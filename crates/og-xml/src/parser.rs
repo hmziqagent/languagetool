@@ -1,6 +1,6 @@
 use crate::types::*;
-use quick_xml::events::Event;
 use quick_xml::Reader;
+use quick_xml::events::Event;
 
 #[derive(Debug, thiserror::Error)]
 pub enum XmlParseError {
@@ -576,7 +576,9 @@ impl XmlRuleParser {
                             in_example = false;
                             // Marker without explicit type implies Incorrect
                             let final_type = match &example_type {
-                                XmlExampleType::Correct if example_has_marker => XmlExampleType::Incorrect,
+                                XmlExampleType::Correct if example_has_marker => {
+                                    XmlExampleType::Incorrect
+                                }
                                 other => other.clone(),
                             };
                             if let Some(rule) = &mut current_rule {
@@ -656,7 +658,8 @@ impl XmlRuleParser {
         // Extract all entity definitions
         let double_q = regex::Regex::new(r#"<!ENTITY\s+(\w+)\s+"([^"]*)">"#).unwrap();
         let single_q = regex::Regex::new(r#"<!ENTITY\s+(\w+)\s+'([^']*)'>"#).unwrap();
-        let mut entities: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        let mut entities: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
         for cap in double_q.captures_iter(xml) {
             entities.insert(cap[1].to_string(), cap[2].to_string());
         }
@@ -717,8 +720,14 @@ mod tests {
         assert_eq!(result.rules.len(), 1);
         assert_eq!(result.rules[0].id, "TEST_RULE");
         assert_eq!(result.rules[0].pattern.tokens.len(), 2);
-        assert_eq!(result.rules[0].pattern.tokens[0].text.as_deref(), Some("foo"));
-        assert_eq!(result.rules[0].pattern.tokens[1].text.as_deref(), Some("bar"));
+        assert_eq!(
+            result.rules[0].pattern.tokens[0].text.as_deref(),
+            Some("foo")
+        );
+        assert_eq!(
+            result.rules[0].pattern.tokens[1].text.as_deref(),
+            Some("bar")
+        );
         assert_eq!(result.rules[0].message, "Use baz instead.");
     }
 
@@ -738,8 +747,14 @@ mod tests {
 
         let parser = XmlRuleParser::new();
         let result = parser.parse(xml).unwrap();
-        assert_eq!(result.rules[0].pattern.tokens[0].regexp.as_deref(), Some("yes"));
-        assert_eq!(result.rules[0].pattern.tokens[0].text.as_deref(), Some("foo|bar"));
+        assert_eq!(
+            result.rules[0].pattern.tokens[0].regexp.as_deref(),
+            Some("yes")
+        );
+        assert_eq!(
+            result.rules[0].pattern.tokens[0].text.as_deref(),
+            Some("foo|bar")
+        );
     }
 
     #[test]
@@ -797,20 +812,32 @@ mod tests {
         assert_eq!(result.rules[0].id, "RULE_ONE");
         assert_eq!(result.rules[0].name, "First rule");
         assert_eq!(result.rules[0].pattern.tokens.len(), 1);
-        assert_eq!(result.rules[0].pattern.tokens[0].text.as_deref(), Some("apple"));
+        assert_eq!(
+            result.rules[0].pattern.tokens[0].text.as_deref(),
+            Some("apple")
+        );
         assert_eq!(result.rules[0].message, "Message one");
 
         assert_eq!(result.rules[1].id, "RULE_TWO");
         assert_eq!(result.rules[1].name, "Second rule");
         assert_eq!(result.rules[1].pattern.tokens.len(), 2);
-        assert_eq!(result.rules[1].pattern.tokens[0].text.as_deref(), Some("banana"));
-        assert_eq!(result.rules[1].pattern.tokens[1].text.as_deref(), Some("cherry"));
+        assert_eq!(
+            result.rules[1].pattern.tokens[0].text.as_deref(),
+            Some("banana")
+        );
+        assert_eq!(
+            result.rules[1].pattern.tokens[1].text.as_deref(),
+            Some("cherry")
+        );
         assert_eq!(result.rules[1].message, "Message two");
 
         assert_eq!(result.rules[2].id, "RULE_THREE");
         assert_eq!(result.rules[2].name, "Third rule");
         assert_eq!(result.rules[2].pattern.tokens.len(), 1);
-        assert_eq!(result.rules[2].pattern.tokens[0].text.as_deref(), Some("date"));
+        assert_eq!(
+            result.rules[2].pattern.tokens[0].text.as_deref(),
+            Some("date")
+        );
         assert_eq!(result.rules[2].message, "Message three");
     }
 
@@ -859,7 +886,10 @@ mod tests {
 
         assert!(result.rules[0].pattern.tokens[0].negate);
         assert!(!result.rules[0].pattern.tokens[1].negate);
-        assert_eq!(result.rules[0].pattern.tokens[1].text.as_deref(), Some("good"));
+        assert_eq!(
+            result.rules[0].pattern.tokens[1].text.as_deref(),
+            Some("good")
+        );
     }
 
     #[test]
@@ -1010,7 +1040,10 @@ mod tests {
         assert_eq!(result.rules[0].suggestions[0].text, "option1");
         assert_eq!(result.rules[0].suggestions[1].text, "option2");
         assert_eq!(result.rules[0].suggestions[2].text, "option3");
-        assert_eq!(result.rules[0].message, "Use option1 or option2 or option3.");
+        assert_eq!(
+            result.rules[0].message,
+            "Use option1 or option2 or option3."
+        );
     }
 
     #[test]
@@ -1059,7 +1092,10 @@ mod tests {
         let result = parser.parse(xml).unwrap();
 
         assert_eq!(result.rules[0].pattern.tokens[0].skip, 2);
-        assert_eq!(result.rules[0].pattern.tokens[0].text.as_deref(), Some("first"));
+        assert_eq!(
+            result.rules[0].pattern.tokens[0].text.as_deref(),
+            Some("first")
+        );
         assert_eq!(result.rules[0].pattern.tokens[1].skip, 0);
     }
 
@@ -1097,12 +1133,18 @@ mod tests {
 
         assert_eq!(group.rules[0].id, "RULE_G1");
         assert_eq!(group.rules[0].name, "Grouped rule 1");
-        assert_eq!(group.rules[0].pattern.tokens[0].text.as_deref(), Some("alpha"));
+        assert_eq!(
+            group.rules[0].pattern.tokens[0].text.as_deref(),
+            Some("alpha")
+        );
         assert_eq!(group.rules[0].message, "Alpha message");
 
         assert_eq!(group.rules[1].id, "RULE_G2");
         assert_eq!(group.rules[1].name, "Grouped rule 2");
-        assert_eq!(group.rules[1].pattern.tokens[0].text.as_deref(), Some("beta"));
+        assert_eq!(
+            group.rules[1].pattern.tokens[0].text.as_deref(),
+            Some("beta")
+        );
         assert_eq!(group.rules[1].message, "Beta message");
     }
 
@@ -1242,7 +1284,10 @@ mod tests {
         let result = parser.parse(xml).unwrap();
 
         assert_eq!(result.rules[0].examples.len(), 1);
-        assert_eq!(result.rules[0].examples[0].example_type, XmlExampleType::Correct);
+        assert_eq!(
+            result.rules[0].examples[0].example_type,
+            XmlExampleType::Correct
+        );
         assert_eq!(result.rules[0].examples[0].text, "This is right.");
     }
 
@@ -1265,8 +1310,14 @@ mod tests {
         let result = parser.parse(xml).unwrap();
 
         assert_eq!(result.rules[0].examples.len(), 1);
-        assert_eq!(result.rules[0].examples[0].example_type, XmlExampleType::Incorrect);
-        assert_eq!(result.rules[0].examples[0].text, "This is <marker>wrong</marker> here.");
+        assert_eq!(
+            result.rules[0].examples[0].example_type,
+            XmlExampleType::Incorrect
+        );
+        assert_eq!(
+            result.rules[0].examples[0].text,
+            "This is <marker>wrong</marker> here."
+        );
     }
 
     #[test]
@@ -1288,7 +1339,10 @@ mod tests {
         let result = parser.parse(xml).unwrap();
 
         // Examples with <marker> tags are implicitly incorrect
-        assert_eq!(result.rules[0].examples[0].example_type, XmlExampleType::Incorrect);
+        assert_eq!(
+            result.rules[0].examples[0].example_type,
+            XmlExampleType::Incorrect
+        );
     }
 
     #[test]
@@ -1307,7 +1361,10 @@ mod tests {
         let parser = XmlRuleParser::new();
         let result = parser.parse(xml).unwrap();
 
-        assert_eq!(result.rules[0].examples[0].example_type, XmlExampleType::Correct);
+        assert_eq!(
+            result.rules[0].examples[0].example_type,
+            XmlExampleType::Correct
+        );
         assert_eq!(result.rules[0].examples[0].text, "A plain sentence.");
     }
 
@@ -1501,7 +1558,10 @@ mod tests {
         let result = parser.parse(xml).unwrap();
 
         assert!(result.rules[0].pattern.tokens[0].inflected);
-        assert_eq!(result.rules[0].pattern.tokens[0].text.as_deref(), Some("run"));
+        assert_eq!(
+            result.rules[0].pattern.tokens[0].text.as_deref(),
+            Some("run")
+        );
     }
 
     #[test]
@@ -1569,10 +1629,22 @@ mod tests {
         let result = parser.parse(xml).unwrap();
 
         assert_eq!(result.rules[0].examples.len(), 4);
-        assert_eq!(result.rules[0].examples[0].example_type, XmlExampleType::Incorrect);
-        assert_eq!(result.rules[0].examples[1].example_type, XmlExampleType::Incorrect);
-        assert_eq!(result.rules[0].examples[2].example_type, XmlExampleType::Correct);
-        assert_eq!(result.rules[0].examples[3].example_type, XmlExampleType::Correct);
+        assert_eq!(
+            result.rules[0].examples[0].example_type,
+            XmlExampleType::Incorrect
+        );
+        assert_eq!(
+            result.rules[0].examples[1].example_type,
+            XmlExampleType::Incorrect
+        );
+        assert_eq!(
+            result.rules[0].examples[2].example_type,
+            XmlExampleType::Correct
+        );
+        assert_eq!(
+            result.rules[0].examples[3].example_type,
+            XmlExampleType::Correct
+        );
     }
 
     #[test]

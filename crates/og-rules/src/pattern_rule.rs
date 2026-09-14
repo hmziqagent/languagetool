@@ -1,4 +1,7 @@
-use og_core::{AnalyzedSentence, AnalyzedTokenReadings, RuleMatch, RuleMatchContext, RuleMatchRule, SuggestedReplacement};
+use og_core::{
+    AnalyzedSentence, AnalyzedTokenReadings, RuleMatch, RuleMatchContext, RuleMatchRule,
+    SuggestedReplacement,
+};
 use og_xml::compiler::CompiledRule;
 use std::collections::HashMap;
 
@@ -6,7 +9,11 @@ use std::collections::HashMap;
 /// Java LT normalizes these, so "it\u{2019}s" should match pattern token "'s".
 fn normalize_apostrophes(text: &str) -> std::borrow::Cow<'_, str> {
     if text.contains('\u{2019}') || text.contains('\u{2018}') || text.contains('\u{201B}') {
-        std::borrow::Cow::Owned(text.replace('\u{2019}', "'").replace('\u{2018}', "'").replace('\u{201B}', "'"))
+        std::borrow::Cow::Owned(
+            text.replace('\u{2019}', "'")
+                .replace('\u{2018}', "'")
+                .replace('\u{201B}', "'"),
+        )
     } else {
         std::borrow::Cow::Borrowed(text)
     }
@@ -73,7 +80,11 @@ impl PatternRuleEngine {
     }
 
     /// Match indexed rules against a sentence. Must call build_index first.
-    pub fn match_indexed_rules(&self, rules: &[&CompiledRule], sentence: &AnalyzedSentence) -> Vec<RuleMatch> {
+    pub fn match_indexed_rules(
+        &self,
+        rules: &[&CompiledRule],
+        sentence: &AnalyzedSentence,
+    ) -> Vec<RuleMatch> {
         let tokens = sentence.non_whitespace_tokens();
         let mut all_matches = Vec::new();
 
@@ -82,7 +93,9 @@ impl PatternRuleEngine {
 
             if let Some(rule_indices) = self.word_index.get(&token_lower) {
                 for &rule_idx in rule_indices {
-                    if let Some(rm) = self.try_match_at(rules[rule_idx], &tokens, token_idx, sentence) {
+                    if let Some(rm) =
+                        self.try_match_at(rules[rule_idx], &tokens, token_idx, sentence)
+                    {
                         all_matches.push(rm);
                     }
                 }
@@ -106,7 +119,8 @@ impl PatternRuleEngine {
     ) -> Vec<RuleMatch> {
         use rayon::prelude::*;
 
-        sentences.par_iter()
+        sentences
+            .par_iter()
             .flat_map(|sentence| self.match_indexed_rules(rules, sentence))
             .collect()
     }
@@ -124,14 +138,19 @@ impl PatternRuleEngine {
         // When the pattern starts with an OR/AND group, the first pattern.tokens
         // entry may be wrong (it's the first non-group token). Fall back to all positions.
         let has_structured = rule.pattern.elements.iter().any(|e| {
-            matches!(e, og_xml::compiler::CompiledPatternElement::OrGroup(_) | og_xml::compiler::CompiledPatternElement::AndGroup(_))
+            matches!(
+                e,
+                og_xml::compiler::CompiledPatternElement::OrGroup(_)
+                    | og_xml::compiler::CompiledPatternElement::AndGroup(_)
+            )
         });
 
-        let first_element_is_group = has_structured && matches!(
-            rule.pattern.elements.first(),
-            Some(og_xml::compiler::CompiledPatternElement::OrGroup(_)) |
-            Some(og_xml::compiler::CompiledPatternElement::AndGroup(_))
-        );
+        let first_element_is_group = has_structured
+            && matches!(
+                rule.pattern.elements.first(),
+                Some(og_xml::compiler::CompiledPatternElement::OrGroup(_))
+                    | Some(og_xml::compiler::CompiledPatternElement::AndGroup(_))
+            );
 
         if first_element_is_group {
             // Can't optimize start positions for patterns starting with OR/AND groups
@@ -147,7 +166,9 @@ impl PatternRuleEngine {
 
         let start_positions: Vec<usize> = if let Some(ref text) = first_token.text {
             if !first_token.negate && first_token.compiled_regexp.is_none() {
-                tokens.iter().enumerate()
+                tokens
+                    .iter()
+                    .enumerate()
                     .filter(|(_, t)| {
                         let surface_matches = if first_token.case_sensitive {
                             t.token().token() == text
@@ -192,7 +213,11 @@ impl PatternRuleEngine {
     }
 
     /// Match multiple rules against a sentence efficiently using first-token indexing.
-    pub fn match_rules(&self, rules: &[&CompiledRule], sentence: &AnalyzedSentence) -> Vec<RuleMatch> {
+    pub fn match_rules(
+        &self,
+        rules: &[&CompiledRule],
+        sentence: &AnalyzedSentence,
+    ) -> Vec<RuleMatch> {
         let mut engine = Self::new();
         engine.build_index(rules);
         engine.match_indexed_rules(rules, sentence)
@@ -210,7 +235,11 @@ impl PatternRuleEngine {
 
         // Use elements-based matching only when there are or/and groups
         let has_structured = elements.iter().any(|e| {
-            matches!(e, og_xml::compiler::CompiledPatternElement::OrGroup(_) | og_xml::compiler::CompiledPatternElement::AndGroup(_))
+            matches!(
+                e,
+                og_xml::compiler::CompiledPatternElement::OrGroup(_)
+                    | og_xml::compiler::CompiledPatternElement::AndGroup(_)
+            )
         });
 
         // Try to match the pattern, collecting matched token positions
@@ -222,31 +251,43 @@ impl PatternRuleEngine {
 
         // Check antipatterns - if any antipattern matches, suppress this rule
         for antipattern in rule.antipatterns.iter() {
-            if self.antipattern_matches(antipattern, tokens, start_idx, &match_result.matched_positions) {
+            if self.antipattern_matches(
+                antipattern,
+                tokens,
+                start_idx,
+                &match_result.matched_positions,
+            ) {
                 return None;
             }
         }
 
         // Build RuleMatch first, then apply filter (filters can modify suggestions/spans)
         let text = sentence.text();
-        let (match_start, match_end) = if let (Some(ms), Some(me)) = (rule.pattern.marker_start, rule.pattern.marker_end) {
-            // Use marker positions for error span
-            let ms_tok_idx = *match_result.matched_positions.get(ms)?;
-            let me_idx = if me > 0 { me - 1 } else { 0 };
-            let me_tok_idx = *match_result.matched_positions.get(me_idx)?;
-            let start_tok = tokens.get(ms_tok_idx)?;
-            let end_tok = tokens.get(me_tok_idx)?;
-            let start = start_tok.token().start();
-            let end = end_tok.token().end();
-            (start, end)
-        } else {
-            let mut start = match_result.first_start?;
-            let end = match_result.last_end?;
-            while start > 0 && text.as_bytes().get(start - 1).map(|&b| b.is_ascii_whitespace()).unwrap_or(false) {
-                start -= 1;
-            }
-            (start, end)
-        };
+        let (match_start, match_end) =
+            if let (Some(ms), Some(me)) = (rule.pattern.marker_start, rule.pattern.marker_end) {
+                // Use marker positions for error span
+                let ms_tok_idx = *match_result.matched_positions.get(ms)?;
+                let me_idx = if me > 0 { me - 1 } else { 0 };
+                let me_tok_idx = *match_result.matched_positions.get(me_idx)?;
+                let start_tok = tokens.get(ms_tok_idx)?;
+                let end_tok = tokens.get(me_tok_idx)?;
+                let start = start_tok.token().start();
+                let end = end_tok.token().end();
+                (start, end)
+            } else {
+                let mut start = match_result.first_start?;
+                let end = match_result.last_end?;
+                while start > 0
+                    && text
+                        .as_bytes()
+                        .get(start - 1)
+                        .map(|&b| b.is_ascii_whitespace())
+                        .unwrap_or(false)
+                {
+                    start -= 1;
+                }
+                (start, end)
+            };
 
         if match_end < match_start {
             return None;
@@ -255,13 +296,21 @@ impl PatternRuleEngine {
         let match_length = match_end - match_start;
 
         let context_start = {
-            let mut pos = if match_start >= 40 { match_start - 40 } else { 0 };
-            while !text.is_char_boundary(pos) && pos < text.len() { pos += 1; }
+            let mut pos = if match_start >= 40 {
+                match_start - 40
+            } else {
+                0
+            };
+            while !text.is_char_boundary(pos) && pos < text.len() {
+                pos += 1;
+            }
             pos
         };
         let context_end = {
             let mut pos = std::cmp::min(match_end + 40, text.len());
-            while !text.is_char_boundary(pos) && pos > 0 { pos -= 1; }
+            while !text.is_char_boundary(pos) && pos > 0 {
+                pos -= 1;
+            }
             pos
         };
         let context_text = text[context_start..context_end].to_string();
@@ -276,7 +325,9 @@ impl PatternRuleEngine {
                     for part in &s.parts {
                         match part {
                             og_xml::types::SuggestionPart::Text(t) => {
-                                resolved.push_str(&self.resolve_backreferences(t, &match_result.matched_texts));
+                                resolved.push_str(
+                                    &self.resolve_backreferences(t, &match_result.matched_texts),
+                                );
                             }
                             og_xml::types::SuggestionPart::Match(m) => {
                                 let token_idx = (m.no as usize).saturating_sub(1);
@@ -290,7 +341,8 @@ impl PatternRuleEngine {
                                         // Apply regexp match/replace
                                         if let Some(ref rm) = m.regexp_match {
                                             if let Ok(re) = regex::Regex::new(rm) {
-                                                let replace = m.regexp_replace.as_deref().unwrap_or("");
+                                                let replace =
+                                                    m.regexp_replace.as_deref().unwrap_or("");
                                                 text = re.replace_all(&text, replace).to_string();
                                             }
                                         }
@@ -302,14 +354,18 @@ impl PatternRuleEngine {
                     }
                     SuggestedReplacement::new(&resolved)
                 } else {
-                    let resolved = self.resolve_backreferences(&s.text, &match_result.matched_texts);
+                    let resolved =
+                        self.resolve_backreferences(&s.text, &match_result.matched_texts);
                     SuggestedReplacement::new(&resolved)
                 }
             })
             .collect();
 
         let rm_rule = RuleMatchRule::new(&rule.id, &rule.name)
-            .with_category(og_core::Category::new(&rule.category.id, &rule.category.name))
+            .with_category(og_core::Category::new(
+                &rule.category.id,
+                &rule.category.name,
+            ))
             .with_issue_type(&rule.issue_type);
         let rm_rule = if let Some(ref sub_id) = rule.sub_id {
             rm_rule.with_sub_id(sub_id)
@@ -322,17 +378,29 @@ impl PatternRuleEngine {
             rm_rule
         };
 
-        let mut rm = RuleMatch::new(&rule.message, match_start, match_length, rm_rule,
-            RuleMatchContext::new(context_text, context_start, context_end - context_start))
-            .with_replacements(replacements)
-            .with_sentence(sentence.text().to_string());
+        let mut rm = RuleMatch::new(
+            &rule.message,
+            match_start,
+            match_length,
+            rm_rule,
+            RuleMatchContext::new(context_text, context_start, context_end - context_start),
+        )
+        .with_replacements(replacements)
+        .with_sentence(sentence.text().to_string());
         if let Some(ref short) = rule.short_message {
             rm = rm.with_short_message(short);
         }
 
         // Apply filter if present - filters can accept/reject or modify the match
         if let Some(ref filter) = rule.filter {
-            return self.apply_filter(filter, &match_result.matched_texts, &match_result.matched_positions, tokens, sentence, rm);
+            return self.apply_filter(
+                filter,
+                &match_result.matched_texts,
+                &match_result.matched_positions,
+                tokens,
+                sentence,
+                rm,
+            );
         }
 
         Some(rm)
@@ -379,7 +447,11 @@ impl PatternRuleEngine {
         } else {
             token_text.eq_ignore_ascii_case(&ref_text)
         };
-        if pattern_token.negate { Some(!matches) } else { Some(matches) }
+        if pattern_token.negate {
+            Some(!matches)
+        } else {
+            Some(matches)
+        }
     }
 
     fn match_elements_recursive(
@@ -401,11 +473,9 @@ impl PatternRuleEngine {
 
         if token_idx >= tokens.len() {
             // Check if remaining elements are all optional
-            let remaining_ok: bool = (element_idx..elements.len()).all(|i| {
-                match &elements[i] {
-                    og_xml::compiler::CompiledPatternElement::Token(t) => t.min == Some(0),
-                    _ => false,
-                }
+            let remaining_ok: bool = (element_idx..elements.len()).all(|i| match &elements[i] {
+                og_xml::compiler::CompiledPatternElement::Token(t) => t.min == Some(0),
+                _ => false,
             });
             if remaining_ok {
                 return Some(PatternMatchResult {
@@ -422,12 +492,21 @@ impl PatternRuleEngine {
         match element {
             og_xml::compiler::CompiledPatternElement::Token(pattern_token) => {
                 // Regular token - use existing logic
-                self.match_token_element(pattern_token, elements, tokens, token_idx, element_idx, matched_texts)
+                self.match_token_element(
+                    pattern_token,
+                    elements,
+                    tokens,
+                    token_idx,
+                    element_idx,
+                    matched_texts,
+                )
             }
             og_xml::compiler::CompiledPatternElement::OrGroup(alternatives) => {
                 // Or-group: try each alternative, first match wins
                 for alt in alternatives {
-                    let matches = if let Some(br) = self.backreference_matches(alt, tokens[token_idx], matched_texts) {
+                    let matches = if let Some(br) =
+                        self.backreference_matches(alt, tokens[token_idx], matched_texts)
+                    {
                         br
                     } else {
                         self.token_matches(alt, tokens[token_idx], token_idx, tokens)
@@ -436,10 +515,16 @@ impl PatternRuleEngine {
                         let mut new_mt = matched_texts.to_vec();
                         new_mt.push(tokens[token_idx].token().token().to_string());
                         let mut result = self.match_elements_recursive(
-                            elements, tokens, token_idx + 1, element_idx + 1, &new_mt
+                            elements,
+                            tokens,
+                            token_idx + 1,
+                            element_idx + 1,
+                            &new_mt,
                         )?;
                         result.matched_positions.insert(0, token_idx);
-                        result.matched_texts.insert(0, tokens[token_idx].token().token().to_string());
+                        result
+                            .matched_texts
+                            .insert(0, tokens[token_idx].token().token().to_string());
                         if result.first_start.is_none() {
                             result.first_start = Some(tokens[token_idx].token().start());
                         }
@@ -452,7 +537,9 @@ impl PatternRuleEngine {
             og_xml::compiler::CompiledPatternElement::AndGroup(constraints) => {
                 // And-group: all constraints must match at this position
                 let all_match = constraints.iter().all(|c| {
-                    if let Some(br) = self.backreference_matches(c, tokens[token_idx], matched_texts) {
+                    if let Some(br) =
+                        self.backreference_matches(c, tokens[token_idx], matched_texts)
+                    {
                         br
                     } else {
                         self.token_matches(c, tokens[token_idx], token_idx, tokens)
@@ -462,10 +549,16 @@ impl PatternRuleEngine {
                     let mut new_mt = matched_texts.to_vec();
                     new_mt.push(tokens[token_idx].token().token().to_string());
                     let mut result = self.match_elements_recursive(
-                        elements, tokens, token_idx + 1, element_idx + 1, &new_mt
+                        elements,
+                        tokens,
+                        token_idx + 1,
+                        element_idx + 1,
+                        &new_mt,
                     )?;
                     result.matched_positions.insert(0, token_idx);
-                    result.matched_texts.insert(0, tokens[token_idx].token().token().to_string());
+                    result
+                        .matched_texts
+                        .insert(0, tokens[token_idx].token().token().to_string());
                     if result.first_start.is_none() {
                         result.first_start = Some(tokens[token_idx].token().start());
                     }
@@ -503,7 +596,13 @@ impl PatternRuleEngine {
         // Handle min=0 (optional token)
         if min == Some(0) {
             // Try skipping this token
-            if let Some(mut result) = self.match_elements_recursive(elements, tokens, token_idx, element_idx + 1, matched_texts) {
+            if let Some(mut result) = self.match_elements_recursive(
+                elements,
+                tokens,
+                token_idx,
+                element_idx + 1,
+                matched_texts,
+            ) {
                 // Add placeholder so matched_positions stays aligned with pattern indices
                 result.matched_positions.insert(0, token_idx);
                 result.matched_texts.insert(0, String::new());
@@ -513,16 +612,28 @@ impl PatternRuleEngine {
 
         // Handle skip tokens (try matching current, then skip 1, skip 2, etc.)
         if skip != 0 {
-            let max_skip = if skip < 0 { tokens.len() } else { skip as usize };
+            let max_skip = if skip < 0 {
+                tokens.len()
+            } else {
+                skip as usize
+            };
             for s in 0..=max_skip {
                 let next_token = token_idx + s;
                 if next_token < tokens.len() && token_ok(next_token, matched_texts) {
                     let mut new_mt = matched_texts.to_vec();
                     new_mt.push(tokens[next_token].token().token().to_string());
                     // Try to continue matching from this position
-                    if let Some(mut result) = self.match_elements_recursive(elements, tokens, next_token + 1, element_idx + 1, &new_mt) {
+                    if let Some(mut result) = self.match_elements_recursive(
+                        elements,
+                        tokens,
+                        next_token + 1,
+                        element_idx + 1,
+                        &new_mt,
+                    ) {
                         result.matched_positions.insert(0, next_token);
-                        result.matched_texts.insert(0, tokens[next_token].token().token().to_string());
+                        result
+                            .matched_texts
+                            .insert(0, tokens[next_token].token().token().to_string());
                         if result.first_start.is_none() {
                             result.first_start = Some(tokens[next_token].token().start());
                         }
@@ -537,7 +648,9 @@ impl PatternRuleEngine {
         // Handle min/max (repetition)
         if min.is_some() || max.is_some() {
             let min_count = min.unwrap_or(1) as usize;
-            let max_count = max.map(|m| m as usize).unwrap_or(if min_count > 0 { min_count } else { 1 });
+            let max_count =
+                max.map(|m| m as usize)
+                    .unwrap_or(if min_count > 0 { min_count } else { 1 });
             // Try matching as many as possible within min/max range
             let mut matched_count = 0;
             let mut cur = token_idx;
@@ -555,10 +668,18 @@ impl PatternRuleEngine {
                 for i in token_idx..token_idx + count {
                     new_mt.push(tokens[i].token().token().to_string());
                 }
-                if let Some(mut result) = self.match_elements_recursive(elements, tokens, token_idx + count, element_idx + 1, &new_mt) {
+                if let Some(mut result) = self.match_elements_recursive(
+                    elements,
+                    tokens,
+                    token_idx + count,
+                    element_idx + 1,
+                    &new_mt,
+                ) {
                     for i in (0..count).rev() {
                         result.matched_positions.insert(0, token_idx + i);
-                        result.matched_texts.insert(0, tokens[token_idx + i].token().token().to_string());
+                        result
+                            .matched_texts
+                            .insert(0, tokens[token_idx + i].token().token().to_string());
                     }
                     if result.first_start.is_none() {
                         result.first_start = Some(tokens[token_idx].token().start());
@@ -574,9 +695,17 @@ impl PatternRuleEngine {
         if token_ok(token_idx, matched_texts) {
             let mut new_mt = matched_texts.to_vec();
             new_mt.push(tokens[token_idx].token().token().to_string());
-            let mut result = self.match_elements_recursive(elements, tokens, token_idx + 1, element_idx + 1, &new_mt)?;
+            let mut result = self.match_elements_recursive(
+                elements,
+                tokens,
+                token_idx + 1,
+                element_idx + 1,
+                &new_mt,
+            )?;
             result.matched_positions.insert(0, token_idx);
-            result.matched_texts.insert(0, tokens[token_idx].token().token().to_string());
+            result
+                .matched_texts
+                .insert(0, tokens[token_idx].token().token().to_string());
             if result.first_start.is_none() {
                 result.first_start = Some(tokens[token_idx].token().start());
             }
@@ -607,8 +736,8 @@ impl PatternRuleEngine {
 
         if token_idx >= tokens.len() {
             // Check if remaining pattern tokens are all optional
-            let remaining_ok: bool = (pattern_idx..pattern_tokens.len())
-                .all(|i| pattern_tokens[i].min == Some(0));
+            let remaining_ok: bool =
+                (pattern_idx..pattern_tokens.len()).all(|i| pattern_tokens[i].min == Some(0));
             if remaining_ok {
                 return Some(PatternMatchResult {
                     first_start: None,
@@ -624,7 +753,9 @@ impl PatternRuleEngine {
         let text_token = tokens[token_idx];
 
         // Check backreference + normal matching
-        let matches = if let Some(br) = self.backreference_matches(pattern_token, text_token, matched_texts) {
+        let matches = if let Some(br) =
+            self.backreference_matches(pattern_token, text_token, matched_texts)
+        {
             br && self.token_matches(pattern_token, text_token, token_idx, tokens)
         } else {
             self.token_matches(pattern_token, text_token, token_idx, tokens)
@@ -644,10 +775,24 @@ impl PatternRuleEngine {
             let mut last_token_idx = token_idx;
 
             while repeat_count < max_count && last_token_idx + 1 < tokens.len() {
-                let next_matches = if let Some(br) = self.backreference_matches(pattern_token, tokens[last_token_idx + 1], matched_texts) {
-                    br && self.token_matches(pattern_token, tokens[last_token_idx + 1], last_token_idx + 1, tokens)
+                let next_matches = if let Some(br) = self.backreference_matches(
+                    pattern_token,
+                    tokens[last_token_idx + 1],
+                    matched_texts,
+                ) {
+                    br && self.token_matches(
+                        pattern_token,
+                        tokens[last_token_idx + 1],
+                        last_token_idx + 1,
+                        tokens,
+                    )
                 } else {
-                    self.token_matches(pattern_token, tokens[last_token_idx + 1], last_token_idx + 1, tokens)
+                    self.token_matches(
+                        pattern_token,
+                        tokens[last_token_idx + 1],
+                        last_token_idx + 1,
+                        tokens,
+                    )
                 };
                 if next_matches {
                     last_token_idx += 1;
@@ -666,7 +811,13 @@ impl PatternRuleEngine {
             // skipping it allows the rest of the pattern to match.
             if min_count == 0 {
                 // Try skipping the optional token first
-                if let Some(mut result) = self.match_pattern_recursive(pattern_tokens, tokens, token_idx, pattern_idx + 1, matched_texts) {
+                if let Some(mut result) = self.match_pattern_recursive(
+                    pattern_tokens,
+                    tokens,
+                    token_idx,
+                    pattern_idx + 1,
+                    matched_texts,
+                ) {
                     // Add placeholder so matched_positions stays aligned with pattern indices
                     result.matched_positions.insert(0, token_idx);
                     result.matched_texts.insert(0, String::new());
@@ -677,7 +828,11 @@ impl PatternRuleEngine {
 
             // Determine skip range for the next token
             let skip = pattern_token.skip;
-            let max_skip = if skip < 0 { tokens.len() } else { skip as usize };
+            let max_skip = if skip < 0 {
+                tokens.len()
+            } else {
+                skip as usize
+            };
 
             // Build new matched_texts with this token's text
             let mut new_mt = matched_texts.to_vec();
@@ -697,7 +852,11 @@ impl PatternRuleEngine {
                     break;
                 }
                 if let Some(mut rest) = self.match_pattern_recursive(
-                    pattern_tokens, tokens, next_token_idx, pattern_idx + 1, &new_mt
+                    pattern_tokens,
+                    tokens,
+                    next_token_idx,
+                    pattern_idx + 1,
+                    &new_mt,
                 ) {
                     // Build the result
                     let last_end = if last_token_idx < tokens.len() {
@@ -762,7 +921,11 @@ impl PatternRuleEngine {
         } else if pattern_token.min == Some(0) {
             // Optional token - skip pattern token, don't consume text token
             let mut result = self.match_pattern_recursive(
-                pattern_tokens, tokens, token_idx, pattern_idx + 1, matched_texts
+                pattern_tokens,
+                tokens,
+                token_idx,
+                pattern_idx + 1,
+                matched_texts,
             )?;
             // Add empty placeholder for backreference indexing
             result.matched_positions.insert(0, token_idx);
@@ -788,7 +951,11 @@ impl PatternRuleEngine {
         if matched_positions.is_empty() {
             // Without matched positions, fall back to global suppression
             let has_structured = antipattern.elements.iter().any(|e| {
-                matches!(e, og_xml::compiler::CompiledPatternElement::OrGroup(_) | og_xml::compiler::CompiledPatternElement::AndGroup(_))
+                matches!(
+                    e,
+                    og_xml::compiler::CompiledPatternElement::OrGroup(_)
+                        | og_xml::compiler::CompiledPatternElement::AndGroup(_)
+                )
             });
             for pos in 0..tokens.len() {
                 let result = if has_structured {
@@ -804,7 +971,11 @@ impl PatternRuleEngine {
         }
 
         let has_structured = antipattern.elements.iter().any(|e| {
-            matches!(e, og_xml::compiler::CompiledPatternElement::OrGroup(_) | og_xml::compiler::CompiledPatternElement::AndGroup(_))
+            matches!(
+                e,
+                og_xml::compiler::CompiledPatternElement::OrGroup(_)
+                    | og_xml::compiler::CompiledPatternElement::AndGroup(_)
+            )
         });
 
         let match_min = *matched_positions.iter().min().unwrap();
@@ -819,7 +990,11 @@ impl PatternRuleEngine {
                 self.match_pattern_tokens(&antipattern.tokens, tokens, pos)
             };
             if let Some(anti_result) = result {
-                let anti_min = anti_result.matched_positions.first().copied().unwrap_or(usize::MAX);
+                let anti_min = anti_result
+                    .matched_positions
+                    .first()
+                    .copied()
+                    .unwrap_or(usize::MAX);
                 let anti_max = anti_result.matched_positions.last().copied().unwrap_or(0);
                 if anti_min <= match_max && anti_max >= match_min {
                     return true;
@@ -897,9 +1072,17 @@ impl PatternRuleEngine {
                         }
                     })
                 };
-                if pattern.negate { !lemma_matches } else { lemma_matches }
+                if pattern.negate {
+                    !lemma_matches
+                } else {
+                    lemma_matches
+                }
             } else {
-                if pattern.negate { !surface_matches } else { surface_matches }
+                if pattern.negate {
+                    !surface_matches
+                } else {
+                    surface_matches
+                }
             }
         } else if let Some(ref re) = pattern.compiled_regexp {
             let token_text = normalize_apostrophes(token.token().token());
@@ -944,16 +1127,24 @@ impl PatternRuleEngine {
             if let Some(ref postag_re) = pattern.compiled_postag_regexp {
                 let pos_matches = token.has_pos_tag_matching_regex(postag_re);
                 if pattern.negate_pos {
-                    if pos_matches { return false; }
+                    if pos_matches {
+                        return false;
+                    }
                 } else {
-                    if !pos_matches { return false; }
+                    if !pos_matches {
+                        return false;
+                    }
                 }
             } else {
                 let pos_matches = token.has_pos_tag(postag);
                 if pattern.negate_pos {
-                    if pos_matches { return false; }
+                    if pos_matches {
+                        return false;
+                    }
                 } else {
-                    if !pos_matches { return false; }
+                    if !pos_matches {
+                        return false;
+                    }
                 }
             }
         }
@@ -1048,17 +1239,18 @@ impl PatternRuleEngine {
             };
             if exc.inflected {
                 // inflected="yes": also match if any reading's lemma matches
-                let lemma_matches = surface_matches || token.readings().iter().any(|r| {
-                    if let Some(lemma) = r.lemma() {
-                        if exc.case_sensitive {
-                            lemma == text
+                let lemma_matches = surface_matches
+                    || token.readings().iter().any(|r| {
+                        if let Some(lemma) = r.lemma() {
+                            if exc.case_sensitive {
+                                lemma == text
+                            } else {
+                                lemma.eq_ignore_ascii_case(text)
+                            }
                         } else {
-                            lemma.eq_ignore_ascii_case(text)
+                            false
                         }
-                    } else {
-                        false
-                    }
-                });
+                    });
                 lemma_matches
             } else {
                 surface_matches
@@ -1069,7 +1261,11 @@ impl PatternRuleEngine {
             } else {
                 token.has_pos_tag(postag)
             };
-            if exc.negate_pos { !pos_matches } else { pos_matches }
+            if exc.negate_pos {
+                !pos_matches
+            } else {
+                pos_matches
+            }
         } else {
             // No text or POS constraint - matches any token
             true
@@ -1140,9 +1336,7 @@ impl PatternRuleEngine {
             "org.languagetool.rules.en.AdverbFilter" => {
                 self.apply_adverb_filter(&filter.args, matched_texts, rm)
             }
-            "org.languagetool.rules.en.OrdinalSuffixFilter" => {
-                self.apply_ordinal_suffix_filter(rm)
-            }
+            "org.languagetool.rules.en.OrdinalSuffixFilter" => self.apply_ordinal_suffix_filter(rm),
             "org.languagetool.rules.UnderlineSpacesFilter" => {
                 self.apply_underline_spaces_filter(&filter.args, sentence, rm)
             }
@@ -1246,7 +1440,10 @@ impl PatternRuleEngine {
         } else {
             let day_str = parsed.get("day").map(|s| s.as_str()).unwrap_or("1");
             let month_str = parsed.get("month").map(|s| s.as_str()).unwrap_or("1");
-            let y = parsed.get("year").map(|s| parse_date_number(s)).unwrap_or_else(|| current_date().0);
+            let y = parsed
+                .get("year")
+                .map(|s| parse_date_number(s))
+                .unwrap_or_else(|| current_date().0);
             (y, parse_month(month_str), parse_date_number(day_str))
         };
 
@@ -1273,8 +1470,14 @@ impl PatternRuleEngine {
     /// DateRangeChecker: accept match (flag error) if x >= y (invalid date range).
     fn apply_date_range_filter(&self, args: &str, matched_texts: &[String]) -> bool {
         let parsed = self.parse_filter_args(args, matched_texts);
-        let x = parsed.get("x").and_then(|v| v.parse::<i32>().ok()).unwrap_or(0);
-        let y = parsed.get("y").and_then(|v| v.parse::<i32>().ok()).unwrap_or(0);
+        let x = parsed
+            .get("x")
+            .and_then(|v| v.parse::<i32>().ok())
+            .unwrap_or(0);
+        let y = parsed
+            .get("y")
+            .and_then(|v| v.parse::<i32>().ok())
+            .unwrap_or(0);
         x >= y
     }
 
@@ -1298,7 +1501,8 @@ impl PatternRuleEngine {
     /// ApostropheTypeFilter: accept match if the token has the expected apostrophe type.
     fn apply_apostrophe_type_filter(&self, args: &str, matched_texts: &[String]) -> bool {
         let parsed = self.parse_filter_args(args, matched_texts);
-        let wants_typographic = parsed.get("hasTypographicalApostrophe")
+        let wants_typographic = parsed
+            .get("hasTypographicalApostrophe")
             .map(|v| v == "true")
             .unwrap_or(false);
 
@@ -1320,21 +1524,26 @@ impl PatternRuleEngine {
     fn apply_ordinal_suffix_filter(&self, mut rm: RuleMatch) -> Option<RuleMatch> {
         let replacements = rm.replacements().to_vec();
         if let Some(first) = replacements.first() {
-            let digits: String = first.value().chars().filter(|c| c.is_ascii_digit()).collect();
+            let digits: String = first
+                .value()
+                .chars()
+                .filter(|c| c.is_ascii_digit())
+                .collect();
             if digits.is_empty() {
                 return Some(rm);
             }
-            let suffix = if digits.ends_with("11") || digits.ends_with("12") || digits.ends_with("13") {
-                "th"
-            } else if digits.ends_with('1') {
-                "st"
-            } else if digits.ends_with('2') {
-                "nd"
-            } else if digits.ends_with('3') {
-                "rd"
-            } else {
-                "th"
-            };
+            let suffix =
+                if digits.ends_with("11") || digits.ends_with("12") || digits.ends_with("13") {
+                    "th"
+                } else if digits.ends_with('1') {
+                    "st"
+                } else if digits.ends_with('2') {
+                    "nd"
+                } else if digits.ends_with('3') {
+                    "rd"
+                } else {
+                    "th"
+                };
             let new_suggestion = format!("{}{}", digits, suffix);
             let new_replacements = vec![SuggestedReplacement::new(&new_suggestion)];
             rm = rm.with_replacements(new_replacements);
@@ -1350,18 +1559,33 @@ impl PatternRuleEngine {
         rm: RuleMatch,
     ) -> Option<RuleMatch> {
         let parsed = self.parse_filter_args(args, &[]);
-        let mode = parsed.get("underlineSpaces").map(|s| s.as_str()).unwrap_or("both");
+        let mode = parsed
+            .get("underlineSpaces")
+            .map(|s| s.as_str())
+            .unwrap_or("both");
         let text = sentence.text();
         let mut offset = rm.offset();
         let mut end = rm.offset() + rm.length();
 
         if mode == "before" || mode == "both" {
-            if offset > 0 && text.as_bytes().get(offset - 1).map(|&b| b.is_ascii_whitespace()).unwrap_or(false) {
+            if offset > 0
+                && text
+                    .as_bytes()
+                    .get(offset - 1)
+                    .map(|&b| b.is_ascii_whitespace())
+                    .unwrap_or(false)
+            {
                 offset -= 1;
             }
         }
         if mode == "after" || mode == "both" {
-            if end + 1 < text.len() && text.as_bytes().get(end).map(|&b| b.is_ascii_whitespace()).unwrap_or(false) {
+            if end + 1 < text.len()
+                && text
+                    .as_bytes()
+                    .get(end)
+                    .map(|&b| b.is_ascii_whitespace())
+                    .unwrap_or(false)
+            {
                 end += 1;
             }
         }
@@ -1371,7 +1595,12 @@ impl PatternRuleEngine {
 
     /// AdverbFilter: replaces adverb+noun suggestion with adjective+noun.
     /// Uses a lookup table to map common adverbs to their adjective forms.
-    fn apply_adverb_filter(&self, args: &str, matched_texts: &[String], rm: RuleMatch) -> Option<RuleMatch> {
+    fn apply_adverb_filter(
+        &self,
+        args: &str,
+        matched_texts: &[String],
+        rm: RuleMatch,
+    ) -> Option<RuleMatch> {
         let parsed = self.parse_filter_args(args, matched_texts);
         let adverb = parsed.get("adverb").map(|s| s.as_str()).unwrap_or("");
         let noun = parsed.get("noun").map(|s| s.as_str()).unwrap_or("");
@@ -1380,7 +1609,9 @@ impl PatternRuleEngine {
         if let Some(adj) = adjective {
             if adj != adverb {
                 let new_suggestion = format!("{} {}", adj, noun);
-                return Some(rm.with_replacements(vec![SuggestedReplacement::new(&new_suggestion)]));
+                return Some(
+                    rm.with_replacements(vec![SuggestedReplacement::new(&new_suggestion)]),
+                );
             }
         }
         Some(rm)
@@ -1754,7 +1985,11 @@ fn parse_month(s: &str) -> u32 {
 /// Parse weekday name to 1-7 (Sunday=1, Monday=2, ..., Saturday=7)
 fn parse_weekday(s: &str) -> u32 {
     let lower = s.to_lowercase();
-    let prefix = if lower.len() >= 2 { &lower[..2] } else { &lower };
+    let prefix = if lower.len() >= 2 {
+        &lower[..2]
+    } else {
+        &lower
+    };
     match prefix {
         "su" => 1,
         "mo" => 2,
@@ -1811,21 +2046,38 @@ mod tests {
             while pos < chars.len() && chars[pos].is_whitespace() {
                 pos += 1;
             }
-            if pos >= chars.len() { break; }
-            let start_byte = text[..text.char_indices().nth(pos).map(|(i,_)| i).unwrap_or(text.len())].len();
+            if pos >= chars.len() {
+                break;
+            }
+            let start_byte = text[..text
+                .char_indices()
+                .nth(pos)
+                .map(|(i, _)| i)
+                .unwrap_or(text.len())]
+                .len();
             if chars[pos].is_alphanumeric() || chars[pos] == '\'' {
                 let word_start = pos;
                 while pos < chars.len() && (chars[pos].is_alphanumeric() || chars[pos] == '\'') {
                     pos += 1;
                 }
                 let word: String = chars[word_start..pos].iter().collect();
-                let end_byte = text[..text.char_indices().nth(pos).map(|(i,_)| i).unwrap_or(text.len())].len();
+                let end_byte = text[..text
+                    .char_indices()
+                    .nth(pos)
+                    .map(|(i, _)| i)
+                    .unwrap_or(text.len())]
+                    .len();
                 let at = AnalyzedToken::new(&word, start_byte, end_byte);
                 tokens.push(AnalyzedTokenReadings::new(at));
             } else {
                 let ch = chars[pos].to_string();
                 pos += 1;
-                let end_byte = text[..text.char_indices().nth(pos).map(|(i,_)| i).unwrap_or(text.len())].len();
+                let end_byte = text[..text
+                    .char_indices()
+                    .nth(pos)
+                    .map(|(i, _)| i)
+                    .unwrap_or(text.len())]
+                    .len();
                 let at = AnalyzedToken::new(&ch, start_byte, end_byte);
                 tokens.push(AnalyzedTokenReadings::new(at));
             }
@@ -2004,7 +2256,11 @@ mod tests {
 
         let matches = compile_and_match(xml, "foo bar");
         assert_eq!(matches.len(), 1);
-        let repl: Vec<&str> = matches[0].replacements().iter().map(|r| r.value()).collect();
+        let repl: Vec<&str> = matches[0]
+            .replacements()
+            .iter()
+            .map(|r| r.value())
+            .collect();
         assert_eq!(repl, vec!["foo bar"]);
     }
 
@@ -2025,7 +2281,11 @@ mod tests {
 
         let matches = compile_and_match(xml, "Ponzi scheme");
         assert_eq!(matches.len(), 1);
-        let repl: Vec<&str> = matches[0].replacements().iter().map(|r| r.value()).collect();
+        let repl: Vec<&str> = matches[0]
+            .replacements()
+            .iter()
+            .map(|r| r.value())
+            .collect();
         assert_eq!(repl, vec!["Ponzi scheme"]);
     }
 
@@ -2236,7 +2496,8 @@ mod tests {
         let mut engine = PatternRuleEngine::new();
         engine.build_index(&rules);
 
-        eprintln!("Indexed {} rules, {} unique first-tokens, {} catch-all rules",
+        eprintln!(
+            "Indexed {} rules, {} unique first-tokens, {} catch-all rules",
             rules.len(),
             engine.word_index.len(),
             engine.catch_all_rule_indices.len()
@@ -2247,11 +2508,19 @@ mod tests {
         let start = std::time::Instant::now();
         let matches = engine.match_indexed_rules(&rules, &sentence);
         let elapsed = start.elapsed();
-        eprintln!("Matched {} rules against test sentence in {:?}", rules.len(), elapsed);
+        eprintln!(
+            "Matched {} rules against test sentence in {:?}",
+            rules.len(),
+            elapsed
+        );
         eprintln!("Found {} matches", matches.len());
 
         // Should be fast even for thousands of rules
-        assert!(elapsed.as_millis() < 5000, "Matching took too long: {:?}", elapsed);
+        assert!(
+            elapsed.as_millis() < 5000,
+            "Matching took too long: {:?}",
+            elapsed
+        );
     }
 
     #[test]
@@ -2272,25 +2541,41 @@ mod tests {
         // Test "21" -> "21st"
         let matches = compile_and_match(xml, "The 21nd of May");
         assert!(!matches.is_empty());
-        let repl: Vec<&str> = matches[0].replacements().iter().map(|r| r.value()).collect();
+        let repl: Vec<&str> = matches[0]
+            .replacements()
+            .iter()
+            .map(|r| r.value())
+            .collect();
         assert!(repl.contains(&"21st"), "Expected '21st', got {:?}", repl);
 
         // Test "22" -> "22nd"
         let matches = compile_and_match(xml, "The 22st of May");
         assert!(!matches.is_empty());
-        let repl: Vec<&str> = matches[0].replacements().iter().map(|r| r.value()).collect();
+        let repl: Vec<&str> = matches[0]
+            .replacements()
+            .iter()
+            .map(|r| r.value())
+            .collect();
         assert!(repl.contains(&"22nd"), "Expected '22nd', got {:?}", repl);
 
         // Test "11" -> "11th" (special case)
         let matches = compile_and_match(xml, "The 11nd item");
         assert!(!matches.is_empty());
-        let repl: Vec<&str> = matches[0].replacements().iter().map(|r| r.value()).collect();
+        let repl: Vec<&str> = matches[0]
+            .replacements()
+            .iter()
+            .map(|r| r.value())
+            .collect();
         assert!(repl.contains(&"11th"), "Expected '11th', got {:?}", repl);
 
         // Test "3" -> "3rd"
         let matches = compile_and_match(xml, "The 3th item");
         assert!(!matches.is_empty());
-        let repl: Vec<&str> = matches[0].replacements().iter().map(|r| r.value()).collect();
+        let repl: Vec<&str> = matches[0]
+            .replacements()
+            .iter()
+            .map(|r| r.value())
+            .collect();
         assert!(repl.contains(&"3rd"), "Expected '3rd', got {:?}", repl);
     }
 
@@ -2312,7 +2597,11 @@ mod tests {
         let matches = compile_and_match(xml, "say hello world");
         assert!(!matches.is_empty());
         // "hello" starts at offset 4, but "before" should expand to include the space at offset 3
-        assert_eq!(matches[0].offset(), 3, "Expected offset 3 (including preceding space)");
+        assert_eq!(
+            matches[0].offset(),
+            3,
+            "Expected offset 3 (including preceding space)"
+        );
     }
 
     #[test]
@@ -2334,7 +2623,11 @@ mod tests {
         assert!(!matches.is_empty());
         // "hello" starts at 4, but non-marker path absorbs leading whitespace (start=3).
         // After "after" filter: end=9 -> 10 (includes trailing space), length = 10-3 = 7
-        assert_eq!(matches[0].length(), 7, "Expected length 7 (including trailing space)");
+        assert_eq!(
+            matches[0].length(),
+            7,
+            "Expected length 7 (including trailing space)"
+        );
     }
 
     #[test]
@@ -2356,8 +2649,15 @@ mod tests {
 
         let matches = compile_and_match(xml, "a philosophically question here");
         assert!(!matches.is_empty());
-        let repl: Vec<&str> = matches[0].replacements().iter().map(|r| r.value()).collect();
-        assert!(repl.contains(&"philosophical question"),
-            "Expected 'philosophical question', got {:?}", repl);
+        let repl: Vec<&str> = matches[0]
+            .replacements()
+            .iter()
+            .map(|r| r.value())
+            .collect();
+        assert!(
+            repl.contains(&"philosophical question"),
+            "Expected 'philosophical question', got {:?}",
+            repl
+        );
     }
 }

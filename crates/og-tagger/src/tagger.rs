@@ -1,5 +1,5 @@
-use og_core::AnalyzedTokenReadings;
 use crate::Tagger;
+use og_core::AnalyzedTokenReadings;
 
 pub struct DefaultTagger;
 

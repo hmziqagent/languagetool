@@ -1,6 +1,8 @@
 use og_core::analyzed::{AnalyzedSentence, AnalyzedToken, AnalyzedTokenReadings};
 use og_core::checker::Disambiguator;
-use og_xml::compiler::{CompiledPattern, CompiledPatternElement, CompiledPatternToken, XmlCompiler};
+use og_xml::compiler::{
+    CompiledPattern, CompiledPatternElement, CompiledPatternToken, XmlCompiler,
+};
 use og_xml::disambig_parser::DisambigXmlParser;
 use og_xml::disambig_types::{CompiledDisambigRule, DisambigAction, DisambigRule};
 
@@ -108,9 +110,12 @@ fn match_pattern(
     start_idx: usize,
 ) -> Option<MatchResult> {
     let elements = &pattern.elements;
-    let has_structured = elements
-        .iter()
-        .any(|e| matches!(e, CompiledPatternElement::OrGroup(_) | CompiledPatternElement::AndGroup(_)));
+    let has_structured = elements.iter().any(|e| {
+        matches!(
+            e,
+            CompiledPatternElement::OrGroup(_) | CompiledPatternElement::AndGroup(_)
+        )
+    });
 
     if has_structured {
         match_elements(elements, tokens, start_idx)
@@ -141,7 +146,9 @@ fn match_tokens_recursive(
     }
     if token_idx >= tokens.len() {
         // Check if remaining patterns are all optional
-        let all_optional = pattern_tokens[pattern_idx..].iter().all(|pt| pt.min.unwrap_or(1) == 0);
+        let all_optional = pattern_tokens[pattern_idx..]
+            .iter()
+            .all(|pt| pt.min.unwrap_or(1) == 0);
         if all_optional {
             return Some(MatchResult {
                 matched_positions: Vec::new(),
@@ -158,7 +165,9 @@ fn match_tokens_recursive(
         let skip = if pt.skip > 0 { pt.skip as usize } else { 0 };
         let next_token = token_idx + 1 + skip;
 
-        if let Some(mut result) = match_tokens_recursive(pattern_tokens, tokens, next_token, pattern_idx + 1) {
+        if let Some(mut result) =
+            match_tokens_recursive(pattern_tokens, tokens, next_token, pattern_idx + 1)
+        {
             result.matched_positions.insert(0, token_idx);
             return Some(result);
         }
@@ -267,20 +276,29 @@ fn token_matches(
 
         if pt.inflected {
             // inflected="yes": match surface form or any reading's lemma
-            let lemma_matches = surface_matches || token.readings().iter().any(|r| {
-                if let Some(lemma) = r.lemma() {
-                    if pt.case_sensitive {
-                        lemma == pattern_text
+            let lemma_matches = surface_matches
+                || token.readings().iter().any(|r| {
+                    if let Some(lemma) = r.lemma() {
+                        if pt.case_sensitive {
+                            lemma == pattern_text
+                        } else {
+                            lemma.eq_ignore_ascii_case(pattern_text)
+                        }
                     } else {
-                        lemma.eq_ignore_ascii_case(pattern_text)
+                        false
                     }
-                } else {
-                    false
-                }
-            });
-            if pt.negate { !lemma_matches } else { lemma_matches }
+                });
+            if pt.negate {
+                !lemma_matches
+            } else {
+                lemma_matches
+            }
         } else {
-            if pt.negate { !surface_matches } else { surface_matches }
+            if pt.negate {
+                !surface_matches
+            } else {
+                surface_matches
+            }
         }
     } else if let Some(ref re) = pt.compiled_regexp {
         let re_to_use = if !pt.case_sensitive {
@@ -305,15 +323,25 @@ fn token_matches(
     // Check POS tag constraint
     let pos_matches = if let Some(ref postag) = pt.postag {
         if let Some(ref re) = pt.compiled_postag_regexp {
-            let has_matching = token.readings().iter().any(|r| {
-                r.pos_tags().iter().any(|t| re.is_match(t))
-            });
-            if pt.negate_pos { !has_matching } else { has_matching }
+            let has_matching = token
+                .readings()
+                .iter()
+                .any(|r| r.pos_tags().iter().any(|t| re.is_match(t)));
+            if pt.negate_pos {
+                !has_matching
+            } else {
+                has_matching
+            }
         } else {
-            let has_matching = token.readings().iter().any(|r| {
-                r.pos_tags().iter().any(|t| t == postag)
-            });
-            if pt.negate_pos { !has_matching } else { has_matching }
+            let has_matching = token
+                .readings()
+                .iter()
+                .any(|r| r.pos_tags().iter().any(|t| t == postag));
+            if pt.negate_pos {
+                !has_matching
+            } else {
+                has_matching
+            }
         }
     } else {
         true
@@ -350,13 +378,15 @@ fn token_matches(
         };
         let pos_exc = if let Some(ref postag) = exc.postag {
             if let Some(ref re) = exc.compiled_postag_regexp {
-                token.readings().iter().any(|r| {
-                    r.pos_tags().iter().any(|t| re.is_match(t))
-                })
+                token
+                    .readings()
+                    .iter()
+                    .any(|r| r.pos_tags().iter().any(|t| re.is_match(t)))
             } else {
-                token.readings().iter().any(|r| {
-                    r.pos_tags().iter().any(|t| t == postag)
-                })
+                token
+                    .readings()
+                    .iter()
+                    .any(|r| r.pos_tags().iter().any(|t| t == postag))
             }
         } else {
             false
@@ -376,7 +406,11 @@ fn token_matches(
             false
         };
 
-        let exc_active = if exc.negate { !exc_matches } else { exc_matches };
+        let exc_active = if exc.negate {
+            !exc_matches
+        } else {
+            exc_matches
+        };
         if exc_active {
             return false;
         }
@@ -464,8 +498,12 @@ fn apply_disambiguation(
                     !wds.iter().any(|w| {
                         let pos_match = w.pos.as_ref().map_or(false, |pos| {
                             // Support regex patterns (e.g., "PRP.*")
-                            let is_regex = pos.contains('.') || pos.contains('*') || pos.contains('+')
-                                || pos.contains('[') || pos.contains('(') || pos.contains('|');
+                            let is_regex = pos.contains('.')
+                                || pos.contains('*')
+                                || pos.contains('+')
+                                || pos.contains('[')
+                                || pos.contains('(')
+                                || pos.contains('|');
                             if is_regex {
                                 if let Ok(re) = regex::Regex::new(pos) {
                                     r.pos_tags().iter().any(|t| re.is_match(t))
@@ -476,9 +514,10 @@ fn apply_disambiguation(
                                 r.pos_tags().contains(pos)
                             }
                         });
-                        let lemma_match = w.lemma.as_ref().map_or(true, |lemma| {
-                            r.lemma() == Some(lemma.as_str())
-                        });
+                        let lemma_match = w
+                            .lemma
+                            .as_ref()
+                            .map_or(true, |lemma| r.lemma() == Some(lemma.as_str()));
                         pos_match && lemma_match
                     })
                 })
@@ -517,8 +556,7 @@ fn apply_disambiguation(
                     .filter(|r| r.pos_tags().iter().any(|t| re.is_match(t)))
                     .collect();
                 if !filtered.is_empty() {
-                    tokens[real_idx] =
-                        AnalyzedTokenReadings::new(base).with_readings(filtered);
+                    tokens[real_idx] = AnalyzedTokenReadings::new(base).with_readings(filtered);
                 }
             }
         }
@@ -542,8 +580,18 @@ fn compile_disambig_rule(compiler: &XmlCompiler, rule: DisambigRule) -> Compiled
         id: rule.id,
         name: rule.name,
         pattern: CompiledPattern {
-            tokens: rule.pattern.tokens.iter().map(|t| compiler.compile_token(t)).collect(),
-            elements: rule.pattern.elements.iter().map(|e| compiler.compile_element(e)).collect(),
+            tokens: rule
+                .pattern
+                .tokens
+                .iter()
+                .map(|t| compiler.compile_token(t))
+                .collect(),
+            elements: rule
+                .pattern
+                .elements
+                .iter()
+                .map(|e| compiler.compile_element(e))
+                .collect(),
             case_sensitive: rule.pattern.case_sensitive,
             marker_start: rule.pattern.marker_start,
             marker_end: rule.pattern.marker_end,
@@ -552,8 +600,16 @@ fn compile_disambig_rule(compiler: &XmlCompiler, rule: DisambigRule) -> Compiled
             .antipatterns
             .iter()
             .map(|ap| CompiledPattern {
-                tokens: ap.tokens.iter().map(|t| compiler.compile_token(t)).collect(),
-                elements: ap.elements.iter().map(|e| compiler.compile_element(e)).collect(),
+                tokens: ap
+                    .tokens
+                    .iter()
+                    .map(|t| compiler.compile_token(t))
+                    .collect(),
+                elements: ap
+                    .elements
+                    .iter()
+                    .map(|e| compiler.compile_element(e))
+                    .collect(),
                 case_sensitive: ap.case_sensitive,
                 marker_start: None,
                 marker_end: None,
@@ -579,8 +635,7 @@ mod tests {
             let readings: Vec<AnalyzedToken> = pos_tags
                 .into_iter()
                 .map(|pos| {
-                    AnalyzedToken::new(text, start, end)
-                        .with_pos_tags(vec![pos.to_string()])
+                    AnalyzedToken::new(text, start, end).with_pos_tags(vec![pos.to_string()])
                 })
                 .collect();
             analyzed.push(AnalyzedTokenReadings::new(base).with_readings(readings));
@@ -717,9 +772,7 @@ mod tests {
         ];
         tokens.push(AnalyzedTokenReadings::new(base1).with_readings(readings1));
         let base2 = AnalyzedToken::new("n't", 2, 5);
-        let readings2 = vec![
-            AnalyzedToken::new("n't", 2, 5).with_pos_tags(vec!["RB".to_string()]),
-        ];
+        let readings2 = vec![AnalyzedToken::new("n't", 2, 5).with_pos_tags(vec!["RB".to_string()])];
         tokens.push(AnalyzedTokenReadings::new(base2).with_readings(readings2));
         sentence.set_tokens(tokens);
 
@@ -856,7 +909,10 @@ mod tests {
         match XmlDisambiguator::from_xml(&xml) {
             Ok(d) => {
                 println!("Loaded {} disambiguation rules", d.rule_count());
-                assert!(d.rule_count() > 100, "Expected at least 100 disambiguation rules");
+                assert!(
+                    d.rule_count() > 100,
+                    "Expected at least 100 disambiguation rules"
+                );
             }
             Err(e) => panic!("Failed to load disambiguation.xml: {}", e),
         }

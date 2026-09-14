@@ -1,5 +1,5 @@
-use og_core::Token;
 use crate::WordTokenizer;
+use og_core::Token;
 
 pub struct DefaultWordTokenizer;
 
@@ -14,11 +14,20 @@ impl DefaultWordTokenizer {
 
     /// Check if we're at the start of a URL, email, or file path.
     /// Returns the end byte offset if detected, or None.
-    fn try_consume_url_or_email(&self, text: &str, _chars: &[char], _start: usize, byte_start: usize) -> Option<usize> {
+    fn try_consume_url_or_email(
+        &self,
+        text: &str,
+        _chars: &[char],
+        _start: usize,
+        byte_start: usize,
+    ) -> Option<usize> {
         let remaining = &text[byte_start..];
 
         // URL patterns
-        if remaining.starts_with("http://") || remaining.starts_with("https://") || remaining.starts_with("ftp://") {
+        if remaining.starts_with("http://")
+            || remaining.starts_with("https://")
+            || remaining.starts_with("ftp://")
+        {
             return Some(self.consume_url_like(remaining, byte_start));
         }
 
@@ -29,16 +38,28 @@ impl DefaultWordTokenizer {
 
         // Email: word@word.word pattern
         if let Some(at_pos) = remaining.find('@') {
-            if at_pos > 0 && remaining[..at_pos].chars().all(|c| c.is_alphanumeric() || c == '.' || c == '_' || c == '-' || c == '+') {
+            if at_pos > 0
+                && remaining[..at_pos]
+                    .chars()
+                    .all(|c| c.is_alphanumeric() || c == '.' || c == '_' || c == '-' || c == '+')
+            {
                 // Check domain part
                 let domain = &remaining[at_pos + 1..];
                 if let Some(slash_pos) = domain.find(|c: char| c.is_whitespace()) {
                     let domain_part = &domain[..slash_pos];
-                    if domain_part.contains('.') && domain_part.chars().all(|c| c.is_alphanumeric() || c == '.' || c == '-') {
+                    if domain_part.contains('.')
+                        && domain_part
+                            .chars()
+                            .all(|c| c.is_alphanumeric() || c == '.' || c == '-')
+                    {
                         let end = byte_start + at_pos + 1 + slash_pos;
                         return Some(end);
                     }
-                } else if domain.contains('.') && domain.chars().all(|c| c.is_alphanumeric() || c == '.' || c == '-') {
+                } else if domain.contains('.')
+                    && domain
+                        .chars()
+                        .all(|c| c.is_alphanumeric() || c == '.' || c == '-')
+                {
                     return Some(byte_start + remaining.len());
                 }
             }
@@ -48,7 +69,9 @@ impl DefaultWordTokenizer {
     }
 
     fn consume_url_like(&self, remaining: &str, byte_start: usize) -> usize {
-        let end = remaining.find(|c: char| c.is_whitespace()).unwrap_or(remaining.len());
+        let end = remaining
+            .find(|c: char| c.is_whitespace())
+            .unwrap_or(remaining.len());
         byte_start + end
     }
 
@@ -87,10 +110,9 @@ impl DefaultWordTokenizer {
         // Pattern 1: n't contractions (Java regex group 1 + group 2)
         // Matches: (stem)(n't) where stem is are/is/was/do/does/did/have/etc.
         let nt_stems = [
-            "are", "is", "were", "was", "do", "does", "did",
-            "have", "has", "had", "wo", "would", "ca", "could",
-            "sha", "should", "must", "ai", "ought", "might",
-            "need", "may", "am", "dare", "used", "use",
+            "are", "is", "were", "was", "do", "does", "did", "have", "has", "had", "wo", "would",
+            "ca", "could", "sha", "should", "must", "ai", "ought", "might", "need", "may", "am",
+            "dare", "used", "use",
         ];
         for stem in &nt_stems {
             if let Some(rest) = normalized.strip_prefix(stem) {
@@ -146,8 +168,6 @@ impl DefaultWordTokenizer {
     }
 }
 
-
-
 impl Default for DefaultWordTokenizer {
     fn default() -> Self {
         Self::new()
@@ -176,11 +196,21 @@ impl WordTokenizer for DefaultWordTokenizer {
                     end_byte += chars[i].len_utf8();
                     i += 1;
                 }
-                tokens.push(Token::new(&text[start_byte..end_byte], start_byte, end_byte));
+                tokens.push(Token::new(
+                    &text[start_byte..end_byte],
+                    start_byte,
+                    end_byte,
+                ));
                 byte_offset = end_byte;
-            } else if let Some(url_end) = self.try_consume_url_or_email(text, &chars, i, byte_offset) {
+            } else if let Some(url_end) =
+                self.try_consume_url_or_email(text, &chars, i, byte_offset)
+            {
                 // URL or email: consume as single token
-                tokens.push(Token::new(&text[byte_offset..url_end], byte_offset, url_end));
+                tokens.push(Token::new(
+                    &text[byte_offset..url_end],
+                    byte_offset,
+                    url_end,
+                ));
                 // Advance i to match url_end
                 while byte_offset < url_end && i < chars.len() {
                     byte_offset += chars[i].len_utf8();
@@ -195,13 +225,21 @@ impl WordTokenizer for DefaultWordTokenizer {
                     end_byte += chars[i].len_utf8();
                     i += 1;
                 }
-                tokens.push(Token::new(&text[start_byte..end_byte], start_byte, end_byte));
+                tokens.push(Token::new(
+                    &text[start_byte..end_byte],
+                    start_byte,
+                    end_byte,
+                ));
                 byte_offset = end_byte;
             } else {
                 // Punctuation or other single character
                 let start_byte = byte_offset;
                 let end_byte = byte_offset + c.len_utf8();
-                tokens.push(Token::new(&text[start_byte..end_byte], start_byte, end_byte));
+                tokens.push(Token::new(
+                    &text[start_byte..end_byte],
+                    start_byte,
+                    end_byte,
+                ));
                 byte_offset = end_byte;
                 i += 1;
             }
@@ -287,7 +325,11 @@ mod tests {
 
     /// Helper: collect just the token texts from a tokenize call.
     fn token_texts(tokenizer: &DefaultWordTokenizer, input: &str) -> Vec<String> {
-        tokenizer.tokenize(input).iter().map(|t| t.text().to_string()).collect()
+        tokenizer
+            .tokenize(input)
+            .iter()
+            .map(|t| t.text().to_string())
+            .collect()
     }
 
     /// Helper: verify that start/end offsets are monotonically increasing,
@@ -376,7 +418,10 @@ mod tests {
     fn test_comma_separation() {
         let tz = DefaultWordTokenizer::new();
         let tokens = tz.tokenize("Hello, world");
-        assert_eq!(token_texts(&tz, "Hello, world"), vec!["Hello", ",", " ", "world"]);
+        assert_eq!(
+            token_texts(&tz, "Hello, world"),
+            vec!["Hello", ",", " ", "world"]
+        );
         assert_offsets_valid(&tokens);
         assert_reconstruction(&tokens, "Hello, world");
 
@@ -443,7 +488,10 @@ mod tests {
     fn test_apostrophe_with_sentence() {
         let tz = DefaultWordTokenizer::new();
         let tokens = tz.tokenize("I don't know");
-        assert_eq!(token_texts(&tz, "I don't know"), vec!["I", " ", "do", "n't", " ", "know"]);
+        assert_eq!(
+            token_texts(&tz, "I don't know"),
+            vec!["I", " ", "do", "n't", " ", "know"]
+        );
         assert_offsets_valid(&tokens);
         assert_reconstruction(&tokens, "I don't know");
     }
@@ -466,7 +514,10 @@ mod tests {
     fn test_two_spaces() {
         let tz = DefaultWordTokenizer::new();
         let tokens = tz.tokenize("Hello  world");
-        assert_eq!(token_texts(&tz, "Hello  world"), vec!["Hello", "  ", "world"]);
+        assert_eq!(
+            token_texts(&tz, "Hello  world"),
+            vec!["Hello", "  ", "world"]
+        );
         assert_offsets_valid(&tokens);
         assert_reconstruction(&tokens, "Hello  world");
     }
@@ -503,7 +554,10 @@ mod tests {
     fn test_number_at_start() {
         let tz = DefaultWordTokenizer::new();
         let tokens = tz.tokenize("42 is the answer");
-        assert_eq!(token_texts(&tz, "42 is the answer"), vec!["42", " ", "is", " ", "the", " ", "answer"]);
+        assert_eq!(
+            token_texts(&tz, "42 is the answer"),
+            vec!["42", " ", "is", " ", "the", " ", "answer"]
+        );
         assert_offsets_valid(&tokens);
         assert_reconstruction(&tokens, "42 is the answer");
     }
@@ -563,7 +617,10 @@ mod tests {
     fn test_semicolon_and_colon() {
         let tz = DefaultWordTokenizer::new();
         let tokens = tz.tokenize("yes:no;maybe");
-        assert_eq!(token_texts(&tz, "yes:no;maybe"), vec!["yes", ":", "no", ";", "maybe"]);
+        assert_eq!(
+            token_texts(&tz, "yes:no;maybe"),
+            vec!["yes", ":", "no", ";", "maybe"]
+        );
         assert_offsets_valid(&tokens);
     }
 
@@ -860,7 +917,10 @@ mod tests {
     fn test_newline_between_words() {
         let tz = DefaultWordTokenizer::new();
         let tokens = tz.tokenize("line1\nline2");
-        assert_eq!(token_texts(&tz, "line1\nline2"), vec!["line1", "\n", "line2"]);
+        assert_eq!(
+            token_texts(&tz, "line1\nline2"),
+            vec!["line1", "\n", "line2"]
+        );
         assert_offsets_valid(&tokens);
     }
 
@@ -870,11 +930,11 @@ mod tests {
     fn test_token_is_word_classification() {
         let tz = DefaultWordTokenizer::new();
         let tokens = tz.tokenize("Hello, world!");
-        assert!(tokens[0].is_word());    // "Hello"
-        assert!(!tokens[1].is_word());   // ","
-        assert!(!tokens[2].is_word());   // " "
-        assert!(tokens[3].is_word());    // "world"
-        assert!(!tokens[4].is_word());   // "!"
+        assert!(tokens[0].is_word()); // "Hello"
+        assert!(!tokens[1].is_word()); // ","
+        assert!(!tokens[2].is_word()); // " "
+        assert!(tokens[3].is_word()); // "world"
+        assert!(!tokens[4].is_word()); // "!"
     }
 
     #[test]
@@ -882,7 +942,7 @@ mod tests {
         let tz = DefaultWordTokenizer::new();
         let tokens = tz.tokenize("a b");
         assert!(!tokens[0].is_whitespace()); // "a"
-        assert!(tokens[1].is_whitespace());  // " "
+        assert!(tokens[1].is_whitespace()); // " "
         assert!(!tokens[2].is_whitespace()); // "b"
     }
 
@@ -892,10 +952,10 @@ mod tests {
         let tokens = tz.tokenize("a, b!");
         // tokens: ["a", ",", " ", "b", "!"]
         assert!(!tokens[0].is_punctuation()); // "a"
-        assert!(tokens[1].is_punctuation());  // ","
+        assert!(tokens[1].is_punctuation()); // ","
         assert!(!tokens[2].is_punctuation()); // " "
         assert!(!tokens[3].is_punctuation()); // "b"
-        assert!(tokens[4].is_punctuation());  // "!"
+        assert!(tokens[4].is_punctuation()); // "!"
     }
 
     #[test]
@@ -1009,7 +1069,10 @@ mod tests {
         let tz = DefaultWordTokenizer::new();
         let input = "a.b.c.d";
         let tokens = tz.tokenize(input);
-        assert_eq!(token_texts(&tz, input), vec!["a", ".", "b", ".", "c", ".", "d"]);
+        assert_eq!(
+            token_texts(&tz, input),
+            vec!["a", ".", "b", ".", "c", ".", "d"]
+        );
         assert_offsets_valid(&tokens);
         assert_reconstruction(&tokens, input);
     }
@@ -1126,7 +1189,11 @@ mod tests {
         let tokens = tz.tokenize("Go to www.example.com now");
         // "Go" " " "to" " " "www.example.com" " " "now"
         let texts: Vec<&str> = tokens.iter().map(|t| t.text()).collect();
-        assert!(texts.contains(&"www.example.com"), "Expected 'www.example.com' in tokens: {:?}", texts);
+        assert!(
+            texts.contains(&"www.example.com"),
+            "Expected 'www.example.com' in tokens: {:?}",
+            texts
+        );
         assert_offsets_valid(&tokens);
     }
 

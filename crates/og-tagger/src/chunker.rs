@@ -6,9 +6,9 @@
 #[derive(Debug, Clone, PartialEq)]
 pub enum ChunkTag {
     None,
-    BNP(String),  // B-NP, B-NP-singular, B-NP-plural
-    INP(String),  // I-NP, I-NP-singular, I-NP-plural
-    ENP(String),  // E-NP, E-NP-singular, E-NP-plural
+    BNP(String), // B-NP, B-NP-singular, B-NP-plural
+    INP(String), // I-NP, I-NP-singular, I-NP-plural
+    ENP(String), // E-NP, E-NP-singular, E-NP-plural
     BVP,
     IVP,
     EVP,
@@ -78,7 +78,8 @@ pub fn chunk_tokens(pos_tags: &[&str], tokens: &[&str]) -> Vec<Option<String>> {
         // Try matching chunk patterns in priority order
         if let Some(consumed) = try_np_chunk(&pos_tags[i..], &tokens[i..], &mut chunks[i..]) {
             i += consumed;
-        } else if let Some(consumed) = try_vp_chunk(&pos_tags[i..], &tokens[i..], &mut chunks[i..]) {
+        } else if let Some(consumed) = try_vp_chunk(&pos_tags[i..], &tokens[i..], &mut chunks[i..])
+        {
             i += consumed;
         } else if let Some(consumed) = try_pp_chunk(&pos_tags[i..], &mut chunks[i..]) {
             i += consumed;
@@ -95,11 +96,18 @@ pub fn chunk_tokens(pos_tags: &[&str], tokens: &[&str]) -> Vec<Option<String>> {
 }
 
 fn is_punct_tag(tag: &str) -> bool {
-    matches!(tag, "SENT_START" | "SENT_END" | "," | ":" | "." | "-LRB-" | "-RRB-" | "PCT")
+    matches!(
+        tag,
+        "SENT_START" | "SENT_END" | "," | ":" | "." | "-LRB-" | "-RRB-" | "PCT"
+    )
 }
 
 /// Try to match a noun phrase starting at position 0.
-fn try_np_chunk(pos_tags: &[&str], tokens: &[&str], chunks: &mut [Option<String>]) -> Option<usize> {
+fn try_np_chunk(
+    pos_tags: &[&str],
+    tokens: &[&str],
+    chunks: &mut [Option<String>],
+) -> Option<usize> {
     let n = pos_tags.len();
     let mut j = 0;
     let mut has_noun = false;
@@ -214,7 +222,10 @@ fn is_np_determiner(tag: &str) -> bool {
 }
 
 fn is_predet(word: &str) -> bool {
-    matches!(word.to_lowercase().as_str(), "all" | "both" | "half" | "such" | "many" | "some" | "few")
+    matches!(
+        word.to_lowercase().as_str(),
+        "all" | "both" | "half" | "such" | "many" | "some" | "few"
+    )
 }
 
 fn is_adjectival(tag: &str) -> bool {
@@ -228,7 +239,11 @@ fn is_noun_tag(tag: &str) -> bool {
 /// Try to match a verb phrase.
 /// Groups auxiliaries (be/have/do forms + modals) + adverbs + main verb into a single VP chunk.
 /// Matches Java LT's OpenNLP chunker behavior.
-fn try_vp_chunk(pos_tags: &[&str], tokens: &[&str], chunks: &mut [Option<String>]) -> Option<usize> {
+fn try_vp_chunk(
+    pos_tags: &[&str],
+    tokens: &[&str],
+    chunks: &mut [Option<String>],
+) -> Option<usize> {
     let n = pos_tags.len();
     let mut j = 0;
 
@@ -264,8 +279,10 @@ fn try_vp_chunk(pos_tags: &[&str], tokens: &[&str], chunks: &mut [Option<String>
         // (e.g., "has open" → open should start NP, not be VP main verb)
         let prev_is_have_aux = if j > 0 {
             let prev_tok = tokens.get(j - 1).map(|s| *s).unwrap_or("");
-            matches!(prev_tok.to_lowercase().as_str(), "have" | "has" | "had" | "'ve" | "'s")
-                && pos_tags[j - 1] != "MD" // only if prev was the have-aux, not modal
+            matches!(
+                prev_tok.to_lowercase().as_str(),
+                "have" | "has" | "had" | "'ve" | "'s"
+            ) && pos_tags[j - 1] != "MD" // only if prev was the have-aux, not modal
         } else {
             false
         };
@@ -310,10 +327,24 @@ fn try_vp_chunk(pos_tags: &[&str], tokens: &[&str], chunks: &mut [Option<String>
 }
 
 fn is_aux_verb(word: &str) -> bool {
-    matches!(word.to_lowercase().as_str(),
-        "be" | "am" | "is" | "are" | "was" | "were" | "been" | "being" |
-        "have" | "has" | "had" | "having" |
-        "do" | "does" | "did" | "doing" | "done"
+    matches!(
+        word.to_lowercase().as_str(),
+        "be" | "am"
+            | "is"
+            | "are"
+            | "was"
+            | "were"
+            | "been"
+            | "being"
+            | "have"
+            | "has"
+            | "had"
+            | "having"
+            | "do"
+            | "does"
+            | "did"
+            | "doing"
+            | "done"
     )
 }
 

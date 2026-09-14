@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use crate::Token;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AnalyzedToken {
@@ -137,7 +137,9 @@ impl AnalyzedTokenReadings {
     }
 
     pub fn has_lemma(&self, lemma: &str) -> bool {
-        self.readings.iter().any(|r| r.lemma.as_deref() == Some(lemma))
+        self.readings
+            .iter()
+            .any(|r| r.lemma.as_deref() == Some(lemma))
     }
 
     pub fn has_pos_tag(&self, tag: &str) -> bool {
@@ -147,8 +149,8 @@ impl AnalyzedTokenReadings {
     }
 
     pub fn has_pos_tag_matching(&self, pattern: &str) -> bool {
-        use std::sync::LazyLock;
         use std::collections::HashMap;
+        use std::sync::LazyLock;
         use std::sync::Mutex;
 
         static REGEX_CACHE: LazyLock<Mutex<HashMap<String, regex::Regex>>> =
@@ -164,28 +166,37 @@ impl AnalyzedTokenReadings {
         {
             let cache = REGEX_CACHE.lock().unwrap();
             if let Some(re) = cache.get(&anchored) {
-                return self.readings.iter().any(|r| r.pos_tags.iter().any(|t| re.is_match(t)));
+                return self
+                    .readings
+                    .iter()
+                    .any(|r| r.pos_tags.iter().any(|t| re.is_match(t)));
             }
         }
 
         // Compile and cache
         match regex::Regex::new(&anchored) {
             Ok(re) => {
-                let result = self.readings.iter().any(|r| r.pos_tags.iter().any(|t| re.is_match(t)));
+                let result = self
+                    .readings
+                    .iter()
+                    .any(|r| r.pos_tags.iter().any(|t| re.is_match(t)));
                 let mut cache = REGEX_CACHE.lock().unwrap();
                 cache.entry(anchored).or_insert(re);
                 result
             }
-            Err(_) => {
-                self.readings.iter().any(|r| r.pos_tags.iter().any(|t| t == pattern))
-            }
+            Err(_) => self
+                .readings
+                .iter()
+                .any(|r| r.pos_tags.iter().any(|t| t == pattern)),
         }
     }
 
     /// Check if any reading has a POS tag matching a pre-compiled regex.
     /// Use this instead of `has_pos_tag_matching` when the regex is already compiled.
     pub fn has_pos_tag_matching_regex(&self, re: &regex::Regex) -> bool {
-        self.readings.iter().any(|r| r.pos_tags.iter().any(|t| re.is_match(t)))
+        self.readings
+            .iter()
+            .any(|r| r.pos_tags.iter().any(|t| re.is_match(t)))
     }
 
     pub fn chunk(&self) -> Option<&str> {
@@ -199,10 +210,15 @@ impl AnalyzedTokenReadings {
     /// Add a SENT_END reading to this token (like Java's setSentEnd()).
     /// Adds the tag as both a primary POS tag and as a new reading.
     pub fn add_sent_end(&mut self) {
-        let lemma = self.token.lemma.clone().unwrap_or_else(|| self.token.token.to_string());
-        let sent_end_token = AnalyzedToken::new(self.token.token.as_str(), self.token.start, self.token.end)
-            .with_pos_tags(vec!["SENT_END".to_string()])
-            .with_lemma(lemma);
+        let lemma = self
+            .token
+            .lemma
+            .clone()
+            .unwrap_or_else(|| self.token.token.to_string());
+        let sent_end_token =
+            AnalyzedToken::new(self.token.token.as_str(), self.token.start, self.token.end)
+                .with_pos_tags(vec!["SENT_END".to_string()])
+                .with_lemma(lemma);
         self.readings.push(sent_end_token);
         if !self.token.pos_tags.contains(&"SENT_END".to_string()) {
             self.token.pos_tags.push("SENT_END".to_string());
@@ -211,12 +227,18 @@ impl AnalyzedTokenReadings {
 
     pub fn is_sentence_start(&self) -> bool {
         self.token.pos_tags.iter().any(|t| t == "SENT_START")
-            || self.readings.iter().any(|r| r.pos_tags.iter().any(|t| t == "SENT_START"))
+            || self
+                .readings
+                .iter()
+                .any(|r| r.pos_tags.iter().any(|t| t == "SENT_START"))
     }
 
     pub fn is_sentence_end(&self) -> bool {
         self.token.pos_tags.iter().any(|t| t == "SENT_END")
-            || self.readings.iter().any(|r| r.pos_tags.iter().any(|t| t == "SENT_END"))
+            || self
+                .readings
+                .iter()
+                .any(|r| r.pos_tags.iter().any(|t| t == "SENT_END"))
     }
 
     /// Get all POS tags from all readings combined (deduplicated).
@@ -234,7 +256,8 @@ impl AnalyzedTokenReadings {
 
     /// Get all lemmas from all readings.
     pub fn all_lemmas(&self) -> Vec<&str> {
-        self.readings.iter()
+        self.readings
+            .iter()
             .filter_map(|r| r.lemma.as_deref())
             .collect()
     }

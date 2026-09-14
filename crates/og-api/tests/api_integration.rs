@@ -1,7 +1,7 @@
-use og_api::server::{AppState, build_app};
 use axum::body::Body;
-use http_body_util::BodyExt;
 use http::{Request, StatusCode};
+use http_body_util::BodyExt;
+use og_api::server::{AppState, build_app};
 use std::sync::Arc;
 use tower::ServiceExt;
 
@@ -87,7 +87,10 @@ async fn test_v2_languages() {
     assert!(!json.is_empty());
     assert!(json.iter().any(|l| l["longCode"] == "en-US"));
     assert!(json.iter().any(|l| l["longCode"] == "de-DE"));
-    assert!(json.iter().any(|l| l["code"] == "en" && l["longCode"] == "en-US"));
+    assert!(
+        json.iter()
+            .any(|l| l["code"] == "en" && l["longCode"] == "en-US")
+    );
 }
 
 #[tokio::test]

@@ -1,8 +1,6 @@
 use crate::{
-    AnalyzedSentence, AnalyzedToken, AnalyzedTokenReadings,
-    CheckResult, Language, LanguageDetectedInfo, LanguageInfo,
-    RuleMatch, SoftwareInfo, Warnings,
-    rule::Rule,
+    AnalyzedSentence, AnalyzedToken, AnalyzedTokenReadings, CheckResult, Language,
+    LanguageDetectedInfo, LanguageInfo, RuleMatch, SoftwareInfo, Warnings, rule::Rule,
 };
 use std::sync::Arc;
 
@@ -52,7 +50,9 @@ impl CheckRequest {
             return false;
         }
         // If specific categories are enabled, only those run
-        if !self.enabled_categories.is_empty() && !self.enabled_categories.contains(&category_id.to_string()) {
+        if !self.enabled_categories.is_empty()
+            && !self.enabled_categories.contains(&category_id.to_string())
+        {
             return false;
         }
         // Explicitly disabled categories never run
@@ -61,7 +61,11 @@ impl CheckRequest {
         }
         // Rules that are default-off only run if explicitly enabled or if picky mode is on
         let picky = self.picky || self.level.as_deref() == Some("picky");
-        if !default_on && !picky && !self.enabled_rules.contains(&rule_id.to_string()) && !self.enabled_categories.contains(&category_id.to_string()) {
+        if !default_on
+            && !picky
+            && !self.enabled_rules.contains(&rule_id.to_string())
+            && !self.enabled_categories.contains(&category_id.to_string())
+        {
             return false;
         }
         true
@@ -160,7 +164,10 @@ impl Checker {
         let sentence_ranges = if let Some(ref tokenizer) = self.sentence_tokenizer {
             tokenizer.split(text)
         } else {
-            vec![SentenceRange { start: 0, end: text.len() }]
+            vec![SentenceRange {
+                start: 0,
+                end: text.len(),
+            }]
         };
 
         // Step 2: For each sentence, tokenize, tag, disambiguate, then apply rules
@@ -177,7 +184,7 @@ impl Checker {
                 // Add SENTENCE_START token
                 let start_token = AnalyzedTokenReadings::new(
                     AnalyzedToken::new("<S>", range.start, range.start)
-                        .with_pos_tags(vec!["SENT_START".to_string()])
+                        .with_pos_tags(vec!["SENT_START".to_string()]),
                 );
                 tokens.insert(0, start_token);
                 sentence.set_tokens(tokens);
@@ -209,7 +216,11 @@ impl Checker {
 
             // Step 2d: Apply sentence-level rules
             for rule in &self.rules {
-                if !request.is_rule_enabled(rule.id(), &rule.category().id().as_str().to_string(), rule.is_default_on()) {
+                if !request.is_rule_enabled(
+                    rule.id(),
+                    &rule.category().id().as_str().to_string(),
+                    rule.is_default_on(),
+                ) {
                     continue;
                 }
                 let matches = rule.match_sentence(&sentence);
@@ -221,7 +232,11 @@ impl Checker {
 
         // Step 3: Apply text-level rules across all sentences
         for rule in &self.text_level_rules {
-            if !request.is_rule_enabled(rule.id(), &rule.category().id().as_str().to_string(), rule.is_default_on()) {
+            if !request.is_rule_enabled(
+                rule.id(),
+                &rule.category().id().as_str().to_string(),
+                rule.is_default_on(),
+            ) {
                 continue;
             }
             let matches = rule.match_text(text, &analyzed_sentences);
@@ -267,4 +282,3 @@ impl Default for Checker {
 }
 
 // Re-export trait names that don't conflict with lang-module traits
-

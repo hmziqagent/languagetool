@@ -1,8 +1,8 @@
-use og_core::checker::{SentenceTokenizer, WordTokenizer, Disambiguator};
+use og_core::checker::{Disambiguator, SentenceTokenizer, WordTokenizer};
 use og_core::{AnalyzedSentence, AnalyzedToken, AnalyzedTokenReadings, SentenceRange};
-use og_xml::compiler::XmlCompiler;
 use og_rules::pattern_rule::PatternRuleEngine;
 use og_tagger::{EnglishTagger, Tagger, XmlDisambiguator};
+use og_xml::compiler::XmlCompiler;
 use std::path::Path;
 
 /// Result of running a single example test
@@ -38,10 +38,13 @@ impl WordTokenizer for TestWordTokenizer {
         let tokenizer = og_tokenizer::DefaultWordTokenizer::new();
         use og_tokenizer::WordTokenizer as _;
         let tokens = tokenizer.tokenize(text);
-        tokens.into_iter().map(|t| {
-            let at = AnalyzedToken::new(t.text(), t.start() + offset, t.end() + offset);
-            AnalyzedTokenReadings::new(at)
-        }).collect()
+        tokens
+            .into_iter()
+            .map(|t| {
+                let at = AnalyzedToken::new(t.text(), t.start() + offset, t.end() + offset);
+                AnalyzedTokenReadings::new(at)
+            })
+            .collect()
     }
 }
 
@@ -53,10 +56,13 @@ impl SentenceTokenizer for TestSentenceTokenizer {
         let splitter = og_tokenizer::DefaultSentenceSplitter::new();
         use og_tokenizer::SentenceTokenizer as _;
         let sentences = splitter.split(text);
-        sentences.into_iter().map(|s| SentenceRange {
-            start: s.start(),
-            end: s.end(),
-        }).collect()
+        sentences
+            .into_iter()
+            .map(|s| SentenceRange {
+                start: s.start(),
+                end: s.end(),
+            })
+            .collect()
     }
 }
 
@@ -140,12 +146,16 @@ impl TestRunner {
         let mut tokens = tokenizer.tokenize(text, 0);
         // Add SENT_START token
         let start_token = AnalyzedTokenReadings::new(
-            AnalyzedToken::new("<S>", 0, 0).with_pos_tags(vec!["SENT_START".to_string()])
+            AnalyzedToken::new("<S>", 0, 0).with_pos_tags(vec!["SENT_START".to_string()]),
         );
         tokens.insert(0, start_token);
 
         // Apply POS tagger to non-SENT_START tokens
-        let token_texts: Vec<String> = tokens.iter().skip(1).map(|t| t.token().token().to_string()).collect();
+        let token_texts: Vec<String> = tokens
+            .iter()
+            .skip(1)
+            .map(|t| t.token().token().to_string())
+            .collect();
         let text_refs: Vec<&str> = token_texts.iter().map(|s| s.as_str()).collect();
         let tagged = Tagger::tag(&self.tagger, &text_refs);
 
@@ -156,18 +166,17 @@ impl TestRunner {
                 let readings = tagged_atr.readings().to_vec();
                 if !readings.is_empty() {
                     let primary = tokens[token_idx].token().clone();
-                    let all_tags: Vec<String> = readings.iter()
+                    let all_tags: Vec<String> = readings
+                        .iter()
                         .flat_map(|r| r.pos_tags().to_vec())
                         .collect();
-                    let updated_primary = AnalyzedToken::new(
-                        primary.token(),
-                        primary.start(),
-                        primary.end()
-                    )
-                    .with_pos_tags(all_tags)
-                    .with_lemma(readings[0].lemma().unwrap_or(primary.token()).to_string());
+                    let updated_primary =
+                        AnalyzedToken::new(primary.token(), primary.start(), primary.end())
+                            .with_pos_tags(all_tags)
+                            .with_lemma(readings[0].lemma().unwrap_or(primary.token()).to_string());
 
-                    tokens[token_idx] = AnalyzedTokenReadings::new(updated_primary).with_readings(readings);
+                    tokens[token_idx] =
+                        AnalyzedTokenReadings::new(updated_primary).with_readings(readings);
                 }
             }
         }
@@ -178,7 +187,12 @@ impl TestRunner {
         // In Java LT, every sentence's last non-whitespace token gets a SENT_END reading added
         let tokens = sentence.tokens_mut();
         for i in (0..tokens.len()).rev() {
-            if !tokens[i].is_whitespace() && !tokens[i].token().pos_tags().contains(&"SENT_START".to_string()) {
+            if !tokens[i].is_whitespace()
+                && !tokens[i]
+                    .token()
+                    .pos_tags()
+                    .contains(&"SENT_START".to_string())
+            {
                 if !tokens[i].has_pos_tag("SENT_END") {
                     tokens[i].add_sent_end();
                 }
@@ -211,21 +225,26 @@ impl TestRunner {
 
         // Build list of non-whitespace token indices
         let nw: Vec<usize> = (0..n).filter(|&i| !tokens[i].is_whitespace()).collect();
-        if nw.len() < 3 { return; }
+        if nw.len() < 3 {
+            return;
+        }
 
         // Build parallel arrays of text and tags for non-ws tokens
         let nw_text: Vec<&str> = nw.iter().map(|&i| tokens[i].token().token()).collect();
-        let nw_has_tag: Vec<Vec<String>> = nw.iter().map(|&i| {
-            let mut tags: Vec<String> = Vec::new();
-            for r in tokens[i].readings() {
-                for t in r.pos_tags() {
-                    if !tags.contains(&t.to_string()) {
-                        tags.push(t.to_string());
+        let nw_has_tag: Vec<Vec<String>> = nw
+            .iter()
+            .map(|&i| {
+                let mut tags: Vec<String> = Vec::new();
+                for r in tokens[i].readings() {
+                    for t in r.pos_tags() {
+                        if !tags.contains(&t.to_string()) {
+                            tags.push(t.to_string());
+                        }
                     }
                 }
-            }
-            tags
-        }).collect();
+                tags
+            })
+            .collect();
 
         let mut removals: Vec<(usize, String)> = Vec::new(); // (nw_index, tag_to_remove)
 
@@ -238,26 +257,33 @@ impl TestRunner {
             // remove VBZ/VB from following word if it also has NN/NNS.
             // e.g., "I do flips" → "flips" should be NNS, not VBZ
             if i >= 1 {
-                let prev_lower = nw_text[i-1].to_lowercase();
-                let prev_is_do_verb = (prev_lower == "do" || prev_lower == "does" || prev_lower == "did")
-                    && nw_has_tag[i-1].iter().any(|t| t.starts_with("VB"));
+                let prev_lower = nw_text[i - 1].to_lowercase();
+                let prev_is_do_verb =
+                    (prev_lower == "do" || prev_lower == "does" || prev_lower == "did")
+                        && nw_has_tag[i - 1].iter().any(|t| t.starts_with("VB"));
                 if prev_is_do_verb {
-                    if tags.contains(&"VBZ".to_string()) && tags.iter().any(|t| t.starts_with("NN")) {
+                    if tags.contains(&"VBZ".to_string()) && tags.iter().any(|t| t.starts_with("NN"))
+                    {
                         removals.push((i, "VBZ".to_string()));
                     }
-                    if tags.contains(&"VB".to_string()) && tags.iter().any(|t| t.starts_with("NN"))
-                        && !tags.contains(&"NN:UN".to_string()) && !tags.contains(&"NN:U".to_string()) {
+                    if tags.contains(&"VB".to_string())
+                        && tags.iter().any(|t| t.starts_with("NN"))
+                        && !tags.contains(&"NN:UN".to_string())
+                        && !tags.contains(&"NN:U".to_string())
+                    {
                         removals.push((i, "VB".to_string()));
                     }
                 }
                 // Also handle "do not flips" pattern
-                if i >= 2 && nw_text[i-1].eq_ignore_ascii_case("not") {
+                if i >= 2 && nw_text[i - 1].eq_ignore_ascii_case("not") {
                     let do_idx = i - 2;
                     let do_lower = nw_text[do_idx].to_lowercase();
                     let do_is_verb = (do_lower == "do" || do_lower == "does" || do_lower == "did")
                         && nw_has_tag[do_idx].iter().any(|t| t.starts_with("VB"));
                     if do_is_verb {
-                        if tags.contains(&"VBZ".to_string()) && tags.iter().any(|t| t.starts_with("NN")) {
+                        if tags.contains(&"VBZ".to_string())
+                            && tags.iter().any(|t| t.starts_with("NN"))
+                        {
                             removals.push((i, "VBZ".to_string()));
                         }
                     }
@@ -265,12 +291,15 @@ impl TestRunner {
             }
 
             // Rule 2: "does" as plural of "doe" (deer) - "The does grazed"
-            if lower == "does" && tags.contains(&"VBZ".to_string()) && tags.contains(&"NNS".to_string()) {
+            if lower == "does"
+                && tags.contains(&"VBZ".to_string())
+                && tags.contains(&"NNS".to_string())
+            {
                 if i >= 1 {
-                    let prev_lower = nw_text[i-1].to_lowercase();
+                    let prev_lower = nw_text[i - 1].to_lowercase();
                     if prev_lower == "the" || prev_lower == "these" || prev_lower == "those" {
                         if i + 1 < nw.len() {
-                            let next_tags = &nw_has_tag[i+1];
+                            let next_tags = &nw_has_tag[i + 1];
                             if next_tags.iter().any(|t| t == "VBD" || t == "VBN") {
                                 removals.push((i, "VBZ".to_string()));
                             }
@@ -283,10 +312,13 @@ impl TestRunner {
             // e.g., "the dreams" → "dreams" should be NNS
             // But DON'T remove VB (needed for "a need" etc.)
             if i >= 1 {
-                let prev_tags = &nw_has_tag[i-1];
-                let prev_is_det = prev_tags.iter().any(|t| t == "DT" || t == "PRP$" || t == "PRP_S");
+                let prev_tags = &nw_has_tag[i - 1];
+                let prev_is_det = prev_tags
+                    .iter()
+                    .any(|t| t == "DT" || t == "PRP$" || t == "PRP_S");
                 if prev_is_det {
-                    if tags.contains(&"VBZ".to_string()) && tags.iter().any(|t| t.starts_with("NN")) {
+                    if tags.contains(&"VBZ".to_string()) && tags.iter().any(|t| t.starts_with("NN"))
+                    {
                         removals.push((i, "VBZ".to_string()));
                     }
                 }
@@ -296,7 +328,7 @@ impl TestRunner {
             // remove IN from words that also have VB (like/love/want/need/hope/try)
             // e.g., "I like ice cream" → "like" should be VB, not IN
             if i >= 1 {
-                let prev_tags = &nw_has_tag[i-1];
+                let prev_tags = &nw_has_tag[i - 1];
                 let prev_is_subject = prev_tags.iter().any(|t| t == "PRP")
                     || prev_tags.iter().any(|t| t.starts_with("NNP"));
                 if prev_is_subject {
@@ -313,10 +345,11 @@ impl TestRunner {
             // Rule 5: After "does/do/did + n't/not", remove IN from following verb-preps
             // e.g., "doesn't like" → "like" should be VB, not IN
             if i >= 2 {
-                let prev2_lower = nw_text[i-2].to_lowercase();
-                let prev1_lower = nw_text[i-1].to_lowercase();
-                let is_do_nt = (prev2_lower == "does" || prev2_lower == "do" || prev2_lower == "did")
-                    && (prev1_lower == "n't" || prev1_lower == "not");
+                let prev2_lower = nw_text[i - 2].to_lowercase();
+                let prev1_lower = nw_text[i - 1].to_lowercase();
+                let is_do_nt =
+                    (prev2_lower == "does" || prev2_lower == "do" || prev2_lower == "did")
+                        && (prev1_lower == "n't" || prev1_lower == "not");
                 if is_do_nt {
                     if tags.contains(&"IN".to_string()) && tags.contains(&"VB".to_string()) {
                         removals.push((i, "IN".to_string()));
@@ -327,7 +360,7 @@ impl TestRunner {
             // Rule 6: After modal (MD), remove IN from verb-preps
             // e.g., "will like" → "like" should be VB, not IN
             if i >= 1 {
-                let prev_tags = &nw_has_tag[i-1];
+                let prev_tags = &nw_has_tag[i - 1];
                 if prev_tags.iter().any(|t| t == "MD") {
                     if tags.contains(&"IN".to_string()) && tags.contains(&"VB".to_string()) {
                         removals.push((i, "IN".to_string()));
@@ -338,9 +371,9 @@ impl TestRunner {
             // Rule 7: After "to" (IN/TO), remove IN from verb-preps
             // e.g., "to like" → "like" should be VB, not IN
             if i >= 1 {
-                let prev_tags = &nw_has_tag[i-1];
+                let prev_tags = &nw_has_tag[i - 1];
                 let prev_is_to = prev_tags.iter().any(|t| t == "TO" || t == "IN")
-                    && nw_text[i-1].eq_ignore_ascii_case("to");
+                    && nw_text[i - 1].eq_ignore_ascii_case("to");
                 if prev_is_to {
                     if tags.contains(&"IN".to_string()) && tags.contains(&"VB".to_string()) {
                         removals.push((i, "IN".to_string()));
@@ -353,9 +386,11 @@ impl TestRunner {
             // But DON'T apply when prev is plural (NNS) — "The dogs barks" needs VBZ kept
             // Reduces SINGULAR_AGREEMENT_SENT_START false positives
             if i >= 2 {
-                let prev2_tags = &nw_has_tag[i-2];
-                let prev1_tags = &nw_has_tag[i-1];
-                let prev2_is_det = prev2_tags.iter().any(|t| t == "DT" || t == "PRP$" || t == "PRP_S");
+                let prev2_tags = &nw_has_tag[i - 2];
+                let prev1_tags = &nw_has_tag[i - 1];
+                let prev2_is_det = prev2_tags
+                    .iter()
+                    .any(|t| t == "DT" || t == "PRP$" || t == "PRP_S");
                 let prev1_is_singular_noun = prev1_tags.iter().any(|t| t.starts_with("NN"))
                     && !prev1_tags.iter().any(|t| t == "NNS");
                 if prev2_is_det && prev1_is_singular_noun {
@@ -373,8 +408,10 @@ impl TestRunner {
             // Rule 9: After DT + NN (directly adjacent), remove VBP/VBZ
             // e.g., "the dreams" → "dreams" should be NNS
             if i >= 1 {
-                let prev_tags = &nw_has_tag[i-1];
-                let prev_is_det = prev_tags.iter().any(|t| t == "DT" || t == "PRP$" || t == "PRP_S");
+                let prev_tags = &nw_has_tag[i - 1];
+                let prev_is_det = prev_tags
+                    .iter()
+                    .any(|t| t == "DT" || t == "PRP$" || t == "PRP_S");
                 if prev_is_det {
                     if tags.iter().any(|t| t.starts_with("NN")) {
                         if tags.contains(&"VBZ".to_string()) {
@@ -388,10 +425,13 @@ impl TestRunner {
             // e.g., "has become" → "become" should be VBN, not VBD
             // This prevents HAVE_PART_AGREEMENT from matching valid perfect tenses
             if i >= 1 {
-                let prev_lower = nw_text[i-1].to_lowercase();
-                let prev_is_have = (prev_lower == "have" || prev_lower == "has" || prev_lower == "had"
-                    || prev_lower == "'ve" || prev_lower == "'s")
-                    && nw_has_tag[i-1].iter().any(|t| t.starts_with("VB"));
+                let prev_lower = nw_text[i - 1].to_lowercase();
+                let prev_is_have = (prev_lower == "have"
+                    || prev_lower == "has"
+                    || prev_lower == "had"
+                    || prev_lower == "'ve"
+                    || prev_lower == "'s")
+                    && nw_has_tag[i - 1].iter().any(|t| t.starts_with("VB"));
                 if prev_is_have {
                     // If word has VBN, remove VBD to prefer perfect tense reading
                     if tags.contains(&"VBN".to_string()) && tags.contains(&"VBD".to_string()) {
@@ -403,11 +443,15 @@ impl TestRunner {
             // Rule 11: After "many/more/most/few/several/some", remove VBZ from NN words
             // e.g., "many dreams" → "dreams" should be NNS
             if i >= 1 {
-                let prev_lower = nw_text[i-1].to_lowercase();
-                let prev_is_quant = ["many", "more", "most", "few", "several", "some",
-                    "these", "those", "various", "numerous"].contains(&prev_lower.as_str());
+                let prev_lower = nw_text[i - 1].to_lowercase();
+                let prev_is_quant = [
+                    "many", "more", "most", "few", "several", "some", "these", "those", "various",
+                    "numerous",
+                ]
+                .contains(&prev_lower.as_str());
                 if prev_is_quant {
-                    if tags.iter().any(|t| t.starts_with("NN")) && tags.contains(&"VBZ".to_string()) {
+                    if tags.iter().any(|t| t.starts_with("NN")) && tags.contains(&"VBZ".to_string())
+                    {
                         removals.push((i, "VBZ".to_string()));
                     }
                 }
@@ -416,14 +460,19 @@ impl TestRunner {
             // Rule 12: After PRP subject (he/she/it/they/we/I/you), remove NN/NNS from VB words
             // when followed by a non-verb. This helps "He walk" match HE_VERB_AGR.
             if i >= 1 && i + 1 < nw.len() {
-                let prev_tags = &nw_has_tag[i-1];
+                let prev_tags = &nw_has_tag[i - 1];
                 let prev_is_subject = prev_tags.iter().any(|t| t == "PRP");
                 if prev_is_subject {
-                    if tags.contains(&"VB".to_string()) && tags.iter().any(|t| t.starts_with("NN")) {
-                        let next_tags = &nw_has_tag[i+1];
-                        let next_is_verb = next_tags.iter().any(|t| t.starts_with("VB") || t.starts_with("MD"));
-                        let next_is_det = next_tags.iter().any(|t| t == "DT" || t == "PRP$" || t == "IN");
-                        if !next_is_verb && !next_is_det && nw_text[i+1] != "to" {
+                    if tags.contains(&"VB".to_string()) && tags.iter().any(|t| t.starts_with("NN"))
+                    {
+                        let next_tags = &nw_has_tag[i + 1];
+                        let next_is_verb = next_tags
+                            .iter()
+                            .any(|t| t.starts_with("VB") || t.starts_with("MD"));
+                        let next_is_det = next_tags
+                            .iter()
+                            .any(|t| t == "DT" || t == "PRP$" || t == "IN");
+                        if !next_is_verb && !next_is_det && nw_text[i + 1] != "to" {
                             for nn_tag in ["NN", "NNS"].iter() {
                                 if tags.contains(&nn_tag.to_string()) {
                                     removals.push((i, nn_tag.to_string()));
@@ -437,9 +486,9 @@ impl TestRunner {
             // Rule 13: After "to" (TO tag), remove NN/NNS from following word if it has VB
             // e.g., "to walk" → "walk" should be VB, not NN
             if i >= 1 {
-                let prev_tags = &nw_has_tag[i-1];
+                let prev_tags = &nw_has_tag[i - 1];
                 let prev_is_to = prev_tags.iter().any(|t| t == "TO")
-                    && nw_text[i-1].eq_ignore_ascii_case("to");
+                    && nw_text[i - 1].eq_ignore_ascii_case("to");
                 if prev_is_to {
                     if tags.contains(&"VB".to_string()) {
                         for nn_tag in ["NN", "NNS"].iter() {
@@ -454,7 +503,7 @@ impl TestRunner {
             // Rule 14: After modal (MD), remove NN/NNS from following word if it has VB
             // e.g., "will walk" → "walk" should be VB, not NN
             if i >= 1 {
-                let prev_tags = &nw_has_tag[i-1];
+                let prev_tags = &nw_has_tag[i - 1];
                 if prev_tags.iter().any(|t| t == "MD") {
                     if tags.contains(&"VB".to_string()) {
                         for nn_tag in ["NN", "NNS"].iter() {
@@ -469,17 +518,23 @@ impl TestRunner {
             // Rule 15: After "have/has/had" + RB?, remove NN from VBN/VBD words
             // e.g., "has run" → "run" should be VBN, not NN
             if i >= 1 {
-                let prev_lower = nw_text[i-1].to_lowercase();
-                let prev_is_have = (prev_lower == "have" || prev_lower == "has" || prev_lower == "had"
-                    || prev_lower == "'ve" || prev_lower == "'s")
-                    && nw_has_tag[i-1].iter().any(|t| t.starts_with("VB"));
+                let prev_lower = nw_text[i - 1].to_lowercase();
+                let prev_is_have = (prev_lower == "have"
+                    || prev_lower == "has"
+                    || prev_lower == "had"
+                    || prev_lower == "'ve"
+                    || prev_lower == "'s")
+                    && nw_has_tag[i - 1].iter().any(|t| t.starts_with("VB"));
                 let prev_is_have_or_rb = prev_is_have
                     || (i >= 2 && {
-                        let pp_lower = nw_text[i-2].to_lowercase();
-                        let pp_is_have = (pp_lower == "have" || pp_lower == "has" || pp_lower == "had"
-                            || pp_lower == "'ve" || pp_lower == "'s")
-                            && nw_has_tag[i-2].iter().any(|t| t.starts_with("VB"));
-                        pp_is_have && nw_has_tag[i-1].iter().any(|t| t == "RB")
+                        let pp_lower = nw_text[i - 2].to_lowercase();
+                        let pp_is_have = (pp_lower == "have"
+                            || pp_lower == "has"
+                            || pp_lower == "had"
+                            || pp_lower == "'ve"
+                            || pp_lower == "'s")
+                            && nw_has_tag[i - 2].iter().any(|t| t.starts_with("VB"));
+                        pp_is_have && nw_has_tag[i - 1].iter().any(|t| t == "RB")
                     });
                 if prev_is_have_or_rb {
                     if tags.contains(&"VBN".to_string()) || tags.contains(&"VBD".to_string()) {
@@ -496,21 +551,29 @@ impl TestRunner {
             // noun/determiner, remove VBD/VBN to prefer JJ reading.
             // e.g., "have open positions" → "open" is JJ, not VBN
             if i >= 1 && i + 1 < nw.len() {
-                let prev_lower = nw_text[i-1].to_lowercase();
-                let prev_is_have = (prev_lower == "have" || prev_lower == "has" || prev_lower == "had"
-                    || prev_lower == "'ve" || prev_lower == "'s")
-                    && nw_has_tag[i-1].iter().any(|t| t.starts_with("VB"));
+                let prev_lower = nw_text[i - 1].to_lowercase();
+                let prev_is_have = (prev_lower == "have"
+                    || prev_lower == "has"
+                    || prev_lower == "had"
+                    || prev_lower == "'ve"
+                    || prev_lower == "'s")
+                    && nw_has_tag[i - 1].iter().any(|t| t.starts_with("VB"));
                 if prev_is_have {
                     let has_jj = tags.contains(&"JJ".to_string());
                     let has_vbn = tags.contains(&"VBN".to_string());
                     let has_vbd = tags.contains(&"VBD".to_string());
                     if has_jj && (has_vbn || has_vbd) {
-                        let next_tags = &nw_has_tag[i+1];
-                        let next_is_noun_or_det = next_tags.iter().any(|t|
-                            t.starts_with("NN") || t == "DT" || t == "PRP$" || t == "PRP_S");
+                        let next_tags = &nw_has_tag[i + 1];
+                        let next_is_noun_or_det = next_tags.iter().any(|t| {
+                            t.starts_with("NN") || t == "DT" || t == "PRP$" || t == "PRP_S"
+                        });
                         if next_is_noun_or_det {
-                            if has_vbn { removals.push((i, "VBN".to_string())); }
-                            if has_vbd { removals.push((i, "VBD".to_string())); }
+                            if has_vbn {
+                                removals.push((i, "VBN".to_string()));
+                            }
+                            if has_vbd {
+                                removals.push((i, "VBD".to_string()));
+                            }
                         }
                     }
                 }
@@ -519,8 +582,8 @@ impl TestRunner {
             // Rule 17: After "the/a/an" + JJ, remove VBZ/VBP from following word if it has NN
             // e.g., "the live music" → "music" should be NN, not VBP
             if i >= 2 {
-                let prev2_tags = &nw_has_tag[i-2];
-                let prev1_tags = &nw_has_tag[i-1];
+                let prev2_tags = &nw_has_tag[i - 2];
+                let prev1_tags = &nw_has_tag[i - 1];
                 let prev2_is_det = prev2_tags.iter().any(|t| t == "DT");
                 let prev1_is_adj = prev1_tags.iter().any(|t| t.starts_with("JJ"));
                 if prev2_is_det && prev1_is_adj {
@@ -538,7 +601,7 @@ impl TestRunner {
             // Rule 19: Before a determiner (DT), remove JJR/JJS from nouns
             // "the better results" → "better" is JJR, "results" is NNS not JJR
             if i + 1 < nw.len() {
-                let next_tags = &nw_has_tag[i+1];
+                let next_tags = &nw_has_tag[i + 1];
                 let next_is_det = next_tags.iter().any(|t| t == "DT");
                 if next_is_det && tags.iter().any(|t| t.starts_with("NN")) {
                     if tags.contains(&"JJR".to_string()) {
@@ -553,8 +616,8 @@ impl TestRunner {
             // Rule 20: After IN (preposition), if word has NN and VB, prefer NN
             // "in the park" → "park" is NN, not VB
             if i >= 2 && i < nw.len() {
-                let prev2_tags = &nw_has_tag[i-2];
-                let prev1_tags = &nw_has_tag[i-1];
+                let prev2_tags = &nw_has_tag[i - 2];
+                let prev1_tags = &nw_has_tag[i - 1];
                 let prev2_is_in = prev2_tags.iter().any(|t| t == "IN");
                 let prev1_is_det = prev1_tags.iter().any(|t| t == "DT" || t == "PRP$");
                 if prev2_is_in && prev1_is_det {
@@ -569,8 +632,8 @@ impl TestRunner {
             // Rule 21: After "a/an" (DT), remove VB from words that also have NN
             // "a need" → "need" is NN, not VB. Fixes A_INFINITIVE FPs.
             if i >= 1 {
-                let prev_tags = &nw_has_tag[i-1];
-                let prev_text_lower = nw_text[i-1].to_lowercase();
+                let prev_tags = &nw_has_tag[i - 1];
+                let prev_text_lower = nw_text[i - 1].to_lowercase();
                 let prev_is_a_an = prev_text_lower == "a" || prev_text_lower == "an";
                 if prev_is_a_an && prev_tags.iter().any(|t| t == "DT") {
                     if tags.iter().any(|t| t.starts_with("NN")) {
@@ -593,12 +656,16 @@ impl TestRunner {
             // "Animals can..." → "Animals" is NNS, not VB
             // But "Walk the dog" → "Walk" should be VB
             // So only apply if next word is NOT a verb/modifier
-            if i == 0 && tags.contains(&"VB".to_string()) && tags.iter().any(|t| t.starts_with("NN")) {
+            if i == 0
+                && tags.contains(&"VB".to_string())
+                && tags.iter().any(|t| t.starts_with("NN"))
+            {
                 if nw.len() > 1 {
                     let next_tags = &nw_has_tag[1];
                     // If next word is DT, IN, or noun, current word is likely a noun
-                    let next_suggests_noun_subject = next_tags.iter().any(|t|
-                        t == "DT" || t == "IN" || t.starts_with("NN") || t == "CC" || t == "MD");
+                    let next_suggests_noun_subject = next_tags.iter().any(|t| {
+                        t == "DT" || t == "IN" || t.starts_with("NN") || t == "CC" || t == "MD"
+                    });
                     if next_suggests_noun_subject {
                         removals.push((i, "VB".to_string()));
                         removals.push((i, "VBP".to_string()));
@@ -616,7 +683,7 @@ impl TestRunner {
             // Rule 25: After comma, if word has VBZ/VBP and NN, prefer NN
             // "In winter, animals migrate" → "animals" is NNS
             if i >= 1 {
-                let prev_text_lower = nw_text[i-1].to_lowercase();
+                let prev_text_lower = nw_text[i - 1].to_lowercase();
                 if prev_text_lower == "," || prev_text_lower == ":" || prev_text_lower == ";" {
                     if tags.iter().any(|t| t.starts_with("NN")) {
                         if tags.contains(&"VBZ".to_string()) {
@@ -632,9 +699,12 @@ impl TestRunner {
             // Rule 26: After "the/these/those" + JJ, remove VB from following word if NN
             // "the open position" → "position" is NN, not VB
             if i >= 2 {
-                let prev2_text = nw_text[i-2].to_lowercase();
-                let prev2_is_det = ["the", "these", "those", "this", "that", "some", "any", "every"].contains(&prev2_text.as_str());
-                let prev1_is_adj = nw_has_tag[i-1].iter().any(|t| t.starts_with("JJ"));
+                let prev2_text = nw_text[i - 2].to_lowercase();
+                let prev2_is_det = [
+                    "the", "these", "those", "this", "that", "some", "any", "every",
+                ]
+                .contains(&prev2_text.as_str());
+                let prev1_is_adj = nw_has_tag[i - 1].iter().any(|t| t.starts_with("JJ"));
                 if prev2_is_det && prev1_is_adj {
                     if tags.iter().any(|t| t.starts_with("NN")) {
                         removals.push((i, "VB".to_string()));
@@ -648,11 +718,14 @@ impl TestRunner {
             // "key to success" → "key" is NN, not VB/JJ
             // But don't apply after subject pronouns: "I go to school" → "go" is VB
             if i + 1 < nw.len() {
-                let next_text_lower = nw_text[i+1].to_lowercase();
-                let next_is_to = next_text_lower == "to" && nw_has_tag[i+1].iter().any(|t| t == "TO");
+                let next_text_lower = nw_text[i + 1].to_lowercase();
+                let next_is_to =
+                    next_text_lower == "to" && nw_has_tag[i + 1].iter().any(|t| t == "TO");
                 if next_is_to {
-                    let prev_is_subject = i >= 1 && nw_has_tag[i-1].iter().any(|t|
-                        t == "PRP" || t.starts_with("PRP_S") || t.starts_with("PRP_O"));
+                    let prev_is_subject = i >= 1
+                        && nw_has_tag[i - 1].iter().any(|t| {
+                            t == "PRP" || t.starts_with("PRP_S") || t.starts_with("PRP_O")
+                        });
                     if !prev_is_subject {
                         if tags.iter().any(|t| t.starts_with("NN")) {
                             removals.push((i, "VB".to_string()));
@@ -665,8 +738,8 @@ impl TestRunner {
             // Rule 28: Before CC (and/or/but) + noun, remove VB from words that have NN
             // "time and effort" → "time" is NN, not VB
             if i + 2 < nw.len() {
-                let next_is_cc = nw_has_tag[i+1].iter().any(|t| t == "CC");
-                let next2_is_nn = nw_has_tag[i+2].iter().any(|t| t.starts_with("NN"));
+                let next_is_cc = nw_has_tag[i + 1].iter().any(|t| t == "CC");
+                let next2_is_nn = nw_has_tag[i + 2].iter().any(|t| t.starts_with("NN"));
                 if next_is_cc && next2_is_nn {
                     if tags.iter().any(|t| t.starts_with("NN")) {
                         removals.push((i, "VB".to_string()));
@@ -675,11 +748,12 @@ impl TestRunner {
                     }
                 }
             }
-
         }
 
         // Apply removals
-        if removals.is_empty() { return; }
+        if removals.is_empty() {
+            return;
+        }
 
         let tokens_mut = sentence.tokens_mut();
         for (nw_idx, tag_to_remove) in &removals {
@@ -687,18 +761,21 @@ impl TestRunner {
                 let token = &mut tokens_mut[real_idx];
                 for reading in token.readings_mut() {
                     reading.set_pos_tags(
-                        reading.pos_tags().iter()
+                        reading
+                            .pos_tags()
+                            .iter()
                             .filter(|t| *t != tag_to_remove)
                             .cloned()
-                            .collect()
+                            .collect(),
                     );
                 }
                 let base = token.token_mut();
                 base.set_pos_tags(
-                    base.pos_tags().iter()
+                    base.pos_tags()
+                        .iter()
                         .filter(|t| *t != tag_to_remove)
                         .cloned()
-                        .collect()
+                        .collect(),
                 );
             }
         }
@@ -715,122 +792,189 @@ impl TestRunner {
         let mut token_texts: Vec<&str> = Vec::new();
 
         for (i, t) in tokens.iter().enumerate() {
-            if t.is_whitespace() { continue; }
+            if t.is_whitespace() {
+                continue;
+            }
             let tags = t.token().pos_tags();
-            if tags.iter().any(|t| t == "SENT_START" || t == "SENT_END") { continue; }
+            if tags.iter().any(|t| t == "SENT_START" || t == "SENT_END") {
+                continue;
+            }
             nw_indices.push(i);
             all_tags.push(tags.to_vec());
             token_texts.push(t.token().token());
         }
 
         // Select best POS tag per token using context heuristics
-        let pos_tags: Vec<&str> = all_tags.iter().enumerate().map(|(i, tags)| {
-            if tags.is_empty() { return ""; }
-            if tags.len() == 1 { return tags[0].as_str(); }
+        let pos_tags: Vec<&str> = all_tags
+            .iter()
+            .enumerate()
+            .map(|(i, tags)| {
+                if tags.is_empty() {
+                    return "";
+                }
+                if tags.len() == 1 {
+                    return tags[0].as_str();
+                }
 
-            let has_vb = tags.iter().any(|t| t.starts_with("VB"));
-            let has_jj = tags.iter().any(|t| t.starts_with("JJ"));
-            let has_nn = tags.iter().any(|t| t.starts_with("NN") || t == "FW");
+                let has_vb = tags.iter().any(|t| t.starts_with("VB"));
+                let has_jj = tags.iter().any(|t| t.starts_with("JJ"));
+                let has_nn = tags.iter().any(|t| t.starts_with("NN") || t == "FW");
 
-            // Look back to find the effective previous verb context
-            // Skip over negation (n't/not/RB) to find the real preceding POS
-            let prev_is_verb = if i > 0 {
-                all_tags[i - 1].iter().any(|t| t.starts_with("VB") || t == "MD")
-            } else {
-                false
-            };
-            // After "do n't" / "does n't" etc, the negation RB is prev, but verb is 2 back
-            let prev_2_is_verb = if i > 1 {
-                let prev_text = token_texts.get(i - 1).map(|s| *s).unwrap_or("");
-                let is_negation = matches!(prev_text.to_lowercase().as_str(), "n't" | "not" | "never")
-                    || all_tags[i - 1].iter().any(|t| t == "RB");
-                if is_negation {
-                    all_tags[i - 2].iter().any(|t| t.starts_with("VB") || t == "MD")
+                // Look back to find the effective previous verb context
+                // Skip over negation (n't/not/RB) to find the real preceding POS
+                let prev_is_verb = if i > 0 {
+                    all_tags[i - 1]
+                        .iter()
+                        .any(|t| t.starts_with("VB") || t == "MD")
                 } else {
                     false
+                };
+                // After "do n't" / "does n't" etc, the negation RB is prev, but verb is 2 back
+                let prev_2_is_verb = if i > 1 {
+                    let prev_text = token_texts.get(i - 1).map(|s| *s).unwrap_or("");
+                    let is_negation =
+                        matches!(prev_text.to_lowercase().as_str(), "n't" | "not" | "never")
+                            || all_tags[i - 1].iter().any(|t| t == "RB");
+                    if is_negation {
+                        all_tags[i - 2]
+                            .iter()
+                            .any(|t| t.starts_with("VB") || t == "MD")
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+                let effective_prev_is_verb = prev_is_verb || prev_2_is_verb;
+
+                let prev_is_det = if i > 0 {
+                    all_tags[i - 1]
+                        .iter()
+                        .any(|t| t == "DT" || t == "PRP$" || t == "CD" || t == "WDT")
+                } else {
+                    false
+                };
+
+                // After "have/has/had", prefer adjective/noun over verb for ambiguous words
+                // (e.g., "has open positions" → open should be JJ, not VB)
+                // But ONLY when have is immediately before (not separated by not/n't)
+                // "have not getting" → getting should stay VBG, not become NN
+                let prev_is_have = if i > 0 {
+                    let prev_text = token_texts.get(i - 1).map(|s| *s).unwrap_or("");
+                    prev_is_verb
+                        && matches!(
+                            prev_text.to_lowercase().as_str(),
+                            "have" | "has" | "had" | "'ve" | "'s"
+                        )
+                } else {
+                    false
+                };
+                // Don't apply have-heuristic when separated by negation
+                let effective_prev_is_have = prev_is_have;
+
+                if effective_prev_is_have && has_jj {
+                    return tags
+                        .iter()
+                        .find(|t| t.starts_with("JJ"))
+                        .map(|s| s.as_str())
+                        .unwrap_or(tags[0].as_str());
                 }
-            } else {
-                false
-            };
-            let effective_prev_is_verb = prev_is_verb || prev_2_is_verb;
-
-            let prev_is_det = if i > 0 {
-                all_tags[i - 1].iter().any(|t| t == "DT" || t == "PRP$" || t == "CD" || t == "WDT")
-            } else {
-                false
-            };
-
-            // After "have/has/had", prefer adjective/noun over verb for ambiguous words
-            // (e.g., "has open positions" → open should be JJ, not VB)
-            // But ONLY when have is immediately before (not separated by not/n't)
-            // "have not getting" → getting should stay VBG, not become NN
-            let prev_is_have = if i > 0 {
-                let prev_text = token_texts.get(i - 1).map(|s| *s).unwrap_or("");
-                prev_is_verb && matches!(prev_text.to_lowercase().as_str(),
-                    "have" | "has" | "had" | "'ve" | "'s")
-            } else {
-                false
-            };
-            // Don't apply have-heuristic when separated by negation
-            let effective_prev_is_have = prev_is_have;
-
-            if effective_prev_is_have && has_jj {
-                return tags.iter().find(|t| t.starts_with("JJ")).map(|s| s.as_str()).unwrap_or(tags[0].as_str());
-            }
-            if effective_prev_is_have && has_nn {
-                return tags.iter().find(|t| t.starts_with("NN")).map(|s| s.as_str()).unwrap_or(tags[0].as_str());
-            }
-
-            // After a determiner, prefer noun tags over verb tags
-            if prev_is_det && has_nn && has_vb {
-                return tags.iter().find(|t| t.starts_with("NN")).map(|s| s.as_str()).unwrap_or(tags[0].as_str());
-            }
-
-            // After a verb (including after "do n't"), prefer verb tags over noun tags
-            // But ONLY for specific verbs that commonly take bare infinitives
-            // E.g., "want test" → test should be VB not NN
-            // E.g., "don't want" → want should be VB not NN:UN
-            if effective_prev_is_verb && has_vb && has_nn && !effective_prev_is_have {
-                return tags.iter().find(|t| t.starts_with("VB")).map(|s| s.as_str()).unwrap_or(tags[0].as_str());
-            }
-
-            // After a verb (including negated), prefer VB over JJ for ambiguous words
-            // E.g., "would like" → like should be VB not JJ
-            // But NOT after have/has/had (where adj is more likely, e.g., "have hard copy")
-            if effective_prev_is_verb && has_vb && has_jj && !effective_prev_is_have {
-                return tags.iter().find(|t| t.starts_with("VB")).map(|s| s.as_str()).unwrap_or(tags[0].as_str());
-            }
-
-            // After a subject pronoun (PRP), prefer verb/modals over noun tags
-            // E.g., "We want" → want should be VB not NN:UN
-            // E.g., "We would" → would should be MD not NN
-            let prev_is_prp = if i > 0 {
-                all_tags[i - 1].iter().any(|t| t == "PRP" || t.starts_with("PRP_S") || t.starts_with("PRP_O"))
-            } else {
-                false
-            };
-            if prev_is_prp {
-                let has_md = tags.iter().any(|t| t == "MD");
-                if has_vb && has_nn {
-                    return tags.iter().find(|t| t.starts_with("VB")).map(|s| s.as_str()).unwrap_or(tags[0].as_str());
+                if effective_prev_is_have && has_nn {
+                    return tags
+                        .iter()
+                        .find(|t| t.starts_with("NN"))
+                        .map(|s| s.as_str())
+                        .unwrap_or(tags[0].as_str());
                 }
-                if has_md && has_nn {
-                    return "MD";
+
+                // After a determiner, prefer noun tags over verb tags
+                if prev_is_det && has_nn && has_vb {
+                    return tags
+                        .iter()
+                        .find(|t| t.starts_with("NN"))
+                        .map(|s| s.as_str())
+                        .unwrap_or(tags[0].as_str());
                 }
-            }
 
-            // Known verb forms should always prefer verb tags
-            // am, is, are, was, were, be, been, being, have, has, had, do, does, did
-            let word_lower = token_texts[i].to_lowercase();
-            if matches!(word_lower.as_str(),
-                "am" | "is" | "are" | "was" | "were" | "be" | "been" | "being" |
-                "have" | "has" | "had" | "do" | "does" | "did" | "doing" | "done"
-            ) && has_vb {
-                return tags.iter().find(|t| t.starts_with("VB")).map(|s| s.as_str()).unwrap_or(tags[0].as_str());
-            }
+                // After a verb (including after "do n't"), prefer verb tags over noun tags
+                // But ONLY for specific verbs that commonly take bare infinitives
+                // E.g., "want test" → test should be VB not NN
+                // E.g., "don't want" → want should be VB not NN:UN
+                if effective_prev_is_verb && has_vb && has_nn && !effective_prev_is_have {
+                    return tags
+                        .iter()
+                        .find(|t| t.starts_with("VB"))
+                        .map(|s| s.as_str())
+                        .unwrap_or(tags[0].as_str());
+                }
 
-            tags[0].as_str()
-        }).collect();
+                // After a verb (including negated), prefer VB over JJ for ambiguous words
+                // E.g., "would like" → like should be VB not JJ
+                // But NOT after have/has/had (where adj is more likely, e.g., "have hard copy")
+                if effective_prev_is_verb && has_vb && has_jj && !effective_prev_is_have {
+                    return tags
+                        .iter()
+                        .find(|t| t.starts_with("VB"))
+                        .map(|s| s.as_str())
+                        .unwrap_or(tags[0].as_str());
+                }
+
+                // After a subject pronoun (PRP), prefer verb/modals over noun tags
+                // E.g., "We want" → want should be VB not NN:UN
+                // E.g., "We would" → would should be MD not NN
+                let prev_is_prp = if i > 0 {
+                    all_tags[i - 1]
+                        .iter()
+                        .any(|t| t == "PRP" || t.starts_with("PRP_S") || t.starts_with("PRP_O"))
+                } else {
+                    false
+                };
+                if prev_is_prp {
+                    let has_md = tags.iter().any(|t| t == "MD");
+                    if has_vb && has_nn {
+                        return tags
+                            .iter()
+                            .find(|t| t.starts_with("VB"))
+                            .map(|s| s.as_str())
+                            .unwrap_or(tags[0].as_str());
+                    }
+                    if has_md && has_nn {
+                        return "MD";
+                    }
+                }
+
+                // Known verb forms should always prefer verb tags
+                // am, is, are, was, were, be, been, being, have, has, had, do, does, did
+                let word_lower = token_texts[i].to_lowercase();
+                if matches!(
+                    word_lower.as_str(),
+                    "am" | "is"
+                        | "are"
+                        | "was"
+                        | "were"
+                        | "be"
+                        | "been"
+                        | "being"
+                        | "have"
+                        | "has"
+                        | "had"
+                        | "do"
+                        | "does"
+                        | "did"
+                        | "doing"
+                        | "done"
+                ) && has_vb
+                {
+                    return tags
+                        .iter()
+                        .find(|t| t.starts_with("VB"))
+                        .map(|s| s.as_str())
+                        .unwrap_or(tags[0].as_str());
+                }
+
+                tags[0].as_str()
+            })
+            .collect();
 
         // Prepend a fake SENT_START for the chunker
         let mut all_pos = vec!["SENT_START"];
@@ -862,7 +1006,9 @@ impl TestRunner {
             (Some(s), Some(e)) => {
                 let marker_start = s;
                 let marker_end = e - start_marker.len();
-                let clean = text[..s].to_string() + &text[s + start_marker.len()..e] + &text[e + end_marker.len()..];
+                let clean = text[..s].to_string()
+                    + &text[s + start_marker.len()..e]
+                    + &text[e + end_marker.len()..];
                 (clean, Some((marker_start, marker_end)))
             }
             _ => (text.to_string(), None),
@@ -924,7 +1070,10 @@ impl TestRunner {
                                 results.push(ExampleTestResult {
                                     rule_id: rule.id.clone(),
                                     passed: true,
-                                    message: format!("Match {}..{} contains marker {}..{}", match_start, match_end, m_start, m_end),
+                                    message: format!(
+                                        "Match {}..{} contains marker {}..{}",
+                                        match_start, match_end, m_start, m_end
+                                    ),
                                     example_text: clean_text,
                                     expected_type: "incorrect".to_string(),
                                 });
@@ -957,7 +1106,8 @@ impl TestRunner {
                                 passed: false,
                                 message: format!(
                                     "Expected no match on correct example but got {}: '{}'",
-                                    matches.len(), clean_text
+                                    matches.len(),
+                                    clean_text
                                 ),
                                 example_text: clean_text,
                                 expected_type: "correct".to_string(),
@@ -1073,18 +1223,22 @@ mod tests {
     use super::*;
 
     fn simple_xml(rules_body: &str) -> String {
-        format!(r#"<?xml version="1.0" encoding="UTF-8"?>
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
         <rules lang="en">
             <category id="GRAMMAR" name="Grammar">
                 {}
             </category>
-        </rules>"#, rules_body)
+        </rules>"#,
+            rules_body
+        )
     }
 
     #[test]
     fn test_runner_incorrect_example_passes() {
         let runner = TestRunner::new();
-        let xml = simple_xml(r#"
+        let xml = simple_xml(
+            r#"
             <rule id="TEST1" name="Test">
                 <pattern>
                     <token>their</token>
@@ -1094,17 +1248,28 @@ mod tests {
                 <example correction="there is">Their <marker>is</marker> a problem.</example>
                 <example>There is no problem.</example>
             </rule>
-        "#);
+        "#,
+        );
 
         let summary = runner.run_xml_example_tests(&xml);
         assert_eq!(summary.total, 2);
-        assert_eq!(summary.passed, 2, "Failed: {:?}", summary.results.iter().filter(|r| !r.passed).collect::<Vec<_>>());
+        assert_eq!(
+            summary.passed,
+            2,
+            "Failed: {:?}",
+            summary
+                .results
+                .iter()
+                .filter(|r| !r.passed)
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]
     fn test_runner_correct_example_no_match() {
         let runner = TestRunner::new();
-        let xml = simple_xml(r#"
+        let xml = simple_xml(
+            r#"
             <rule id="TEST2" name="Test">
                 <pattern>
                     <token>xyzzy</token>
@@ -1112,7 +1277,8 @@ mod tests {
                 <message>This should not match.</message>
                 <example>This is a normal sentence.</example>
             </rule>
-        "#);
+        "#,
+        );
 
         let summary = runner.run_xml_example_tests(&xml);
         assert_eq!(summary.total, 1);
@@ -1122,7 +1288,8 @@ mod tests {
     #[test]
     fn test_runner_regexp_rule() {
         let runner = TestRunner::new();
-        let xml = simple_xml(r#"
+        let xml = simple_xml(
+            r#"
             <rule id="TEST3" name="Test">
                 <pattern>
                     <token regexp="yes">teh</token>
@@ -1131,7 +1298,8 @@ mod tests {
                 <example correction="the"><marker>Teh</marker> quick brown fox.</example>
                 <example>The quick brown fox.</example>
             </rule>
-        "#);
+        "#,
+        );
 
         let summary = runner.run_xml_example_tests(&xml);
         // The regexp rule should match "Teh"
@@ -1141,13 +1309,19 @@ mod tests {
             }
         }
         // At minimum, the correct example should pass (no match)
-        assert!(summary.results.iter().any(|r| r.passed && r.expected_type == "correct"));
+        assert!(
+            summary
+                .results
+                .iter()
+                .any(|r| r.passed && r.expected_type == "correct")
+        );
     }
 
     #[test]
     fn test_runner_multiple_rules() {
         let runner = TestRunner::new();
-        let xml = simple_xml(r#"
+        let xml = simple_xml(
+            r#"
             <rule id="RULE_A" name="Rule A">
                 <pattern>
                     <token>hello</token>
@@ -1166,7 +1340,8 @@ mod tests {
                 <example><marker>Goodbye world</marker> test.</example>
                 <example>See you.</example>
             </rule>
-        "#);
+        "#,
+        );
 
         let summary = runner.run_xml_example_tests(&xml);
         assert_eq!(summary.total, 4, "Should have 4 examples");
@@ -1189,7 +1364,8 @@ mod tests {
     #[test]
     fn test_runner_single_pattern_test() {
         let runner = TestRunner::new();
-        let xml = simple_xml(r#"
+        let xml = simple_xml(
+            r#"
             <rule id="SINGLE_TEST" name="Single">
                 <pattern>
                     <token>foo</token>
@@ -1197,7 +1373,8 @@ mod tests {
                 </pattern>
                 <message>Test</message>
             </rule>
-        "#);
+        "#,
+        );
 
         let result = runner.run_pattern_test("SINGLE_TEST", &xml, "foo bar baz", true);
         assert!(result.passed, "{}", result.message);
@@ -1220,12 +1397,14 @@ mod tests {
     #[test]
     fn test_runner_rule_not_found() {
         let runner = TestRunner::new();
-        let xml = simple_xml(r#"
+        let xml = simple_xml(
+            r#"
             <rule id="EXISTS" name="Exists">
                 <pattern><token>test</token></pattern>
                 <message>Test</message>
             </rule>
-        "#);
+        "#,
+        );
 
         let result = runner.run_pattern_test("NONEXISTENT", &xml, "test", true);
         assert!(!result.passed);
@@ -1235,7 +1414,8 @@ mod tests {
     #[test]
     fn test_runner_negate_token() {
         let runner = TestRunner::new();
-        let xml = simple_xml(r#"
+        let xml = simple_xml(
+            r#"
             <rule id="NEG_TEST" name="Negate">
                 <pattern>
                     <token negate="yes">good</token>
@@ -1245,12 +1425,16 @@ mod tests {
                 <example><marker>Bad morning</marker> today.</example>
                 <example>Good morning everyone.</example>
             </rule>
-        "#);
+        "#,
+        );
 
         let summary = runner.run_xml_example_tests(&xml);
         for r in &summary.results {
             if !r.passed {
-                eprintln!("FAILED: {} ({}) - {}", r.rule_id, r.expected_type, r.message);
+                eprintln!(
+                    "FAILED: {} ({}) - {}",
+                    r.rule_id, r.expected_type, r.message
+                );
             }
         }
         assert!(summary.is_all_passed(), "Negate token test failed");
@@ -1261,13 +1445,18 @@ mod tests {
     fn test_load_real_english_grammar_xml() {
         let grammar_path = "/home/agent/languagetool/languagetool-language-modules/en/src/main/resources/org/languagetool/rules/en/grammar.xml";
         if !Path::new(grammar_path).exists() {
-            eprintln!("Skipping: English grammar.xml not found at {}", grammar_path);
+            eprintln!(
+                "Skipping: English grammar.xml not found at {}",
+                grammar_path
+            );
             return;
         }
 
         let xml = std::fs::read_to_string(grammar_path).expect("Failed to read grammar.xml");
         let compiler = og_xml::compiler::XmlCompiler::new();
-        let rule_set = compiler.compile_file(&xml).expect("Failed to compile grammar.xml");
+        let rule_set = compiler
+            .compile_file(&xml)
+            .expect("Failed to compile grammar.xml");
 
         let total = rule_set.rules.len();
         eprintln!("Loaded {} rules from English grammar.xml", total);
@@ -1276,16 +1465,41 @@ mod tests {
         assert!(total > 4000, "Expected 4000+ rules, got {}", total);
 
         // Count rules with various features
-        let with_antipatterns = rule_set.rules.iter().filter(|r| !r.antipatterns.is_empty()).count();
-        let with_marker = rule_set.rules.iter().filter(|r| r.pattern.marker_start.is_some()).count();
-        let with_exceptions = rule_set.rules.iter()
-            .filter(|r| r.pattern.tokens.iter().any(|t| !t.exceptions.is_empty())).count();
-        let with_skip = rule_set.rules.iter()
-            .filter(|r| r.pattern.tokens.iter().any(|t| t.skip != 0)).count();
-        let with_min_max = rule_set.rules.iter()
-            .filter(|r| r.pattern.tokens.iter().any(|t| t.min.is_some() || t.max.is_some())).count();
-        let with_postag = rule_set.rules.iter()
-            .filter(|r| r.pattern.tokens.iter().any(|t| t.postag.is_some())).count();
+        let with_antipatterns = rule_set
+            .rules
+            .iter()
+            .filter(|r| !r.antipatterns.is_empty())
+            .count();
+        let with_marker = rule_set
+            .rules
+            .iter()
+            .filter(|r| r.pattern.marker_start.is_some())
+            .count();
+        let with_exceptions = rule_set
+            .rules
+            .iter()
+            .filter(|r| r.pattern.tokens.iter().any(|t| !t.exceptions.is_empty()))
+            .count();
+        let with_skip = rule_set
+            .rules
+            .iter()
+            .filter(|r| r.pattern.tokens.iter().any(|t| t.skip != 0))
+            .count();
+        let with_min_max = rule_set
+            .rules
+            .iter()
+            .filter(|r| {
+                r.pattern
+                    .tokens
+                    .iter()
+                    .any(|t| t.min.is_some() || t.max.is_some())
+            })
+            .count();
+        let with_postag = rule_set
+            .rules
+            .iter()
+            .filter(|r| r.pattern.tokens.iter().any(|t| t.postag.is_some()))
+            .count();
 
         eprintln!("Rules with antipatterns: {}", with_antipatterns);
         eprintln!("Rules with pattern markers: {}", with_marker);
@@ -1295,9 +1509,21 @@ mod tests {
         eprintln!("Rules with postag: {}", with_postag);
 
         // Sanity checks on feature counts
-        assert!(with_antipatterns > 1000, "Expected 1000+ rules with antipatterns, got {}", with_antipatterns);
-        assert!(with_exceptions > 500, "Expected 500+ rules with exceptions, got {}", with_exceptions);
-        assert!(with_skip > 100, "Expected 100+ rules with skip, got {}", with_skip);
+        assert!(
+            with_antipatterns > 1000,
+            "Expected 1000+ rules with antipatterns, got {}",
+            with_antipatterns
+        );
+        assert!(
+            with_exceptions > 500,
+            "Expected 500+ rules with exceptions, got {}",
+            with_exceptions
+        );
+        assert!(
+            with_skip > 100,
+            "Expected 100+ rules with skip, got {}",
+            with_skip
+        );
     }
 
     #[test]
@@ -1316,16 +1542,29 @@ mod tests {
         eprintln!("Total examples tested: {}", summary.total);
         eprintln!("Passed: {}", summary.passed);
         eprintln!("Failed: {}", summary.failed);
-        eprintln!("Pass rate: {:.1}%", if summary.total > 0 { 100.0 * summary.passed as f64 / summary.total as f64 } else { 0.0 });
+        eprintln!(
+            "Pass rate: {:.1}%",
+            if summary.total > 0 {
+                100.0 * summary.passed as f64 / summary.total as f64
+            } else {
+                0.0
+            }
+        );
 
         // Categorize failures
-        let mut fail_by_reason: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        let mut fail_by_reason: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
         for r in &summary.results {
             if !r.passed {
-                let reason = if r.message.contains("POS") { "pos_tag".to_string() }
-                    else if r.message.contains("match") { "no_match".to_string() }
-                    else if r.message.contains("marker") { "marker_mismatch".to_string() }
-                    else { "other".to_string() };
+                let reason = if r.message.contains("POS") {
+                    "pos_tag".to_string()
+                } else if r.message.contains("match") {
+                    "no_match".to_string()
+                } else if r.message.contains("marker") {
+                    "marker_mismatch".to_string()
+                } else {
+                    "other".to_string()
+                };
                 *fail_by_reason.entry(reason).or_insert(0) += 1;
             }
         }
@@ -1335,24 +1574,40 @@ mod tests {
         }
 
         // Print top failing rule IDs by count
-        let mut rule_fail_counts: std::collections::HashMap<String, (usize, usize, usize)> = std::collections::HashMap::new();
+        let mut rule_fail_counts: std::collections::HashMap<String, (usize, usize, usize)> =
+            std::collections::HashMap::new();
         for r in &summary.results {
             if !r.passed {
-                let entry = rule_fail_counts.entry(r.rule_id.clone()).or_insert((0, 0, 0));
-                if r.expected_type == "incorrect" { entry.0 += 1; }
-                else { entry.1 += 1; }
-                if r.message.contains("marker") { entry.2 += 1; }
+                let entry = rule_fail_counts
+                    .entry(r.rule_id.clone())
+                    .or_insert((0, 0, 0));
+                if r.expected_type == "incorrect" {
+                    entry.0 += 1;
+                } else {
+                    entry.1 += 1;
+                }
+                if r.message.contains("marker") {
+                    entry.2 += 1;
+                }
             }
         }
         let mut sorted_fails: Vec<_> = rule_fail_counts.iter().collect();
         sorted_fails.sort_by(|a, b| (b.1.0 + b.1.1).cmp(&(a.1.0 + a.1.1)));
         eprintln!("\nTop 30 failing rules:");
         for (rule_id, (incorrect, correct, marker)) in sorted_fails.iter().take(30) {
-            eprintln!("  {}: {} no-match, {} false-positive, {} marker-mismatch", rule_id, incorrect, correct, marker);
+            eprintln!(
+                "  {}: {} no-match, {} false-positive, {} marker-mismatch",
+                rule_id, incorrect, correct, marker
+            );
         }
 
         // Print some failing examples for debugging
-        let failures: Vec<_> = summary.results.iter().filter(|r| !r.passed).take(100).collect();
+        let failures: Vec<_> = summary
+            .results
+            .iter()
+            .filter(|r| !r.passed)
+            .take(100)
+            .collect();
         for f in &failures {
             eprintln!("FAIL: [{}] {} - {}", f.rule_id, f.expected_type, f.message);
         }
@@ -1363,20 +1618,37 @@ mod tests {
             let mut out = std::io::BufWriter::new(all_failures);
             for r in &summary.results {
                 if !r.passed {
-                    writeln!(out, "FAIL: [{}] {} - {}", r.rule_id, r.expected_type, r.message).ok();
+                    writeln!(
+                        out,
+                        "FAIL: [{}] {} - {}",
+                        r.rule_id, r.expected_type, r.message
+                    )
+                    .ok();
                 }
             }
         }
 
         // Show breakdown of failures by expected type
-        let incorrect_no_match = summary.results.iter()
-            .filter(|r| !r.passed && r.expected_type == "incorrect" && r.message.contains("Expected match"))
+        let incorrect_no_match = summary
+            .results
+            .iter()
+            .filter(|r| {
+                !r.passed && r.expected_type == "incorrect" && r.message.contains("Expected match")
+            })
             .count();
-        let correct_unexpected = summary.results.iter()
+        let correct_unexpected = summary
+            .results
+            .iter()
             .filter(|r| !r.passed && r.expected_type == "correct")
             .count();
-        let incorrect_marker = summary.results.iter()
-            .filter(|r| !r.passed && r.expected_type == "incorrect" && r.message.contains("does not contain marker"))
+        let incorrect_marker = summary
+            .results
+            .iter()
+            .filter(|r| {
+                !r.passed
+                    && r.expected_type == "incorrect"
+                    && r.message.contains("does not contain marker")
+            })
             .count();
         eprintln!("\nFailure breakdown:");
         eprintln!("  Incorrect (no match): {}", incorrect_no_match);
@@ -1385,8 +1657,16 @@ mod tests {
 
         // We don't require 100% pass rate yet (many rules need POS tags, filters, etc.)
         // But we should have a reasonable pass rate
-        let pass_rate = if summary.total > 0 { summary.passed as f64 / summary.total as f64 } else { 0.0 };
-        assert!(pass_rate > 0.10, "Expected at least 10% pass rate, got {:.1}%", pass_rate * 100.0);
+        let pass_rate = if summary.total > 0 {
+            summary.passed as f64 / summary.total as f64
+        } else {
+            0.0
+        };
+        assert!(
+            pass_rate > 0.10,
+            "Expected at least 10% pass rate, got {:.1}%",
+            pass_rate * 100.0
+        );
     }
 
     #[test]
@@ -1421,10 +1701,13 @@ mod tests {
         let nwt: Vec<_> = sentence.non_whitespace_tokens();
         eprintln!("Non-whitespace tokens for 'Its cool man!':");
         for (i, token) in nwt.iter().enumerate() {
-            eprintln!("  [{}] '{}' pos={:?} has_JJ={}",
-                i, token.token().token(),
+            eprintln!(
+                "  [{}] '{}' pos={:?} has_JJ={}",
+                i,
+                token.token().token(),
                 token.token().pos_tags(),
-                token.has_pos_tag("JJ"));
+                token.has_pos_tag("JJ")
+            );
         }
 
         // Try matching manually
@@ -1432,9 +1715,16 @@ mod tests {
         let rule_set = compiler.compile_file(xml).unwrap();
         eprintln!("Compiled {} rules", rule_set.rules.len());
         for rule in &rule_set.rules {
-            eprintln!("Rule {} has {} pattern tokens", rule.id, rule.pattern.tokens.len());
+            eprintln!(
+                "Rule {} has {} pattern tokens",
+                rule.id,
+                rule.pattern.tokens.len()
+            );
             for (i, t) in rule.pattern.tokens.iter().enumerate() {
-                eprintln!("  token[{}]: text={:?} postag={:?} negate={}", i, t.text, t.postag, t.negate);
+                eprintln!(
+                    "  token[{}]: text={:?} postag={:?} negate={}",
+                    i, t.text, t.postag, t.negate
+                );
             }
             let matches = runner.pattern_engine.match_rule(rule, &sentence);
             eprintln!("  matches: {} matches found", matches.len());
@@ -1445,7 +1735,10 @@ mod tests {
                 eprintln!("FAILED: {}", r.message);
             }
         }
-        assert!(summary.is_all_passed(), "IT_IS[10] rule should match 'Its cool man!'");
+        assert!(
+            summary.is_all_passed(),
+            "IT_IS[10] rule should match 'Its cool man!'"
+        );
     }
 
     #[test]
@@ -1463,9 +1756,13 @@ mod tests {
             eprintln!("\n'{}':", text);
             for (i, token) in nwt.iter().enumerate() {
                 let chunk = token.chunk().unwrap_or("-");
-                eprintln!("  [{}] {:15} pos={:?} chunk={}",
-                    i, format!("'{}'", token.token().token()),
-                    token.token().pos_tags(), chunk);
+                eprintln!(
+                    "  [{}] {:15} pos={:?} chunk={}",
+                    i,
+                    format!("'{}'", token.token().token()),
+                    token.token().pos_tags(),
+                    chunk
+                );
             }
         }
     }
@@ -1503,9 +1800,13 @@ mod tests {
             eprintln!("\n'{}':", text);
             for (i, token) in nwt.iter().enumerate() {
                 let chunk = token.chunk().unwrap_or("-");
-                eprintln!("  [{}] {:15} pos={:?} chunk={}",
-                    i, format!("'{}'", token.token().token()),
-                    token.token().pos_tags(), chunk);
+                eprintln!(
+                    "  [{}] {:15} pos={:?} chunk={}",
+                    i,
+                    format!("'{}'", token.token().token()),
+                    token.token().pos_tags(),
+                    chunk
+                );
             }
         }
     }
@@ -1523,10 +1824,14 @@ mod tests {
         // Load grammar rules and try matching
         let grammar_path = "/home/agent/languagetool/languagetool-language-modules/en/src/main/resources/org/languagetool/rules/en/grammar.xml";
         let xml = std::fs::read_to_string(grammar_path).unwrap();
-        let compiled_rule_set = og_xml::compiler::XmlCompiler::new().compile_file(&xml).unwrap();
+        let compiled_rule_set = og_xml::compiler::XmlCompiler::new()
+            .compile_file(&xml)
+            .unwrap();
 
         // Debug TO_TOO matching
-        let to_too_rules: Vec<_> = compiled_rule_set.rules.iter()
+        let to_too_rules: Vec<_> = compiled_rule_set
+            .rules
+            .iter()
             .filter(|r| r.id == "TO_TOO")
             .collect();
         eprintln!("\nTO_TOO rules found: {}", to_too_rules.len());
@@ -1539,7 +1844,9 @@ mod tests {
             }
         }
 
-        let been_rules: Vec<_> = compiled_rule_set.rules.iter()
+        let been_rules: Vec<_> = compiled_rule_set
+            .rules
+            .iter()
             .filter(|r| r.id.contains("BEEN_PART"))
             .collect();
         assert!(!been_rules.is_empty(), "Should find BEEN_PART rules");
@@ -1551,7 +1858,10 @@ mod tests {
                 any_matched = true;
             }
         }
-        assert!(any_matched, "At least one BEEN_PART rule should match 'I'm been prepared.'");
+        assert!(
+            any_matched,
+            "At least one BEEN_PART rule should match 'I'm been prepared.'"
+        );
     }
 
     #[test]
@@ -1560,7 +1870,9 @@ mod tests {
         let runner = &TestRunner::new();
         let grammar_path = "/home/agent/languagetool/languagetool-language-modules/en/src/main/resources/org/languagetool/rules/en/grammar.xml";
         let xml = std::fs::read_to_string(grammar_path).unwrap();
-        let compiled = og_xml::compiler::XmlCompiler::new().compile_file(&xml).unwrap();
+        let compiled = og_xml::compiler::XmlCompiler::new()
+            .compile_file(&xml)
+            .unwrap();
 
         // These sentences use "is/were/been" (inflected forms of "be") + "to" + adjective
         // They should all match TO_TOO rules that use <token inflected="yes">be</token>
@@ -1572,18 +1884,18 @@ mod tests {
             ("He spent 10% to much.", true),
         ];
 
-        let to_too_rules: Vec<_> = compiled.rules.iter()
-            .filter(|r| r.id == "TO_TOO")
-            .collect();
+        let to_too_rules: Vec<_> = compiled.rules.iter().filter(|r| r.id == "TO_TOO").collect();
 
         for (text, should_match) in &test_cases {
             let sentence = runner.tokenize_sentence(text);
-            let any_matched = to_too_rules.iter().any(|rule| {
-                !runner.pattern_engine.match_rule(rule, &sentence).is_empty()
-            });
-            assert_eq!(any_matched, *should_match,
+            let any_matched = to_too_rules
+                .iter()
+                .any(|rule| !runner.pattern_engine.match_rule(rule, &sentence).is_empty());
+            assert_eq!(
+                any_matched, *should_match,
                 "TO_TOO match for '{}' expected {}, got {}",
-                text, should_match, any_matched);
+                text, should_match, any_matched
+            );
         }
     }
 
@@ -1602,10 +1914,12 @@ mod tests {
             let sentence = runner.tokenize_sentence(word);
             let nwt: Vec<_> = sentence.non_whitespace_tokens();
             // Skip the synthetic <S> token and take the first real token's readings
-            let token = nwt.iter()
+            let token = nwt
+                .iter()
                 .find(|t| t.token().token() != "<S>")
                 .expect("should have a non-<S> token");
-            let mut tags: Vec<String> = token.readings()
+            let mut tags: Vec<String> = token
+                .readings()
                 .iter()
                 .flat_map(|r| r.pos_tags().to_vec())
                 .collect();
@@ -1615,11 +1929,7 @@ mod tests {
         }
 
         /// Helper: assert and print diagnostics for one word.
-        fn check(
-            runner: &TestRunner,
-            word: &str,
-            expected_tags: &[&str],
-        ) -> Vec<String> {
+        fn check(runner: &TestRunner, word: &str, expected_tags: &[&str]) -> Vec<String> {
             let actual = tags_for(runner, word);
 
             let mut missing: Vec<&str> = expected_tags
@@ -1684,7 +1994,15 @@ mod tests {
         // Adjectives  (JJ)
         // -----------------------------------------------------------------------
         eprintln!("\n=== JJ (adjective) ===");
-        for word in &["cool", "awesome", "great", "easy", "happy", "perfect", "recommendable"] {
+        for word in &[
+            "cool",
+            "awesome",
+            "great",
+            "easy",
+            "happy",
+            "perfect",
+            "recommendable",
+        ] {
             check(runner, word, &["JJ"]);
         }
         for word in &["okay", "worth"] {
@@ -1731,197 +2049,225 @@ mod tests {
     }
 }
 
-    #[test]
-    #[ignore] // debug diagnostic — run with `cargo test -- --ignored`
-    fn test_debug_have_part_agreement_fp() {
-        let runner = TestRunner::new();
-        let sentences = vec![
-            "Do you have change?",
-            "Like other insects, beetles have open circulatory systems, based on hemolymph rather than blood.",
-            "RWE said it has open positions",
-            "We have soap.",
-            "We do have soap.",
-            "We do not have soap.",
-            "I have contact with aliens.",
-            "Do you have Telegram?",
-            "The family that my friend had was his cousin and his sister.",
-            "In the Sahara region some oases have palm trees.",
-            "It had feature limitations such as...",
-            "A rabbit has long ears.",
-            "The tool my teacher had was archaic.",
-            "Do you have bicycle in your garage?",
-            "For any additional questions that you may have please contact me.",
-            "We have only option 2 available.",
-            "We have only option #2 available.",
-            "I don't have job We need all the food we can get.",
-            "The block of wood had saw marks on it.",
-            "The sun had rose before I awoke.",
-            "The block of wood has saw marks on it.",
-            "For example, monarchical societies often had a system of \"social ranks\" which were collectivist because the social rank one had or did not have was more important than his or her individual will, and the specific rank in question could only be overridden in very limited cases.",
-            "By the mid-10th century, the Samanid dynasty had crumble in the face of attacks from Turkish tribes to the north and from the Ghaznavids, a rising Turkic Muslim dynasty in Afghanistan.",
-            "What I'm trying to have are papers on the Silver Leaf resort thingy.",
-            "What I like to have are papers on the Silver Leaf resort thingy.",
-            "What I really would like to have are papers on the Silver Leaf resort thingy.",
-            "The options that my brother should have are the only ...",
-            "The options my brother should have are the only ...",
-            "The options he should have are the only ...",
-            "we have open positions sometimes.",
-            "There are a few I have open questions about or am waiting to receive copies of the contract.",
-            "I am taking a scuba diving class and I have open water dives on both Saturday and Sunday.",
-            "we don't have open access to the transmission grid",
-            "In this case I think 100 is necessary because once a strike has open interest, we must continue to support it.",
-            "If we restrict to strikes with a lower delta, we face the problem of not offering enough strikes and not making a market in options that have open EOL interest that have moved closer to the money.",
-            "When the basis vectors have norm 1, the coordinate functionals e*n have...",
-            "the coordinate functionals e*n have norm 2C in the dual of X.",
-        ];
+#[test]
+#[ignore] // debug diagnostic — run with `cargo test -- --ignored`
+fn test_debug_have_part_agreement_fp() {
+    let runner = TestRunner::new();
+    let sentences = vec![
+        "Do you have change?",
+        "Like other insects, beetles have open circulatory systems, based on hemolymph rather than blood.",
+        "RWE said it has open positions",
+        "We have soap.",
+        "We do have soap.",
+        "We do not have soap.",
+        "I have contact with aliens.",
+        "Do you have Telegram?",
+        "The family that my friend had was his cousin and his sister.",
+        "In the Sahara region some oases have palm trees.",
+        "It had feature limitations such as...",
+        "A rabbit has long ears.",
+        "The tool my teacher had was archaic.",
+        "Do you have bicycle in your garage?",
+        "For any additional questions that you may have please contact me.",
+        "We have only option 2 available.",
+        "We have only option #2 available.",
+        "I don't have job We need all the food we can get.",
+        "The block of wood had saw marks on it.",
+        "The sun had rose before I awoke.",
+        "The block of wood has saw marks on it.",
+        "For example, monarchical societies often had a system of \"social ranks\" which were collectivist because the social rank one had or did not have was more important than his or her individual will, and the specific rank in question could only be overridden in very limited cases.",
+        "By the mid-10th century, the Samanid dynasty had crumble in the face of attacks from Turkish tribes to the north and from the Ghaznavids, a rising Turkic Muslim dynasty in Afghanistan.",
+        "What I'm trying to have are papers on the Silver Leaf resort thingy.",
+        "What I like to have are papers on the Silver Leaf resort thingy.",
+        "What I really would like to have are papers on the Silver Leaf resort thingy.",
+        "The options that my brother should have are the only ...",
+        "The options my brother should have are the only ...",
+        "The options he should have are the only ...",
+        "we have open positions sometimes.",
+        "There are a few I have open questions about or am waiting to receive copies of the contract.",
+        "I am taking a scuba diving class and I have open water dives on both Saturday and Sunday.",
+        "we don't have open access to the transmission grid",
+        "In this case I think 100 is necessary because once a strike has open interest, we must continue to support it.",
+        "If we restrict to strikes with a lower delta, we face the problem of not offering enough strikes and not making a market in options that have open EOL interest that have moved closer to the money.",
+        "When the basis vectors have norm 1, the coordinate functionals e*n have...",
+        "the coordinate functionals e*n have norm 2C in the dual of X.",
+    ];
 
-        for text in &sentences {
-            let sentence = runner.tokenize_sentence(text);
-            let nwt: Vec<_> = sentence.non_whitespace_tokens();
-            eprintln!("\n'{}':", text);
-            for (i, token) in nwt.iter().enumerate() {
-                let chunk = token.chunk().unwrap_or("-");
-                eprintln!("  [{}] {:15} pos={:?} chunk={}",
-                    i, format!("'{}'", token.token().token()),
-                    token.token().pos_tags(), chunk);
-            }
-        }
-    }
-
-    #[test]
-    #[ignore] // debug diagnostic — run with `cargo test -- --ignored`
-    fn test_debug_missing_to_before_verb() {
-        let runner = TestRunner::new();
-        let sentences = vec![
-            "We need test it first.",
-            "I would like see us make this work.",
-            "I like go to the pool.",
-            "He needs go there.",
-            "I want spend time with my friends.",
-            "They want improve his skills.",
-            "Try get in our heads.",
-            "I like hang out with the crew.",
-            "Installer will detect PHP 7 and try install.",
-            "He needs go",
-        ];
-
-        for text in &sentences {
-            let sentence = runner.tokenize_sentence(text);
-            let nwt: Vec<_> = sentence.non_whitespace_tokens();
-            eprintln!("\n'{}':", text);
-            for (i, token) in nwt.iter().enumerate() {
-                let chunk = token.chunk().unwrap_or("-");
-                eprintln!("  [{}] {:15} pos={:?} chunk={}",
-                    i, format!("'{}'", token.token().token()),
-                    token.token().pos_tags(), chunk);
-            }
-        }
-    }
-
-    #[test]
-    #[ignore] // debug diagnostic — run with `cargo test -- --ignored`
-    fn test_debug_chunking_with_whitespace() {
-        let runner = TestRunner::new();
-        let sentence = runner.tokenize_sentence("The client is here.");
-        let tokens = sentence.tokens();
-        eprintln!("ALL tokens for 'The client is here.' ({} total):", tokens.len());
-        for (i, token) in tokens.iter().enumerate() {
-            let tags = token.token().pos_tags();
-            let tag_str = if tags.is_empty() { "(none)".to_string() } else { format!("{:?}", tags) };
-            let ws = if token.is_whitespace() { " [WS]" } else { "" };
-            eprintln!("  [{}] {:10} pos={} chunk={}{}",
-                i, format!("'{}'", token.token().token().replace('\n', "\\n").replace(' ', "·")),
-                tag_str,
-                token.chunk().unwrap_or("-"),
-                ws);
-        }
-    }
-
-    #[test]
-    #[ignore] // debug diagnostic — run with `cargo test -- --ignored`
-    fn test_it_is_2_debug() {
-        let runner = TestRunner::new();
-        let sentences = vec![
-            "But its much better like this.",
-            "I think its much better now.",
-            "Its much easier.",
-        ];
-
-        for text in &sentences {
-            let sentence = runner.tokenize_sentence(text);
-            eprintln!("\n--- '{}' ---", text);
-            let nwt: Vec<_> = sentence.non_whitespace_tokens();
-            for (i, token) in nwt.iter().enumerate() {
-                eprintln!("  [{}] {:15} pos={:?} chunk={}",
-                    i, format!("'{}'", token.token().token()),
-                    token.token().pos_tags(),
-                    token.chunk().unwrap_or("-"));
-            }
-        }
-
-        // Try matching with IT_IS_2 rules
-        let grammar_path = "/home/agent/languagetool/languagetool-language-modules/en/src/main/resources/org/languagetool/rules/en/grammar.xml";
-        let xml = std::fs::read_to_string(grammar_path).unwrap();
-        let compiler = og_xml::compiler::XmlCompiler::new();
-        let rule_set = compiler.compile_file(&xml).unwrap();
-
-        let text = "But its much better like this.";
+    for text in &sentences {
         let sentence = runner.tokenize_sentence(text);
-        let mut rule_num = 0;
-        for rule in &rule_set.rules {
-            if rule.id == "IT_IS_2" {
-                rule_num += 1;
-                let matches = runner.pattern_engine.match_rule(rule, &sentence);
-                eprintln!("\nIT_IS_2[{}]: {} matches", rule_num, matches.len());
-                if !matches.is_empty() {
-                    for m in &matches {
-                        eprintln!("  match: {:?}", m);
-                    }
+        let nwt: Vec<_> = sentence.non_whitespace_tokens();
+        eprintln!("\n'{}':", text);
+        for (i, token) in nwt.iter().enumerate() {
+            let chunk = token.chunk().unwrap_or("-");
+            eprintln!(
+                "  [{}] {:15} pos={:?} chunk={}",
+                i,
+                format!("'{}'", token.token().token()),
+                token.token().pos_tags(),
+                chunk
+            );
+        }
+    }
+}
+
+#[test]
+#[ignore] // debug diagnostic — run with `cargo test -- --ignored`
+fn test_debug_missing_to_before_verb() {
+    let runner = TestRunner::new();
+    let sentences = vec![
+        "We need test it first.",
+        "I would like see us make this work.",
+        "I like go to the pool.",
+        "He needs go there.",
+        "I want spend time with my friends.",
+        "They want improve his skills.",
+        "Try get in our heads.",
+        "I like hang out with the crew.",
+        "Installer will detect PHP 7 and try install.",
+        "He needs go",
+    ];
+
+    for text in &sentences {
+        let sentence = runner.tokenize_sentence(text);
+        let nwt: Vec<_> = sentence.non_whitespace_tokens();
+        eprintln!("\n'{}':", text);
+        for (i, token) in nwt.iter().enumerate() {
+            let chunk = token.chunk().unwrap_or("-");
+            eprintln!(
+                "  [{}] {:15} pos={:?} chunk={}",
+                i,
+                format!("'{}'", token.token().token()),
+                token.token().pos_tags(),
+                chunk
+            );
+        }
+    }
+}
+
+#[test]
+#[ignore] // debug diagnostic — run with `cargo test -- --ignored`
+fn test_debug_chunking_with_whitespace() {
+    let runner = TestRunner::new();
+    let sentence = runner.tokenize_sentence("The client is here.");
+    let tokens = sentence.tokens();
+    eprintln!(
+        "ALL tokens for 'The client is here.' ({} total):",
+        tokens.len()
+    );
+    for (i, token) in tokens.iter().enumerate() {
+        let tags = token.token().pos_tags();
+        let tag_str = if tags.is_empty() {
+            "(none)".to_string()
+        } else {
+            format!("{:?}", tags)
+        };
+        let ws = if token.is_whitespace() { " [WS]" } else { "" };
+        eprintln!(
+            "  [{}] {:10} pos={} chunk={}{}",
+            i,
+            format!(
+                "'{}'",
+                token.token().token().replace('\n', "\\n").replace(' ', "·")
+            ),
+            tag_str,
+            token.chunk().unwrap_or("-"),
+            ws
+        );
+    }
+}
+
+#[test]
+#[ignore] // debug diagnostic — run with `cargo test -- --ignored`
+fn test_it_is_2_debug() {
+    let runner = TestRunner::new();
+    let sentences = vec![
+        "But its much better like this.",
+        "I think its much better now.",
+        "Its much easier.",
+    ];
+
+    for text in &sentences {
+        let sentence = runner.tokenize_sentence(text);
+        eprintln!("\n--- '{}' ---", text);
+        let nwt: Vec<_> = sentence.non_whitespace_tokens();
+        for (i, token) in nwt.iter().enumerate() {
+            eprintln!(
+                "  [{}] {:15} pos={:?} chunk={}",
+                i,
+                format!("'{}'", token.token().token()),
+                token.token().pos_tags(),
+                token.chunk().unwrap_or("-")
+            );
+        }
+    }
+
+    // Try matching with IT_IS_2 rules
+    let grammar_path = "/home/agent/languagetool/languagetool-language-modules/en/src/main/resources/org/languagetool/rules/en/grammar.xml";
+    let xml = std::fs::read_to_string(grammar_path).unwrap();
+    let compiler = og_xml::compiler::XmlCompiler::new();
+    let rule_set = compiler.compile_file(&xml).unwrap();
+
+    let text = "But its much better like this.";
+    let sentence = runner.tokenize_sentence(text);
+    let mut rule_num = 0;
+    for rule in &rule_set.rules {
+        if rule.id == "IT_IS_2" {
+            rule_num += 1;
+            let matches = runner.pattern_engine.match_rule(rule, &sentence);
+            eprintln!("\nIT_IS_2[{}]: {} matches", rule_num, matches.len());
+            if !matches.is_empty() {
+                for m in &matches {
+                    eprintln!("  match: {:?}", m);
                 }
             }
         }
     }
+}
 
-    #[test]
-    #[ignore] // debug diagnostic — run with `cargo test -- --ignored`
-    fn test_debug_a_infinitive_fps() {
-        let runner = TestRunner::new();
-        let sentences = vec![
-            "Checkout or add a subscribe box to the cart.",
-            "If there is already a notify email...",
-            "I hope this will help to explain why I am hesitant to endorse a centralize unit commitment implementation.",
-            "Let's have a listen to what he wants to say",
-            "He had a listen.",
-            "a show",
-            "He pulled a stun gun.",
-            "Simply book an Excite Travel Vacations package by October 31, 2001.",
-            "Smith's bill would ban the use of methyl tertiary butyl ether, an oxygenate used in 85 percent of reformulated gasoline.",
-            "He sustained the injury while chasing down a lose ball in the fourth quarter.",
-            "We invite you to come an have a look.",
-            "The carve outs from the LOL remain an open issue.",
-            "The unify pathing issue is resolved, all buckets are filled.",
-            "The integrate mw's are 10mw'w and are reflected on revised oasis request 4405.",
-            "Perhaps should add the decommission of the present MIPS measurement system and the implementation of the PGAS system.",
-            "The engine ran fine, the outdrive went up and down, the prop was the correct size and pitch.",
-            "The proof of Cleveland's mettle came quickly: its NFL regular-season opener was against the two-time defending champion Eagles on September 16 in Philadelphia.",
-            "He said we would need either a parent guarantee or a prepay to transact with occidental energy marketing.",
-            "The open e and back a are often indicated in writing by the use of the letters alaph",
-            "He sustained the injury while chasing down a lose ball in the fourth quarter.",
-            "confirms that the deny code that we wrote is ineffective.",
-            "The Disk II single-sided floppy drive used 5.25-inch floppy disks",
-            "In the U.S.A be the best.",
-            "the conquer stage will be more complex than decrease and conquer algorithms.",
-        ];
+#[test]
+#[ignore] // debug diagnostic — run with `cargo test -- --ignored`
+fn test_debug_a_infinitive_fps() {
+    let runner = TestRunner::new();
+    let sentences = vec![
+        "Checkout or add a subscribe box to the cart.",
+        "If there is already a notify email...",
+        "I hope this will help to explain why I am hesitant to endorse a centralize unit commitment implementation.",
+        "Let's have a listen to what he wants to say",
+        "He had a listen.",
+        "a show",
+        "He pulled a stun gun.",
+        "Simply book an Excite Travel Vacations package by October 31, 2001.",
+        "Smith's bill would ban the use of methyl tertiary butyl ether, an oxygenate used in 85 percent of reformulated gasoline.",
+        "He sustained the injury while chasing down a lose ball in the fourth quarter.",
+        "We invite you to come an have a look.",
+        "The carve outs from the LOL remain an open issue.",
+        "The unify pathing issue is resolved, all buckets are filled.",
+        "The integrate mw's are 10mw'w and are reflected on revised oasis request 4405.",
+        "Perhaps should add the decommission of the present MIPS measurement system and the implementation of the PGAS system.",
+        "The engine ran fine, the outdrive went up and down, the prop was the correct size and pitch.",
+        "The proof of Cleveland's mettle came quickly: its NFL regular-season opener was against the two-time defending champion Eagles on September 16 in Philadelphia.",
+        "He said we would need either a parent guarantee or a prepay to transact with occidental energy marketing.",
+        "The open e and back a are often indicated in writing by the use of the letters alaph",
+        "He sustained the injury while chasing down a lose ball in the fourth quarter.",
+        "confirms that the deny code that we wrote is ineffective.",
+        "The Disk II single-sided floppy drive used 5.25-inch floppy disks",
+        "In the U.S.A be the best.",
+        "the conquer stage will be more complex than decrease and conquer algorithms.",
+    ];
 
-        for text in &sentences {
-            let sentence = runner.tokenize_sentence(text);
-            let nwt: Vec<_> = sentence.non_whitespace_tokens();
-            eprintln!("\n'{}':", text);
-            for (i, token) in nwt.iter().enumerate() {
-                let chunk = token.chunk().unwrap_or("-");
-                eprintln!("  [{}] {:15} pos={:?} chunk={}",
-                    i, format!("'{}'", token.token().token()),
-                    token.token().pos_tags(), chunk);
-            }
+    for text in &sentences {
+        let sentence = runner.tokenize_sentence(text);
+        let nwt: Vec<_> = sentence.non_whitespace_tokens();
+        eprintln!("\n'{}':", text);
+        for (i, token) in nwt.iter().enumerate() {
+            let chunk = token.chunk().unwrap_or("-");
+            eprintln!(
+                "  [{}] {:15} pos={:?} chunk={}",
+                i,
+                format!("'{}'", token.token().token()),
+                token.token().pos_tags(),
+                chunk
+            );
         }
     }
+}

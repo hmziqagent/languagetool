@@ -1,5 +1,5 @@
-use axum::routing::{get, post};
 use axum::Router;
+use axum::routing::{get, post};
 use og_langs::engine::LanguageEngine;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -17,7 +17,10 @@ pub fn build_engines() -> HashMap<String, LanguageEngine> {
 
     info!("Loading English language engine...");
     let en_engine = LanguageEngine::english();
-    info!("English engine loaded with {} rules", en_engine.rule_count());
+    info!(
+        "English engine loaded with {} rules",
+        en_engine.rule_count()
+    );
     engines.insert("en".to_string(), en_engine);
     engines.insert("en-US".to_string(), LanguageEngine::english());
     engines.insert("en-GB".to_string(), LanguageEngine::english());
@@ -32,7 +35,10 @@ pub fn build_app(state: Arc<AppState>) -> Router {
         .route("/v2/languages", get(crate::handlers::handle_languages))
         .route("/v2/version", get(crate::handlers::handle_version))
         .route("/v2/info", get(crate::handlers::handle_info))
-        .route("/v2/maxtextlength", get(crate::handlers::handle_max_text_length))
+        .route(
+            "/v2/maxtextlength",
+            get(crate::handlers::handle_max_text_length),
+        )
         .layer(CorsLayer::permissive())
         .with_state(state)
 }

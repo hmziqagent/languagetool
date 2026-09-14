@@ -30,7 +30,6 @@ pub static ENGLISH_POS_DICT: &[(&str, &[&str])] = &[
     ("whatever", &["DT", "WDT"]),
     ("whichever", &["DT", "WDT"]),
     ("quite", &["PDT", "RB"]),
-
     // === Prepositions (IN) ===
     ("of", &["IN"]),
     ("in", &["IN", "RB", "RP"]),
@@ -87,7 +86,6 @@ pub static ENGLISH_POS_DICT: &[(&str, &[&str])] = &[
     ("per", &["IN"]),
     ("than", &["IN"]),
     ("like", &["IN", "VB", "NN", "JJ"]),
-
     // === Coordinating Conjunctions (CC) ===
     ("and", &["CC"]),
     ("but", &["CC", "RB"]),
@@ -95,7 +93,6 @@ pub static ENGLISH_POS_DICT: &[(&str, &[&str])] = &[
     ("nor", &["CC"]),
     ("so", &["CC", "RB"]),
     ("yet", &["CC", "RB"]),
-
     // === Modals (MD) ===
     ("can", &["MD"]),
     ("could", &["MD"]),
@@ -107,7 +104,6 @@ pub static ENGLISH_POS_DICT: &[(&str, &[&str])] = &[
     ("might", &["MD"]),
     ("must", &["MD"]),
     ("ought", &["MD"]),
-
     // === Personal Pronouns (PRP) ===
     ("i", &["PRP"]),
     ("you", &["PRP"]),
@@ -121,7 +117,6 @@ pub static ENGLISH_POS_DICT: &[(&str, &[&str])] = &[
     ("her", &["PRP", "PRP$"]),
     ("us", &["PRP"]),
     ("them", &["PRP"]),
-
     // === Possessive Pronouns (PRP$) ===
     ("my", &["PRP$"]),
     ("your", &["PRP$"]),
@@ -134,7 +129,6 @@ pub static ENGLISH_POS_DICT: &[(&str, &[&str])] = &[
     ("hers", &["PRP$"]),
     ("ours", &["PRP$"]),
     ("theirs", &["PRP$"]),
-
     // === Wh-words ===
     ("who", &["WP"]),
     ("whom", &["WP"]),
@@ -143,7 +137,6 @@ pub static ENGLISH_POS_DICT: &[(&str, &[&str])] = &[
     ("where", &["WRB", "NN"]),
     ("when", &["WRB", "IN", "CC"]),
     ("why", &["WRB"]),
-
     // === Indefinite pronouns ===
     ("nothing", &["NN:U", "RB"]),
     ("nobody", &["NN:U"]),
@@ -161,17 +154,14 @@ pub static ENGLISH_POS_DICT: &[(&str, &[&str])] = &[
     ("everyone", &["NN:U"]),
     ("no one", &["NN:U"]),
     ("none", &["NN:U", "JJ"]),
-
     // === Existential (EX) ===
     ("there", &["EX", "RB"]),
-
     // === Particles (RP) ===
     ("away", &["RB", "RP"]),
     ("back", &["RB", "RP", "NN", "JJ", "VB"]),
     ("ahead", &["RB"]),
     ("apart", &["RB"]),
     ("aside", &["RB"]),
-
     // === Common Adverbs (RB) ===
     ("not", &["RB"]),
     ("very", &["RB"]),
@@ -302,7 +292,6 @@ pub static ENGLISH_POS_DICT: &[(&str, &[&str])] = &[
     ("again", &["RB"]),
     ("anyway", &["RB"]),
     ("anymore", &["RB"]),
-
     // === Be verb ===
     ("be", &["VB"]),
     ("am", &["VBP"]),
@@ -312,20 +301,17 @@ pub static ENGLISH_POS_DICT: &[(&str, &[&str])] = &[
     ("were", &["VBD"]),
     ("been", &["VBN"]),
     ("being", &["VBG", "NN"]),
-
     // === Have verb ===
     ("have", &["VB", "VBP", "NN"]),
     ("has", &["VBZ"]),
     ("had", &["VBD", "VBN"]),
     ("having", &["VBG"]),
-
     // === Do verb ===
     ("do", &["VB", "VBP"]),
     ("does", &["VBZ"]),
     ("did", &["VBD"]),
     ("done", &["VBN", "JJ"]),
     ("doing", &["VBG"]),
-
     // === Common Verbs (VB) base forms ===
     ("say", &["VB", "NN"]),
     ("get", &["VB", "NN"]),
@@ -537,7 +523,6 @@ pub static ENGLISH_POS_DICT: &[(&str, &[&str])] = &[
     ("transfer", &["VB", "NN"]),
     ("recommend", &["VB"]),
     ("negotiate", &["VB"]),
-
     // === Common verbs - 3rd person singular (VBZ) ===
     ("says", &["VBZ", "NNS"]),
     ("gets", &["VBZ", "NNS"]),
@@ -700,7 +685,6 @@ pub static ENGLISH_POS_DICT: &[(&str, &[&str])] = &[
     ("delivers", &["VBZ"]),
     ("assesses", &["VBZ"]),
     ("analyzes", &["VBZ"]),
-
     // === Common verbs - past tense (VBD) ===
     ("said", &["VBD"]),
     ("got", &["VBD"]),
@@ -840,7 +824,6 @@ pub static ENGLISH_POS_DICT: &[(&str, &[&str])] = &[
     ("determined", &["VBD", "VBN"]),
     ("demonstrated", &["VBD", "VBN"]),
     ("occurred", &["VBD"]),
-
     // === Common verbs - gerund/present participle (VBG) ===
     ("saying", &["VBG"]),
     ("getting", &["VBG"]),
@@ -972,7 +955,6 @@ pub static ENGLISH_POS_DICT: &[(&str, &[&str])] = &[
     ("contributing", &["VBG"]),
     ("predicting", &["VBG"]),
     ("generating", &["VBG"]),
-
     // === Common verbs - past participle (VBN) ===
     ("been", &["VBN"]),
     ("given", &["VBN", "VBD", "JJ"]),
@@ -1019,7 +1001,6 @@ pub static ENGLISH_POS_DICT: &[(&str, &[&str])] = &[
     ("swum", &["VBN", "VBD"]),
     ("awoken", &["VBN"]),
     ("born", &["VBN", "JJ"]),
-
     // === Common Nouns (NN) ===
     ("time", &["NN", "VB"]),
     ("year", &["NN"]),
@@ -1244,7 +1225,6 @@ pub static ENGLISH_POS_DICT: &[(&str, &[&str])] = &[
     ("percent", &["NN"]),
     ("half", &["NN", "DT", "PDT"]),
     ("quarter", &["NN", "CD"]),
-
     // === Common Plural Nouns (NNS) ===
     ("years", &["NNS"]),
     ("days", &["NNS"]),
@@ -1421,7 +1401,6 @@ pub static ENGLISH_POS_DICT: &[(&str, &[&str])] = &[
     ("many", &["NNS", "DT", "JJ"]),
     ("some", &["DT"]),
     ("those", &["DT"]),
-
     // === Common Adjectives (JJ) ===
     ("good", &["JJ"]),
     ("new", &["JJ"]),
@@ -1635,7 +1614,6 @@ pub static ENGLISH_POS_DICT: &[(&str, &[&str])] = &[
     ("unable", &["JJ"]),
     ("aware", &["JJ"]),
     ("unable", &["JJ"]),
-
     // === Comparative Adjectives (JJR) ===
     ("better", &["JJR", "RBR"]),
     ("worse", &["JJR", "RBR"]),
@@ -1680,7 +1658,6 @@ pub static ENGLISH_POS_DICT: &[(&str, &[&str])] = &[
     ("later", &["JJR", "RBR"]),
     ("further", &["JJR", "RBR"]),
     ("farther", &["JJR", "RBR"]),
-
     // === Superlative Adjectives (JJS) ===
     ("best", &["JJS", "RBS"]),
     ("worst", &["JJS", "RBS"]),
@@ -1715,7 +1692,6 @@ pub static ENGLISH_POS_DICT: &[(&str, &[&str])] = &[
     ("coolest", &["JJS"]),
     ("hottest", &["JJS"]),
     ("coldest", &["JJS"]),
-
     // === Cardinal Numbers (CD) ===
     ("one", &["CD", "NN"]),
     ("two", &["CD", "NN"]),
@@ -1761,7 +1737,6 @@ pub static ENGLISH_POS_DICT: &[(&str, &[&str])] = &[
     ("ninth", &["ORD", "JJ"]),
     ("tenth", &["ORD", "JJ"]),
     ("both", &["DT", "CC"]),
-
     // === Proper Nouns (NNP) - common ones ===
     ("january", &["NNP"]),
     ("february", &["NNP"]),
@@ -1862,7 +1837,6 @@ pub static ENGLISH_POS_DICT: &[(&str, &[&str])] = &[
     ("senate", &["NNP", "NN"]),
     ("supreme court", &["NNP"]),
     ("white house", &["NNP"]),
-
     // === Interjections (UH) ===
     ("oh", &["UH"]),
     ("please", &["UH", "VB"]),

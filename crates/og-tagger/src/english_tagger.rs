@@ -1,7 +1,7 @@
-use std::collections::{HashMap, HashSet};
-use og_core::AnalyzedTokenReadings;
 use crate::Tagger;
 use crate::english_data::ENGLISH_POS_DICT;
+use og_core::AnalyzedTokenReadings;
+use std::collections::{HashMap, HashSet};
 
 /// Irregular English verb forms: past tense, past participle, gerund → base form
 /// Also includes irregular adjectives (comparative/superlative) and plural nouns.
@@ -245,11 +245,15 @@ fn add_vbp_if_vb(results: &mut Vec<(String, Option<String>)>) {
 }
 
 /// Words that are primarily modals (MD) but can also be nouns.
-const MD_NOUN_WORDS: &[&str] = &["can", "will", "may", "must", "should", "could", "would", "might"];
+const MD_NOUN_WORDS: &[&str] = &[
+    "can", "will", "may", "must", "should", "could", "would", "might",
+];
 
 fn add_nn_for_md_nouns(results: &mut Vec<(String, Option<String>)>) {
     let has_md = results.iter().any(|(t, _)| t == "MD");
-    let has_nn = results.iter().any(|(t, _)| t == "NN" || t == "NN:U" || t == "NN:UN");
+    let has_nn = results
+        .iter()
+        .any(|(t, _)| t == "NN" || t == "NN:U" || t == "NN:UN");
     if has_md && !has_nn {
         // Check if the lemma is in the MD_NOUN_WORDS list
         if let Some((_, lemma)) = results.iter().find(|(t, _)| t == "MD").cloned() {
@@ -346,10 +350,15 @@ impl EnglishTagger {
 
                 // Skip NNP/NNPS entries from capitalized forms
                 let is_proper_noun_entry = (pos_tag == "NNP" || pos_tag == "NNPS")
-                    && original_word.chars().next().map(|c| c.is_uppercase()).unwrap_or(false);
+                    && original_word
+                        .chars()
+                        .next()
+                        .map(|c| c.is_uppercase())
+                        .unwrap_or(false);
 
                 if is_proper_noun_entry {
-                    let entry = self.proper_noun_dict
+                    let entry = self
+                        .proper_noun_dict
                         .entry(original_word.to_string())
                         .or_default();
                     if !entry.iter().any(|(p, _)| p == pos_tag) {
@@ -389,18 +398,18 @@ impl EnglishTagger {
         // Format: PRP_S<person><number><gender?> = subject pronoun
         //         PRP_O<person><number><gender?> = object pronoun
         let pronoun_subtags: &[(&str, &[&str])] = &[
-            ("I",     &["PRP", "PRP_S1S"]),
-            ("me",    &["PRP", "PRP_O1S"]),
-            ("we",    &["PRP", "PRP_S1P"]),
-            ("us",    &["PRP", "PRP_O1P"]),
-            ("you",   &["PRP", "PRP_S2S", "PRP_S2P", "PRP_O2S", "PRP_O2P"]),
-            ("he",    &["PRP", "PRP_S3SM"]),
-            ("him",   &["PRP", "PRP_O3SM"]),
-            ("she",   &["PRP", "PRP_S3SF"]),
-            ("her",   &["PRP", "PRP_O3SF", "PRP$"]),
-            ("it",    &["PRP", "PRP_S3SN", "PRP_O3SN"]),
-            ("they",  &["PRP", "PRP_S3P"]),
-            ("them",  &["PRP", "PRP_O3P"]),
+            ("I", &["PRP", "PRP_S1S"]),
+            ("me", &["PRP", "PRP_O1S"]),
+            ("we", &["PRP", "PRP_S1P"]),
+            ("us", &["PRP", "PRP_O1P"]),
+            ("you", &["PRP", "PRP_S2S", "PRP_S2P", "PRP_O2S", "PRP_O2P"]),
+            ("he", &["PRP", "PRP_S3SM"]),
+            ("him", &["PRP", "PRP_O3SM"]),
+            ("she", &["PRP", "PRP_S3SF"]),
+            ("her", &["PRP", "PRP_O3SF", "PRP$"]),
+            ("it", &["PRP", "PRP_S3SN", "PRP_O3SN"]),
+            ("they", &["PRP", "PRP_S3P"]),
+            ("them", &["PRP", "PRP_O3P"]),
         ];
         for (word, subtags) in pronoun_subtags {
             let entry = self.dict.entry(word.to_string()).or_default();
@@ -422,17 +431,27 @@ impl EnglishTagger {
         let mut tags = Vec::new();
 
         // Check if it looks like a number
-        if lower.chars().all(|c| c.is_ascii_digit() || c == '.' || c == ',' || c == '-') {
+        if lower
+            .chars()
+            .all(|c| c.is_ascii_digit() || c == '.' || c == ',' || c == '-')
+        {
             if lower.chars().any(|c| c.is_ascii_digit()) {
                 return vec!["CD".to_string()];
             }
         }
 
         // Check if it starts with a capital letter (potential proper noun)
-        let is_capitalized = word.chars().next().map(|c| c.is_uppercase()).unwrap_or(false);
+        let is_capitalized = word
+            .chars()
+            .next()
+            .map(|c| c.is_uppercase())
+            .unwrap_or(false);
         let is_all_upper = word.chars().all(|c| c.is_uppercase() || !c.is_alphabetic());
 
-        if is_all_upper && word.len() <= 5 && word.chars().filter(|c| c.is_alphabetic()).count() >= 2 {
+        if is_all_upper
+            && word.len() <= 5
+            && word.chars().filter(|c| c.is_alphabetic()).count() >= 2
+        {
             // All-caps short words are likely abbreviations/proper nouns
             tags.push("NNP".to_string());
             return tags;
@@ -441,9 +460,15 @@ impl EnglishTagger {
         // Suffix-based rules (ordered by specificity)
         if lower.ends_with("ously") || lower.ends_with("ively") || lower.ends_with("ically") {
             tags.push("RB".to_string());
-        } else if lower.ends_with("tion") || lower.ends_with("sion") || lower.ends_with("ment")
-            || lower.ends_with("ness") || lower.ends_with("ity") || lower.ends_with("ence")
-            || lower.ends_with("ance") || lower.ends_with("ism") || lower.ends_with("ist")
+        } else if lower.ends_with("tion")
+            || lower.ends_with("sion")
+            || lower.ends_with("ment")
+            || lower.ends_with("ness")
+            || lower.ends_with("ity")
+            || lower.ends_with("ence")
+            || lower.ends_with("ance")
+            || lower.ends_with("ism")
+            || lower.ends_with("ist")
         {
             tags.push("NN".to_string());
         } else if lower.ends_with("ting") {
@@ -467,20 +492,34 @@ impl EnglishTagger {
             tags.push("NN".to_string());
         } else if lower.ends_with("est") && lower.len() > 4 {
             tags.push("JJS".to_string());
-        } else if lower.ends_with("ful") || lower.ends_with("less") || lower.ends_with("ous")
-            || lower.ends_with("ive") || lower.ends_with("able") || lower.ends_with("ible")
-            || lower.ends_with("al") || lower.ends_with("ial") || lower.ends_with("ent")
-            || lower.ends_with("ant") || lower.ends_with("ic") || lower.ends_with("ical")
+        } else if lower.ends_with("ful")
+            || lower.ends_with("less")
+            || lower.ends_with("ous")
+            || lower.ends_with("ive")
+            || lower.ends_with("able")
+            || lower.ends_with("ible")
+            || lower.ends_with("al")
+            || lower.ends_with("ial")
+            || lower.ends_with("ent")
+            || lower.ends_with("ant")
+            || lower.ends_with("ic")
+            || lower.ends_with("ical")
         {
             tags.push("JJ".to_string());
-        } else if lower.ends_with("ize") || lower.ends_with("ise") || lower.ends_with("ify")
+        } else if lower.ends_with("ize")
+            || lower.ends_with("ise")
+            || lower.ends_with("ify")
             || lower.ends_with("ate")
         {
             tags.push("VB".to_string());
         } else if lower.ends_with("es") && lower.len() > 3 {
             tags.push("NNS".to_string());
             tags.push("VBZ".to_string());
-        } else if lower.ends_with('s') && !lower.ends_with("ss") && !lower.ends_with("us") && lower.len() > 3 {
+        } else if lower.ends_with('s')
+            && !lower.ends_with("ss")
+            && !lower.ends_with("us")
+            && lower.len() > 3
+        {
             tags.push("NNS".to_string());
             tags.push("VBZ".to_string());
         }
@@ -517,69 +556,80 @@ impl EnglishTagger {
         match pos {
             "NNS" | "NNPS" => {
                 if lower.ends_with("ies") && lower.len() > 4 {
-                    Some(format!("{}y", &lower[..lower.len()-3]))
+                    Some(format!("{}y", &lower[..lower.len() - 3]))
                 } else if lower.ends_with("ves") && lower.len() > 4 {
-                    Some(format!("{}fe", &lower[..lower.len()-3]))
-                } else if lower.ends_with("ses") || lower.ends_with("xes") || lower.ends_with("zes") || lower.ends_with("ches") || lower.ends_with("shes") {
-                    Some(lower[..lower.len()-2].to_string())
+                    Some(format!("{}fe", &lower[..lower.len() - 3]))
+                } else if lower.ends_with("ses")
+                    || lower.ends_with("xes")
+                    || lower.ends_with("zes")
+                    || lower.ends_with("ches")
+                    || lower.ends_with("shes")
+                {
+                    Some(lower[..lower.len() - 2].to_string())
                 } else if lower.ends_with('s') && !lower.ends_with("ss") {
-                    Some(lower[..lower.len()-1].to_string())
+                    Some(lower[..lower.len() - 1].to_string())
                 } else {
                     None
                 }
             }
             "VBZ" => {
                 if lower.ends_with("ies") && lower.len() > 4 {
-                    Some(format!("{}y", &lower[..lower.len()-3]))
-                } else if lower.ends_with("es") && (lower.ends_with("ches") || lower.ends_with("shes") || lower.ends_with("sses") || lower.ends_with("xes") || lower.ends_with("zes")) {
-                    Some(lower[..lower.len()-2].to_string())
+                    Some(format!("{}y", &lower[..lower.len() - 3]))
+                } else if lower.ends_with("es")
+                    && (lower.ends_with("ches")
+                        || lower.ends_with("shes")
+                        || lower.ends_with("sses")
+                        || lower.ends_with("xes")
+                        || lower.ends_with("zes"))
+                {
+                    Some(lower[..lower.len() - 2].to_string())
                 } else if lower.ends_with('s') && !lower.ends_with("ss") {
-                    Some(lower[..lower.len()-1].to_string())
+                    Some(lower[..lower.len() - 1].to_string())
                 } else {
                     None
                 }
             }
             "VBD" | "VBN" => {
                 if lower.ends_with("ied") && lower.len() > 4 {
-                    Some(format!("{}y", &lower[..lower.len()-3]))
+                    Some(format!("{}y", &lower[..lower.len() - 3]))
                 } else if lower.ends_with("ed") && lower.len() > 4 {
                     // try removing just 'd' first (e.g., "changed" → "change")
-                    Some(lower[..lower.len()-2].to_string())
+                    Some(lower[..lower.len() - 2].to_string())
                 } else {
                     None
                 }
             }
             "VBG" => {
                 if lower.ends_with("ing") && lower.len() > 5 {
-                    Some(lower[..lower.len()-3].to_string())
+                    Some(lower[..lower.len() - 3].to_string())
                 } else {
                     None
                 }
             }
             "JJR" => {
                 if lower.ends_with("er") && lower.len() > 3 {
-                    Some(lower[..lower.len()-2].to_string())
+                    Some(lower[..lower.len() - 2].to_string())
                 } else {
                     None
                 }
             }
             "JJS" => {
                 if lower.ends_with("est") && lower.len() > 4 {
-                    Some(lower[..lower.len()-3].to_string())
+                    Some(lower[..lower.len() - 3].to_string())
                 } else {
                     None
                 }
             }
             "RBR" => {
                 if lower.ends_with("er") && lower.len() > 3 {
-                    Some(lower[..lower.len()-2].to_string())
+                    Some(lower[..lower.len() - 2].to_string())
                 } else {
                     None
                 }
             }
             "RBS" => {
                 if lower.ends_with("est") && lower.len() > 4 {
-                    Some(lower[..lower.len()-3].to_string())
+                    Some(lower[..lower.len() - 3].to_string())
                 } else {
                     None
                 }
@@ -599,10 +649,7 @@ impl EnglishTagger {
                 "(" | "[" | "{" => vec![(("-LRB-").to_string(), None)],
                 ")" | "]" | "}" => vec![(("-RRB-").to_string(), None)],
                 "..." => vec![((".").to_string(), None)],
-                "'s" | "\u{2019}s" => vec![
-                    ("POS".to_string(), None),
-                    ("VBZ".to_string(), None),
-                ],
+                "'s" | "\u{2019}s" => vec![("POS".to_string(), None), ("VBZ".to_string(), None)],
                 _ => vec![("PCT".to_string(), None)],
             };
         }
@@ -616,8 +663,8 @@ impl EnglishTagger {
         let lower = word.to_lowercase();
         let chars: Vec<char> = lower.chars().collect();
         if chars.len() > 2 {
-            let last_two: String = chars[chars.len()-2..].iter().collect();
-            let prefix: String = chars[..chars.len()-2].iter().collect();
+            let last_two: String = chars[chars.len() - 2..].iter().collect();
+            let prefix: String = chars[..chars.len() - 2].iter().collect();
             if !prefix.is_empty() && prefix.chars().all(|c| c.is_ascii_digit()) {
                 if last_two == "st" || last_two == "nd" || last_two == "rd" || last_two == "th" {
                     return vec![("ORD".to_string(), Some(word.to_string()))];
@@ -635,12 +682,17 @@ impl EnglishTagger {
 
         // Try FSA dictionary first (has real lemmas)
         if let Some(entries) = self.fsa_dict.get(&lower) {
-            let mut results: Vec<(String, Option<String>)> = entries.iter().map(|(pos, lemma)| {
-                (pos.clone(), Some(lemma.clone()))
-            }).collect();
+            let mut results: Vec<(String, Option<String>)> = entries
+                .iter()
+                .map(|(pos, lemma)| (pos.clone(), Some(lemma.clone())))
+                .collect();
 
             // Add proper noun readings if word is capitalized in context
-            let is_capitalized = word.chars().next().map(|c| c.is_uppercase()).unwrap_or(false);
+            let is_capitalized = word
+                .chars()
+                .next()
+                .map(|c| c.is_uppercase())
+                .unwrap_or(false);
             if is_capitalized {
                 if let Some(pn_entries) = self.proper_noun_dict.get(word) {
                     for (pos, lemma) in pn_entries {
@@ -674,10 +726,15 @@ impl EnglishTagger {
 
         // Try built-in dictionary lookup
         if let Some(tags) = self.lookup(word) {
-            let mut results: Vec<(String, Option<String>)> = tags.iter().map(|t| {
-                let lemma = self.guess_lemma(word, t).unwrap_or_else(|| word.to_lowercase());
-                (t.clone(), Some(lemma))
-            }).collect();
+            let mut results: Vec<(String, Option<String>)> = tags
+                .iter()
+                .map(|t| {
+                    let lemma = self
+                        .guess_lemma(word, t)
+                        .unwrap_or_else(|| word.to_lowercase());
+                    (t.clone(), Some(lemma))
+                })
+                .collect();
 
             // Check if word is uncountable/partlycountable even if in dict
             if self.uncountable.contains(&lower) {
@@ -738,7 +795,11 @@ impl EnglishTagger {
         }
 
         // NNPS: capitalized words ending in 's' that are likely plural proper nouns
-        let is_capitalized = word.chars().next().map(|c| c.is_uppercase()).unwrap_or(false);
+        let is_capitalized = word
+            .chars()
+            .next()
+            .map(|c| c.is_uppercase())
+            .unwrap_or(false);
         if is_capitalized && lower.ends_with('s') && !lower.ends_with("ss") && lower.len() > 2 {
             if tags.contains(&"NNS".to_string()) {
                 // Replace NNS with NNPS for capitalized words
@@ -747,10 +808,14 @@ impl EnglishTagger {
             }
         }
 
-        tags.into_iter().map(|t| {
-            let lemma = self.guess_lemma(word, &t).unwrap_or_else(|| word.to_lowercase());
-            (t, Some(lemma))
-        }).collect()
+        tags.into_iter()
+            .map(|t| {
+                let lemma = self
+                    .guess_lemma(word, &t)
+                    .unwrap_or_else(|| word.to_lowercase());
+                (t, Some(lemma))
+            })
+            .collect()
     }
 }
 
@@ -763,7 +828,8 @@ impl Default for EnglishTagger {
 impl og_core::checker::Tagger for EnglishTagger {
     fn tag(&self, tokens: &mut [og_core::AnalyzedTokenReadings]) {
         // Collect token texts, skipping the SENT_START token at position 0
-        let token_texts: Vec<String> = tokens.iter()
+        let token_texts: Vec<String> = tokens
+            .iter()
             .skip(1)
             .map(|t| t.token().token().to_string())
             .collect();
@@ -779,16 +845,22 @@ impl og_core::checker::Tagger for EnglishTagger {
 
                 let new_readings: Vec<og_core::AnalyzedToken> = tagged_atr.readings().to_vec();
                 if !new_readings.is_empty() {
-                    let all_tags: Vec<String> = new_readings.iter()
+                    let all_tags: Vec<String> = new_readings
+                        .iter()
                         .flat_map(|r| r.pos_tags().to_vec())
                         .collect();
                     let updated_primary = og_core::AnalyzedToken::new(
                         primary.token(),
                         primary.start(),
-                        primary.end()
+                        primary.end(),
                     )
                     .with_pos_tags(all_tags)
-                    .with_lemma(new_readings[0].lemma().unwrap_or(primary.token()).to_string());
+                    .with_lemma(
+                        new_readings[0]
+                            .lemma()
+                            .unwrap_or(primary.token())
+                            .to_string(),
+                    );
 
                     let mut new_atr = og_core::AnalyzedTokenReadings::new(updated_primary);
                     new_atr = new_atr.with_readings(new_readings);
@@ -803,95 +875,162 @@ impl og_core::checker::Tagger for EnglishTagger {
         let mut chunk_token_texts: Vec<&str> = Vec::new();
 
         for (i, t) in tokens.iter().enumerate() {
-            if t.is_whitespace() { continue; }
+            if t.is_whitespace() {
+                continue;
+            }
             let tags = t.token().pos_tags();
-            if tags.iter().any(|t| t == "SENT_START" || t == "SENT_END") { continue; }
+            if tags.iter().any(|t| t == "SENT_START" || t == "SENT_END") {
+                continue;
+            }
             nw_indices.push(i);
             all_tags.push(tags.to_vec());
             chunk_token_texts.push(t.token().token());
         }
 
         // Select best POS tag per token using context heuristics
-        let pos_tags: Vec<&str> = all_tags.iter().enumerate().map(|(i, tags)| {
-            if tags.is_empty() { return ""; }
-            if tags.len() == 1 { return tags[0].as_str(); }
+        let pos_tags: Vec<&str> = all_tags
+            .iter()
+            .enumerate()
+            .map(|(i, tags)| {
+                if tags.is_empty() {
+                    return "";
+                }
+                if tags.len() == 1 {
+                    return tags[0].as_str();
+                }
 
-            let has_vb = tags.iter().any(|t| t.starts_with("VB"));
-            let has_jj = tags.iter().any(|t| t.starts_with("JJ"));
-            let has_nn = tags.iter().any(|t| t.starts_with("NN") || t == "FW");
+                let has_vb = tags.iter().any(|t| t.starts_with("VB"));
+                let has_jj = tags.iter().any(|t| t.starts_with("JJ"));
+                let has_nn = tags.iter().any(|t| t.starts_with("NN") || t == "FW");
 
-            let prev_is_verb = if i > 0 {
-                all_tags[i - 1].iter().any(|t| t.starts_with("VB") || t == "MD")
-            } else {
-                false
-            };
-            let prev_2_is_verb = if i > 1 {
-                let prev_text = chunk_token_texts.get(i - 1).map(|s| *s).unwrap_or("");
-                let is_negation = matches!(prev_text.to_lowercase().as_str(), "n't" | "not" | "never")
-                    || all_tags[i - 1].iter().any(|t| t == "RB");
-                if is_negation {
-                    all_tags[i - 2].iter().any(|t| t.starts_with("VB") || t == "MD")
+                let prev_is_verb = if i > 0 {
+                    all_tags[i - 1]
+                        .iter()
+                        .any(|t| t.starts_with("VB") || t == "MD")
                 } else {
                     false
+                };
+                let prev_2_is_verb = if i > 1 {
+                    let prev_text = chunk_token_texts.get(i - 1).map(|s| *s).unwrap_or("");
+                    let is_negation =
+                        matches!(prev_text.to_lowercase().as_str(), "n't" | "not" | "never")
+                            || all_tags[i - 1].iter().any(|t| t == "RB");
+                    if is_negation {
+                        all_tags[i - 2]
+                            .iter()
+                            .any(|t| t.starts_with("VB") || t == "MD")
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+                let effective_prev_is_verb = prev_is_verb || prev_2_is_verb;
+
+                let prev_is_det = if i > 0 {
+                    all_tags[i - 1]
+                        .iter()
+                        .any(|t| t == "DT" || t == "PRP$" || t == "CD" || t == "WDT")
+                } else {
+                    false
+                };
+
+                let prev_is_have = if i > 0 {
+                    let prev_text = chunk_token_texts.get(i - 1).map(|s| *s).unwrap_or("");
+                    prev_is_verb
+                        && matches!(
+                            prev_text.to_lowercase().as_str(),
+                            "have" | "has" | "had" | "'ve" | "'s"
+                        )
+                } else {
+                    false
+                };
+
+                if prev_is_have && has_jj {
+                    return tags
+                        .iter()
+                        .find(|t| t.starts_with("JJ"))
+                        .map(|s| s.as_str())
+                        .unwrap_or(tags[0].as_str());
                 }
-            } else {
-                false
-            };
-            let effective_prev_is_verb = prev_is_verb || prev_2_is_verb;
-
-            let prev_is_det = if i > 0 {
-                all_tags[i - 1].iter().any(|t| t == "DT" || t == "PRP$" || t == "CD" || t == "WDT")
-            } else {
-                false
-            };
-
-            let prev_is_have = if i > 0 {
-                let prev_text = chunk_token_texts.get(i - 1).map(|s| *s).unwrap_or("");
-                prev_is_verb && matches!(prev_text.to_lowercase().as_str(),
-                    "have" | "has" | "had" | "'ve" | "'s")
-            } else {
-                false
-            };
-
-            if prev_is_have && has_jj {
-                return tags.iter().find(|t| t.starts_with("JJ")).map(|s| s.as_str()).unwrap_or(tags[0].as_str());
-            }
-            if prev_is_have && has_nn {
-                return tags.iter().find(|t| t.starts_with("NN")).map(|s| s.as_str()).unwrap_or(tags[0].as_str());
-            }
-            if prev_is_det && has_nn && has_vb {
-                return tags.iter().find(|t| t.starts_with("NN")).map(|s| s.as_str()).unwrap_or(tags[0].as_str());
-            }
-            if effective_prev_is_verb && has_vb && has_nn && !prev_is_have {
-                return tags.iter().find(|t| t.starts_with("VB")).map(|s| s.as_str()).unwrap_or(tags[0].as_str());
-            }
-            if effective_prev_is_verb && has_vb && has_jj && !prev_is_have {
-                return tags.iter().find(|t| t.starts_with("VB")).map(|s| s.as_str()).unwrap_or(tags[0].as_str());
-            }
-            let prev_is_prp = if i > 0 {
-                all_tags[i - 1].iter().any(|t| t == "PRP" || t.starts_with("PRP_S") || t.starts_with("PRP_O"))
-            } else {
-                false
-            };
-            if prev_is_prp {
-                let has_md = tags.iter().any(|t| t == "MD");
-                if has_vb && has_nn {
-                    return tags.iter().find(|t| t.starts_with("VB")).map(|s| s.as_str()).unwrap_or(tags[0].as_str());
+                if prev_is_have && has_nn {
+                    return tags
+                        .iter()
+                        .find(|t| t.starts_with("NN"))
+                        .map(|s| s.as_str())
+                        .unwrap_or(tags[0].as_str());
                 }
-                if has_md && has_nn {
-                    return "MD";
+                if prev_is_det && has_nn && has_vb {
+                    return tags
+                        .iter()
+                        .find(|t| t.starts_with("NN"))
+                        .map(|s| s.as_str())
+                        .unwrap_or(tags[0].as_str());
                 }
-            }
-            let word_lower = chunk_token_texts[i].to_lowercase();
-            if matches!(word_lower.as_str(),
-                "am" | "is" | "are" | "was" | "were" | "be" | "been" | "being" |
-                "have" | "has" | "had" | "do" | "does" | "did" | "doing" | "done"
-            ) && has_vb {
-                return tags.iter().find(|t| t.starts_with("VB")).map(|s| s.as_str()).unwrap_or(tags[0].as_str());
-            }
+                if effective_prev_is_verb && has_vb && has_nn && !prev_is_have {
+                    return tags
+                        .iter()
+                        .find(|t| t.starts_with("VB"))
+                        .map(|s| s.as_str())
+                        .unwrap_or(tags[0].as_str());
+                }
+                if effective_prev_is_verb && has_vb && has_jj && !prev_is_have {
+                    return tags
+                        .iter()
+                        .find(|t| t.starts_with("VB"))
+                        .map(|s| s.as_str())
+                        .unwrap_or(tags[0].as_str());
+                }
+                let prev_is_prp = if i > 0 {
+                    all_tags[i - 1]
+                        .iter()
+                        .any(|t| t == "PRP" || t.starts_with("PRP_S") || t.starts_with("PRP_O"))
+                } else {
+                    false
+                };
+                if prev_is_prp {
+                    let has_md = tags.iter().any(|t| t == "MD");
+                    if has_vb && has_nn {
+                        return tags
+                            .iter()
+                            .find(|t| t.starts_with("VB"))
+                            .map(|s| s.as_str())
+                            .unwrap_or(tags[0].as_str());
+                    }
+                    if has_md && has_nn {
+                        return "MD";
+                    }
+                }
+                let word_lower = chunk_token_texts[i].to_lowercase();
+                if matches!(
+                    word_lower.as_str(),
+                    "am" | "is"
+                        | "are"
+                        | "was"
+                        | "were"
+                        | "be"
+                        | "been"
+                        | "being"
+                        | "have"
+                        | "has"
+                        | "had"
+                        | "do"
+                        | "does"
+                        | "did"
+                        | "doing"
+                        | "done"
+                ) && has_vb
+                {
+                    return tags
+                        .iter()
+                        .find(|t| t.starts_with("VB"))
+                        .map(|s| s.as_str())
+                        .unwrap_or(tags[0].as_str());
+                }
 
-            tags[0].as_str()
-        }).collect();
+                tags[0].as_str()
+            })
+            .collect();
 
         // Prepend SENT_START for the chunker
         let mut chunker_pos = vec!["SENT_START"];
@@ -925,13 +1064,21 @@ impl Tagger for EnglishTagger {
             use og_core::AnalyzedToken;
             let primary = AnalyzedToken::new(*token_text, token_start, token_end)
                 .with_pos_tags(readings_data.iter().map(|(t, _)| t.clone()).collect())
-                .with_lemma(readings_data.first().and_then(|(_, l)| l.clone()).unwrap_or_else(|| token_text.to_lowercase()));
+                .with_lemma(
+                    readings_data
+                        .first()
+                        .and_then(|(_, l)| l.clone())
+                        .unwrap_or_else(|| token_text.to_lowercase()),
+                );
 
-            let readings: Vec<AnalyzedToken> = readings_data.into_iter().map(|(tag, lemma)| {
-                AnalyzedToken::new(*token_text, token_start, token_end)
-                    .with_pos_tags(vec![tag])
-                    .with_lemma(lemma.unwrap_or_else(|| token_text.to_lowercase()))
-            }).collect();
+            let readings: Vec<AnalyzedToken> = readings_data
+                .into_iter()
+                .map(|(tag, lemma)| {
+                    AnalyzedToken::new(*token_text, token_start, token_end)
+                        .with_pos_tags(vec![tag])
+                        .with_lemma(lemma.unwrap_or_else(|| token_text.to_lowercase()))
+                })
+                .collect();
 
             let atr = AnalyzedTokenReadings::new(primary).with_readings(readings);
             results.push(atr);
@@ -1001,7 +1148,9 @@ mod tests {
     fn test_adverbs() {
         let tagger = EnglishTagger::new();
 
-        let rb_words = vec!["very", "quickly", "not", "always", "never", "really", "often", "already"];
+        let rb_words = vec![
+            "very", "quickly", "not", "always", "never", "really", "often", "already",
+        ];
         for w in &rb_words {
             let result = tagger.tag(&[*w]);
             assert!(result[0].has_pos_tag("RB"), "{} should be RB", w);
@@ -1029,7 +1178,10 @@ mod tests {
         assert!(tagger.tag(&["walked"])[0].has_pos_tag("VBN"));
         // "walked" is a known word (in dictionary), so it gets VBD/VBN from dict not JJ
         // Unknown -ed words get heuristic JJ
-        assert!(tagger.tag(&["stampeded"])[0].has_pos_tag("JJ"), "unknown -ed word should get JJ");
+        assert!(
+            tagger.tag(&["stampeded"])[0].has_pos_tag("JJ"),
+            "unknown -ed word should get JJ"
+        );
     }
 
     #[test]
@@ -1047,7 +1199,10 @@ mod tests {
     fn test_capitalized_unknown() {
         let tagger = EnglishTagger::new();
         let result = tagger.tag(&["Zanzibar"]);
-        assert!(result[0].has_pos_tag("NNP"), "Capitalized unknown should be NNP");
+        assert!(
+            result[0].has_pos_tag("NNP"),
+            "Capitalized unknown should be NNP"
+        );
     }
 
     #[test]
@@ -1113,7 +1268,11 @@ mod tests {
     #[test]
     fn test_dictionary_size() {
         let tagger = EnglishTagger::new();
-        assert!(tagger.dict.len() > 1000, "Dictionary should have >1000 entries, got {}", tagger.dict.len());
+        assert!(
+            tagger.dict.len() > 1000,
+            "Dictionary should have >1000 entries, got {}",
+            tagger.dict.len()
+        );
     }
 
     #[test]

@@ -1,7 +1,7 @@
 use crate::disambig_types::*;
 use crate::types::*;
-use quick_xml::events::Event;
 use quick_xml::Reader;
+use quick_xml::events::Event;
 
 #[derive(Debug, thiserror::Error)]
 pub enum DisambigParseError {
@@ -570,7 +570,10 @@ mod tests {
             }
             other => panic!("Expected Replace, got {:?}", other),
         }
-        assert_eq!(result.rules[0].pattern.tokens[1].space_before.as_deref(), Some("no"));
+        assert_eq!(
+            result.rules[0].pattern.tokens[1].space_before.as_deref(),
+            Some("no")
+        );
     }
 
     #[test]

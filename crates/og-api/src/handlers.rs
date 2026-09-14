@@ -1,10 +1,10 @@
+use crate::request::CheckParams;
+use crate::response::{InfoResponse, LanguagesResponse, MaxTextLengthResponse, VersionResponse};
+use crate::server::{AppState, MAX_TEXT_LENGTH};
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::Json;
 use og_core::{CheckResult, Language};
-use crate::request::CheckParams;
-use crate::response::{InfoResponse, LanguagesResponse, MaxTextLengthResponse, VersionResponse};
-use crate::server::{AppState, MAX_TEXT_LENGTH};
 use std::sync::Arc;
 
 pub async fn handle_check(

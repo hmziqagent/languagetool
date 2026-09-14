@@ -1,5 +1,8 @@
 use og_core::rule::TextLevelRule;
-use og_core::{AnalyzedSentence, AnalyzedTokenReadings, Category, IssueType, RuleMatch, RuleMatchContext, RuleMatchRule, SuggestedReplacement};
+use og_core::{
+    AnalyzedSentence, AnalyzedTokenReadings, Category, IssueType, RuleMatch, RuleMatchContext,
+    RuleMatchRule, SuggestedReplacement,
+};
 
 /// Detects multiple consecutive whitespace characters that should be a single space.
 /// Text-level rule that checks across all sentences.
@@ -67,9 +70,13 @@ impl TextLevelRule for MultipleWhitespaceRule {
                             start,
                             end - start,
                             rule,
-                            RuleMatchContext::new(context_text, context_start, context_end - context_start),
+                            RuleMatchContext::new(
+                                context_text,
+                                context_start,
+                                context_end - context_start,
+                            ),
                         )
-                        .with_replacements(vec![SuggestedReplacement::new(" ")])
+                        .with_replacements(vec![SuggestedReplacement::new(" ")]),
                     );
                 }
             } else {
@@ -146,7 +153,10 @@ impl TextLevelRule for SentenceWhitespaceRule {
                 let context_end = std::cmp::min(end + 30, text.len());
                 let context_text = text[context_start..context_end].to_string();
 
-                let first_word: String = curr_text.chars().take_while(|c| !c.is_whitespace()).collect();
+                let first_word: String = curr_text
+                    .chars()
+                    .take_while(|c| !c.is_whitespace())
+                    .collect();
                 let suggestion = format!(" {}", first_word);
 
                 let rule = RuleMatchRule::new(&self.id, self.description())
@@ -159,10 +169,14 @@ impl TextLevelRule for SentenceWhitespaceRule {
                         start,
                         end - start,
                         rule,
-                        RuleMatchContext::new(context_text, context_start, context_end - context_start),
+                        RuleMatchContext::new(
+                            context_text,
+                            context_start,
+                            context_end - context_start,
+                        ),
                     )
                     .with_sentence(curr_text.to_string())
-                    .with_replacements(vec![SuggestedReplacement::new(suggestion)])
+                    .with_replacements(vec![SuggestedReplacement::new(suggestion)]),
                 );
             }
 
@@ -198,7 +212,11 @@ impl GenericUnpairedBracketsRule {
     }
 
     pub fn with_symbols(mut self, start: Vec<&str>, end: Vec<&str>) -> Self {
-        assert_eq!(start.len(), end.len(), "Start and end symbol lists must be equal length");
+        assert_eq!(
+            start.len(),
+            end.len(),
+            "Start and end symbol lists must be equal length"
+        );
         self.start_symbols = start.iter().map(|s| s.to_string()).collect();
         self.end_symbols = end.iter().map(|s| s.to_string()).collect();
         self
@@ -242,7 +260,9 @@ impl TextLevelRule for GenericUnpairedBracketsRule {
         let mut stack: Vec<SymbolEntry> = Vec::new();
 
         // Build all bracket symbols for fast lookup
-        let _all_symbols: Vec<&str> = self.start_symbols.iter()
+        let _all_symbols: Vec<&str> = self
+            .start_symbols
+            .iter()
             .chain(self.end_symbols.iter())
             .map(|s| s.as_str())
             .collect();
@@ -279,9 +299,10 @@ impl TextLevelRule for GenericUnpairedBracketsRule {
                     break;
                 }
                 if ch_str == self.end_symbols[j] {
-                    if let Some(idx) = stack.iter().rposition(|s| {
-                        s.is_opening && s.symbol == self.start_symbols[j]
-                    }) {
+                    if let Some(idx) = stack
+                        .iter()
+                        .rposition(|s| s.is_opening && s.symbol == self.start_symbols[j])
+                    {
                         stack.remove(idx);
                     } else {
                         stack.push(SymbolEntry {
@@ -305,10 +326,18 @@ impl TextLevelRule for GenericUnpairedBracketsRule {
             let context_text = text[context_start..context_end].to_string();
 
             let other = if entry.is_opening {
-                let idx = self.start_symbols.iter().position(|s| s == &entry.symbol).unwrap();
+                let idx = self
+                    .start_symbols
+                    .iter()
+                    .position(|s| s == &entry.symbol)
+                    .unwrap();
                 self.end_symbols[idx].clone()
             } else {
-                let idx = self.end_symbols.iter().position(|s| s == &entry.symbol).unwrap();
+                let idx = self
+                    .end_symbols
+                    .iter()
+                    .position(|s| s == &entry.symbol)
+                    .unwrap();
                 self.start_symbols[idx].clone()
             };
 
@@ -325,7 +354,7 @@ impl TextLevelRule for GenericUnpairedBracketsRule {
                     RuleMatchContext::new(context_text, context_start, context_end - context_start),
                 )
                 .with_sentence("".to_string())
-                .with_replacements(vec![SuggestedReplacement::new(entry.symbol.clone())])
+                .with_replacements(vec![SuggestedReplacement::new(entry.symbol.clone())]),
             );
         }
 
@@ -348,7 +377,7 @@ impl GenericUnpairedQuotesRule {
             quote_symbols: vec![
                 ("\u{201C}".to_string(), "\u{201D}".to_string()), // "" smart double
                 ("\u{2018}".to_string(), "\u{2019}".to_string()), // '' smart single
-                ("\"".to_string(), "\"".to_string()),              // regular double
+                ("\"".to_string(), "\"".to_string()),             // regular double
             ],
         }
     }
@@ -423,7 +452,9 @@ impl TextLevelRule for GenericUnpairedQuotesRule {
 
                                 let rule = RuleMatchRule::new(&self.id, self.description())
                                     .with_category(self.category.clone())
-                                    .with_issue_type(IssueType::Other("other".to_string()).as_str());
+                                    .with_issue_type(
+                                        IssueType::Other("other".to_string()).as_str(),
+                                    );
 
                                 matches.push(
                                     RuleMatch::new(
@@ -431,9 +462,13 @@ impl TextLevelRule for GenericUnpairedQuotesRule {
                                         start,
                                         end - start,
                                         rule,
-                                        RuleMatchContext::new(context_text, context_start, context_end - context_start),
+                                        RuleMatchContext::new(
+                                            context_text,
+                                            context_start,
+                                            context_end - context_start,
+                                        ),
                                     )
-                                    .with_sentence(sentence.text().to_string())
+                                    .with_sentence(sentence.text().to_string()),
                                 );
                             }
                         }
@@ -462,9 +497,13 @@ impl TextLevelRule for GenericUnpairedQuotesRule {
                         start_pos,
                         end - start_pos,
                         rule,
-                        RuleMatchContext::new(context_text, context_start, context_end - context_start),
+                        RuleMatchContext::new(
+                            context_text,
+                            context_start,
+                            context_end - context_start,
+                        ),
                     )
-                    .with_sentence("".to_string())
+                    .with_sentence("".to_string()),
                 );
             }
         }
@@ -523,18 +562,20 @@ impl TextLevelRule for LongSentenceRule {
 
         for sentence in sentences {
             let tokens = sentence.non_whitespace_tokens();
-            let word_count = tokens.iter()
+            let word_count = tokens
+                .iter()
                 .filter(|t| t.token().token().chars().any(|c| c.is_alphabetic()))
                 .count();
 
             if word_count > self.max_words {
                 // Find the first and last word token for the match range
-                let first_word = tokens.iter().find(|t|
-                    t.token().token().chars().any(|c| c.is_alphabetic())
-                );
-                let last_word = tokens.iter().rev().find(|t|
-                    t.token().token().chars().any(|c| c.is_alphabetic())
-                );
+                let first_word = tokens
+                    .iter()
+                    .find(|t| t.token().token().chars().any(|c| c.is_alphabetic()));
+                let last_word = tokens
+                    .iter()
+                    .rev()
+                    .find(|t| t.token().token().chars().any(|c| c.is_alphabetic()));
 
                 if let (Some(first), Some(last)) = (first_word, last_word) {
                     let start = pos + first.token().start();
@@ -549,13 +590,20 @@ impl TextLevelRule for LongSentenceRule {
 
                     matches.push(
                         RuleMatch::new(
-                            format!("Sentence is too long ({} words, max: {})", word_count, self.max_words),
+                            format!(
+                                "Sentence is too long ({} words, max: {})",
+                                word_count, self.max_words
+                            ),
                             start,
                             end - start,
                             rule,
-                            RuleMatchContext::new(context_text, context_start, context_end - context_start),
+                            RuleMatchContext::new(
+                                context_text,
+                                context_start,
+                                context_end - context_start,
+                            ),
                         )
-                        .with_sentence(sentence.text().to_string())
+                        .with_sentence(sentence.text().to_string()),
                     );
                 }
             }
@@ -627,7 +675,8 @@ impl TextLevelRule for WordRepeatBeginningRule {
         let mut i = 0;
         while i < first_words.len() {
             let mut run_len = 1;
-            while i + run_len < first_words.len() && first_words[i + run_len].0 == first_words[i].0 {
+            while i + run_len < first_words.len() && first_words[i + run_len].0 == first_words[i].0
+            {
                 run_len += 1;
             }
 
@@ -644,13 +693,20 @@ impl TextLevelRule for WordRepeatBeginningRule {
 
                     matches.push(
                         RuleMatch::new(
-                            format!("Three or more sentences start with the word '{}'.", first_words[i].0),
+                            format!(
+                                "Three or more sentences start with the word '{}'.",
+                                first_words[i].0
+                            ),
                             *start,
                             *end - start,
                             rule,
-                            RuleMatchContext::new(context_text, context_start, context_end - context_start),
+                            RuleMatchContext::new(
+                                context_text,
+                                context_start,
+                                context_end - context_start,
+                            ),
                         )
-                        .with_sentence("".to_string())
+                        .with_sentence("".to_string()),
                     );
                 }
             }
@@ -768,7 +824,11 @@ mod tests {
         for word in text.split_whitespace() {
             let start = text[pos..].find(word).unwrap_or(0) + pos;
             let end = start + word.len();
-            tokens.push(AnalyzedTokenReadings::new(AnalyzedToken::new(word, offset + start, offset + end)));
+            tokens.push(AnalyzedTokenReadings::new(AnalyzedToken::new(
+                word,
+                offset + start,
+                offset + end,
+            )));
             pos = end;
         }
         sentence.set_tokens(tokens);
@@ -904,7 +964,10 @@ mod tests {
         let s = make_simple_sentence("Hello world", 0);
         let text = "Hello ((world))";
         let matches = rule.match_text(text, &[s]);
-        assert!(matches.is_empty(), "Nested paired brackets should not trigger");
+        assert!(
+            matches.is_empty(),
+            "Nested paired brackets should not trigger"
+        );
     }
 
     #[test]
@@ -913,7 +976,10 @@ mod tests {
         let s = make_simple_sentence("Hello world", 0);
         let text = "Hello :) world";
         let matches = rule.match_text(text, &[s]);
-        assert!(matches.is_empty(), "Smiley :) should not trigger unpaired bracket");
+        assert!(
+            matches.is_empty(),
+            "Smiley :) should not trigger unpaired bracket"
+        );
     }
 
     #[test]
@@ -943,7 +1009,11 @@ mod tests {
 
         let text = "one two three four five six";
         let matches = rule.match_text(text, &[sentence]);
-        assert_eq!(matches.len(), 1, "Sentence with 6 words, max 5, should trigger");
+        assert_eq!(
+            matches.len(),
+            1,
+            "Sentence with 6 words, max 5, should trigger"
+        );
     }
 
     #[test]
@@ -978,7 +1048,11 @@ mod tests {
 
         let text = "The cat sat. The dog ran. The bird flew.";
         let matches = rule.match_text(text, &[s1, s2, s3]);
-        assert_eq!(matches.len(), 3, "Three sentences starting with 'The' should trigger 3 matches");
+        assert_eq!(
+            matches.len(),
+            3,
+            "Three sentences starting with 'The' should trigger 3 matches"
+        );
     }
 
     #[test]
@@ -995,7 +1069,10 @@ mod tests {
 
         let text = "The cat sat. A dog ran. Some bird flew.";
         let matches = rule.match_text(text, &[s1, s2, s3]);
-        assert!(matches.is_empty(), "Different starting words should not trigger");
+        assert!(
+            matches.is_empty(),
+            "Different starting words should not trigger"
+        );
     }
 
     #[test]

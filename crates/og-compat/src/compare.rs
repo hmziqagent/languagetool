@@ -54,12 +54,12 @@ pub fn compare_results(
 
     for java_match in java_matches {
         // Find closest rust match by rule_id + offset
-        let best_rust = rust_matches.iter().enumerate()
+        let best_rust = rust_matches
+            .iter()
+            .enumerate()
             .filter(|(_, rm)| !rust_matched[rm_idx(rust_matches, rm)])
             .filter(|(_, rm)| rm.rule().id() == java_match.rule_id)
-            .min_by_key(|(_, rm)| {
-                (rm.offset() as i64 - java_match.offset as i64).abs() as usize
-            });
+            .min_by_key(|(_, rm)| (rm.offset() as i64 - java_match.offset as i64).abs() as usize);
 
         match best_rust {
             Some((idx, rm)) => {
@@ -72,7 +72,8 @@ pub fn compare_results(
                         status: ComparisonStatus::OffsetMismatch,
                         details: format!(
                             "Java: offset={}, Rust: offset={}",
-                            java_match.offset, rm.offset()
+                            java_match.offset,
+                            rm.offset()
                         ),
                     });
                     match_ok = false;
@@ -84,13 +85,15 @@ pub fn compare_results(
                         status: ComparisonStatus::LengthMismatch,
                         details: format!(
                             "Java: len={}, Rust: len={}",
-                            java_match.length, rm.length()
+                            java_match.length,
+                            rm.length()
                         ),
                     });
                     match_ok = false;
                 }
 
-                let rust_replacements: Vec<&str> = rm.replacements().iter().map(|r| r.value()).collect();
+                let rust_replacements: Vec<&str> =
+                    rm.replacements().iter().map(|r| r.value()).collect();
                 if rust_replacements != java_match.replacements {
                     results.push(ComparisonResult {
                         rule_id: java_match.rule_id.clone(),
@@ -153,7 +156,10 @@ pub fn compare_results(
 
 fn rm_idx(matches: &[RuleMatch], target: &RuleMatch) -> usize {
     // Get index by pointer comparison
-    matches.iter().position(|m| std::ptr::eq(m, target)).unwrap_or(0)
+    matches
+        .iter()
+        .position(|m| std::ptr::eq(m, target))
+        .unwrap_or(0)
 }
 
 /// Compare two JSON check results (for golden file comparison)
@@ -193,7 +199,8 @@ pub fn compare_json_results(rust_json: &str, java_json: &str) -> Vec<ComparisonR
     };
 
     // Convert to JavaMatch format for comparison
-    let rust_as_java: Vec<JavaMatch> = rust_matches_raw.as_array()
+    let rust_as_java: Vec<JavaMatch> = rust_matches_raw
+        .as_array()
         .unwrap_or(&vec![])
         .iter()
         .filter_map(|m| {
@@ -202,13 +209,21 @@ pub fn compare_json_results(rust_json: &str, java_json: &str) -> Vec<ComparisonR
                 message: m.get("message")?.as_str()?.to_string(),
                 offset: m.get("offset")?.as_u64()? as usize,
                 length: m.get("length")?.as_u64()? as usize,
-                replacements: m.get("replacements")
+                replacements: m
+                    .get("replacements")
                     .and_then(|r| r.as_array())
-                    .map(|arr| arr.iter()
-                        .filter_map(|v| v.get("value")?.as_str().map(String::from))
-                        .collect())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.get("value")?.as_str().map(String::from))
+                            .collect()
+                    })
                     .unwrap_or_default(),
-                category: m.get("rule")?.get("category")?.get("id")?.as_str()?.to_string(),
+                category: m
+                    .get("rule")?
+                    .get("category")?
+                    .get("id")?
+                    .as_str()?
+                    .to_string(),
                 issue_type: String::new(),
             })
         })
@@ -223,7 +238,9 @@ fn compare_java_match_lists(rust: &[JavaMatch], java: &[JavaMatch]) -> Vec<Compa
     let mut rust_matched: Vec<bool> = vec![false; rust.len()];
 
     for java_match in java {
-        let best = rust.iter().enumerate()
+        let best = rust
+            .iter()
+            .enumerate()
             .filter(|(i, _)| !rust_matched[*i])
             .filter(|(_, r)| r.rule_id == java_match.rule_id)
             .min_by_key(|(_, r)| (r.offset as i64 - java_match.offset as i64).abs() as usize);
@@ -237,7 +254,10 @@ fn compare_java_match_lists(rust: &[JavaMatch], java: &[JavaMatch]) -> Vec<Compa
                     results.push(ComparisonResult {
                         rule_id: java_match.rule_id.clone(),
                         status: ComparisonStatus::OffsetMismatch,
-                        details: format!("Java: offset={}, Rust: offset={}", java_match.offset, rm.offset),
+                        details: format!(
+                            "Java: offset={}, Rust: offset={}",
+                            java_match.offset, rm.offset
+                        ),
                     });
                     match_ok = false;
                 }
@@ -246,7 +266,10 @@ fn compare_java_match_lists(rust: &[JavaMatch], java: &[JavaMatch]) -> Vec<Compa
                     results.push(ComparisonResult {
                         rule_id: java_match.rule_id.clone(),
                         status: ComparisonStatus::LengthMismatch,
-                        details: format!("Java: len={}, Rust: len={}", java_match.length, rm.length),
+                        details: format!(
+                            "Java: len={}, Rust: len={}",
+                            java_match.length, rm.length
+                        ),
                     });
                     match_ok = false;
                 }
@@ -255,7 +278,10 @@ fn compare_java_match_lists(rust: &[JavaMatch], java: &[JavaMatch]) -> Vec<Compa
                     results.push(ComparisonResult {
                         rule_id: java_match.rule_id.clone(),
                         status: ComparisonStatus::ReplacementMismatch,
-                        details: format!("Java: {:?}, Rust: {:?}", java_match.replacements, rm.replacements),
+                        details: format!(
+                            "Java: {:?}, Rust: {:?}",
+                            java_match.replacements, rm.replacements
+                        ),
                     });
                     match_ok = false;
                 }
@@ -272,7 +298,10 @@ fn compare_java_match_lists(rust: &[JavaMatch], java: &[JavaMatch]) -> Vec<Compa
                 results.push(ComparisonResult {
                     rule_id: java_match.rule_id.clone(),
                     status: ComparisonStatus::MissingInRust,
-                    details: format!("Java found '{}' at offset={}, Rust missed it", java_match.rule_id, java_match.offset),
+                    details: format!(
+                        "Java found '{}' at offset={}, Rust missed it",
+                        java_match.rule_id, java_match.offset
+                    ),
                 });
             }
         }
@@ -283,7 +312,10 @@ fn compare_java_match_lists(rust: &[JavaMatch], java: &[JavaMatch]) -> Vec<Compa
             results.push(ComparisonResult {
                 rule_id: rm.rule_id.clone(),
                 status: ComparisonStatus::ExtraInRust,
-                details: format!("Rust found '{}' at offset={}, not in Java", rm.rule_id, rm.offset),
+                details: format!(
+                    "Rust found '{}' at offset={}, not in Java",
+                    rm.rule_id, rm.offset
+                ),
             });
         }
     }
@@ -303,7 +335,12 @@ fn compare_java_match_lists(rust: &[JavaMatch], java: &[JavaMatch]) -> Vec<Compa
 mod tests {
     use super::*;
 
-    fn make_java_match(rule_id: &str, offset: usize, length: usize, replacements: Vec<&str>) -> JavaMatch {
+    fn make_java_match(
+        rule_id: &str,
+        offset: usize,
+        length: usize,
+        replacements: Vec<&str>,
+    ) -> JavaMatch {
         JavaMatch {
             rule_id: rule_id.to_string(),
             message: String::new(),
@@ -331,14 +368,22 @@ mod tests {
     fn test_compare_java_found_rust_missed() {
         let java = vec![make_java_match("RULE1", 5, 3, vec!["fix"])];
         let results = compare_java_match_lists(&[], &java);
-        assert!(results.iter().any(|r| r.status == ComparisonStatus::MissingInRust));
+        assert!(
+            results
+                .iter()
+                .any(|r| r.status == ComparisonStatus::MissingInRust)
+        );
     }
 
     #[test]
     fn test_compare_rust_found_extra() {
         let rust = vec![make_java_match("RULE1", 5, 3, vec!["fix"])];
         let results = compare_java_match_lists(&rust, &[]);
-        assert!(results.iter().any(|r| r.status == ComparisonStatus::ExtraInRust));
+        assert!(
+            results
+                .iter()
+                .any(|r| r.status == ComparisonStatus::ExtraInRust)
+        );
     }
 
     #[test]
@@ -356,7 +401,11 @@ mod tests {
         let java = vec![make_java_match("RULE1", 5, 3, vec!["fix"])];
         let rust = vec![make_java_match("RULE1", 6, 3, vec!["fix"])];
         let results = compare_java_match_lists(&rust, &java);
-        assert!(results.iter().any(|r| r.status == ComparisonStatus::OffsetMismatch));
+        assert!(
+            results
+                .iter()
+                .any(|r| r.status == ComparisonStatus::OffsetMismatch)
+        );
     }
 
     #[test]
@@ -364,7 +413,11 @@ mod tests {
         let java = vec![make_java_match("RULE1", 5, 3, vec!["fix"])];
         let rust = vec![make_java_match("RULE1", 5, 4, vec!["fix"])];
         let results = compare_java_match_lists(&rust, &java);
-        assert!(results.iter().any(|r| r.status == ComparisonStatus::LengthMismatch));
+        assert!(
+            results
+                .iter()
+                .any(|r| r.status == ComparisonStatus::LengthMismatch)
+        );
     }
 
     #[test]
@@ -372,7 +425,11 @@ mod tests {
         let java = vec![make_java_match("RULE1", 5, 3, vec!["fix1"])];
         let rust = vec![make_java_match("RULE1", 5, 3, vec!["fix2"])];
         let results = compare_java_match_lists(&rust, &java);
-        assert!(results.iter().any(|r| r.status == ComparisonStatus::ReplacementMismatch));
+        assert!(
+            results
+                .iter()
+                .any(|r| r.status == ComparisonStatus::ReplacementMismatch)
+        );
     }
 
     #[test]
@@ -387,7 +444,15 @@ mod tests {
             make_java_match("RULE3", 20, 4, vec!["word"]),
         ];
         let results = compare_java_match_lists(&rust, &java);
-        assert!(results.iter().any(|r| r.status == ComparisonStatus::Pass && r.rule_id == "RULE1"));
-        assert!(results.iter().any(|r| r.status == ComparisonStatus::MissingInRust && r.rule_id == "RULE2"));
+        assert!(
+            results
+                .iter()
+                .any(|r| r.status == ComparisonStatus::Pass && r.rule_id == "RULE1")
+        );
+        assert!(
+            results
+                .iter()
+                .any(|r| r.status == ComparisonStatus::MissingInRust && r.rule_id == "RULE2")
+        );
     }
 }
