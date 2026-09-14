@@ -12,7 +12,7 @@
 // API shape identical while the backing data is whatever corpus the host
 // provides.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 
@@ -27,8 +27,8 @@ pub struct LanguageModel {
     counts: HashMap<Vec<String>, u64>,
     /// context (n-1 tokens) -> number of n-grams observed with that context.
     context_totals: HashMap<Vec<String>, u64>,
-    /// Number of distinct tokens observed (vocabulary size, for smoothing).
-    vocabulary: usize,
+    /// Distinct tokens observed (vocabulary, for smoothing).
+    vocab: HashSet<String>,
     /// Total token count.
     tokens: u64,
     /// Add-k smoothing constant.
@@ -42,7 +42,7 @@ impl LanguageModel {
             order: order.max(1),
             counts: HashMap::new(),
             context_totals: HashMap::new(),
-            vocabulary: 0,
+            vocab: HashSet::new(),
             tokens: 0,
             smoothing: 0.1,
         }
@@ -55,7 +55,7 @@ impl LanguageModel {
 
     /// Number of distinct tokens seen during training.
     pub fn vocabulary_size(&self) -> usize {
-        self.vocabulary
+        self.vocab.len()
     }
 
     /// Total token count seen during training.
@@ -85,24 +85,23 @@ impl LanguageModel {
         self.add_tokens(&tokens);
     }
 
-    /// Train on pre-tokenized input.
+    /// Train on pre-tokenized input. Tokens are lowercased so that
+    /// case-insensitive lookups match regardless of corpus casing.
     pub fn add_tokens(&mut self, tokens: &[String]) {
         if tokens.is_empty() {
             return;
         }
-        for token in tokens {
-            if self
-                .counts
-                .insert(vec![token.clone()], self.count(&[token.as_str()]) + 1)
-                .is_none()
-            {
-                self.vocabulary += 1;
-            }
+        let tokens: Vec<String> = tokens.iter().map(|t| t.to_lowercase()).collect();
+        for token in &tokens {
+            self.vocab.insert(token.clone());
         }
         for n in 1..=self.order {
             for gram in tokens.windows(n) {
                 *self.counts.entry(gram.to_vec()).or_insert(0) += 1;
-                if n == self.order {
+                // Context totals are recorded for every n >= 2 so that
+                // queries shorter than the model order (and higher orders)
+                // find their context instead of always backing off.
+                if n >= 2 {
                     let ctx = &gram[..n - 1];
                     *self.context_totals.entry(ctx.to_vec()).or_insert(0) += 1;
                 }
@@ -133,10 +132,10 @@ impl LanguageModel {
         let owned: Vec<String> = words.iter().map(|w| w.to_lowercase()).collect();
         let start = owned.len().saturating_sub(self.order);
         let gram: Vec<String> = owned[start..].to_vec();
-        self.gram_probability(&gram, true)
+        self.gram_probability(&gram)
     }
 
-    fn gram_probability(&self, gram: &[String], allow_backoff: bool) -> f64 {
+    fn gram_probability(&self, gram: &[String]) -> f64 {
         let n = gram.len();
         if n == 0 {
             return 0.0;
@@ -146,23 +145,19 @@ impl LanguageModel {
         if n == 1 {
             // Unigram: add-k over vocabulary.
             let count = self.owned_count(gram) as f64;
-            let v = self.vocabulary.max(1) as f64;
+            let v = self.vocab.len().max(1) as f64;
             return (count + self.smoothing) / (self.tokens as f64 + self.smoothing * v);
         }
 
         if let Some(total) = self.context_totals.get(&context).copied() {
             let count = self.owned_count(gram) as f64;
-            let v = self.vocabulary.max(1) as f64;
+            let v = self.vocab.len().max(1) as f64;
             // Seen context: smoothed MLE.
             return (count + self.smoothing) / (total as f64 + self.smoothing * v);
         }
 
-        if allow_backoff {
-            // Stupid backoff: scaled probability of the shorter n-gram.
-            0.4 * self.gram_probability(&gram[1..], true)
-        } else {
-            0.0
-        }
+        // Stupid backoff: scaled probability of the shorter n-gram.
+        0.4 * self.gram_probability(&gram[1..])
     }
 }
 
@@ -233,6 +228,47 @@ mod tests {
         let p1 = lm.get_probability(&["sat", "on", "the", "cat"]);
         let p2 = lm.get_probability(&["the", "cat"]);
         assert!((p1 - p2).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn unigram_counts_are_not_double_counted() {
+        let mut lm = LanguageModel::new(2);
+        lm.add_text("the cat the cat the");
+        // "the" occurs 3 times, "cat" twice — exactly.
+        assert_eq!(lm.count(&["the"]), 3);
+        assert_eq!(lm.count(&["cat"]), 2);
+        assert_eq!(lm.token_count(), 5);
+        assert_eq!(lm.vocabulary_size(), 2);
+    }
+
+    #[test]
+    fn probabilities_never_exceed_one() {
+        let lm = trained();
+        // Every bigram and unigram of the training text must be a legal
+        // probability (<= 1.0).
+        let words = ["the", "cat", "sat", "on", "the", "mat", "ran"];
+        for w in words {
+            assert!(
+                lm.get_probability(&[w]) <= 1.0 + 1e-9,
+                "unigram P({w}) > 1.0"
+            );
+        }
+        for pair in words.windows(2) {
+            let p = lm.get_probability(&[pair[0], pair[1]]);
+            assert!(p <= 1.0 + 1e-9, "bigram P({pair:?}) = {p} > 1.0");
+            assert!(p > 0.0);
+        }
+    }
+
+    #[test]
+    fn add_tokens_is_lowercased_for_consistent_lookup() {
+        let mut lm = LanguageModel::new(2);
+        lm.add_tokens(&["The".to_string(), "CAT".to_string()]);
+        assert_eq!(lm.count(&["the", "cat"]), 1);
+        assert_eq!(
+            lm.get_probability(&["the", "cat"]),
+            lm.get_probability(&["THE", "Cat"])
+        );
     }
 
     #[test]

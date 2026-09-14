@@ -87,7 +87,7 @@ Row accounting: 21 Ported + 3 Partial + 13 'Not started' rows = 37 rows; the 'No
 | POS tagging | Morfologik dictionary + HMM | Dictionary + heuristic suffix rules | ~50% |
 | Disambiguation | XML rules (1,017 rules, 1,017 disambig actions; comment-stripped count) | XML rules (loaded + executed); unify is a no-op | ~65% |
 | Chunking | OpenNLP IOB chunker | Rule-based IOB chunker | ~70% |
-| Spellchecking | Morfologik + Hunspell + SymSpell | word-list dict + Levenshtein (deterministic ranking, early-exit DP) + `og-spell::hunspell` (.dic/.aff subset: FLAG ASCII/LONG/NUM, PFX/SFX depth-2 with conditions, COMPOUNDFLAG/BEGIN/MIDDLE/END, ONLYINCOMPOUND — verified against de_AT; no recursive continuation classes, no SymSpell) | ~60% |
+| Spellchecking | Morfologik + Hunspell + SymSpell | word-list dict + Levenshtein (deterministic ranking, early-exit DP) + `og-spell::hunspell` (.dic/.aff subset: FLAG ASCII/LONG/NUM, PFX/SFX depth-2 with conditions, COMPOUNDFLAG/BEGIN/MIDDLE/END (stem flags AND affix continuation flags, verified against de_AT incl. positive compound), ONLYINCOMPOUND, FORBIDDENWORD (must-reject), NEEDAFFIX, KEEPCASE, cross-product permission — verified against de_AT; no recursive continuation expansion, COMPOUNDPERMITFLAG not enforced, no SymSpell) | ~60% |
 | Pattern rules | Full XML grammar.xml (5,545 rule elements) | XML loaded + most features work | ~80% |
 | Native rules | 37 Java classes | 4 generic + 13 English structs + SpellingCheckRule (all wired) | ~65% |
 | Language model | N-gram probabilities (Lucene-indexed corpora) | Count-based n-gram model in `og-languagemodel` (add-k smoothing + stupid backoff, corpus-trained; Lucene ngram binary index NOT parsed — host supplies a plain-text corpus) | ~40% |
