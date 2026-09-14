@@ -23,20 +23,11 @@ use std::sync::Arc;
 /// when it is at least as probable.
 pub struct EnglishNgramProbabilityRule {
     lm: Arc<LanguageModel>,
-    min_probability: f64,
 }
 
 impl EnglishNgramProbabilityRule {
     pub fn new(lm: Arc<LanguageModel>) -> Self {
-        Self {
-            lm,
-            min_probability: 1.0e-14,
-        }
-    }
-
-    pub fn with_min_probability(mut self, min_probability: f64) -> Self {
-        self.min_probability = min_probability;
-        self
+        Self { lm }
     }
 
     fn naive_variant(token: &str) -> Vec<String> {

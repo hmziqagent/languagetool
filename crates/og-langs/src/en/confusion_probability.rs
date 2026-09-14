@@ -113,16 +113,40 @@ impl ConfusionCore {
         // First and last real tokens are not scored: Java pads with
         // _START_/_END_ pseudo tokens for edge context (documented
         // divergence).
+        // Token 0 is never scored, but it still counts as a preceding real
+        // word for the sentence-start lowercase fallback (Java iterates all
+        // tokens).
+        let mut real_word_before = tokens[0]
+            .token()
+            .token()
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_alphabetic());
         for i in 1..tokens.len().saturating_sub(1) {
             let token_str = tokens[i].token().token();
-            let pairs = match self.word_to_pairs.get(&token_str.to_lowercase()) {
+            // Java: exact-case lookup, with a lowercase fallback only at
+            // sentence start (no real word before), so mid-sentence proper
+            // nouns ("Bill", "Mark", "May") are not flagged.
+            let lookup_key = if token_str.chars().next().is_some_and(|c| c.is_uppercase())
+                && !real_word_before
+            {
+                lowercase_first_char(token_str)
+            } else {
+                token_str.to_string()
+            };
+            let pairs = match self.word_to_pairs.get(&lookup_key) {
                 Some(p) => p,
-                None => continue,
+                None => {
+                    if token_str.chars().next().is_some_and(|c| c.is_alphabetic()) {
+                        real_word_before = true;
+                    }
+                    continue;
+                }
             };
             let prev = tokens[i - 1].token().token();
             let next = tokens[i + 1].token().token();
             for pair in pairs {
-                let token_lower = token_str.to_lowercase();
+                let token_lower = lookup_key.to_lowercase();
                 // The token itself and the other term of the pair:
                 let (from_text, alternative) = if pair.term1 == token_lower {
                     (&pair.term1, &pair.term2)
@@ -140,7 +164,11 @@ impl ConfusionCore {
                         "Statistics-based suggestion: '{alternative}' might be correct here instead of '{from_text}'."
                     );
                     let rm_rule = RuleMatchRule::new(rule_id, rule_description)
-                        .with_sub_id(format!("{alternative}_{from_text}"))
+                        .with_sub_id(format!(
+                            "{}_{}",
+                            alternative.to_uppercase(),
+                            from_text.to_uppercase()
+                        ))
                         .with_category(category.clone());
                     let start = tokens[i].token().start();
                     let end = tokens[i].token().end();
@@ -167,8 +195,20 @@ impl ConfusionCore {
                     break;
                 }
             }
+            if token_str.chars().next().is_some_and(|c| c.is_alphabetic()) {
+                real_word_before = true;
+            }
         }
         matches
+    }
+}
+
+/// Lowercase only the first character (Java `StringTools.lowercaseFirstChar`).
+fn lowercase_first_char(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(c) => c.to_lowercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
     }
 }
 
@@ -295,6 +335,45 @@ mod tests {
                 .replacements()
                 .iter()
                 .any(|r| r.value() == "there")
+        );
+    }
+
+    #[test]
+    fn mid_sentence_proper_noun_not_flagged() {
+        // Java gates the lowercase fallback to sentence start: a mid-sentence
+        // "Mark" (member of the mark; ... confusion set) must not be flagged.
+        let mut lm = LanguageModel::new(3);
+        for _ in 0..20 {
+            lm.add_text("she left a mark on the paper");
+        }
+        let core = ConfusionCore::new(Arc::new(lm), parse_confusion_pairs("mark; margin; 2\n"));
+        let s = sentence_from_tokens(&["She", "saw", "Mark", "at", "work"]);
+        let matches =
+            core.match_sentence(&s, "CONFUSION_RULE", "d", Category::new("TYPOS", "Typo"));
+        assert!(
+            matches.is_empty(),
+            "mid-sentence proper noun must not be flagged"
+        );
+    }
+
+    #[test]
+    fn sentence_start_lowercase_fallback_still_matches() {
+        // No real word before "Their" (leading dash), so the sentence-start
+        // lowercase fallback applies and the confusion set is consulted.
+        let mut lm = LanguageModel::new(3);
+        for _ in 0..20 {
+            lm.add_text("there is a problem here");
+        }
+        let core = synthetic_core(Arc::new(lm));
+        let s = sentence_from_tokens(&["-", "Their", "is", "a", "problem"]);
+        let matches =
+            core.match_sentence(&s, "CONFUSION_RULE", "d", Category::new("TYPOS", "Typo"));
+        assert!(!matches.is_empty(), "sentence-start fallback should match");
+        assert!(
+            matches[0]
+                .replacements()
+                .iter()
+                .any(|r| r.value() == "There")
         );
     }
 

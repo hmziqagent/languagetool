@@ -226,7 +226,10 @@ impl UnitConversionRule {
         for caps in re.captures_iter(sentence.text()) {
             let whole = caps.get(0).expect("group 0 present");
             let number = caps.get(1).expect("group 1 present");
-            let unit_text = sentence.text()[number.end() + 1..whole.end()].trim();
+            // UTF-8-safe: the `\s+` between number and unit may be a single
+            // byte or multi-byte whitespace (NBSP, ideographic space), so
+            // slice from the number end (a known char boundary) and trim.
+            let unit_text = sentence.text()[number.end()..whole.end()].trim();
             if let Some((metric, unit_name)) = Self::convert(number.as_str(), unit_text, imperial) {
                 // Skip conversions the user already wrote: "10 miles (16 km)"
                 let after = &sentence.text()[whole.end()..];
@@ -384,6 +387,20 @@ mod tests {
             rule.match_sentence(&sentence("A quarter of a mile: 1/4 mile."))
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn multibyte_whitespace_between_number_and_unit() {
+        // regression: NBSP (2 bytes) / ideographic space (3 bytes) between
+        // number and unit must not panic and must still convert
+        let rule = UnitConversionRule::general();
+        let s = sentence("It weighs 5\u{00a0}pounds today.");
+        let matches = rule.match_sentence(&s);
+        assert_eq!(matches.len(), 1);
+        let s2 = sentence("We walked 5\u{3000}miles home.");
+        let matches2 = rule.match_sentence(&s2);
+        assert_eq!(matches2.len(), 1);
+        assert!(matches2[0].replacements()[0].value().contains("8.05 km"));
     }
 
     #[test]
