@@ -2,6 +2,7 @@ pub mod compiler;
 pub mod disambig_parser;
 pub mod disambig_types;
 pub mod parser;
+pub mod regex_cache;
 pub mod types;
 
 pub use compiler::*;

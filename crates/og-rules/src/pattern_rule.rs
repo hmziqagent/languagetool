@@ -340,7 +340,9 @@ impl PatternRuleEngine {
                                         }
                                         // Apply regexp match/replace
                                         if let Some(ref rm) = m.regexp_match {
-                                            if let Ok(re) = regex::Regex::new(rm) {
+                                            if let Some(re) =
+                                                og_xml::regex_cache::compile(rm, false)
+                                            {
                                                 let replace =
                                                     m.regexp_replace.as_deref().unwrap_or("");
                                                 text = re.replace_all(&text, replace).to_string();
@@ -1486,7 +1488,7 @@ impl PatternRuleEngine {
         let parsed = self.parse_filter_args(args, matched_texts);
         if let Some(patterns) = parsed.get("antipatterns") {
             for pattern in patterns.split('|') {
-                if let Ok(re) = regex::Regex::new(pattern) {
+                if let Some(re) = og_xml::regex_cache::compile(pattern, false) {
                     for text in matched_texts {
                         if re.is_match(text) {
                             return false;

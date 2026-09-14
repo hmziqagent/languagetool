@@ -1,4 +1,7 @@
+use std::sync::Arc;
+
 use crate::parser::*;
+use crate::regex_cache;
 use crate::types::*;
 
 pub struct XmlCompiler;
@@ -27,30 +30,43 @@ impl XmlCompiler {
             categories: rule_file.categories.clone(),
         };
 
-        for rule in &rule_file.rules {
-            compiled.rules.push(self.compile_rule(rule));
-        }
+        // Compile rules in parallel: each rule independently compiles a
+        // handful of regexes, and regex compilation dominates load time on
+        // large grammars (the real English grammar.xml has 5.5k rules).
+        use rayon::prelude::*;
+        let mut rules: Vec<_> = rule_file
+            .rules
+            .par_iter()
+            .map(|r| self.compile_rule(r))
+            .collect();
 
         for group in &rule_file.rule_groups {
-            for (i, rule) in group.rules.iter().enumerate() {
-                let mut compiled_rule = self.compile_rule(rule);
-                // If rule doesn't have its own ID, inherit the group's ID
-                if compiled_rule.id.is_empty() {
-                    if let Some(ref group_id) = group.id {
+            let mut group_rules: Vec<_> = group
+                .rules
+                .par_iter()
+                .enumerate()
+                .map(|(i, rule)| {
+                    let mut compiled_rule = self.compile_rule(rule);
+                    // If rule doesn't have its own ID, inherit the group's ID
+                    if compiled_rule.id.is_empty()
+                        && let Some(ref group_id) = group.id
+                    {
                         compiled_rule.id = group_id.clone();
                         // Add sub-id based on position within group
                         compiled_rule.sub_id = Some(format!("{}", i + 1));
                     }
-                }
-                // Inherit group-level issue_type if rule doesn't have its own
-                if compiled_rule.issue_type == "grammar" {
-                    if let Some(ref git) = group.issue_type {
+                    // Inherit group-level issue_type if rule doesn't have its own
+                    if compiled_rule.issue_type == "grammar"
+                        && let Some(ref git) = group.issue_type
+                    {
                         compiled_rule.issue_type = git.clone();
                     }
-                }
-                compiled.rules.push(compiled_rule);
-            }
+                    compiled_rule
+                })
+                .collect();
+            rules.append(&mut group_rules);
         }
+        compiled.rules = rules;
 
         Ok(compiled)
     }
@@ -206,45 +222,37 @@ impl XmlCompiler {
     pub fn compile_token(&self, token: &XmlPatternToken) -> CompiledPatternToken {
         // When regexp="yes", the token text IS the regex pattern.
         // Java's String.matches() requires full-string match, so anchor with ^(?:...)$
-        let compiled_re = if token.regexp.as_deref() == Some("yes") {
-            token.text.as_ref().and_then(|t| {
-                let anchored = Self::anchor_regex(t);
-                regex::Regex::new(&anchored).ok()
-            })
+        // All regexes go through the process-wide cache: identical patterns
+        // (very common across 5k+ rules) are compiled once and shared.
+        let raw_pattern = if token.regexp.as_deref() == Some("yes") {
+            token.text.as_deref()
         } else {
-            token.regexp.as_ref().and_then(|r| {
-                let anchored = Self::anchor_regex(r);
-                regex::Regex::new(&anchored).ok()
-            })
+            token.regexp.as_deref()
         };
-        // Pre-compile case-insensitive version for non-case-sensitive regex matching
-        let compiled_re_ci = if token.regexp.as_deref() == Some("yes") {
-            token.text.as_ref().and_then(|t| {
-                let anchored = Self::anchor_regex(t);
-                regex::RegexBuilder::new(&anchored)
-                    .case_insensitive(true)
-                    .build()
-                    .ok()
+        let compiled_re = raw_pattern.and_then(|p| {
+            let anchored = Self::anchor_regex(p);
+            regex_cache::compile(&anchored, false)
+        });
+        // Pre-compile case-insensitive version for non-case-sensitive regex matching.
+        // Skipped for case-sensitive tokens, where it would never be used.
+        let compiled_re_ci = if raw_pattern.is_some() && !token.case_sensitive {
+            raw_pattern.and_then(|p| {
+                let anchored = Self::anchor_regex(p);
+                regex_cache::compile(&anchored, true)
             })
         } else {
-            token.regexp.as_ref().and_then(|r| {
-                let anchored = Self::anchor_regex(r);
-                regex::RegexBuilder::new(&anchored)
-                    .case_insensitive(true)
-                    .build()
-                    .ok()
-            })
+            None
         };
         let postag_re = if token.postag_regexp.as_deref() == Some("yes") {
             token
                 .postag
-                .as_ref()
-                .and_then(|t| regex::Regex::new(t).ok())
+                .as_deref()
+                .and_then(|t| regex_cache::compile(t, false))
         } else {
             token
                 .postag_regexp
-                .as_ref()
-                .and_then(|r| regex::Regex::new(r).ok())
+                .as_deref()
+                .and_then(|r| regex_cache::compile(r, false))
         };
 
         // When regexp="yes", text is the pattern, not a literal match
@@ -274,9 +282,9 @@ impl XmlCompiler {
                 .collect(),
             space_before: token.space_before.clone(),
             chunk: token.chunk.clone(),
-            chunk_re: token.chunk_re.as_ref().and_then(|r| {
+            chunk_re: token.chunk_re.as_deref().and_then(|r| {
                 let anchored = Self::anchor_regex(r);
-                regex::Regex::new(&anchored).ok()
+                regex_cache::compile(&anchored, false)
             }),
             match_no: token.match_no,
         }
@@ -301,19 +309,19 @@ impl XmlCompiler {
     }
 
     fn compile_exception(&self, exc: &XmlException) -> CompiledException {
-        let compiled_re = if exc.regexp.as_deref() == Some("yes") {
-            exc.text.as_ref().and_then(|t| {
-                let anchored = Self::anchor_regex(t);
-                regex::Regex::new(&anchored).ok()
-            })
+        let raw_pattern = if exc.regexp.as_deref() == Some("yes") {
+            exc.text.as_deref()
         } else {
-            exc.regexp.as_ref().and_then(|r| {
-                let anchored = Self::anchor_regex(r);
-                regex::Regex::new(&anchored).ok()
-            })
+            exc.regexp.as_deref()
         };
+        let compiled_re = raw_pattern.and_then(|p| {
+            let anchored = Self::anchor_regex(p);
+            regex_cache::compile(&anchored, false)
+        });
         let compiled_postag_re = if exc.postag_regexp.as_deref() == Some("yes") {
-            exc.postag.as_ref().and_then(|t| regex::Regex::new(t).ok())
+            exc.postag
+                .as_deref()
+                .and_then(|t| regex_cache::compile(t, false))
         } else {
             None
         };
@@ -386,11 +394,11 @@ pub struct CompiledPattern {
 #[derive(Debug, Clone)]
 pub struct CompiledPatternToken {
     pub text: Option<String>,
-    pub compiled_regexp: Option<regex::Regex>,
+    pub compiled_regexp: Option<Arc<regex::Regex>>,
     /// Case-insensitive version of compiled_regexp (pre-compiled for performance)
-    pub compiled_regexp_ci: Option<regex::Regex>,
+    pub compiled_regexp_ci: Option<Arc<regex::Regex>>,
     pub postag: Option<String>,
-    pub compiled_postag_regexp: Option<regex::Regex>,
+    pub compiled_postag_regexp: Option<Arc<regex::Regex>>,
     pub negate: bool,
     pub negate_pos: bool,
     pub case_sensitive: bool,
@@ -401,7 +409,7 @@ pub struct CompiledPatternToken {
     pub exceptions: Vec<CompiledException>,
     pub space_before: Option<String>,
     pub chunk: Option<String>,
-    pub chunk_re: Option<regex::Regex>,
+    pub chunk_re: Option<Arc<regex::Regex>>,
     /// Backreference: match the same text as pattern token N (1-based).
     pub match_no: Option<i32>,
 }
@@ -409,9 +417,9 @@ pub struct CompiledPatternToken {
 #[derive(Debug, Clone)]
 pub struct CompiledException {
     pub text: Option<String>,
-    pub compiled_regexp: Option<regex::Regex>,
+    pub compiled_regexp: Option<Arc<regex::Regex>>,
     pub postag: Option<String>,
-    pub compiled_postag_regexp: Option<regex::Regex>,
+    pub compiled_postag_regexp: Option<Arc<regex::Regex>>,
     pub negate: bool,
     pub negate_pos: bool,
     pub inflected: bool,

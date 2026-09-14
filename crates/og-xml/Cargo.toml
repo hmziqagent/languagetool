@@ -8,4 +8,5 @@ og-core = { workspace = true }
 serde = { workspace = true }
 quick-xml = { workspace = true }
 regex = { workspace = true }
+rayon = { workspace = true }
 thiserror = { workspace = true }
