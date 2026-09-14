@@ -396,10 +396,13 @@ impl DefaultSentenceSplitter {
     }
 
     /// `chars` is the caller's pre-collected `text.chars().collect::<Vec<_>>()`
-    /// — hoisted out of this method so the per-position scan in `split` stays
-    /// O(n) overall instead of re-collecting the whole text per character
-    /// (PLAN Phase 12 performance fix; behavior identical to the previous
-    /// per-call `text.chars().collect()`).
+    /// — hoisted out of this method so the per-position scan in `split` no
+    /// longer re-collects the whole text per character (that made it O(n²);
+    /// PLAN Phase 12 performance fix, behavior identical to the previous
+    /// per-call `text.chars().collect()`). The boundary scan itself is now
+    /// linear in the text length plus the per-boundary work (abbreviation
+    /// list scan and byte-offset walk from the sentence start); pathological
+    /// all-boundary input is still super-linear in the boundary count.
     fn is_sentence_boundary(&self, text: &str, chars: &[char], pos: usize) -> bool {
         if pos >= chars.len() {
             return false;
