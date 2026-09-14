@@ -164,7 +164,7 @@ fn rm_idx(matches: &[RuleMatch], target: &RuleMatch) -> usize {
 
 /// Compare two JSON check results (for golden file comparison)
 pub fn compare_json_results(rust_json: &str, java_json: &str) -> Vec<ComparisonResult> {
-    let rust_result: serde_json::Value = match serde_json::from_str(rust_json) {
+    let rust_as_java = match crate::harness::parse_matches(rust_json) {
         Ok(v) => v,
         Err(e) => {
             return vec![ComparisonResult {
@@ -175,7 +175,7 @@ pub fn compare_json_results(rust_json: &str, java_json: &str) -> Vec<ComparisonR
         }
     };
 
-    let java_java_matches: Vec<JavaMatch> = match serde_json::from_str(java_json) {
+    let java_java_matches: Vec<JavaMatch> = match crate::harness::parse_matches(java_json) {
         Ok(v) => v,
         Err(e) => {
             return vec![ComparisonResult {
@@ -186,54 +186,13 @@ pub fn compare_json_results(rust_json: &str, java_json: &str) -> Vec<ComparisonR
         }
     };
 
-    // Extract matches from Rust JSON
-    let rust_matches_raw = match rust_result.get("matches") {
-        Some(v) => v,
-        None => {
-            return vec![ComparisonResult {
-                rule_id: "FORMAT_ERROR".to_string(),
-                status: ComparisonStatus::MissingInRust,
-                details: "Rust JSON missing 'matches' field".to_string(),
-            }];
-        }
-    };
-
-    // Convert to JavaMatch format for comparison
-    let rust_as_java: Vec<JavaMatch> = rust_matches_raw
-        .as_array()
-        .unwrap_or(&vec![])
-        .iter()
-        .filter_map(|m| {
-            Some(JavaMatch {
-                rule_id: m.get("rule")?.get("id")?.as_str()?.to_string(),
-                message: m.get("message")?.as_str()?.to_string(),
-                offset: m.get("offset")?.as_u64()? as usize,
-                length: m.get("length")?.as_u64()? as usize,
-                replacements: m
-                    .get("replacements")
-                    .and_then(|r| r.as_array())
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|v| v.get("value")?.as_str().map(String::from))
-                            .collect()
-                    })
-                    .unwrap_or_default(),
-                category: m
-                    .get("rule")?
-                    .get("category")?
-                    .get("id")?
-                    .as_str()?
-                    .to_string(),
-                issue_type: String::new(),
-            })
-        })
-        .collect();
-
     // Since we can't create RuleMatch from JSON easily, compare the two JavaMatch vecs directly
     compare_java_match_lists(&rust_as_java, &java_java_matches)
 }
 
-fn compare_java_match_lists(rust: &[JavaMatch], java: &[JavaMatch]) -> Vec<ComparisonResult> {
+/// Compare two parsed match lists (the engine behind `compare_results` /
+/// `compare_json_results`; used directly by the CLI against HTTP responses).
+pub fn compare_java_match_lists(rust: &[JavaMatch], java: &[JavaMatch]) -> Vec<ComparisonResult> {
     let mut results = Vec::new();
     let mut rust_matched: Vec<bool> = vec![false; rust.len()];
 
@@ -281,6 +240,30 @@ fn compare_java_match_lists(rust: &[JavaMatch], java: &[JavaMatch]) -> Vec<Compa
                         details: format!(
                             "Java: {:?}, Rust: {:?}",
                             java_match.replacements, rm.replacements
+                        ),
+                    });
+                    match_ok = false;
+                }
+
+                if rm.message != java_match.message {
+                    results.push(ComparisonResult {
+                        rule_id: java_match.rule_id.clone(),
+                        status: ComparisonStatus::MessageMismatch,
+                        details: format!("Java: {:?}, Rust: {:?}", java_match.message, rm.message),
+                    });
+                    match_ok = false;
+                }
+
+                if !rm.category.is_empty()
+                    && !java_match.category.is_empty()
+                    && rm.category != java_match.category
+                {
+                    results.push(ComparisonResult {
+                        rule_id: java_match.rule_id.clone(),
+                        status: ComparisonStatus::CategoryMismatch,
+                        details: format!(
+                            "Java: {:?}, Rust: {:?}",
+                            java_match.category, rm.category
                         ),
                     });
                     match_ok = false;
@@ -429,6 +412,33 @@ mod tests {
             results
                 .iter()
                 .any(|r| r.status == ComparisonStatus::ReplacementMismatch)
+        );
+    }
+
+    #[test]
+    fn test_compare_message_mismatch() {
+        let mut java = vec![make_java_match("RULE1", 5, 3, vec!["fix"])];
+        java[0].message = "Use 'there'.".to_string();
+        let mut rust = vec![make_java_match("RULE1", 5, 3, vec!["fix"])];
+        rust[0].message = "Did you mean 'there'?".to_string();
+        let results = compare_java_match_lists(&rust, &java);
+        assert!(
+            results
+                .iter()
+                .any(|r| r.status == ComparisonStatus::MessageMismatch)
+        );
+    }
+
+    #[test]
+    fn test_compare_category_mismatch() {
+        let java = vec![make_java_match("RULE1", 5, 3, vec!["fix"])];
+        let mut rust = vec![make_java_match("RULE1", 5, 3, vec!["fix"])];
+        rust[0].category = "TYPO".to_string();
+        let results = compare_java_match_lists(&rust, &java);
+        assert!(
+            results
+                .iter()
+                .any(|r| r.status == ComparisonStatus::CategoryMismatch)
         );
     }
 

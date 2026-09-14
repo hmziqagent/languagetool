@@ -45,3 +45,27 @@ jobs:
 
       - name: tests
         run: cargo test --workspace
+
+  # plans/07 test-suite parity: og-test-runner + og-compat explicitly,
+  # including the ignored heavy tests. CI runs without the read-only
+  # `languagetool/` reference checkout, so the data-backed tests
+  # (real grammar.xml, golden fixtures) skip themselves via
+  # og_spell::resource::lt_resource_root(); locally with the checkout
+  # present they run for real.
+  test-runner:
+    name: test-runner + compat
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: og-test-runner (incl. ignored grammar.xml tests; skip without checkout)
+        run: cargo test -p og-test-runner -- --include-ignored
+
+      - name: og-compat (incl. golden fixtures; skip without checkout)
+        run: cargo test -p og-compat -- --include-ignored

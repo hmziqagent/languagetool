@@ -5,6 +5,24 @@ use og_tagger::{EnglishTagger, Tagger, XmlDisambiguator};
 use og_xml::compiler::XmlCompiler;
 use std::path::Path;
 
+/// Resource directory of the English language module inside the LT resource
+/// root (see `og_spell::resource::lt_resource_root`).
+const EN_RESOURCE_DIR: &str = "en/src/main/resources/org/languagetool/resource/en";
+
+/// Path of a file under the English resource directory, relative to the root.
+fn en_resource(name: &str) -> String {
+    format!("{EN_RESOURCE_DIR}/{name}")
+}
+
+/// Read the real English `grammar.xml` from the LT resource root, if the
+/// upstream checkout is available. Data-backed callers must skip when this
+/// returns `None`.
+pub fn english_grammar_xml() -> Option<String> {
+    og_spell::resource::read_lt_resource(
+        "en/src/main/resources/org/languagetool/rules/en/grammar.xml",
+    )
+}
+
 /// Result of running a single example test
 #[derive(Debug, Clone)]
 pub struct ExampleTestResult {
@@ -74,61 +92,47 @@ pub struct TestRunner {
 
 impl TestRunner {
     pub fn new() -> Self {
+        use og_spell::resource::read_lt_resource;
         let mut tagger = EnglishTagger::new();
 
+        // Resource files under the configurable LT resource root
+        // (see og_spell::resource). All of these silently degrade to the
+        // tagger's built-in data when the upstream checkout is absent.
+
         // Load added.txt if available
-        let added_path = "/home/agent/languagetool/languagetool-language-modules/en/src/main/resources/org/languagetool/resource/en/added.txt";
-        if Path::new(added_path).exists() {
-            if let Ok(data) = std::fs::read_to_string(added_path) {
-                tagger.load_added(&data);
-            }
+        if let Some(data) = read_lt_resource(&en_resource("added.txt")) {
+            tagger.load_added(&data);
         }
 
         // Load uncountable nouns (-> NN:U)
-        let uncountable_path = "/home/agent/languagetool/languagetool-language-modules/en/src/main/resources/org/languagetool/resource/en/uncountable.txt";
-        if Path::new(uncountable_path).exists() {
-            if let Ok(data) = std::fs::read_to_string(uncountable_path) {
-                tagger.load_uncountable(&data);
-            }
+        if let Some(data) = read_lt_resource(&en_resource("uncountable.txt")) {
+            tagger.load_uncountable(&data);
         }
 
         // Load partly-countable nouns (-> NN:UN)
-        let partlycountable_path = "/home/agent/languagetool/languagetool-language-modules/en/src/main/resources/org/languagetool/resource/en/partlycountable.txt";
-        if Path::new(partlycountable_path).exists() {
-            if let Ok(data) = std::fs::read_to_string(partlycountable_path) {
-                tagger.load_partlycountable(&data);
-            }
+        if let Some(data) = read_lt_resource(&en_resource("partlycountable.txt")) {
+            tagger.load_partlycountable(&data);
         }
 
         // Load FSA dictionary for more accurate POS tagging (only for unknown words)
-        let dict_path = "/home/agent/languagetool/languagetool-language-modules/en/src/main/resources/org/languagetool/resource/en/dict_decoded.txt";
-        if Path::new(dict_path).exists() {
-            if let Ok(data) = std::fs::read_to_string(dict_path) {
-                let count = tagger.load_fsa_dictionary(&data);
-                eprintln!("Loaded {} FSA dictionary entries", count);
-            }
+        if let Some(data) = read_lt_resource(&en_resource("dict_decoded.txt")) {
+            let count = tagger.load_fsa_dictionary(&data);
+            eprintln!("Loaded {} FSA dictionary entries", count);
         }
 
         // Load disambiguation rules if available
         let disambiguator = {
-            let disambig_path = "/home/agent/languagetool/languagetool-language-modules/en/src/main/resources/org/languagetool/resource/en/disambiguation.xml";
-            if Path::new(disambig_path).exists() {
-                if let Ok(xml) = std::fs::read_to_string(disambig_path) {
-                    match XmlDisambiguator::from_xml(&xml) {
-                        Ok(d) => {
-                            eprintln!("Loaded {} disambiguation rules", d.rule_count());
-                            Some(d)
-                        }
-                        Err(e) => {
-                            eprintln!("Warning: failed to load disambiguation: {}", e);
-                            None
-                        }
-                    }
-                } else {
+            let xml = read_lt_resource(&en_resource("disambiguation.xml"));
+            match xml.map(|xml| XmlDisambiguator::from_xml(&xml)) {
+                Some(Ok(d)) => {
+                    eprintln!("Loaded {} disambiguation rules", d.rule_count());
+                    Some(d)
+                }
+                Some(Err(e)) => {
+                    eprintln!("Warning: failed to load disambiguation: {}", e);
                     None
                 }
-            } else {
-                None
+                None => None,
             }
         };
 
@@ -1443,16 +1447,11 @@ mod tests {
     #[test]
     #[ignore] // loads full grammar.xml — run with `cargo test -- --ignored`
     fn test_load_real_english_grammar_xml() {
-        let grammar_path = "/home/agent/languagetool/languagetool-language-modules/en/src/main/resources/org/languagetool/rules/en/grammar.xml";
-        if !Path::new(grammar_path).exists() {
-            eprintln!(
-                "Skipping: English grammar.xml not found at {}",
-                grammar_path
-            );
+        let Some(xml) = english_grammar_xml() else {
+            eprintln!("Skipping: English grammar.xml not found (no LT resource root)");
             return;
-        }
+        };
 
-        let xml = std::fs::read_to_string(grammar_path).expect("Failed to read grammar.xml");
         let compiler = og_xml::compiler::XmlCompiler::new();
         let rule_set = compiler
             .compile_file(&xml)
@@ -1529,13 +1528,11 @@ mod tests {
     #[test]
     #[ignore] // runs all grammar.xml example tests — run with `cargo test -- --ignored`
     fn test_real_english_grammar_examples() {
-        let grammar_path = "/home/agent/languagetool/languagetool-language-modules/en/src/main/resources/org/languagetool/rules/en/grammar.xml";
-        if !Path::new(grammar_path).exists() {
-            eprintln!("Skipping: English grammar.xml not found");
+        let Some(xml) = english_grammar_xml() else {
+            eprintln!("Skipping: English grammar.xml not found (no LT resource root)");
             return;
-        }
+        };
 
-        let xml = std::fs::read_to_string(grammar_path).expect("Failed to read grammar.xml");
         let runner = TestRunner::new();
         let summary = runner.run_xml_example_tests(&xml);
 
@@ -1822,8 +1819,10 @@ mod tests {
         let _nwt: Vec<_> = sentence.non_whitespace_tokens();
 
         // Load grammar rules and try matching
-        let grammar_path = "/home/agent/languagetool/languagetool-language-modules/en/src/main/resources/org/languagetool/rules/en/grammar.xml";
-        let xml = std::fs::read_to_string(grammar_path).unwrap();
+        let Some(xml) = english_grammar_xml() else {
+            eprintln!("Skipping: English grammar.xml not found (no LT resource root)");
+            return;
+        };
         let compiled_rule_set = og_xml::compiler::XmlCompiler::new()
             .compile_file(&xml)
             .unwrap();
@@ -1868,8 +1867,10 @@ mod tests {
     #[ignore] // loads full grammar.xml — run with `cargo test -- --ignored`
     fn test_to_too_inflected_matching() {
         let runner = &TestRunner::new();
-        let grammar_path = "/home/agent/languagetool/languagetool-language-modules/en/src/main/resources/org/languagetool/rules/en/grammar.xml";
-        let xml = std::fs::read_to_string(grammar_path).unwrap();
+        let Some(xml) = english_grammar_xml() else {
+            eprintln!("Skipping: English grammar.xml not found (no LT resource root)");
+            return;
+        };
         let compiled = og_xml::compiler::XmlCompiler::new()
             .compile_file(&xml)
             .unwrap();
@@ -2202,8 +2203,10 @@ fn test_it_is_2_debug() {
     }
 
     // Try matching with IT_IS_2 rules
-    let grammar_path = "/home/agent/languagetool/languagetool-language-modules/en/src/main/resources/org/languagetool/rules/en/grammar.xml";
-    let xml = std::fs::read_to_string(grammar_path).unwrap();
+    let Some(xml) = english_grammar_xml() else {
+        eprintln!("Skipping: English grammar.xml not found (no LT resource root)");
+        return;
+    };
     let compiler = og_xml::compiler::XmlCompiler::new();
     let rule_set = compiler.compile_file(&xml).unwrap();
 

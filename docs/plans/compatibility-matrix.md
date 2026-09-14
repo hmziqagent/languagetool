@@ -101,11 +101,25 @@ The n-gram-backed rules (NGRAM_RULE, EN_UPPER_CASE_NGRAM, CONFUSION_RULE, false 
 
 | Endpoint | Java LT | Rust OG | Status |
 |----------|---------|---------|--------|
-| `POST/GET /v2/check` | Full | Working (only `text`/`data` + `language` acted on; 7 params parsed but ignored — see [09-api-parity.md](09-api-parity.md)) | ~80% |
+| `POST/GET /v2/check` | Full | Working (all 7 regressed params + `enabledOnly` wired; LT additive enabled-semantics emulated via two-pass merge — see [09-api-parity.md](09-api-parity.md)) | ~85% |
 | `GET /v2/languages` | Full | Working | ~90% |
 | `GET /v2/version` | — | Working | Done |
 | `GET /v2/maxtextlength` | Yes | Working (MAX_TEXT_LENGTH = 100,000 enforced) | Done |
 | `GET /v2/info` | Yes | Working | Done |
-| `GET /v2/configinfo` | Yes | Missing | Not started |
-| `GET/POST/DELETE /v2/words` | Yes | Missing | Not started |
-| `GET /v2/users/me` | Yes | Missing | Not started |
+| `GET /v2/configinfo` | Yes | Working (cacheSize = distinct cached engines, not language-code count) | ~80% |
+| `GET/POST/DELETE /v2/words` | Yes | Working (in-memory per-process store; not persisted, not consulted by spell checking) | ~70% |
+| `GET /v2/users/me` | Yes | Working (always anonymous non-premium) | ~80% |
+
+Known response-shape divergence (recorded 2026-09-14, area 8): `matches[].rule` serializes `issue_type`/`sub_id` snake_case where Java LT emits `issueType`/`subId`. `og-compat`'s parser accepts both; fixing the server serialization belongs to og-api.
+
+## Test & Compatibility (Phase 0 + 11)
+
+| Item | Java LT | Rust OG | Status |
+|------|---------|---------|--------|
+| XML example test runner | JUnit `AbstractPatternRuleTest` per rule file | `og-test-runner::TestRunner` (correct/incorrect/triggers_error + marker offsets; real grammar.xml data-backed tests load via the configurable resource root and skip without the checkout) | Working |
+| Golden /v2/check fixtures | n/a (reference side) | `fixtures/<lang>/<name>.txt` + `<name>.expected_rust.json`; in-process golden test in `og-compat` (skips without resource checkout) | en only, rust-side goldens |
+| Java-vs-rust comparison harness | — | `og-compat` CLI: `check` / `compare` (HTTP; `--java-url` or `--java-lt jar` subprocess spawn of `org.languagetool.server.HTTPServer`) / `fixtures` / `record`; compares rule.id, message, offset, length, replacements, category | Working, rust-side exercised; Java side untested here (no jar/java in this checkout) |
+| Comparison fields | — | rule.id, message, offset, length, replacements, category (issueType parsed but not diffed) | Working |
+| expected_java.json generation | frozen-commit Java server | not possible in this checkout (no jar); fixtures carry `expected_rust.json` only | Not started (needs Java host) |
+| CI parity gate | — | `.github/workflows/ci.yml` `test-runner` job: `cargo test -p og-test-runner/-p og-compat -- --include-ignored` (data-backed tests self-skip without the checkout) | Working |
+| Punted defects found by the harness | — | (1) og-rules `pattern_rule.rs:316` panics ("start byte index out of bounds") on multi-sentence text where an offset belongs to a later sentence — e.g. `"Their is a problem with you re spelling.  I has a apple. The dogs barks loudly at the neighbor."` kills the request; fixtures avoid it. (2) response `issue_type`/`sub_id` snake_case (above). | Punted to owners (og-rules / og-api) |
