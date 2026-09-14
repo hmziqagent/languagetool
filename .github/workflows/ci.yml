@@ -34,9 +34,12 @@ jobs:
       - name: rustfmt
         run: cargo fmt --check
 
-      # Kept warning-level (no `-D warnings`) until the pre-existing
-      # clippy::cast_abs_to_unsigned warnings in og-compat are fixed; tighten
-      # to `-- -D warnings` afterwards.
+      # Kept warning-level (no `-D warnings`): the workspace carries a
+      # pre-existing baseline of ~180 warning-level clippy lints spread over
+      # 9 crates (most: og-langs 51, og-test-runner 32, og-rules 29,
+      # og-tagger 28, og-xml 24; dominated by clippy::collapsible_if —
+      # og-compat's cast_abs_to_unsigned is just 2 of them). Tighten to
+      # `-- -D warnings` only after that whole baseline is fixed.
       - name: clippy
         run: cargo clippy --workspace
 
