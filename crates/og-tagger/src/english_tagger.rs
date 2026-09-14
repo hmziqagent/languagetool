@@ -593,15 +593,16 @@ impl EnglishTagger {
                 if lower.ends_with("ied") && lower.len() > 4 {
                     Some(format!("{}y", &lower[..lower.len() - 3]))
                 } else if lower.ends_with("ed") && lower.len() > 4 {
-                    // try removing just 'd' first (e.g., "changed" → "change")
-                    Some(lower[..lower.len() - 2].to_string())
+                    // e.g., "changed" → "change"; "stopped" → "stopp" → "stop"
+                    Some(Self::reduce_doubled_consonant(&lower[..lower.len() - 2]))
                 } else {
                     None
                 }
             }
             "VBG" => {
                 if lower.ends_with("ing") && lower.len() > 5 {
-                    Some(lower[..lower.len() - 3].to_string())
+                    let stem = &lower[..lower.len() - 3];
+                    Some(Self::reduce_doubled_consonant(stem))
                 } else {
                     None
                 }
@@ -636,6 +637,28 @@ impl EnglishTagger {
             }
             _ => None,
         }
+    }
+
+    /// Undo consonant doubling introduced by the -ing/-ed spelling rules:
+    /// "runn" -> "run", "swimm" -> "swim". Only applies when the stem ends in
+    /// a doubled consonant that is not itself a valid double ("ss", "ll",
+    /// "ff", "zz" and "ee"-like vowel doubles are left alone).
+    fn reduce_doubled_consonant(stem: &str) -> String {
+        let chars: Vec<char> = stem.chars().collect();
+        if chars.len() >= 3 {
+            let (a, b) = (chars[chars.len() - 2], chars[chars.len() - 1]);
+            let valid_doubles = a == 's' || a == 'l' || a == 'f' || a == 'z';
+            let preceded_by_vowel = "aeiouy".contains(chars[chars.len() - 3].to_ascii_lowercase());
+            if a == b
+                && a.is_alphabetic()
+                && !valid_doubles
+                && preceded_by_vowel
+                && !"aeiou".contains(a.to_ascii_lowercase())
+            {
+                return chars[..chars.len() - 1].iter().collect();
+            }
+        }
+        stem.to_string()
     }
 
     fn tag_token(&self, word: &str) -> Vec<(String, Option<String>)> {
@@ -1315,6 +1338,20 @@ mod tests {
         assert!(vbg_reading.is_some(), "Should have VBG reading");
         if let Some(r) = vbg_reading {
             assert_eq!(r.lemma(), Some("run"), "VBG lemma should strip -ing");
+        }
+
+        // Doubled-consonant gerunds must reduce: "swimming" -> "swim", not "swimm"
+        let result = tagger.tag(&["swimming"]);
+        let readings = result[0].readings();
+        if let Some(r) = readings.iter().find(|r| r.has_pos_tag("VBG")) {
+            assert_eq!(r.lemma(), Some("swim"), "doubled consonant must reduce");
+        }
+        // Doubled-consonant past tense: "stopped" -> "stop" (via regular rule,
+        // "stop" is not in the irregular table)
+        let result = tagger.tag(&["stopped"]);
+        let readings = result[0].readings();
+        if let Some(r) = readings.iter().find(|r| r.has_pos_tag("VBD")) {
+            assert_eq!(r.lemma(), Some("stop"), "doubled consonant must reduce");
         }
 
         // Test NNS lemma

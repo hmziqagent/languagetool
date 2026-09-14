@@ -900,12 +900,17 @@ mod tests {
 
     #[test]
     fn test_load_real_english_disambiguation() {
-        let path = "/home/agent/languagetool/languagetool-language-modules/en/src/main/resources/org/languagetool/resource/en/disambiguation.xml";
-        if !std::path::Path::new(path).exists() {
+        let Some(path) = og_spell::resource::lt_resource_root().map(|root| {
+            root.join("en/src/main/resources/org/languagetool/resource/en/disambiguation.xml")
+        }) else {
+            eprintln!("Skipping: LT resource root not found");
+            return;
+        };
+        if !path.is_file() {
             eprintln!("Skipping: disambiguation.xml not found");
             return;
         }
-        let xml = std::fs::read_to_string(path).unwrap();
+        let xml = std::fs::read_to_string(&path).unwrap();
         match XmlDisambiguator::from_xml(&xml) {
             Ok(d) => {
                 println!("Loaded {} disambiguation rules", d.rule_count());
