@@ -12,14 +12,25 @@ impl SuggestionEngine {
 
     pub fn suggest(&self, word: &str, max: usize) -> Vec<String> {
         let lower = word.to_lowercase();
-        let is_capitalized = word.chars().next().map(|c| c.is_uppercase()).unwrap_or(false)
-            && word.chars().skip(1).all(|c| !c.is_uppercase() || !c.is_alphabetic());
-        let is_all_upper = word.chars().filter(|c| c.is_alphabetic()).all(|c| c.is_uppercase());
+        let is_capitalized = word
+            .chars()
+            .next()
+            .map(|c| c.is_uppercase())
+            .unwrap_or(false)
+            && word
+                .chars()
+                .skip(1)
+                .all(|c| !c.is_uppercase() || !c.is_alphabetic());
+        let is_all_upper = word
+            .chars()
+            .filter(|c| c.is_alphabetic())
+            .all(|c| c.is_uppercase());
 
         let word_len = lower.len();
         let max_dist = if word_len <= 4 { 2 } else { 3 };
 
-        let mut scored: Vec<(String, usize)> = self.words
+        let mut scored: Vec<(String, usize)> = self
+            .words
             .iter()
             .filter(|w| {
                 let wlen = w.len();
@@ -62,8 +73,12 @@ fn levenshtein_distance(a: &str, b: &str) -> usize {
     let a_len = a.chars().count();
     let b_len = b.chars().count();
 
-    if a_len == 0 { return b_len; }
-    if b_len == 0 { return a_len; }
+    if a_len == 0 {
+        return b_len;
+    }
+    if b_len == 0 {
+        return a_len;
+    }
 
     let mut matrix = vec![vec![0; b_len + 1]; a_len + 1];
 
@@ -80,12 +95,13 @@ fn levenshtein_distance(a: &str, b: &str) -> usize {
 
     for i in 1..=a_len {
         for j in 1..=b_len {
-            let cost = if a_chars[i - 1] == b_chars[j - 1] { 0 } else { 1 };
+            let cost = if a_chars[i - 1] == b_chars[j - 1] {
+                0
+            } else {
+                1
+            };
             matrix[i][j] = std::cmp::min(
-                std::cmp::min(
-                    matrix[i - 1][j] + 1,
-                    matrix[i][j - 1] + 1,
-                ),
+                std::cmp::min(matrix[i - 1][j] + 1, matrix[i][j - 1] + 1),
                 matrix[i - 1][j - 1] + cost,
             );
         }
@@ -112,9 +128,17 @@ mod tests {
         let engine = SuggestionEngine::new(&dict);
         let suggestions = engine.suggest("helo", 5);
         // All words with distance <= 1 should be suggested: hello, help, held, hell
-        assert!(suggestions.contains(&"hello".to_string()) || suggestions.contains(&"help".to_string()),
-            "Expected at least one close match, got: {:?}", suggestions);
+        assert!(
+            suggestions.contains(&"hello".to_string()) || suggestions.contains(&"help".to_string()),
+            "Expected at least one close match, got: {:?}",
+            suggestions
+        );
         // Verify close matches have priority
-        assert!(suggestions.iter().take(3).all(|s| levenshtein_distance("helo", s) <= 1));
+        assert!(
+            suggestions
+                .iter()
+                .take(3)
+                .all(|s| levenshtein_distance("helo", s) <= 1)
+        );
     }
 }

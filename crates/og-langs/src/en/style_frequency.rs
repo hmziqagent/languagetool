@@ -1,9 +1,8 @@
-use std::collections::HashMap;
 use og_core::{
-    AnalyzedSentence, Category, IssueType, RuleMatch,
-    RuleMatchContext, RuleMatchRule,
+    AnalyzedSentence, Category, IssueType, RuleMatch, RuleMatchContext, RuleMatchRule,
     rule::TextLevelRule,
 };
+use std::collections::HashMap;
 
 /// Rust port of LanguageTool's AbstractStyleTooOftenUsedWordRule.
 /// Text-level rule that detects words of a specific POS category used too frequently.
@@ -55,9 +54,10 @@ impl StyleFrequencyRule {
     }
 
     fn is_target_word(&self, token: &og_core::AnalyzedTokenReadings) -> bool {
-        token.readings().iter().any(|r| {
-            r.pos_tags().iter().any(|t| t.starts_with(self.pos_prefix))
-        })
+        token
+            .readings()
+            .iter()
+            .any(|r| r.pos_tags().iter().any(|t| t.starts_with(self.pos_prefix)))
     }
 
     fn is_exception(&self, token: &og_core::AnalyzedTokenReadings) -> bool {
@@ -70,7 +70,10 @@ impl StyleFrequencyRule {
         // Check exception lemmas
         for reading in token.readings() {
             if let Some(lemma) = reading.lemma() {
-                if self.exception_lemmas.contains(&lemma.to_lowercase().as_str()) {
+                if self
+                    .exception_lemmas
+                    .contains(&lemma.to_lowercase().as_str())
+                {
                     return true;
                 }
             }
@@ -80,7 +83,11 @@ impl StyleFrequencyRule {
 
     fn get_lemma(&self, token: &og_core::AnalyzedTokenReadings) -> Option<String> {
         for reading in token.readings() {
-            if reading.pos_tags().iter().any(|t| t.starts_with(self.pos_prefix)) {
+            if reading
+                .pos_tags()
+                .iter()
+                .any(|t| t.starts_with(self.pos_prefix))
+            {
                 if let Some(lemma) = reading.lemma() {
                     return Some(lemma.to_string());
                 }
@@ -131,7 +138,8 @@ impl TextLevelRule for StyleFrequencyRule {
         }
 
         // Find overused words
-        let overused: HashMap<String, u32> = word_counts.iter()
+        let overused: HashMap<String, u32> = word_counts
+            .iter()
             .filter_map(|(lemma, &count)| {
                 let percent = (count as u32 * 100) / total as u32;
                 if percent >= self.min_percent {
@@ -174,9 +182,14 @@ impl TextLevelRule for StyleFrequencyRule {
                         let context_text = text[ctx_start..ctx_end].to_string();
 
                         matches.push(
-                            RuleMatch::new(&message, from_pos, length, rm_rule,
-                                RuleMatchContext::new(context_text, ctx_start, ctx_end - ctx_start))
-                                .with_sentence(sentence.text().to_string())
+                            RuleMatch::new(
+                                &message,
+                                from_pos,
+                                length,
+                                rm_rule,
+                                RuleMatchContext::new(context_text, ctx_start, ctx_end - ctx_start),
+                            )
+                            .with_sentence(sentence.text().to_string()),
                         );
                     }
                 }
@@ -191,7 +204,7 @@ impl TextLevelRule for StyleFrequencyRule {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use og_core::{AnalyzedToken, AnalyzedTokenReadings, AnalyzedSentence};
+    use og_core::{AnalyzedSentence, AnalyzedToken, AnalyzedTokenReadings};
 
     fn make_sentence_with_pos(text: &str, pos_tags: &[&str]) -> AnalyzedSentence {
         let mut sentence = AnalyzedSentence::new(text, 0, text.len());

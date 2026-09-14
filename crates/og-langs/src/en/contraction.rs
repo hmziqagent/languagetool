@@ -1,9 +1,8 @@
-use std::collections::HashMap;
 use og_core::{
-    AnalyzedSentence, Category, IssueType, RuleMatch,
-    RuleMatchContext, RuleMatchRule, SuggestedReplacement,
-    rule::Rule,
+    AnalyzedSentence, Category, IssueType, RuleMatch, RuleMatchContext, RuleMatchRule,
+    SuggestedReplacement, rule::Rule,
 };
+use std::collections::HashMap;
 
 /// Rust port of LanguageTool's ContractionSpellingRule.
 /// Detects missing apostrophes in English contractions (e.g., "dont" → "don't").
@@ -17,7 +16,12 @@ impl ContractionSpellingRule {
         let mut rule = Self {
             entries: HashMap::new(),
         };
-        rule.load_data(include_str!("../../../../../languagetool-language-modules/en/src/main/resources/org/languagetool/rules/en/contractions.txt"));
+        rule.load_data(
+            &og_spell::read_lt_resource(
+                "en/src/main/resources/org/languagetool/rules/en/contractions.txt",
+            )
+            .unwrap_or_default(),
+        );
         rule
     }
 
@@ -81,7 +85,8 @@ impl Rule for ContractionSpellingRule {
 
                 let message = format!(
                     "Did you mean {}?",
-                    replacements.iter()
+                    replacements
+                        .iter()
                         .map(|s| format!("\"{}\"", s))
                         .collect::<Vec<_>>()
                         .join(" or ")
@@ -90,19 +95,34 @@ impl Rule for ContractionSpellingRule {
                 let rm_rule = RuleMatchRule::new(self.id(), self.description())
                     .with_category(self.category());
 
-                let context_start = if match_start >= 40 { match_start - 40 } else { 0 };
-                let context_end = std::cmp::min(match_start + match_length + 40, sentence.text().len());
+                let context_start = if match_start >= 40 {
+                    match_start - 40
+                } else {
+                    0
+                };
+                let context_end =
+                    std::cmp::min(match_start + match_length + 40, sentence.text().len());
                 let context_text = sentence.text()[context_start..context_end].to_string();
 
-                let suggested: Vec<SuggestedReplacement> = replacements.iter()
+                let suggested: Vec<SuggestedReplacement> = replacements
+                    .iter()
                     .map(|s| SuggestedReplacement::new(s))
                     .collect();
 
                 matches.push(
-                    RuleMatch::new(&message, match_start, match_length, rm_rule,
-                        RuleMatchContext::new(context_text, context_start, context_end - context_start))
-                        .with_replacements(suggested)
-                        .with_sentence(sentence.text().to_string())
+                    RuleMatch::new(
+                        &message,
+                        match_start,
+                        match_length,
+                        rm_rule,
+                        RuleMatchContext::new(
+                            context_text,
+                            context_start,
+                            context_end - context_start,
+                        ),
+                    )
+                    .with_replacements(suggested)
+                    .with_sentence(sentence.text().to_string()),
                 );
             }
         }
@@ -114,7 +134,7 @@ impl Rule for ContractionSpellingRule {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use og_core::{AnalyzedToken, AnalyzedTokenReadings, AnalyzedSentence};
+    use og_core::{AnalyzedSentence, AnalyzedToken, AnalyzedTokenReadings};
 
     fn make_sentence(text: &str) -> AnalyzedSentence {
         let mut sentence = AnalyzedSentence::new(text, 0, text.len());
@@ -124,9 +144,9 @@ mod tests {
             if let Some(offset) = text[byte_pos..].find(word) {
                 let word_start = byte_pos + offset;
                 let word_end = word_start + word.len();
-                tokens.push(AnalyzedTokenReadings::new(
-                    AnalyzedToken::new(word, word_start, word_end)
-                ));
+                tokens.push(AnalyzedTokenReadings::new(AnalyzedToken::new(
+                    word, word_start, word_end,
+                )));
                 byte_pos = word_end;
             }
         }

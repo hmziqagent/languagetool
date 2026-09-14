@@ -1,7 +1,7 @@
 pub mod avsan;
 pub mod compound;
-pub mod contraction;
 pub mod consistent_apostrophe;
+pub mod contraction;
 pub mod dash;
 pub mod diacritics;
 pub mod plain_english;
@@ -14,8 +14,8 @@ pub mod wrong_word_context;
 
 pub use avsan::AvsAnRule;
 pub use compound::CompoundRule;
-pub use contraction::ContractionSpellingRule;
 pub use consistent_apostrophe::ConsistentApostrophesRule;
+pub use contraction::ContractionSpellingRule;
 pub use dash::DashRule;
 pub use diacritics::DiacriticsRule;
 pub use plain_english::PlainEnglishRule;

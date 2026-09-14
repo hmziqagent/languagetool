@@ -1,7 +1,10 @@
 use crate::dictionary::Dictionary;
 use crate::suggestion::SuggestionEngine;
-use og_core::{AnalyzedSentence, Category, IssueType, RuleMatch, RuleMatchContext, RuleMatchRule, SuggestedReplacement};
 use og_core::rule::Rule;
+use og_core::{
+    AnalyzedSentence, Category, IssueType, RuleMatch, RuleMatchContext, RuleMatchRule,
+    SuggestedReplacement,
+};
 use std::collections::HashSet;
 
 pub struct SpellingCheckRule {
@@ -50,7 +53,11 @@ impl SpellingCheckRule {
             return true;
         }
         // Skip words that look like URLs, email addresses, or file paths
-        if word.contains('/') || word.contains('@') || word.starts_with("http") || word.starts_with("www.") {
+        if word.contains('/')
+            || word.contains('@')
+            || word.starts_with("http")
+            || word.starts_with("www.")
+        {
             return true;
         }
         // Skip words with digits (likely codes, part numbers, etc.)
@@ -125,10 +132,14 @@ impl Rule for SpellingCheckRule {
                         start,
                         end - start,
                         rule,
-                        RuleMatchContext::new(context_text, context_start, context_end - context_start),
+                        RuleMatchContext::new(
+                            context_text,
+                            context_start,
+                            context_end - context_start,
+                        ),
                     )
                     .with_sentence(sentence.text().to_string())
-                    .with_replacements(replacements)
+                    .with_replacements(replacements),
                 );
             }
         }
@@ -187,10 +198,17 @@ mod tests {
 
     #[test]
     fn test_load_real_english_spelling() {
-        let hunspell_dir = "/home/agent/languagetool/languagetool-language-modules/en/src/main/resources/org/languagetool/resource/en/hunspell";
-        let resource_dir = "/home/agent/languagetool/languagetool-language-modules/en/src/main/resources/org/languagetool/resource/en";
+        let resource_root = match crate::resource::lt_resource_root() {
+            Some(root) => root.join("en/src/main/resources/org/languagetool/resource/en"),
+            None => {
+                eprintln!("Skipping: LT resource root not found");
+                return;
+            }
+        };
+        let hunspell_dir = resource_root.join("hunspell");
+        let resource_dir = resource_root;
 
-        if !std::path::Path::new(hunspell_dir).exists() {
+        if !hunspell_dir.is_dir() {
             eprintln!("Skipping: hunspell dir not found");
             return;
         }
@@ -198,7 +216,7 @@ mod tests {
         let mut dict = Dictionary::new();
 
         // Load common words
-        if let Ok(words) = std::fs::read_to_string(format!("{}/common_words.txt", resource_dir)) {
+        if let Ok(words) = std::fs::read_to_string(resource_dir.join("common_words.txt")) {
             for line in words.lines() {
                 let word = line.trim();
                 if !word.is_empty() && !word.starts_with('#') {
@@ -208,7 +226,7 @@ mod tests {
         }
 
         // Load spelling
-        if let Ok(words) = std::fs::read_to_string(format!("{}/spelling.txt", hunspell_dir)) {
+        if let Ok(words) = std::fs::read_to_string(hunspell_dir.join("spelling.txt")) {
             for line in words.lines() {
                 let word = line.trim();
                 if !word.is_empty() && !word.starts_with('#') {
@@ -218,7 +236,7 @@ mod tests {
         }
 
         // Load spelling_merged
-        if let Ok(words) = std::fs::read_to_string(format!("{}/spelling_merged.txt", hunspell_dir)) {
+        if let Ok(words) = std::fs::read_to_string(hunspell_dir.join("spelling_merged.txt")) {
             for line in words.lines() {
                 let word = line.trim();
                 if !word.is_empty() && !word.starts_with('#') {

@@ -1,9 +1,8 @@
-use regex::Regex;
 use og_core::{
-    AnalyzedSentence, Category, IssueType, RuleMatch,
-    RuleMatchContext, RuleMatchRule, SuggestedReplacement,
-    rule::Rule,
+    AnalyzedSentence, Category, IssueType, RuleMatch, RuleMatchContext, RuleMatchRule,
+    SuggestedReplacement, rule::Rule,
 };
+use regex::Regex;
 
 struct ContextWordEntry {
     word1_re: Regex,
@@ -26,7 +25,12 @@ pub struct WrongWordInContextRule {
 
 impl WrongWordInContextRule {
     pub fn new() -> Self {
-        let entries = Self::load_data(include_str!("../../../../../languagetool-language-modules/en/src/main/resources/org/languagetool/rules/en/wrongWordInContext.txt"));
+        let entries = Self::load_data(
+            &og_spell::read_lt_resource(
+                "en/src/main/resources/org/languagetool/rules/en/wrongWordInContext.txt",
+            )
+            .unwrap_or_default(),
+        );
         Self { entries }
     }
 
@@ -77,9 +81,17 @@ impl WrongWordInContextRule {
     }
 
     fn preserve_case(original: &str, replacement: &str) -> String {
-        if original.chars().all(|c| !c.is_alphabetic() || c.is_uppercase()) {
+        if original
+            .chars()
+            .all(|c| !c.is_alphabetic() || c.is_uppercase())
+        {
             replacement.to_uppercase()
-        } else if original.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
+        } else if original
+            .chars()
+            .next()
+            .map(|c| c.is_uppercase())
+            .unwrap_or(false)
+        {
             let mut r = replacement.chars();
             match r.next() {
                 Some(first) => format!("{}{}", first.to_uppercase(), r.as_str()),
@@ -126,7 +138,9 @@ impl Rule for WrongWordInContextRule {
 
         for entry in &self.entries {
             // Quick pre-filter: check if either word's prefix is in the text
-            if !text_lower.contains(&entry.match1.to_lowercase()) && !text_lower.contains(&entry.match2.to_lowercase()) {
+            if !text_lower.contains(&entry.match1.to_lowercase())
+                && !text_lower.contains(&entry.match2.to_lowercase())
+            {
                 continue;
             }
 
@@ -134,17 +148,50 @@ impl Rule for WrongWordInContextRule {
             let w2_match = word_match_positions(&entry.word2_re, &tokens);
 
             // Need exactly one word present
-            if w1_match.is_empty() && w2_match.is_empty() { continue; }
-            if !w1_match.is_empty() && !w2_match.is_empty() { continue; }
+            if w1_match.is_empty() && w2_match.is_empty() {
+                continue;
+            }
+            if !w1_match.is_empty() && !w2_match.is_empty() {
+                continue;
+            }
 
-            let (found_word, found_idx, not_found_match, found_context, not_found_context, found_expl, not_found_expl, _found_name, not_found_name) =
-                if !w1_match.is_empty() {
-                    let (idx, _) = w1_match[0];
-                    (tokens[idx].token().token(), idx, &entry.match2, &entry.context1_re, &entry.context2_re, &entry.explanation1, &entry.explanation2, &entry.name1, &entry.name2)
-                } else {
-                    let (idx, _) = w2_match[0];
-                    (tokens[idx].token().token(), idx, &entry.match1, &entry.context2_re, &entry.context1_re, &entry.explanation2, &entry.explanation1, &entry.name2, &entry.name1)
-                };
+            let (
+                found_word,
+                found_idx,
+                not_found_match,
+                found_context,
+                not_found_context,
+                found_expl,
+                not_found_expl,
+                _found_name,
+                not_found_name,
+            ) = if !w1_match.is_empty() {
+                let (idx, _) = w1_match[0];
+                (
+                    tokens[idx].token().token(),
+                    idx,
+                    &entry.match2,
+                    &entry.context1_re,
+                    &entry.context2_re,
+                    &entry.explanation1,
+                    &entry.explanation2,
+                    &entry.name1,
+                    &entry.name2,
+                )
+            } else {
+                let (idx, _) = w2_match[0];
+                (
+                    tokens[idx].token().token(),
+                    idx,
+                    &entry.match1,
+                    &entry.context2_re,
+                    &entry.context1_re,
+                    &entry.explanation2,
+                    &entry.explanation1,
+                    &entry.name2,
+                    &entry.name1,
+                )
+            };
 
             // Check context: not_found's context should be present, found's context should NOT
             let sentence_text = text.to_string();
@@ -157,7 +204,10 @@ impl Rule for WrongWordInContextRule {
                 let replacement = if replacement == found_word {
                     // Try the other match string
                     let lowered = found_word.to_lowercase();
-                    lowered.replace(&entry.match2.to_lowercase()[..], &not_found_match.to_lowercase())
+                    lowered.replace(
+                        &entry.match2.to_lowercase()[..],
+                        &not_found_match.to_lowercase(),
+                    )
                 } else {
                     replacement
                 };
@@ -173,8 +223,10 @@ impl Rule for WrongWordInContextRule {
                 let message = if found_expl.is_empty() {
                     format!("Possibly confused word: Did you mean '{}'?", replacement)
                 } else {
-                    format!("Possibly confused word: Did you mean '{}' (= {}) instead of '{}' (= {})?",
-                        replacement, not_found_expl, found_word, found_expl)
+                    format!(
+                        "Possibly confused word: Did you mean '{}' (= {}) instead of '{}' (= {})?",
+                        replacement, not_found_expl, found_word, found_expl
+                    )
                 };
 
                 let rm_rule = RuleMatchRule::new(self.id(), self.description())
@@ -185,10 +237,15 @@ impl Rule for WrongWordInContextRule {
                 let context_text = text[ctx_start..ctx_end].to_string();
 
                 matches.push(
-                    RuleMatch::new(&message, start, end - start, rm_rule,
-                        RuleMatchContext::new(context_text, ctx_start, ctx_end - ctx_start))
-                        .with_replacements(vec![SuggestedReplacement::new(&replacement)])
-                        .with_sentence(text.to_string())
+                    RuleMatch::new(
+                        &message,
+                        start,
+                        end - start,
+                        rm_rule,
+                        RuleMatchContext::new(context_text, ctx_start, ctx_end - ctx_start),
+                    )
+                    .with_replacements(vec![SuggestedReplacement::new(&replacement)])
+                    .with_sentence(text.to_string()),
                 );
             }
         }
@@ -197,7 +254,10 @@ impl Rule for WrongWordInContextRule {
     }
 }
 
-fn word_match_positions<'a>(re: &Regex, tokens: &[&'a og_core::AnalyzedTokenReadings]) -> Vec<(usize, usize)> {
+fn word_match_positions<'a>(
+    re: &Regex,
+    tokens: &[&'a og_core::AnalyzedTokenReadings],
+) -> Vec<(usize, usize)> {
     let mut result = Vec::new();
     for (i, token) in tokens.iter().enumerate() {
         if re.is_match(token.token().token()) {
@@ -210,20 +270,22 @@ fn word_match_positions<'a>(re: &Regex, tokens: &[&'a og_core::AnalyzedTokenRead
 #[cfg(test)]
 mod tests {
     use super::*;
-    use og_core::{AnalyzedToken, AnalyzedTokenReadings, AnalyzedSentence};
+    use og_core::{AnalyzedSentence, AnalyzedToken, AnalyzedTokenReadings};
 
     fn make_sentence(text: &str) -> AnalyzedSentence {
         let mut sentence = AnalyzedSentence::new(text, 0, text.len());
         let mut tokens = Vec::new();
         let mut byte_pos = 0;
         for part in text.split(|c: char| c.is_whitespace()) {
-            if part.is_empty() { continue; }
+            if part.is_empty() {
+                continue;
+            }
             if let Some(offset) = text[byte_pos..].find(part) {
                 let start = byte_pos + offset;
                 let end = start + part.len();
-                tokens.push(AnalyzedTokenReadings::new(
-                    AnalyzedToken::new(part, start, end)
-                ));
+                tokens.push(AnalyzedTokenReadings::new(AnalyzedToken::new(
+                    part, start, end,
+                )));
                 byte_pos = end;
             }
         }
@@ -236,7 +298,10 @@ mod tests {
         let rule = WrongWordInContextRule::new();
         let sentence = make_sentence("The government passed a new statue");
         let matches = rule.match_sentence(&sentence);
-        assert!(!matches.is_empty(), "Should detect 'statue' in government context");
+        assert!(
+            !matches.is_empty(),
+            "Should detect 'statue' in government context"
+        );
     }
 
     #[test]

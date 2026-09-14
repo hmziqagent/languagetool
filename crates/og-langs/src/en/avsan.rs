@@ -1,9 +1,8 @@
-use std::collections::HashSet;
 use og_core::{
-    AnalyzedSentence, Category, IssueType, RuleMatch,
-    RuleMatchContext, RuleMatchRule, SuggestedReplacement,
-    rule::Rule,
+    AnalyzedSentence, Category, IssueType, RuleMatch, RuleMatchContext, RuleMatchRule,
+    SuggestedReplacement, rule::Rule,
 };
+use std::collections::HashSet;
 
 /// Rust port of LanguageTool's AvsAnRule.
 /// Detects incorrect use of "a" vs "an" before words.
@@ -33,18 +32,15 @@ impl AvsAnRule {
     }
 
     /// Load word lists from LT data files
-    pub fn load_data(
-        &mut self,
-        det_a_data: &str,
-        det_an_data: &str,
-    ) {
+    pub fn load_data(&mut self, det_a_data: &str, det_an_data: &str) {
         for line in det_a_data.lines() {
             let line = line.trim();
             if line.is_empty() || line.starts_with('#') {
                 continue;
             }
             if line.starts_with('*') {
-                self.words_requiring_a_case_sensitive.insert(line[1..].to_string());
+                self.words_requiring_a_case_sensitive
+                    .insert(line[1..].to_string());
             } else {
                 self.words_requiring_a.insert(line.to_lowercase());
             }
@@ -56,7 +52,8 @@ impl AvsAnRule {
                 continue;
             }
             if line.starts_with('*') {
-                self.words_requiring_an_case_sensitive.insert(line[1..].to_string());
+                self.words_requiring_an_case_sensitive
+                    .insert(line[1..].to_string());
             } else {
                 self.words_requiring_an.insert(line.to_lowercase());
             }
@@ -64,7 +61,8 @@ impl AvsAnRule {
     }
 
     fn get_correct_determiner(&self, word: &str) -> Determiner {
-        let clean = word.chars()
+        let clean = word
+            .chars()
             .filter(|c| c.is_ascii_alphanumeric() || *c == '\'' || *c == '-')
             .collect::<String>();
 
@@ -77,9 +75,15 @@ impl AvsAnRule {
         let lower = first_part.to_lowercase();
 
         let requires_a = self.words_requiring_a.contains(&lower)
-            || self.words_requiring_a_case_sensitive.iter().any(|w| first_part == *w);
+            || self
+                .words_requiring_a_case_sensitive
+                .iter()
+                .any(|w| first_part == *w);
         let requires_an = self.words_requiring_an.contains(&lower)
-            || self.words_requiring_an_case_sensitive.iter().any(|w| first_part == *w);
+            || self
+                .words_requiring_an_case_sensitive
+                .iter()
+                .any(|w| first_part == *w);
 
         if requires_a && requires_an {
             return Determiner::AOrAn;
@@ -98,12 +102,17 @@ impl AvsAnRule {
         };
 
         // ALL-CAPS words (likely abbreviations) - don't flag
-        if first_part.chars().all(|c| c.is_ascii_uppercase() || !c.is_alphabetic()) && first_part.len() > 1 {
+        if first_part
+            .chars()
+            .all(|c| c.is_ascii_uppercase() || !c.is_alphabetic())
+            && first_part.len() > 1
+        {
             return Determiner::Unknown;
         }
 
         // Check for special prefixes
-        if lower.starts_with("unidentif") || lower.starts_with("unin") || lower.starts_with("unim") {
+        if lower.starts_with("unidentif") || lower.starts_with("unin") || lower.starts_with("unim")
+        {
             return Determiner::An;
         }
 
@@ -156,7 +165,11 @@ impl Rule for AvsAnRule {
 
             // Detect determiners "a" or "an"
             let actual_det = if lower == "a" || lower == "an" {
-                if lower == "a" { Determiner::A } else { Determiner::An }
+                if lower == "a" {
+                    Determiner::A
+                } else {
+                    Determiner::An
+                }
             } else {
                 i += 1;
                 continue;
@@ -167,9 +180,15 @@ impl Rule for AvsAnRule {
             while j < tokens.len() {
                 let next_text = tokens[j].token().token();
                 // Skip punctuation and quotes
-                if next_text == "'" || next_text == "\"" || next_text == "`"
-                    || next_text == "\u{2018}" || next_text == "\u{2019}" || next_text == "\u{201C}" || next_text == "\u{201D}"
-                    || next_text == "(" || next_text == "["
+                if next_text == "'"
+                    || next_text == "\""
+                    || next_text == "`"
+                    || next_text == "\u{2018}"
+                    || next_text == "\u{2019}"
+                    || next_text == "\u{201C}"
+                    || next_text == "\u{201D}"
+                    || next_text == "("
+                    || next_text == "["
                 {
                     j += 1;
                     continue;
@@ -196,7 +215,11 @@ impl Rule for AvsAnRule {
                 let det_end = tokens[i].token().end();
                 let det_len = det_end - det_start;
 
-                let suggestion = if actual_det == Determiner::A { "an" } else { "a" };
+                let suggestion = if actual_det == Determiner::A {
+                    "an"
+                } else {
+                    "a"
+                };
 
                 let rm_rule = RuleMatchRule::new("EN_A_VS_AN", "Use of 'a' vs 'an'")
                     .with_category(Category::new("MISC", "Miscellaneous"));
@@ -208,11 +231,17 @@ impl Rule for AvsAnRule {
                 matches.push(
                     RuleMatch::new(
                         &format!("Use '{}' instead of '{}'.", suggestion, token_text),
-                        det_start, det_len, rm_rule,
-                        RuleMatchContext::new(context_text, context_start, context_end - context_start),
+                        det_start,
+                        det_len,
+                        rm_rule,
+                        RuleMatchContext::new(
+                            context_text,
+                            context_start,
+                            context_end - context_start,
+                        ),
                     )
                     .with_replacements(vec![SuggestedReplacement::new(suggestion)])
-                    .with_sentence(sentence.text().to_string())
+                    .with_sentence(sentence.text().to_string()),
                 );
             }
 
@@ -232,7 +261,7 @@ impl Default for AvsAnRule {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use og_core::{AnalyzedToken, AnalyzedTokenReadings, AnalyzedSentence};
+    use og_core::{AnalyzedSentence, AnalyzedToken, AnalyzedTokenReadings};
 
     fn make_sentence(text: &str) -> AnalyzedSentence {
         let mut sentence = AnalyzedSentence::new(text, 0, text.len());
@@ -240,20 +269,45 @@ mod tests {
         let mut pos = 0;
         let chars: Vec<char> = text.chars().collect();
         while pos < chars.len() {
-            while pos < chars.len() && chars[pos].is_whitespace() { pos += 1; }
-            if pos >= chars.len() { break; }
-            let start_byte = text[..text.char_indices().nth(pos).map(|(i,_)| i).unwrap_or(text.len())].len();
+            while pos < chars.len() && chars[pos].is_whitespace() {
+                pos += 1;
+            }
+            if pos >= chars.len() {
+                break;
+            }
+            let start_byte = text[..text
+                .char_indices()
+                .nth(pos)
+                .map(|(i, _)| i)
+                .unwrap_or(text.len())]
+                .len();
             if chars[pos].is_alphanumeric() || chars[pos] == '\'' {
                 let word_start = pos;
-                while pos < chars.len() && (chars[pos].is_alphanumeric() || chars[pos] == '\'') { pos += 1; }
+                while pos < chars.len() && (chars[pos].is_alphanumeric() || chars[pos] == '\'') {
+                    pos += 1;
+                }
                 let word: String = chars[word_start..pos].iter().collect();
-                let end_byte = text[..text.char_indices().nth(pos).map(|(i,_)| i).unwrap_or(text.len())].len();
-                tokens.push(AnalyzedTokenReadings::new(AnalyzedToken::new(&word, start_byte, end_byte)));
+                let end_byte = text[..text
+                    .char_indices()
+                    .nth(pos)
+                    .map(|(i, _)| i)
+                    .unwrap_or(text.len())]
+                    .len();
+                tokens.push(AnalyzedTokenReadings::new(AnalyzedToken::new(
+                    &word, start_byte, end_byte,
+                )));
             } else {
                 let ch = chars[pos].to_string();
                 pos += 1;
-                let end_byte = text[..text.char_indices().nth(pos).map(|(i,_)| i).unwrap_or(text.len())].len();
-                tokens.push(AnalyzedTokenReadings::new(AnalyzedToken::new(&ch, start_byte, end_byte)));
+                let end_byte = text[..text
+                    .char_indices()
+                    .nth(pos)
+                    .map(|(i, _)| i)
+                    .unwrap_or(text.len())]
+                    .len();
+                tokens.push(AnalyzedTokenReadings::new(AnalyzedToken::new(
+                    &ch, start_byte, end_byte,
+                )));
             }
         }
         sentence.set_tokens(tokens);

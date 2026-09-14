@@ -8,6 +8,8 @@
 
 This is the single source of truth for parity tracking. Update these tables in place; other plans reference them instead of duplicating. English port matrix updated 2026-09-14 (WrongWordInContextRule now Ported; EnglishWordRepeatRule ported as a dedicated rule).
 
+Upstream freeze: the Java LanguageTool reference checkout at `<repo>/languagetool/` is frozen at commit `20b2119977960949c791069b57d191ec1449d211` (recorded 2026-09-14). All Rust resource reads resolve this checkout via the configurable LT resource root (`OG_LT_RESOURCE_ROOT` env var or ancestor search; see `og_spell::resource`).
+
 ## Language Modules (37 total, 1 implemented)
 
 | Language | Code | Module Dir | grammar.xml Rules | Status |

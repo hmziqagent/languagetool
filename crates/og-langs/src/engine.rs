@@ -1,15 +1,14 @@
 use og_core::checker::{SentenceTokenizer, WordTokenizer};
 use og_core::{
-    AnalyzedSentence, AnalyzedToken, AnalyzedTokenReadings,
-    CheckRequest, CheckResult, Checker, Language, RuleMatch,
-    SentenceRange,
-    rule::{Rule, TextLevelRule}, Category, IssueType,
+    AnalyzedSentence, AnalyzedToken, AnalyzedTokenReadings, Category, CheckRequest, CheckResult,
+    Checker, IssueType, Language, RuleMatch, SentenceRange,
+    rule::{Rule, TextLevelRule},
 };
-use og_xml::compiler::{XmlCompiler, CompiledRule};
 use og_rules::pattern_rule::PatternRuleEngine;
+use og_spell::{Dictionary, SpellingCheckRule};
 use og_tagger::EnglishTagger;
 use og_tagger::XmlDisambiguator;
-use og_spell::{Dictionary, SpellingCheckRule};
+use og_xml::compiler::{CompiledRule, XmlCompiler};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -90,26 +89,30 @@ impl LanguageEngine {
 
         // Load external data into the tagger
         if let Some(lt_root) = find_lt_resource_dir() {
-            let dict_path = lt_root.join("en/src/main/resources/org/languagetool/resource/en/dict_decoded.txt");
+            let dict_path =
+                lt_root.join("en/src/main/resources/org/languagetool/resource/en/dict_decoded.txt");
             if dict_path.exists() {
                 if let Ok(data) = std::fs::read_to_string(&dict_path) {
                     let count = tagger.load_fsa_dictionary(&data);
                     eprintln!("Loaded {} FSA dictionary entries", count);
                 }
             }
-            let added_path = lt_root.join("en/src/main/resources/org/languagetool/resource/en/added.txt");
+            let added_path =
+                lt_root.join("en/src/main/resources/org/languagetool/resource/en/added.txt");
             if added_path.exists() {
                 if let Ok(data) = std::fs::read_to_string(&added_path) {
                     tagger.load_added(&data);
                 }
             }
-            let uncountable_path = lt_root.join("en/src/main/resources/org/languagetool/resource/en/uncountable.txt");
+            let uncountable_path =
+                lt_root.join("en/src/main/resources/org/languagetool/resource/en/uncountable.txt");
             if uncountable_path.exists() {
                 if let Ok(data) = std::fs::read_to_string(&uncountable_path) {
                     tagger.load_uncountable(&data);
                 }
             }
-            let partlycountable_path = lt_root.join("en/src/main/resources/org/languagetool/resource/en/partlycountable.txt");
+            let partlycountable_path = lt_root
+                .join("en/src/main/resources/org/languagetool/resource/en/partlycountable.txt");
             if partlycountable_path.exists() {
                 if let Ok(data) = std::fs::read_to_string(&partlycountable_path) {
                     tagger.load_partlycountable(&data);
@@ -140,12 +143,16 @@ impl LanguageEngine {
             }
 
             // Load disambiguation.xml
-            let disambig_path = lt_root.join("en/src/main/resources/org/languagetool/resource/en/disambiguation.xml");
+            let disambig_path = lt_root
+                .join("en/src/main/resources/org/languagetool/resource/en/disambiguation.xml");
             if disambig_path.exists() {
                 if let Ok(xml) = std::fs::read_to_string(&disambig_path) {
                     match XmlDisambiguator::from_xml(&xml) {
                         Ok(disambiguator) => {
-                            eprintln!("Loaded {} disambiguation rules for English", disambiguator.rule_count());
+                            eprintln!(
+                                "Loaded {} disambiguation rules for English",
+                                disambiguator.rule_count()
+                            );
                             engine.disambiguator = Some(Arc::new(disambiguator));
                         }
                         Err(e) => eprintln!("Warning: Failed to load disambiguation rules: {}", e),
@@ -154,8 +161,10 @@ impl LanguageEngine {
             }
 
             // Load AvsAnRule with data files
-            let det_a_path = lt_root.join("en/src/main/resources/org/languagetool/rules/en/det_a.txt");
-            let det_an_path = lt_root.join("en/src/main/resources/org/languagetool/rules/en/det_an.txt");
+            let det_a_path =
+                lt_root.join("en/src/main/resources/org/languagetool/rules/en/det_a.txt");
+            let det_an_path =
+                lt_root.join("en/src/main/resources/org/languagetool/rules/en/det_an.txt");
             if det_a_path.exists() && det_an_path.exists() {
                 if let (Ok(det_a), Ok(det_an)) = (
                     std::fs::read_to_string(&det_a_path),
@@ -171,15 +180,21 @@ impl LanguageEngine {
             engine.add_rule(Arc::new(crate::en::SimpleReplaceRule::english_default()));
 
             // Add redundancy and profanity rules (same engine, different data)
-            engine.add_rule(Arc::new(crate::en::SimpleReplaceRule::english_redundancies()));
+            engine.add_rule(Arc::new(
+                crate::en::SimpleReplaceRule::english_redundancies(),
+            ));
             engine.add_rule(Arc::new(crate::en::SimpleReplaceRule::english_profanity()));
             engine.add_rule(Arc::new(crate::en::SimpleReplaceRule::american_replace()));
             engine.add_rule(Arc::new(crate::en::SimpleReplaceRule::british_replace()));
             engine.add_rule(Arc::new(crate::en::SimpleReplaceRule::new_zealand_replace()));
 
             // Add generic native rules
-            engine.add_rule(Arc::new(og_rules::native_rules::DoublePunctuationRule::new()));
-            engine.add_rule(Arc::new(og_rules::native_rules::UppercaseSentenceStartRule::new()));
+            engine.add_rule(Arc::new(
+                og_rules::native_rules::DoublePunctuationRule::new(),
+            ));
+            engine.add_rule(Arc::new(
+                og_rules::native_rules::UppercaseSentenceStartRule::new(),
+            ));
             engine.add_rule(Arc::new(og_rules::native_rules::CommaWhitespaceRule::new()));
 
             // Add English-specific native rules
@@ -194,7 +209,8 @@ impl LanguageEngine {
 
             // Load spellchecker with English word lists
             let mut dict = Dictionary::new();
-            let hunspell_dir = lt_root.join("en/src/main/resources/org/languagetool/resource/en/hunspell");
+            let hunspell_dir =
+                lt_root.join("en/src/main/resources/org/languagetool/resource/en/hunspell");
             let resource_dir = lt_root.join("en/src/main/resources/org/languagetool/resource/en");
 
             // Load common words
@@ -211,7 +227,10 @@ impl LanguageEngine {
             let dict_decoded = resource_dir.join("dict_decoded.txt");
             if dict_decoded.exists() {
                 if let Ok(full_dict) = og_spell::Dictionary::from_morfologik(&dict_decoded) {
-                    eprintln!("Loaded {} words from Morfologik dictionary", full_dict.len());
+                    eprintln!(
+                        "Loaded {} words from Morfologik dictionary",
+                        full_dict.len()
+                    );
                     dict = full_dict;
                 }
             }
@@ -238,20 +257,31 @@ impl LanguageEngine {
             }
 
             if dict.len() > 0 {
-                let spell_rule = SpellingCheckRule::new(dict)
-                    .with_ignore_words(ignore_words);
+                let spell_rule = SpellingCheckRule::new(dict).with_ignore_words(ignore_words);
                 eprintln!("Loaded spellchecker with {} words", spell_rule.dict_size());
                 engine.add_rule(Arc::new(spell_rule));
             }
         }
 
         // Add text-level rules
-        engine.add_text_level_rule(Arc::new(og_rules::text_level_rules::MultipleWhitespaceRule::new()));
-        engine.add_text_level_rule(Arc::new(og_rules::text_level_rules::SentenceWhitespaceRule::new()));
-        engine.add_text_level_rule(Arc::new(og_rules::text_level_rules::GenericUnpairedBracketsRule::new()));
-        engine.add_text_level_rule(Arc::new(og_rules::text_level_rules::GenericUnpairedQuotesRule::new()));
-        engine.add_text_level_rule(Arc::new(og_rules::text_level_rules::LongSentenceRule::new(30)));
-        engine.add_text_level_rule(Arc::new(og_rules::text_level_rules::WordRepeatBeginningRule::new()));
+        engine.add_text_level_rule(Arc::new(
+            og_rules::text_level_rules::MultipleWhitespaceRule::new(),
+        ));
+        engine.add_text_level_rule(Arc::new(
+            og_rules::text_level_rules::SentenceWhitespaceRule::new(),
+        ));
+        engine.add_text_level_rule(Arc::new(
+            og_rules::text_level_rules::GenericUnpairedBracketsRule::new(),
+        ));
+        engine.add_text_level_rule(Arc::new(
+            og_rules::text_level_rules::GenericUnpairedQuotesRule::new(),
+        ));
+        engine.add_text_level_rule(Arc::new(og_rules::text_level_rules::LongSentenceRule::new(
+            30,
+        )));
+        engine.add_text_level_rule(Arc::new(
+            og_rules::text_level_rules::WordRepeatBeginningRule::new(),
+        ));
         engine.add_text_level_rule(Arc::new(crate::en::ConsistentApostrophesRule::new()));
         engine.add_text_level_rule(Arc::new(crate::en::WordCoherencyRule::new()));
         engine.add_text_level_rule(Arc::new(crate::en::StyleFrequencyRule::adjective()));
@@ -265,7 +295,8 @@ impl LanguageEngine {
     /// Load grammar rules from an XML file
     pub fn load_xml_rules(&mut self, xml: &str) -> Result<usize, String> {
         let compiler = XmlCompiler::new();
-        let rule_set = compiler.compile_file(xml)
+        let rule_set = compiler
+            .compile_file(xml)
             .map_err(|e| format!("XML compilation error: {}", e))?;
 
         let count = rule_set.rules.len();
@@ -344,10 +375,13 @@ impl SentenceTokenizer for SentenceSplitterBridge {
         let splitter = og_tokenizer::DefaultSentenceSplitter::new();
         use og_tokenizer::SentenceTokenizer as _;
         let sentences = splitter.split(text);
-        sentences.into_iter().map(|s| SentenceRange {
-            start: s.start(),
-            end: s.end(),
-        }).collect()
+        sentences
+            .into_iter()
+            .map(|s| SentenceRange {
+                start: s.start(),
+                end: s.end(),
+            })
+            .collect()
     }
 }
 
@@ -359,33 +393,34 @@ impl WordTokenizer for WordTokenizerBridge {
         let tokenizer = og_tokenizer::DefaultWordTokenizer::new();
         use og_tokenizer::WordTokenizer as _;
         let tokens = tokenizer.tokenize(text);
-        tokens.into_iter().map(|t| {
-            let at = AnalyzedToken::new(t.text(), t.start() + offset, t.end() + offset);
-            AnalyzedTokenReadings::new(at)
-        }).collect()
+        tokens
+            .into_iter()
+            .map(|t| {
+                let at = AnalyzedToken::new(t.text(), t.start() + offset, t.end() + offset);
+                AnalyzedTokenReadings::new(at)
+            })
+            .collect()
     }
 }
 
-/// Find the LanguageTool resource directory for a given language
+/// Find the LanguageTool resource root (the `languagetool-language-modules`
+/// directory of the upstream checkout).
+///
+/// Resolution order (see `og_spell::resource` for details):
+/// 1. `OG_LT_RESOURCE_ROOT` environment variable.
+/// 2. Ancestor search from the current working directory for
+///    `languagetool/languagetool-language-modules`.
+/// 3. Ancestor search from og-spell's compile-time manifest directory.
 pub fn find_lt_resource_dir() -> Option<PathBuf> {
-    let candidates = [
-        PathBuf::from("../languagetool-language-modules"),
-        PathBuf::from("../../languagetool-language-modules"),
-        PathBuf::from("/home/agent/languagetool/languagetool-language-modules"),
-    ];
-    for candidate in &candidates {
-        if candidate.exists() {
-            return Some(candidate.canonicalize().ok()?);
-        }
-    }
-    None
+    og_spell::resource::lt_resource_root()
 }
 
 /// Get the grammar.xml path for a language
 pub fn grammar_xml_path(lang_code: &str, lt_root: &Path) -> PathBuf {
     // Map language code to module directory name
     let module_name = lang_code.split('-').next().unwrap_or(lang_code);
-    lt_root.join(module_name)
+    lt_root
+        .join(module_name)
         .join("src/main/resources/org/languagetool/rules")
         .join(module_name)
         .join("grammar.xml")
@@ -466,7 +501,11 @@ mod tests {
         assert_eq!(count, 2);
 
         let result = engine.check("teh their is");
-        assert!(result.matches.len() >= 2, "Expected at least 2 matches, got {}", result.matches.len());
+        assert!(
+            result.matches.len() >= 2,
+            "Expected at least 2 matches, got {}",
+            result.matches.len()
+        );
     }
 
     #[test]
@@ -491,7 +530,10 @@ mod tests {
 
         let grammar_path = grammar_xml_path("en", &lt_root);
         if !grammar_path.exists() {
-            eprintln!("Skipping: English grammar.xml not found at {:?}", grammar_path);
+            eprintln!(
+                "Skipping: English grammar.xml not found at {:?}",
+                grammar_path
+            );
             return;
         }
 

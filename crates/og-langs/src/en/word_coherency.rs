@@ -1,9 +1,8 @@
-use std::collections::{HashMap, HashSet};
 use og_core::{
-    AnalyzedSentence, Category, IssueType, RuleMatch,
-    RuleMatchContext, RuleMatchRule, SuggestedReplacement,
-    rule::TextLevelRule,
+    AnalyzedSentence, Category, IssueType, RuleMatch, RuleMatchContext, RuleMatchRule,
+    SuggestedReplacement, rule::TextLevelRule,
 };
+use std::collections::{HashMap, HashSet};
 
 /// Rust port of LanguageTool's WordCoherencyRule (EN_WORD_COHERENCY).
 /// Detects inconsistent spelling of variant words across a document
@@ -18,7 +17,12 @@ impl WordCoherencyRule {
         let mut rule = Self {
             word_map: HashMap::new(),
         };
-        rule.load_data(include_str!("../../../../../languagetool-language-modules/en/src/main/resources/org/languagetool/rules/en/coherency.txt"));
+        rule.load_data(
+            &og_spell::read_lt_resource(
+                "en/src/main/resources/org/languagetool/rules/en/coherency.txt",
+            )
+            .unwrap_or_default(),
+        );
         rule
     }
 
@@ -34,7 +38,10 @@ impl WordCoherencyRule {
             }
             let a = parts[0].trim().to_lowercase();
             let b = parts[1].trim().to_lowercase();
-            self.word_map.entry(a.clone()).or_default().insert(b.clone());
+            self.word_map
+                .entry(a.clone())
+                .or_default()
+                .insert(b.clone());
             self.word_map.entry(b).or_default().insert(a);
         }
     }
@@ -81,7 +88,9 @@ impl TextLevelRule for WordCoherencyRule {
 
                 // Try lemma first (from readings), fall back to token text
                 let lookup_word = if !token.readings().is_empty() {
-                    token.readings().iter()
+                    token
+                        .readings()
+                        .iter()
                         .find_map(|r| r.lemma())
                         .map(|l| l.to_lowercase())
                         .unwrap_or(text_lower.clone())
@@ -100,9 +109,18 @@ impl TextLevelRule for WordCoherencyRule {
 
                     // Create replacement by swapping the variant
                     let mut replacement = text.replace(&lookup_word, first_spelling);
-                    if text.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
+                    if text
+                        .chars()
+                        .next()
+                        .map(|c| c.is_uppercase())
+                        .unwrap_or(false)
+                    {
                         if let Some(first) = replacement.chars().next() {
-                            replacement = format!("{}{}", first.to_uppercase(), &replacement[first.len_utf8()..]);
+                            replacement = format!(
+                                "{}{}",
+                                first.to_uppercase(),
+                                &replacement[first.len_utf8()..]
+                            );
                         }
                     }
 
@@ -111,20 +129,29 @@ impl TextLevelRule for WordCoherencyRule {
 
                     let ctx_start = if from_pos >= 40 { from_pos - 40 } else { 0 };
                     let ctx_end = std::cmp::min(to_pos + 40, pos + sentence.text().len());
-                    let context_text = sentence.text()[ctx_start.saturating_sub(pos)..ctx_end.saturating_sub(pos)].to_string();
+                    let context_text = sentence.text()
+                        [ctx_start.saturating_sub(pos)..ctx_end.saturating_sub(pos)]
+                        .to_string();
 
                     if !text.eq_ignore_ascii_case(&replacement) {
                         matches.push(
-                            RuleMatch::new(&message, from_pos, length, rm_rule,
-                                RuleMatchContext::new(context_text, ctx_start, ctx_end - ctx_start))
-                                .with_replacements(vec![SuggestedReplacement::new(&replacement)])
-                                .with_sentence(sentence.text().to_string())
+                            RuleMatch::new(
+                                &message,
+                                from_pos,
+                                length,
+                                rm_rule,
+                                RuleMatchContext::new(context_text, ctx_start, ctx_end - ctx_start),
+                            )
+                            .with_replacements(vec![SuggestedReplacement::new(&replacement)])
+                            .with_sentence(sentence.text().to_string()),
                         );
                     }
                     break; // one match per token
                 } else if let Some(variants) = self.word_map.get(&lookup_word) {
                     for variant in variants {
-                        should_not_appear.entry(variant.clone()).or_insert_with(|| lookup_word.clone());
+                        should_not_appear
+                            .entry(variant.clone())
+                            .or_insert_with(|| lookup_word.clone());
                     }
                 }
             }
@@ -138,20 +165,22 @@ impl TextLevelRule for WordCoherencyRule {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use og_core::{AnalyzedToken, AnalyzedTokenReadings, AnalyzedSentence};
+    use og_core::{AnalyzedSentence, AnalyzedToken, AnalyzedTokenReadings};
 
     fn make_sentence(text: &str) -> AnalyzedSentence {
         let mut sentence = AnalyzedSentence::new(text, 0, text.len());
         let mut tokens = Vec::new();
         let mut byte_pos = 0;
         for part in text.split(|c: char| c.is_whitespace()) {
-            if part.is_empty() { continue; }
+            if part.is_empty() {
+                continue;
+            }
             if let Some(offset) = text[byte_pos..].find(part) {
                 let start = byte_pos + offset;
                 let end = start + part.len();
-                tokens.push(AnalyzedTokenReadings::new(
-                    AnalyzedToken::new(part, start, end)
-                ));
+                tokens.push(AnalyzedTokenReadings::new(AnalyzedToken::new(
+                    part, start, end,
+                )));
                 byte_pos = end;
             }
         }
@@ -166,7 +195,10 @@ mod tests {
         let s2 = make_sentence("She likes archeology too");
         let full_text = "He likes archaeology She likes archeology too";
         let matches = rule.match_text(full_text, &[s1, s2]);
-        assert!(!matches.is_empty(), "Should detect inconsistent 'archeology' vs 'archaeology'");
+        assert!(
+            !matches.is_empty(),
+            "Should detect inconsistent 'archeology' vs 'archaeology'"
+        );
     }
 
     #[test]

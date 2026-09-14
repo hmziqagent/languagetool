@@ -1,9 +1,8 @@
-use std::collections::HashMap;
 use og_core::{
-    AnalyzedSentence, Category, IssueType, RuleMatch,
-    RuleMatchContext, RuleMatchRule, SuggestedReplacement,
-    rule::Rule,
+    AnalyzedSentence, Category, IssueType, RuleMatch, RuleMatchContext, RuleMatchRule,
+    SuggestedReplacement, rule::Rule,
 };
+use std::collections::HashMap;
 
 struct ReplaceEntry {
     suggestions: Vec<String>,
@@ -72,7 +71,8 @@ impl SimpleReplaceRule {
             };
 
             for wrong in &wrong_forms {
-                self.entries.insert(wrong.trim().to_lowercase(), entry.clone());
+                self.entries
+                    .insert(wrong.trim().to_lowercase(), entry.clone());
             }
         }
     }
@@ -86,8 +86,11 @@ impl SimpleReplaceRule {
             "Possible Typo",
         );
 
-        let data = include_str!("../../../../../languagetool-language-modules/en/src/main/resources/org/languagetool/rules/en/replace.txt");
-        rule.load_data(data);
+        let data = og_spell::read_lt_resource(
+            "en/src/main/resources/org/languagetool/rules/en/replace.txt",
+        )
+        .unwrap_or_default();
+        rule.load_data(&data);
         rule
     }
 
@@ -100,8 +103,11 @@ impl SimpleReplaceRule {
             "Redundancy",
         );
 
-        let data = include_str!("../../../../../languagetool-language-modules/en/src/main/resources/org/languagetool/rules/en/redundancies.txt");
-        rule.load_data(data);
+        let data = og_spell::read_lt_resource(
+            "en/src/main/resources/org/languagetool/rules/en/redundancies.txt",
+        )
+        .unwrap_or_default();
+        rule.load_data(&data);
         rule
     }
 
@@ -114,8 +120,11 @@ impl SimpleReplaceRule {
             "Possible Typo",
         );
 
-        let data = include_str!("../../../../../languagetool-language-modules/en/src/main/resources/org/languagetool/rules/en/replace_profanity.txt");
-        rule.load_data(data);
+        let data = og_spell::read_lt_resource(
+            "en/src/main/resources/org/languagetool/rules/en/replace_profanity.txt",
+        )
+        .unwrap_or_default();
+        rule.load_data(&data);
         rule
     }
 
@@ -128,8 +137,11 @@ impl SimpleReplaceRule {
             "Style",
         );
 
-        let data = include_str!("../../../../../languagetool-language-modules/en/src/main/resources/org/languagetool/rules/en/en-US/replace.txt");
-        rule.load_data(data);
+        let data = og_spell::read_lt_resource(
+            "en/src/main/resources/org/languagetool/rules/en/en-US/replace.txt",
+        )
+        .unwrap_or_default();
+        rule.load_data(&data);
         rule
     }
 
@@ -142,8 +154,11 @@ impl SimpleReplaceRule {
             "Style",
         );
 
-        let data = include_str!("../../../../../languagetool-language-modules/en/src/main/resources/org/languagetool/rules/en/en-GB/replace.txt");
-        rule.load_data(data);
+        let data = og_spell::read_lt_resource(
+            "en/src/main/resources/org/languagetool/rules/en/en-GB/replace.txt",
+        )
+        .unwrap_or_default();
+        rule.load_data(&data);
         rule
     }
 
@@ -156,8 +171,11 @@ impl SimpleReplaceRule {
             "Style",
         );
 
-        let data = include_str!("../../../../../languagetool-language-modules/en/src/main/resources/org/languagetool/rules/en/en-NZ/replace.txt");
-        rule.load_data(data);
+        let data = og_spell::read_lt_resource(
+            "en/src/main/resources/org/languagetool/rules/en/en-NZ/replace.txt",
+        )
+        .unwrap_or_default();
+        rule.load_data(&data);
         rule
     }
 }
@@ -208,7 +226,9 @@ impl Rule for SimpleReplaceRule {
 
                     let default_msg = format!(
                         "Did you mean {}?",
-                        entry.suggestions.iter()
+                        entry
+                            .suggestions
+                            .iter()
                             .map(|s| format!("\"{}\"", s))
                             .collect::<Vec<_>>()
                             .join(" or ")
@@ -218,19 +238,34 @@ impl Rule for SimpleReplaceRule {
                     let rm_rule = RuleMatchRule::new(&self.id, &self.name)
                         .with_category(Category::new(&self.category_id, &self.category_name));
 
-                    let context_start = if match_start >= 40 { match_start - 40 } else { 0 };
+                    let context_start = if match_start >= 40 {
+                        match_start - 40
+                    } else {
+                        0
+                    };
                     let context_end = std::cmp::min(match_end + 40, sentence.text().len());
                     let context_text = sentence.text()[context_start..context_end].to_string();
 
-                    let replacements: Vec<SuggestedReplacement> = entry.suggestions.iter()
+                    let replacements: Vec<SuggestedReplacement> = entry
+                        .suggestions
+                        .iter()
                         .map(|s| SuggestedReplacement::new(s))
                         .collect();
 
                     matches.push(
-                        RuleMatch::new(message, match_start, match_length, rm_rule,
-                            RuleMatchContext::new(context_text, context_start, context_end - context_start))
-                            .with_replacements(replacements)
-                            .with_sentence(sentence.text().to_string())
+                        RuleMatch::new(
+                            message,
+                            match_start,
+                            match_length,
+                            rm_rule,
+                            RuleMatchContext::new(
+                                context_text,
+                                context_start,
+                                context_end - context_start,
+                            ),
+                        )
+                        .with_replacements(replacements)
+                        .with_sentence(sentence.text().to_string()),
                     );
                     break; // Don't report the same start position multiple times
                 }
@@ -254,7 +289,7 @@ impl Clone for ReplaceEntry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use og_core::{AnalyzedToken, AnalyzedTokenReadings, AnalyzedSentence};
+    use og_core::{AnalyzedSentence, AnalyzedToken, AnalyzedTokenReadings};
 
     fn make_sentence(text: &str) -> AnalyzedSentence {
         let mut sentence = AnalyzedSentence::new(text, 0, text.len());
@@ -262,20 +297,47 @@ mod tests {
         let mut pos = 0;
         let chars: Vec<char> = text.chars().collect();
         while pos < chars.len() {
-            while pos < chars.len() && chars[pos].is_whitespace() { pos += 1; }
-            if pos >= chars.len() { break; }
-            let start_byte = text[..text.char_indices().nth(pos).map(|(i,_)| i).unwrap_or(text.len())].len();
+            while pos < chars.len() && chars[pos].is_whitespace() {
+                pos += 1;
+            }
+            if pos >= chars.len() {
+                break;
+            }
+            let start_byte = text[..text
+                .char_indices()
+                .nth(pos)
+                .map(|(i, _)| i)
+                .unwrap_or(text.len())]
+                .len();
             if chars[pos].is_alphanumeric() || chars[pos] == '\'' || chars[pos] == '-' {
                 let word_start = pos;
-                while pos < chars.len() && (chars[pos].is_alphanumeric() || chars[pos] == '\'' || chars[pos] == '-') { pos += 1; }
+                while pos < chars.len()
+                    && (chars[pos].is_alphanumeric() || chars[pos] == '\'' || chars[pos] == '-')
+                {
+                    pos += 1;
+                }
                 let word: String = chars[word_start..pos].iter().collect();
-                let end_byte = text[..text.char_indices().nth(pos).map(|(i,_)| i).unwrap_or(text.len())].len();
-                tokens.push(AnalyzedTokenReadings::new(AnalyzedToken::new(&word, start_byte, end_byte)));
+                let end_byte = text[..text
+                    .char_indices()
+                    .nth(pos)
+                    .map(|(i, _)| i)
+                    .unwrap_or(text.len())]
+                    .len();
+                tokens.push(AnalyzedTokenReadings::new(AnalyzedToken::new(
+                    &word, start_byte, end_byte,
+                )));
             } else {
                 let ch = chars[pos].to_string();
                 pos += 1;
-                let end_byte = text[..text.char_indices().nth(pos).map(|(i,_)| i).unwrap_or(text.len())].len();
-                tokens.push(AnalyzedTokenReadings::new(AnalyzedToken::new(&ch, start_byte, end_byte)));
+                let end_byte = text[..text
+                    .char_indices()
+                    .nth(pos)
+                    .map(|(i, _)| i)
+                    .unwrap_or(text.len())]
+                    .len();
+                tokens.push(AnalyzedTokenReadings::new(AnalyzedToken::new(
+                    &ch, start_byte, end_byte,
+                )));
             }
         }
         sentence.set_tokens(tokens);
@@ -284,9 +346,7 @@ mod tests {
 
     #[test]
     fn test_simple_replace_basic() {
-        let mut rule = SimpleReplaceRule::new(
-            "TEST_REPLACE", "Test", "TYPOS", "Typos"
-        );
+        let mut rule = SimpleReplaceRule::new("TEST_REPLACE", "Test", "TYPOS", "Typos");
         rule.load_data("bussines|bussiness=business\n");
 
         let sentence = make_sentence("bussines is hard");
@@ -297,9 +357,7 @@ mod tests {
 
     #[test]
     fn test_simple_replace_case_insensitive() {
-        let mut rule = SimpleReplaceRule::new(
-            "TEST_REPLACE", "Test", "TYPOS", "Typos"
-        );
+        let mut rule = SimpleReplaceRule::new("TEST_REPLACE", "Test", "TYPOS", "Typos");
         rule.load_data("bussines=business\n");
 
         let sentence = make_sentence("Bussines is hard");
@@ -309,9 +367,7 @@ mod tests {
 
     #[test]
     fn test_simple_replace_no_match() {
-        let mut rule = SimpleReplaceRule::new(
-            "TEST_REPLACE", "Test", "TYPOS", "Typos"
-        );
+        let mut rule = SimpleReplaceRule::new("TEST_REPLACE", "Test", "TYPOS", "Typos");
         rule.load_data("bussines=business\n");
 
         let sentence = make_sentence("business is fine");
@@ -321,9 +377,7 @@ mod tests {
 
     #[test]
     fn test_simple_replace_with_message() {
-        let mut rule = SimpleReplaceRule::new(
-            "TEST_REPLACE", "Test", "TYPOS", "Typos"
-        );
+        let mut rule = SimpleReplaceRule::new("TEST_REPLACE", "Test", "TYPOS", "Typos");
         rule.load_data("bussines=business\tDid you mean business?\n");
 
         let sentence = make_sentence("bussines");
@@ -334,9 +388,7 @@ mod tests {
 
     #[test]
     fn test_simple_replace_multiple_alternatives() {
-        let mut rule = SimpleReplaceRule::new(
-            "TEST_REPLACE", "Test", "TYPOS", "Typos"
-        );
+        let mut rule = SimpleReplaceRule::new("TEST_REPLACE", "Test", "TYPOS", "Typos");
         rule.load_data("wrong=option1|option2\n");
 
         let sentence = make_sentence("wrong choice");

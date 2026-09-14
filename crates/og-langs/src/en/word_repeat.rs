@@ -1,17 +1,14 @@
 use og_core::{
-    AnalyzedSentence, AnalyzedTokenReadings, Category, IssueType, RuleMatch,
-    RuleMatchContext, RuleMatchRule, SuggestedReplacement,
-    rule::Rule,
+    AnalyzedSentence, AnalyzedTokenReadings, Category, IssueType, RuleMatch, RuleMatchContext,
+    RuleMatchRule, SuggestedReplacement, rule::Rule,
 };
 
 const EXCEPTIONS: &[&str] = &[
-    "had", "that", "her", "aye", "blah", "mau", "uh", "paw", "cha",
-    "yum", "wop", "woop", "fnarr", "fnar", "ha", "omg", "boo", "tick",
-    "twinkle", "ta", "la", "x", "hi", "ho", "heh", "jay", "walla",
-    "sri", "hey", "hah", "oh", "ouh", "chop", "ring", "beep", "bleep",
-    "yeah", "gout", "quack", "meow", "squawk", "whoa", "si", "honk",
-    "brum", "chi", "santorio", "lapu", "chow", "shh", "yummy", "boom",
-    "bye", "ah", "aah", "bang", "woof", "wink", "yes", "tsk", "hush",
+    "had", "that", "her", "aye", "blah", "mau", "uh", "paw", "cha", "yum", "wop", "woop", "fnarr",
+    "fnar", "ha", "omg", "boo", "tick", "twinkle", "ta", "la", "x", "hi", "ho", "heh", "jay",
+    "walla", "sri", "hey", "hah", "oh", "ouh", "chop", "ring", "beep", "bleep", "yeah", "gout",
+    "quack", "meow", "squawk", "whoa", "si", "honk", "brum", "chi", "santorio", "lapu", "chow",
+    "shh", "yummy", "boom", "bye", "ah", "aah", "bang", "woof", "wink", "yes", "tsk", "hush",
     "ding", "choo", "miu", "tuk", "yadda", "doo", "sapiens", "tse", "no",
 ];
 
@@ -52,10 +49,12 @@ impl EnglishWordRepeatRule {
 
         // "her her phone" — verb PRP before, noun after
         if curr_lower == "her" && position >= 2 && position + 1 < tokens.len() {
-            let has_verb_before = Self::has_pos_tag(tokens, position - 2,
-                &["VB", "VBP", "VBZ", "VBG", "VBD", "VBN"]);
-            let has_noun_after = Self::has_pos_tag(tokens, position + 1,
-                &["NN", "NNS", "NNP"]);
+            let has_verb_before = Self::has_pos_tag(
+                tokens,
+                position - 2,
+                &["VB", "VBP", "VBZ", "VBG", "VBD", "VBN"],
+            );
+            let has_noun_after = Self::has_pos_tag(tokens, position + 1, &["NN", "NNS", "NNP"]);
             if has_verb_before && has_noun_after {
                 return true;
             }
@@ -70,7 +69,11 @@ impl EnglishWordRepeatRule {
 
         // "that that" — modal/noun/pronoun after
         if curr_lower == "that" && position + 1 < tokens.len() {
-            if Self::has_pos_tag(tokens, position + 1, &["MD", "NN", "PRP$", "JJ", "VBZ", "VBD"]) {
+            if Self::has_pos_tag(
+                tokens,
+                position + 1,
+                &["MD", "NN", "PRP$", "JJ", "VBZ", "VBD"],
+            ) {
                 return true;
             }
         }
@@ -124,7 +127,13 @@ impl EnglishWordRepeatRule {
         }
 
         // Spaced-out spelling: "b a s i c a l l y"
-        if curr_token.len() == 1 && curr_token.chars().next().map(|c| c.is_alphabetic()).unwrap_or(false) {
+        if curr_token.len() == 1
+            && curr_token
+                .chars()
+                .next()
+                .map(|c| c.is_alphabetic())
+                .unwrap_or(false)
+        {
             if position >= 2 && position + 1 < tokens.len() {
                 let is_single_alpha = |t: &AnalyzedTokenReadings| {
                     let s = t.token().token();
@@ -141,7 +150,9 @@ impl EnglishWordRepeatRule {
         if position >= 2 && tokens[position - 2].token().token().to_lowercase() == curr_lower {
             return true;
         }
-        if position + 1 < tokens.len() && tokens[position + 1].token().token().to_lowercase() == curr_lower {
+        if position + 1 < tokens.len()
+            && tokens[position + 1].token().token().to_lowercase() == curr_lower
+        {
             return true;
         }
 
@@ -263,10 +274,14 @@ impl Rule for EnglishWordRepeatRule {
                         start,
                         end - start,
                         rule,
-                        RuleMatchContext::new(context_text, context_start, context_end - context_start),
+                        RuleMatchContext::new(
+                            context_text,
+                            context_start,
+                            context_end - context_start,
+                        ),
                     )
                     .with_sentence(sentence.text().to_string())
-                    .with_replacements(vec![SuggestedReplacement::new(curr.token().token())])
+                    .with_replacements(vec![SuggestedReplacement::new(curr.token().token())]),
                 );
             }
         }
@@ -278,20 +293,22 @@ impl Rule for EnglishWordRepeatRule {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use og_core::{AnalyzedToken, AnalyzedSentence};
+    use og_core::{AnalyzedSentence, AnalyzedToken};
 
     fn make_sentence(text: &str) -> AnalyzedSentence {
         let mut sentence = AnalyzedSentence::new(text, 0, text.len());
         let mut tokens = Vec::new();
         let mut byte_pos = 0;
         for part in text.split(|c: char| c.is_whitespace()) {
-            if part.is_empty() { continue; }
+            if part.is_empty() {
+                continue;
+            }
             if let Some(offset) = text[byte_pos..].find(part) {
                 let start = byte_pos + offset;
                 let end = start + part.len();
-                tokens.push(AnalyzedTokenReadings::new(
-                    AnalyzedToken::new(part, start, end)
-                ));
+                tokens.push(AnalyzedTokenReadings::new(AnalyzedToken::new(
+                    part, start, end,
+                )));
                 byte_pos = end;
             }
         }
