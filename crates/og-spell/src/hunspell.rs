@@ -287,6 +287,8 @@ impl HunspellAff {
                     };
                     // Header lines: strip token is Y/N and a count follows.
                     if matches!(strip_tok, "Y" | "N") && tokens.next().is_some() {
+                        aff.group_cross_product
+                            .insert(flag.clone(), strip_tok == "Y");
                         continue;
                     }
                     let Some(add_tok) = tokens.next() else {
@@ -411,17 +413,15 @@ impl HunspellDictionary {
         if self.is_known_stem(word, false) {
             return true;
         }
-        // A dic entry carrying NEEDAFFIX is only legal with an affix
-        // attached — the bare surface form itself is rejected.
-        if self.is_need_affix_surface(word) {
-            return false;
-        }
+        // NEEDAFFIX surfaces are NOT rejected here: igerman98-style
+        // dictionaries mark valid standalone words with h plus a zero-add
+        // rule (e.g. de_AT `SFX j 0 0/xoc .`), so the affixed path below
+        // must still run for them; is_known_stem already rejects the bare
+        // analysis, and a stem with h and no applicable affix simply falls
+        // through to false.
         let lower = word.to_lowercase();
         if lower != word {
             if self.is_forbidden(&lower) {
-                return false;
-            }
-            if self.is_need_affix_surface(&lower) {
                 return false;
             }
             if self.is_known_stem(&lower, true) {
@@ -435,15 +435,6 @@ impl HunspellDictionary {
             return true;
         }
         self.is_known_compound(word)
-    }
-
-    fn is_need_affix_surface(&self, word: &str) -> bool {
-        let Some(need) = &self.aff.need_affix else {
-            return false;
-        };
-        self.entries
-            .get(word)
-            .is_some_and(|flags| flags.iter().any(|f| f == need))
     }
 
     /// A surface form listed with the FORBIDDENWORD flag must be rejected
@@ -654,12 +645,10 @@ impl HunspellDictionary {
             if self.has_any_compound_flag(flags, required) {
                 return true;
             }
-            // A NEEDAFFIX stem is never legal as a bare compound part.
-            if let Some(need) = &self.aff.need_affix
-                && flags.contains(need)
-            {
-                return false;
-            }
+            // No early NEEDAFFIX rejection: a stem with NEEDAFFIX can still
+            // qualify as a member via branch 2 (a zero-add affix whose
+            // continuation flags carry the compound marker), which is how
+            // igerman98 encodes compoundable h-flagged stems.
         }
 
         // 2. The part is affixed: the derived form's flags are the stem's
@@ -829,6 +818,10 @@ NEEDAFFIX N
 KEEPCASE K
 SFX T Y 1
 SFX T 0 ting/BE .
+PFX Q Y 1
+PFX Q 0 re .
+SFX R N 1
+SFX R 0 ly .
 ";
 
     const DIC2: &str = "5
@@ -837,11 +830,25 @@ badword/F
 acme/K
 door/E
 happy/S
+form/QR
 ";
 
     fn test_dict2() -> HunspellDictionary {
         let aff = HunspellAff::parse(AFF2).expect("aff2 parses");
         HunspellDictionary::parse_dic(DIC2, aff).expect("dic2 parses")
+    }
+
+    #[test]
+    fn cross_product_n_groups_do_not_combine() {
+        let dict = test_dict2();
+        // Prefix Q and suffix R both apply to "form", but the R group header
+        // is N (no cross-products), so prefix+suffix must NOT combine.
+        assert!(dict.is_known("reform"));
+        assert!(dict.is_known("formly"));
+        assert!(
+            !dict.is_known("reformly"),
+            "N cross-product group must not combine with a prefix"
+        );
     }
 
     #[test]
@@ -926,14 +933,18 @@ happy/S
             "FORBIDDENWORD dic entry must be rejected"
         );
 
-        // NEEDAFFIX (flag h): "Abiturienten" carries h — rejected bare, but
-        // the SFX g form "Abiturientinnen" (stem Abiturienten + en->innen)
-        // is legal.
+        // NEEDAFFIX (flag h): "Abiturienten" carries h but igerman98 pairs
+        // h with the zero-add SFX j (continuation xoc), so real hunspell
+        // accepts the standalone surface — and so must we. The h+bare-stem
+        // analysis stays rejected (is_known_stem); the zero-add affix
+        // analysis accepts it.
         assert!(
-            !dict.is_known("Abiturienten"),
-            "NEEDAFFIX stem must be rejected standalone"
+            dict.is_known("Abiturienten"),
+            "h-flagged stem with zero-add rule must be accepted standalone"
         );
         assert!(dict.is_known("Abiturientinnen"));
+        // And as a compound first part via the SFX j continuation flags.
+        assert!(dict.is_known("Abiturientenecke"));
 
         // Positive compound through continuation flags: "Abiturientinnen"
         // derives with continuation xyoc (x = COMPOUNDBEGIN via SFX g) and
