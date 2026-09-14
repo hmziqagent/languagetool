@@ -48,8 +48,8 @@ grammar.xml counts verified 2026-09-14 by parsing `languagetool/languagetool-lan
 | EnglishUnpairedQuotesRule | `og-rules::text_level_rules::GenericUnpairedQuotesRule` (generic, wired) | Partial |
 | WordCoherencyRule | `og-langs::en::WordCoherencyRule` | Ported |
 | MorfologikAmericanSpellerRule | `og-spell::SpellingCheckRule` (generic) | Partial |
-| MorfologikBritishSpellerRule | — | Not started |
-| + 6 regional spellers | — | Not started |
+| MorfologikBritishSpellerRule | — | Not started (per-variant Morfologik binary .dict files absent from the frozen checkout — cannot be reconstructed from the available spelling_en-XX.txt supplements without false positives) |
+| + 6 regional spellers | — | Not started (same missing per-variant binary dictionaries) |
 | EnglishMultitokenSpeller | — | Not started |
 | ContractionSpellingRule | `og-langs::en::ContractionSpellingRule` | Ported |
 | EnglishDiacriticsRule | `og-langs::en::DiacriticsRule` | Ported |
@@ -59,16 +59,16 @@ grammar.xml counts verified 2026-09-14 by parsing `languagetool/languagetool-lan
 | StyleTooOftenUsedVerbRule | `og-langs::en::StyleFrequencyRule::verb()` | Ported |
 | EnglishPlainEnglishRule | `og-langs::en::PlainEnglishRule` | Ported |
 | EnglishRedundancyRule | `og-langs::en::SimpleReplaceRule::english_redundancies()` | Ported |
-| UnitConversionRule | — | Not started |
-| EnglishConfusionProbabilityRule | — | Not started |
-| EnglishNgramProbabilityRule | — | Not started (needs og-languagemodel) |
-| UpperCaseNgramRule | — | Not started (needs og-languagemodel) |
+| UnitConversionRule | `og-langs::en::UnitConversionRule` (GENERAL wired; `us()`/`imperial()` variants available, unwired) | Partial (SUGGESTION path only — non-metric units get a metric-equivalent suggestion; Java's CHECK path verifying user-written conversions not ported; picky-only default-off like Java's Tag.picky) |
+| EnglishConfusionProbabilityRule | `og-langs::en::EnglishConfusionProbabilityRule` (confusion_sets.txt + shared LM; no-op untrained) | Ported (subset: trigram factor comparison, directional pairs; Java exception phrases/anti-patterns not ported; first/last sentence tokens unscored — Java pads with _START_/_END_) |
+| EnglishNgramProbabilityRule | `og-langs::en::EnglishNgramProbabilityRule` (default-off like Java; no-op untrained) | Ported (subset: flags unattested trigrams of in-vocabulary words instead of Java's absolute 1e-14 probability threshold — the count model's add-k smoothing makes every trigram positive; no POS-synthesizer suggestions, only naive singular/plural variants) |
+| UpperCaseNgramRule | `og-langs::en::UpperCaseNgramRule` (id EN_UPPER_CASE_NGRAM; no-op untrained) | Ported (subset: the case probability ratio is uncomputable against a case-insensitive model, so an occurrence threshold (>=5) on the lowercase trigram stands in for Java's ratio > 50; Aho-Corasick exception phrases and the spell-check pre-filter skipped; anti-pattern subset) |
 | EnglishWrongWordInContextRule | `og-langs::en::WrongWordInContextRule` (own regex-based context scoring, not og-languagemodel) | Ported |
-| EnglishForGermansFalseFriendRule | — | Not started |
-| EnglishForFrenchFalseFriendRule | — | Not started |
-| EnglishForDutchmenFalseFriendRule | — | Not started |
-| EnglishForSpaniardsFalseFriendRule | — | Not started |
-| EnglishForL2SpeakersFalseFriendRule | — | Not started |
+| EnglishForGermansFalseFriendRule | `og-langs::en::FalseFriendRule::for_germans` (confusion_sets_l2_de.txt; self-gates on request motherTongue=de) | Ported (subset of ConfusionProbabilityRule core; no-op when LM untrained) |
+| EnglishForFrenchFalseFriendRule | `og-langs::en::FalseFriendRule::for_french` (confusion_sets_l2_fr.txt) | Ported (same subset as above) |
+| EnglishForDutchmenFalseFriendRule | `og-langs::en::FalseFriendRule::for_dutch` (confusion_sets_l2_nl.txt) | Ported (same subset as above) |
+| EnglishForSpaniardsFalseFriendRule | `og-langs::en::FalseFriendRule::for_spaniards` (confusion_sets_l2_es.txt) | Ported (same subset as above) |
+| EnglishForL2SpeakersFalseFriendRule | — | Intentionally skipped (abstract base class in Java — no data of its own; the concrete de/fr/nl/es subclasses are ported; its XML false-friends.xml pattern-rule half is not ported) |
 | AmericanReplaceRule | `og-langs::en::SimpleReplaceRule::american_replace()` | Ported |
 | BritishReplaceRule | `og-langs::en::SimpleReplaceRule::british_replace()` | Ported |
 | NewZealandReplaceRule | `og-langs::en::SimpleReplaceRule::new_zealand_replace()` | Ported |
@@ -76,7 +76,11 @@ grammar.xml counts verified 2026-09-14 by parsing `languagetool/languagetool-lan
 
 Status vocabulary: `not_started`, `stubbed`, `ported`, `parity_pass`, `parity_fail`, `intentionally_skipped` (defined in [05-native-rules.md](05-native-rules.md)). No rule has reached `parity_pass` yet — per-rule parity tests do not exist.
 
-Row accounting: 21 Ported + 3 Partial + 13 'Not started' rows = 37 rows; the 'Not started' rows cover 18 distinct classes (the '+ 6 regional spellers' row expands to 6 classes).
+Row accounting (updated 2026-09-14, area 7): 28 Ported + 4 Partial + 1 intentionally_skipped + 4 'Not started' rows = 37 rows; the 'Not started' rows cover 8 distinct classes (EnglishRepeatedWordsRule, MorfologikBritishSpellerRule, + 6 regional spellers, EnglishMultitokenSpeller).
+
+Default-on verification (2026-09-14): `WORD_REPEAT_BEGINNING_RULE` default-ON in Rust was previously suspected to diverge from upstream — verified against the frozen Java checkout: `English.java:189` wires `EnglishWordRepeatBeginningRule`, neither it nor the `WordRepeatBeginningRule`/`Categories.REPETITIONS_STYLE` chain calls `setDefaultOff`, so the upstream rule is default-ON. No divergence. Known real divergence instead: Rust `LongSentenceRule` threshold is 30, upstream English uses 40 (`English.java` `new LongSentenceRule(messages, userConfig, 40)`).
+
+The n-gram-backed rules (NGRAM_RULE, EN_UPPER_CASE_NGRAM, CONFUSION_RULE, false friends) share one process-wide `og_languagemodel::LanguageModel` trained from the plain-text corpus file named by `OG_LT_NGRAM_CORPUS` (order 3). With no variable set the model is empty and every n-gram rule is a no-op — matching Java, where these rules only exist when an ngram index is configured.
 
 ## Core Pipeline Feature Parity
 
@@ -89,7 +93,7 @@ Row accounting: 21 Ported + 3 Partial + 13 'Not started' rows = 37 rows; the 'No
 | Chunking | OpenNLP IOB chunker | Rule-based IOB chunker | ~70% |
 | Spellchecking | Morfologik + Hunspell + SymSpell | word-list dict + Levenshtein (deterministic ranking, early-exit DP) + `og-spell::hunspell` (.dic/.aff subset: FLAG ASCII/LONG/NUM, PFX/SFX depth-2 with conditions, COMPOUNDFLAG/BEGIN/MIDDLE/END (stem flags AND affix continuation flags, verified against de_AT incl. positive compound), ONLYINCOMPOUND, FORBIDDENWORD (must-reject), NEEDAFFIX, KEEPCASE, cross-product Y/N permission (unit-tested; de_AT's N groups no longer combine with prefixes); no recursive continuation expansion, COMPOUNDPERMITFLAG not enforced, no SymSpell) | ~60% |
 | Pattern rules | Full XML grammar.xml (5,545 rule elements) | XML loaded + most features work | ~80% |
-| Native rules | 37 Java classes | 4 generic + 13 English structs + SpellingCheckRule (all wired) | ~65% |
+| Native rules | 37 Java classes | 4 generic + 20 English structs (incl. 7 n-gram/false-friend/unit rules, no-ops until OG_LT_NGRAM_CORPUS trains the shared model) + SpellingCheckRule | ~85% |
 | Language model | N-gram probabilities (Lucene-indexed corpora) | Count-based n-gram model in `og-languagemodel` (add-k smoothing + stupid backoff, corpus-trained; Lucene ngram binary index NOT parsed — host supplies a plain-text corpus) | ~40% |
 | API | 8 endpoints | 5 endpoints | ~60% |
 

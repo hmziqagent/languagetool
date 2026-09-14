@@ -207,6 +207,28 @@ impl LanguageEngine {
             engine.add_rule(Arc::new(crate::en::WrongWordInContextRule::new()));
             engine.add_rule(Arc::new(crate::en::EnglishWordRepeatRule::new()));
 
+            // n-gram-backed rules (no-ops until a corpus is trained — see
+            // shared_ngram_model()).
+            let lm = shared_ngram_model();
+            engine.add_rule(Arc::new(crate::en::EnglishNgramProbabilityRule::new(
+                lm.clone(),
+            )));
+            engine.add_rule(Arc::new(crate::en::UpperCaseNgramRule::new(lm.clone())));
+            engine.add_rule(Arc::new(crate::en::EnglishConfusionProbabilityRule::new(
+                lm.clone(),
+            )));
+            engine.add_rule(Arc::new(crate::en::FalseFriendRule::for_germans(
+                lm.clone(),
+            )));
+            engine.add_rule(Arc::new(crate::en::FalseFriendRule::for_french(lm.clone())));
+            engine.add_rule(Arc::new(crate::en::FalseFriendRule::for_dutch(lm.clone())));
+            engine.add_rule(Arc::new(crate::en::FalseFriendRule::for_spaniards(
+                lm.clone(),
+            )));
+
+            // Unit conversion suggestions (picky-only, default off)
+            engine.add_rule(Arc::new(crate::en::UnitConversionRule::general()));
+
             // Load spellchecker with English word lists
             let mut dict = Dictionary::new();
             let hunspell_dir =
@@ -401,6 +423,48 @@ impl WordTokenizer for WordTokenizerBridge {
             })
             .collect()
     }
+}
+
+/// Build (once per process) the n-gram language model backing the
+/// probability-based rules (EnglishNgramProbabilityRule, UpperCaseNgramRule,
+/// EnglishConfusionProbabilityRule, the false-friend rules).
+///
+/// The model is trained from the plain-text corpus file named by the
+/// `OG_LT_NGRAM_CORPUS` environment variable (order 3). With no variable or
+/// an unreadable file the model stays empty, and every n-gram-backed rule
+/// degrades to a no-op — matching Java, where these rules only exist when an
+/// ngram index is configured. (Java ships a Lucene ngram index built from
+/// large corpora; that binary format is not parsed here.)
+pub fn shared_ngram_model() -> std::sync::Arc<og_languagemodel::LanguageModel> {
+    use std::sync::OnceLock;
+    static MODEL: OnceLock<std::sync::Arc<og_languagemodel::LanguageModel>> = OnceLock::new();
+    MODEL
+        .get_or_init(|| {
+            let model = match std::env::var("OG_LT_NGRAM_CORPUS") {
+                Ok(path) if !path.is_empty() => {
+                    match og_languagemodel::LanguageModel::from_corpus_file(
+                        std::path::Path::new(&path),
+                        3,
+                    ) {
+                        Ok(m) => {
+                            eprintln!(
+                                "Trained n-gram model from {} ({} tokens)",
+                                path,
+                                m.token_count()
+                            );
+                            m
+                        }
+                        Err(e) => {
+                            eprintln!("Warning: cannot train n-gram model from {path}: {e}");
+                            og_languagemodel::LanguageModel::new(3)
+                        }
+                    }
+                }
+                _ => og_languagemodel::LanguageModel::new(3),
+            };
+            std::sync::Arc::new(model)
+        })
+        .clone()
 }
 
 /// Find the LanguageTool resource root (the `languagetool-language-modules`
