@@ -69,7 +69,8 @@ impl Token {
         self.text.chars().any(|c| c.is_alphabetic())
     }
 
-    /// Coarse classification of this token. Empty tokens are [`TokenType::Other`].
+    /// Coarse classification of this token. Empty tokens are [`TokenType::Whitespace`] (vacuous
+    /// `all()` in `is_whitespace()`, matching `token_type_empty_is_whitespace`).
     pub fn token_type(&self) -> TokenType {
         if self.is_whitespace() {
             TokenType::Whitespace
