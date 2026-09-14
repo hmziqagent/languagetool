@@ -285,6 +285,17 @@ impl LanguageEngine {
             }
         }
 
+        let lt_root = find_lt_resource_dir();
+        if let Some(ref root) = lt_root {
+            // style.xml uses the same rule schema as grammar.xml — load it
+            // as additional XML pattern rules (plans/06 gap "style.xml never
+            // loaded").
+            let style_path = style_xml_path("en", root);
+            if let Ok(count) = engine.load_xml_file(&style_path) {
+                eprintln!("Loaded {count} style rules for English");
+            }
+        }
+
         // Add text-level rules
         engine.add_text_level_rule(Arc::new(
             og_rules::text_level_rules::MultipleWhitespaceRule::new(),
@@ -312,6 +323,131 @@ impl LanguageEngine {
 
         engine.rebuild_checker();
         engine
+    }
+
+    /// Create a German LanguageEngine (second language per the migration
+    /// order in docs/PLAN.md). Backed by the real upstream resources when
+    /// the LT resource root is configured:
+    ///
+    /// - POS tagger: `GermanTagger` on `resource/de/added.txt` (full-form
+    ///   list; the binary Morfologik `german.dict` is not parsed — see the
+    ///   compatibility matrix for the divergence).
+    /// - XML rules: `rules/de/grammar.xml`, `rules/de/style.xml`, and
+    ///   `resource/de/disambiguation.xml`.
+    /// - Spelling: `GermanSpellingRule` on the igerman98 Hunspell
+    ///   `de_DE.dic`/`.aff` (affix + compound aware).
+    /// - Native ports: `DE_SIMPLE_REPLACE` (replace.txt) and
+    ///   `DE_WORD_COHERENCY` (coherency.txt), plus the language-independent
+    ///   generic rules.
+    ///
+    /// Without a resource root the engine degrades to generic rules only
+    /// (spelling rule inactive, tagger empty, no XML rules).
+    pub fn german() -> Self {
+        let tagger_arc: Arc<dyn og_core::checker::Tagger> =
+            Arc::new(crate::de::GermanTagger::from_resources());
+
+        let mut engine = Self {
+            language: Language::German,
+            rules: Vec::new(),
+            text_level_rules: Vec::new(),
+            tagger: Some(tagger_arc),
+            disambiguator: None,
+            checker: Checker::new()
+                .with_sentence_tokenizer(Arc::new(SentenceSplitterBridge))
+                .with_word_tokenizer(Arc::new(WordTokenizerBridge)),
+        };
+
+        if let Some(lt_root) = find_lt_resource_dir() {
+            let grammar_path = grammar_xml_path("de", &lt_root);
+            if let Ok(count) = engine.load_xml_file(&grammar_path) {
+                eprintln!("Loaded {count} XML rules for German");
+            }
+
+            let style_path = style_xml_path("de", &lt_root);
+            if let Ok(count) = engine.load_xml_file(&style_path) {
+                eprintln!("Loaded {count} style rules for German");
+            }
+
+            let disambig_path = lt_root
+                .join("de/src/main/resources/org/languagetool/resource/de/disambiguation.xml");
+            if let Ok(xml) = std::fs::read_to_string(&disambig_path) {
+                match XmlDisambiguator::from_xml(&xml) {
+                    Ok(disambiguator) => {
+                        eprintln!(
+                            "Loaded {} disambiguation rules for German",
+                            disambiguator.rule_count()
+                        );
+                        engine.disambiguator = Some(Arc::new(disambiguator));
+                    }
+                    Err(e) => {
+                        eprintln!("Warning: Failed to load German disambiguation rules: {e}")
+                    }
+                }
+            }
+
+            // DE_SIMPLE_REPLACE from replace.txt (same file format as English).
+            let mut replace = crate::en::SimpleReplaceRule::new(
+                "DE_SIMPLE_REPLACE",
+                "Möglicher Tippfehler",
+                "TYPOS",
+                "Mögliche Tippfehler",
+            );
+            if let Some(data) = og_spell::read_lt_resource(
+                "de/src/main/resources/org/languagetool/rules/de/replace.txt",
+            ) {
+                replace.load_data(&data);
+            }
+            engine.add_rule(Arc::new(replace));
+
+            // German spelling on the real igerman98 Hunspell dictionary.
+            engine.add_rule(Arc::new(crate::de::GermanSpellingRule::from_resources()));
+
+            // Generic (language-independent) rules.
+            engine.add_rule(Arc::new(
+                og_rules::native_rules::DoublePunctuationRule::new(),
+            ));
+            engine.add_rule(Arc::new(
+                og_rules::native_rules::UppercaseSentenceStartRule::new(),
+            ));
+            engine.add_rule(Arc::new(og_rules::native_rules::CommaWhitespaceRule::new()));
+        }
+
+        engine.add_text_level_rule(Arc::new(
+            og_rules::text_level_rules::MultipleWhitespaceRule::new(),
+        ));
+        engine.add_text_level_rule(Arc::new(
+            og_rules::text_level_rules::SentenceWhitespaceRule::new(),
+        ));
+        engine.add_text_level_rule(Arc::new(
+            og_rules::text_level_rules::GenericUnpairedBracketsRule::new(),
+        ));
+        engine.add_text_level_rule(Arc::new(
+            og_rules::text_level_rules::GenericUnpairedQuotesRule::new(),
+        ));
+        engine.add_text_level_rule(Arc::new(og_rules::text_level_rules::LongSentenceRule::new(
+            30,
+        )));
+        engine.add_text_level_rule(Arc::new(crate::de::GermanWordCoherencyRule::new()));
+
+        engine.rebuild_checker();
+        engine
+    }
+
+    /// Generic engine factory: map a language code ("en", "en-US", "de",
+    /// "de-AT", ...) to a fully constructed engine. Returns `None` for
+    /// languages without an implementation (everything except English and
+    /// German at this point — see the migration order in docs/PLAN.md).
+    ///
+    /// Variant codes share the base-language engine (en-US/en-GB → the
+    /// English engine, de-DE/de-AT/de-CH → the German engine); per-variant
+    /// rules are not yet distinguished.
+    pub fn for_code(code: &str) -> Option<Self> {
+        let base = code.split('-').next().unwrap_or(code);
+        match base {
+            "en" => Some(Self::english()),
+            "de" => Some(Self::german()),
+            _ => None,
+        }
     }
 
     /// Load grammar rules from an XML file
@@ -479,6 +615,16 @@ pub fn find_lt_resource_dir() -> Option<PathBuf> {
     og_spell::resource::lt_resource_root()
 }
 
+/// Get the style.xml path for a language
+pub fn style_xml_path(lang_code: &str, lt_root: &Path) -> PathBuf {
+    let module_name = lang_code.split('-').next().unwrap_or(lang_code);
+    lt_root
+        .join(module_name)
+        .join("src/main/resources/org/languagetool/rules")
+        .join(module_name)
+        .join("style.xml")
+}
+
 /// Get the grammar.xml path for a language
 pub fn grammar_xml_path(lang_code: &str, lt_root: &Path) -> PathBuf {
     // Map language code to module directory name
@@ -635,5 +781,75 @@ mod tests {
 
         let result = engine.check("Well hello there. And hello again.");
         assert!(result.matches.len() >= 1);
+    }
+
+    #[test]
+    fn test_for_code_known_languages() {
+        for code in ["en", "en-US", "en-GB"] {
+            let engine = LanguageEngine::for_code(code)
+                .unwrap_or_else(|| panic!("for_code({code}) should be Some"));
+            assert_eq!(engine.language().code(), "en-US");
+        }
+        for code in ["de", "de-DE", "de-AT", "de-CH"] {
+            let engine = LanguageEngine::for_code(code)
+                .unwrap_or_else(|| panic!("for_code({code}) should be Some"));
+            assert_eq!(engine.language().code(), "de-DE");
+        }
+    }
+
+    #[test]
+    fn test_for_code_unsupported_language() {
+        assert!(LanguageEngine::for_code("fr").is_none());
+        assert!(LanguageEngine::for_code("zz").is_none());
+    }
+
+    #[test]
+    fn test_german_engine_generic_rules_without_resources() {
+        // Constructing the German engine must never panic, even when the
+        // resource root is absent (generic + text-level rules only).
+        let engine = LanguageEngine::german();
+        assert!(
+            engine.rule_count() > 0,
+            "generic rules should be registered"
+        );
+        let result = engine.check("Das  ist  ein Test");
+        // MultipleWhitespaceRule should fire on the double space.
+        assert!(
+            !result.matches.is_empty(),
+            "expected generic text-level matches"
+        );
+    }
+
+    #[test]
+    fn test_load_real_german_grammar() {
+        let lt_root = match find_lt_resource_dir() {
+            Some(p) => p,
+            None => {
+                eprintln!("Skipping: LT resource dir not found");
+                return;
+            }
+        };
+
+        let grammar_path = grammar_xml_path("de", &lt_root);
+        if !grammar_path.exists() {
+            eprintln!(
+                "Skipping: German grammar.xml not found at {:?}",
+                grammar_path
+            );
+            return;
+        }
+
+        let mut engine = LanguageEngine::new(Language::German);
+        match engine.load_xml_file(&grammar_path) {
+            Ok(count) => {
+                println!("Loaded {count} rules from German grammar.xml");
+                assert!(count > 0, "Expected at least some German rules");
+                let result = engine.check("Das ist ein Test.");
+                assert_eq!(result.language.code, "de-DE");
+            }
+            Err(e) => {
+                panic!("Failed to load German grammar.xml: {e}");
+            }
+        }
     }
 }

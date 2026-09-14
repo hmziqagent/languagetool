@@ -3,19 +3,19 @@
 | | |
 |---|---|
 | Phases covered | Phase 0 deliverable (living document) |
-| Status | Partial — English columns filled; other languages pending |
+| Status | Partial — English + German (started) columns filled; other languages pending |
 | Last verified | 2026-09-14 |
 
-This is the single source of truth for parity tracking. Update these tables in place; other plans reference them instead of duplicating. English port matrix updated 2026-09-14 (WrongWordInContextRule now Ported; EnglishWordRepeatRule ported as a dedicated rule).
+This is the single source of truth for parity tracking. Update these tables in place; other plans reference them instead of duplicating. English port matrix updated 2026-09-14 (WrongWordInContextRule now Ported; EnglishWordRepeatRule ported as a dedicated rule). German module started 2026-09-14 (area 9): generic engine factory + registry wiring landed; see the Language Modules table.
 
 Upstream freeze: the Java LanguageTool reference checkout at `<repo>/languagetool/` is frozen at commit `20b2119977960949c791069b57d191ec1449d211` (recorded 2026-09-14). All Rust resource reads resolve this checkout via the configurable LT resource root (`OG_LT_RESOURCE_ROOT` env var or ancestor search; see `og_spell::resource`).
 
-## Language Modules (37 total, 1 implemented)
+## Language Modules (37 total, 2 implemented)
 
 | Language | Code | Module Dir | grammar.xml Rules | Status |
 |----------|------|-----------|-------------------|--------|
 | English | en | en/ | 2,468 category-level entries (1,502 rules + 966 rulegroups); 5,545 total `<rule>` elements | Partially working * |
-| German | de | de/ | — | Not started |
+| German | de | de/ | 4,716 rules compiled from `rules/de/grammar.xml` (verified 2026-09-14, area 9) | Started, working subset † |
 | French | fr | fr/ | — | Not started |
 | Spanish | es | es/ | — | Not started |
 | Portuguese | pt | pt/ | — | Not started |
@@ -28,7 +28,9 @@ Upstream freeze: the Java LanguageTool reference checkout at `<repo>/languagetoo
 | Arabic | ar | ar/ | — | Not started |
 | + 25 more | — | — | — | Not started |
 
-\* English engine fully wired (13 native rule structs + generic rules + XML grammar rules + disambiguator — see [05-native-rules.md](05-native-rules.md)), but resource loading is broken in this checkout: see [06-languages.md](06-languages.md) and PLAN.md blocker #1.
+\* English engine fully wired (18 native rule structs + generic rules + XML grammar rules (5,545) + style.xml rules (535, loaded since area 9) + disambiguator (1,017) + spelling; see [05-native-rules.md](05-native-rules.md)) via the configurable LT resource root — no resource-path breakage remains.
+
+† German engine (`LanguageEngine::german()`, second language per the PLAN.md migration order) constructed via the generic factory `LanguageEngine::for_code()` / `LanguageRegistry::create_engine()` (en/en-US/en-GB → English engine, de/de-DE/de-AT/de-CH → German engine, others → None; variants share the base engine). Backed by real upstream resources when the resource root is configured: `rules/de/grammar.xml` (4,716 XML pattern rules) + `rules/de/style.xml` (compiled as additional pattern rules), `resource/de/disambiguation.xml` via `XmlDisambiguator`, `GermanTagger` (full-form dictionary on `resource/de/added.txt`, Morphy/STTS tags; no HMM, no unknown-word morphology, and the binary Morfologik `german.dict` is NOT parsed — nouns stay untagged), `GermanSpellingRule` on the real igerman98 Hunspell `de_DE.dic`/`.aff` (affix + compound aware; no suggestions — `HunspellDictionary` has no `suggest`; the rule is inactive without the resource root), `DE_SIMPLE_REPLACE` (`replace.txt` via the generic `SimpleReplaceRule` loader) and `DE_WORD_COHERENCY` (`coherency.txt`) native ports, plus the language-independent generic rules (double punctuation, uppercase sentence start, comma whitespace, whitespace/unpaired/LongSentence(30)/coherency text-level rules). Not ported for German: case-agreement rules (GermanAgreementRule etc.), compound splitting in the tokenizer, GermanUppercaseCompoundNounRule, style.xml-specific German rule classes beyond generic XML compilation, per-variant (de-AT/de-CH) spelling dictionaries via `GermanSpellingRule::with_variant` (available but unwired — the shared de engine serves de-DE). German `LongSentenceRule` uses threshold 30 (same divergence class as English's 30-vs-upstream-40).
 
 grammar.xml counts verified 2026-09-14 by parsing `languagetool/languagetool-language-modules/en/src/main/resources/org/languagetool/rules/en/grammar.xml` (12 categories; 1,502 standalone rules + 966 rulegroups = 2,468 category-level entries; 4,043 rules inside rulegroups; 5,545 total `<rule>` elements). Ids: 1,727 `<rule>` elements carry an id — 1,575 double-quoted + 152 single-quoted, all distinct — and all 966 rulegroups have ids (952 double-quoted + 14 single-quoted), distinct from rule ids; 2,693 unique ids overall. Caution: 152 rule + 14 rulegroup ids use single quotes — double-quote-only parsing undercounts by 166.
 
@@ -93,7 +95,7 @@ The n-gram-backed rules (NGRAM_RULE, EN_UPPER_CASE_NGRAM, CONFUSION_RULE, false 
 | Chunking | OpenNLP IOB chunker | Rule-based IOB chunker | ~70% |
 | Spellchecking | Morfologik + Hunspell + SymSpell | word-list dict + Levenshtein (deterministic ranking, early-exit DP) + `og-spell::hunspell` (.dic/.aff subset: FLAG ASCII/LONG/NUM, PFX/SFX depth-2 with conditions, COMPOUNDFLAG/BEGIN/MIDDLE/END (stem flags AND affix continuation flags, verified against de_AT incl. positive compound), ONLYINCOMPOUND, FORBIDDENWORD (must-reject), NEEDAFFIX, KEEPCASE, cross-product Y/N permission (unit-tested; de_AT's N groups no longer combine with prefixes); no recursive continuation expansion, COMPOUNDPERMITFLAG not enforced, no SymSpell) | ~60% |
 | Pattern rules | Full XML grammar.xml (5,545 rule elements) | XML loaded + most features work | ~80% |
-| Native rules | 37 Java classes | 4 generic + 18 English structs (incl. n-gram/false-friend/unit rules, no-ops until OG_LT_NGRAM_CORPUS trains the shared model) + SpellingCheckRule | ~85% |
+| Native rules | 37 Java classes | 4 generic + 18 English structs (incl. n-gram/false-friend/unit rules, no-ops until OG_LT_NGRAM_CORPUS trains the shared model) + SpellingCheckRule + 3 German-native (GermanTagger, GermanSpellingRule, DE_WORD_COHERENCY, plus DE_SIMPLE_REPLACE via the generic SimpleReplaceRule loader) | ~85% |
 | Language model | N-gram probabilities (Lucene-indexed corpora) | Count-based n-gram model in `og-languagemodel` (add-k smoothing + stupid backoff, corpus-trained; Lucene ngram binary index NOT parsed — host supplies a plain-text corpus) | ~40% |
 | API | 8 endpoints | 5 endpoints | ~60% |
 
