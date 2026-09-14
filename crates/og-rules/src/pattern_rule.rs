@@ -263,6 +263,12 @@ impl PatternRuleEngine {
 
         // Build RuleMatch first, then apply filter (filters can modify suggestions/spans)
         let text = sentence.text();
+        // Token offsets are DOCUMENT-relative (the checker tags each sentence's
+        // tokens with `sentence.start()`), while `sentence.text()` is only this
+        // sentence's slice. All sentence-text indexing below therefore goes
+        // through sentence-local indices (`- sentence.start()`), never raw
+        // document offsets. The RuleMatch offset/length stay document-relative.
+        let sent_start = sentence.start();
         let (match_start, match_end) =
             if let (Some(ms), Some(me)) = (rule.pattern.marker_start, rule.pattern.marker_end) {
                 // Use marker positions for error span
@@ -277,10 +283,10 @@ impl PatternRuleEngine {
             } else {
                 let mut start = match_result.first_start?;
                 let end = match_result.last_end?;
-                while start > 0
+                while start > sent_start
                     && text
                         .as_bytes()
-                        .get(start - 1)
+                        .get(start - 1 - sent_start)
                         .map(|&b| b.is_ascii_whitespace())
                         .unwrap_or(false)
                 {
@@ -295,20 +301,21 @@ impl PatternRuleEngine {
 
         let match_length = match_end - match_start;
 
+        // Context window: up to 40 bytes of surrounding text, clamped to this
+        // sentence's byte range (doc-relative [sent_start, sent_end]) and
+        // snapped to UTF-8 char boundaries so slicing can never panic.
         let context_start = {
-            let mut pos = if match_start >= 40 {
-                match_start - 40
-            } else {
-                0
-            };
-            while !text.is_char_boundary(pos) && pos < text.len() {
+            let lo = match_start.saturating_sub(40).max(sent_start) - sent_start;
+            let mut pos = lo.min(text.len());
+            while pos < text.len() && !text.is_char_boundary(pos) {
                 pos += 1;
             }
             pos
         };
         let context_end = {
-            let mut pos = std::cmp::min(match_end + 40, text.len());
-            while !text.is_char_boundary(pos) && pos > 0 {
+            let hi = match_end.saturating_add(40).min(sentence.end()) - sent_start;
+            let mut pos = hi.min(text.len());
+            while pos > context_start && !text.is_char_boundary(pos) {
                 pos -= 1;
             }
             pos
@@ -385,7 +392,11 @@ impl PatternRuleEngine {
             match_start,
             match_length,
             rm_rule,
-            RuleMatchContext::new(context_text, context_start, context_end - context_start),
+            RuleMatchContext::new(
+                context_text,
+                context_start + sent_start,
+                context_end - context_start,
+            ),
         )
         .with_replacements(replacements)
         .with_sentence(sentence.text().to_string());
@@ -2088,6 +2099,80 @@ mod tests {
         sentence
     }
 
+    /// Like `make_analyzed_sentence`, but offsets are document-relative
+    /// (mirrors og-core's Checker, which tags each sentence's tokens with
+    /// `range.start`) — the third sentence's matches land past the end of
+    /// its own sentence text. Regression test for the /v2/check panic where
+    /// doc-relative offsets were used to slice sentence-local text.
+    #[test]
+    fn test_match_in_later_sentence_no_panic() {
+        use og_core::{AnalyzedSentence, AnalyzedToken, AnalyzedTokenReadings};
+
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <category id="GRAMMAR" name="Grammar">
+                <rule id="TEST" name="Test">
+                    <pattern>
+                        <token>error</token>
+                    </pattern>
+                    <message>Use <suggestion>fix</suggestion></message>
+                </rule>
+            </category>
+        </rules>"#;
+
+        let compiler = XmlCompiler::new();
+        let rule_set = compiler.compile_file(xml).unwrap();
+        let engine = PatternRuleEngine::new();
+
+        // Three sentences; a rule fires only in the LAST one, whose
+        // doc-relative offsets exceed the length of its own text.
+        let sentence_texts = [
+            "This first sentence is fine.",
+            "The second one is also ok.",
+            "But here is an error found.",
+        ];
+        let mut offset = 0usize;
+        for text in sentence_texts {
+            let mut sentence = AnalyzedSentence::new(text, offset, offset + text.len());
+            let mut pos = 0usize;
+            let mut tokens = Vec::new();
+            for word in text.split_whitespace() {
+                let start = offset + pos;
+                pos += 1 + word.len(); // single-ASCII-space separated
+                let end = start + word.len();
+                let at = AnalyzedToken::new(word, start, end);
+                tokens.push(AnalyzedTokenReadings::new(at));
+            }
+            sentence.set_tokens(tokens);
+
+            let mut matches = Vec::new();
+            for rule in &rule_set.rules {
+                matches.extend(engine.match_rule(rule, &sentence));
+            }
+
+            if text.contains("error") {
+                assert_eq!(matches.len(), 1, "rule must fire in the last sentence");
+                let m = &matches[0];
+                // Match offsets must be document-relative (the engine may
+                // extend the span start back over whitespace, so check the
+                // end and sentence containment rather than exact start).
+                let err_start = offset + text.find("error").unwrap();
+                let err_end = err_start + "error".len();
+                assert_eq!(m.offset() + m.length(), err_end);
+                assert!(m.offset() >= offset && m.offset() <= err_start);
+                // ...and the context must be the sentence-local window.
+                let ctx = m.context();
+                assert!(ctx.text().contains("error"), "context: {:?}", ctx.text());
+                assert!(ctx.offset() >= offset);
+                assert!(ctx.length() <= text.len());
+            } else {
+                assert!(matches.is_empty());
+            }
+
+            offset += text.len();
+        }
+    }
+
     #[test]
     fn test_simple_match() {
         let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -2484,13 +2569,15 @@ mod tests {
     #[ignore] // performance benchmark — run with `cargo test -- --ignored`
     fn test_indexed_rules_performance() {
         // Benchmark test: load real grammar and time rule matching
-        let grammar_path = "/home/agent/languagetool/languagetool-language-modules/en/src/main/resources/org/languagetool/rules/en/grammar.xml";
-        if !std::path::Path::new(grammar_path).exists() {
-            eprintln!("Skipping benchmark: grammar.xml not found");
-            return;
-        }
-
-        let xml = std::fs::read_to_string(grammar_path).unwrap();
+        let xml = match og_spell::resource::read_lt_resource(
+            "en/src/main/resources/org/languagetool/rules/en/grammar.xml",
+        ) {
+            Some(xml) => xml,
+            None => {
+                eprintln!("Skipping benchmark: grammar.xml not found in LT resource root");
+                return;
+            }
+        };
         let compiler = og_xml::compiler::XmlCompiler::new();
         let rule_set = compiler.compile_file(&xml).unwrap();
         let rules: Vec<&og_xml::compiler::CompiledRule> = rule_set.rules.iter().collect();
