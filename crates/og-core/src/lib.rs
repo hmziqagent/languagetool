@@ -1,6 +1,7 @@
 pub mod analyzed;
 pub mod category;
 pub mod checker;
+pub mod context;
 pub mod document;
 pub mod issue_type;
 pub mod language;
@@ -11,6 +12,7 @@ pub mod token;
 pub use analyzed::*;
 pub use category::*;
 pub use checker::{CheckRequest, Checker, SentenceRange};
+pub use context::RuleContext;
 pub use document::*;
 pub use issue_type::*;
 pub use language::*;

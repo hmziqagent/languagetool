@@ -526,6 +526,24 @@ impl SentenceTokenizer for DefaultSentenceSplitter {
             sentences.push(Sentence::new(text.trim(), 0, text.len()));
         }
 
+        // Track the whitespace that separated each sentence from the
+        // previous one (Java LT sentence whitespace tracking). The separator
+        // may live in the gap between spans or at the start of the span
+        // itself (sentence text is trimmed), so take the leading whitespace
+        // of everything from the previous sentence's end onward.
+        for i in 1..sentences.len() {
+            let from = sentences[i - 1].end();
+            if from < text.len() && text.is_char_boundary(from) {
+                let ws: String = text[from..]
+                    .chars()
+                    .take_while(|c| c.is_whitespace())
+                    .collect();
+                if !ws.is_empty() {
+                    sentences[i].set_whitespace_before(Some(ws));
+                }
+            }
+        }
+
         sentences
     }
 }
@@ -1545,5 +1563,45 @@ mod tests {
         let text = "Hello world.";
         let sentences = splitter.split(text);
         assert_eq!(sentences.len(), 1);
+    }
+
+    // -- whitespace_before tracking -------------------------------------------
+
+    #[test]
+    fn test_first_sentence_has_no_whitespace_before() {
+        let splitter = DefaultSentenceSplitter::new();
+        let sentences = splitter.split("One. Two.");
+        assert_eq!(sentences[0].whitespace_before(), None);
+    }
+
+    #[test]
+    fn test_following_sentence_records_separator() {
+        let splitter = DefaultSentenceSplitter::new();
+        let sentences = splitter.split("One. Two.");
+        assert_eq!(sentences.len(), 2);
+        assert_eq!(sentences[1].whitespace_before(), Some(" "));
+    }
+
+    #[test]
+    fn test_sentence_separator_includes_newline() {
+        let splitter = DefaultSentenceSplitter::new();
+        let sentences = splitter.split("One.\nTwo.");
+        assert_eq!(sentences.len(), 2);
+        assert_eq!(sentences[1].whitespace_before(), Some("\n"));
+    }
+
+    #[test]
+    fn test_sentence_spans_stay_contiguous_with_tracking() {
+        let splitter = DefaultSentenceSplitter::new();
+        let text = "First sentence here.  Second one!";
+        let sentences = splitter.split(text);
+        assert!(sentences.len() >= 2);
+        for sentence in &sentences {
+            assert_eq!(
+                &text[sentence.start()..sentence.end()],
+                sentence.text(),
+                "span must still slice the original text"
+            );
+        }
     }
 }

@@ -101,6 +101,20 @@ impl DefaultWordTokenizer {
         result
     }
 
+    /// Record on each non-whitespace token the whitespace text that
+    /// immediately preceded it (Java LT `whitespaceBefore` tracking).
+    fn attach_whitespace_before(&self, mut tokens: Vec<Token>) -> Vec<Token> {
+        let mut pending: Option<String> = None;
+        for token in &mut tokens {
+            if token.is_whitespace() {
+                pending = Some(token.text().to_string());
+            } else if let Some(ws) = pending.take() {
+                token.set_whitespace_before(Some(ws));
+            }
+        }
+        tokens
+    }
+
     fn try_split_contraction(&self, text: &str, start: usize) -> Option<Vec<Token>> {
         let lower = text.to_lowercase();
         let normalized = lower.replace('\u{2019}', "'");
@@ -245,7 +259,7 @@ impl WordTokenizer for DefaultWordTokenizer {
             }
         }
 
-        self.split_contractions(tokens)
+        self.attach_whitespace_before(self.split_contractions(tokens))
     }
 }
 
@@ -1211,5 +1225,48 @@ mod tests {
         let tokens = tz.tokenize("I like cats and dogs");
         // Should not be detected as URL
         assert!(tokens.iter().all(|t| !t.text().contains('@')));
+    }
+
+    // -- whitespace_before tracking -------------------------------------------
+
+    #[test]
+    fn test_whitespace_before_first_token_is_none() {
+        let tz = DefaultWordTokenizer::new();
+        let tokens = tz.tokenize("Hello world");
+        assert_eq!(tokens[0].whitespace_before(), None);
+    }
+
+    #[test]
+    fn test_whitespace_before_attached_to_following_word() {
+        let tz = DefaultWordTokenizer::new();
+        let tokens = tz.tokenize("Hello world");
+        assert_eq!(tokens[2].whitespace_before(), Some(" "));
+    }
+
+    #[test]
+    fn test_whitespace_before_records_multiple_spaces() {
+        let tz = DefaultWordTokenizer::new();
+        let tokens = tz.tokenize("Hello   world");
+        assert_eq!(tokens[2].whitespace_before(), Some("   "));
+    }
+
+    #[test]
+    fn test_whitespace_before_between_punctuation_and_word() {
+        let tz = DefaultWordTokenizer::new();
+        // No whitespace between "," and "b" — stays None.
+        let tokens = tz.tokenize("a, b");
+        assert_eq!(tokens[1].whitespace_before(), None); // ","
+        assert_eq!(tokens[3].whitespace_before(), Some(" ")); // "b"
+    }
+
+    #[test]
+    fn test_whitespace_before_only_first_word_after_gap() {
+        let tz = DefaultWordTokenizer::new();
+        // After contraction splitting: "do" carries the gap, "n't" does not.
+        let tokens = tz.tokenize("I don't know");
+        let dont = tokens.iter().find(|t| t.text() == "do").unwrap();
+        let nt = tokens.iter().find(|t| t.text() == "n't").unwrap();
+        assert_eq!(dont.whitespace_before(), Some(" "));
+        assert_eq!(nt.whitespace_before(), None);
     }
 }

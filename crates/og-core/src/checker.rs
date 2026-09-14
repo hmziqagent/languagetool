@@ -1,6 +1,7 @@
 use crate::{
-    AnalyzedSentence, AnalyzedToken, AnalyzedTokenReadings, CheckResult, Language,
-    LanguageDetectedInfo, LanguageInfo, RuleMatch, SoftwareInfo, Warnings, rule::Rule,
+    AnalyzedDocument, AnalyzedSentence, AnalyzedToken, AnalyzedTokenReadings, CheckResult,
+    Language, LanguageDetectedInfo, LanguageInfo, RuleContext, RuleMatch, SoftwareInfo, Warnings,
+    rule::Rule,
 };
 use std::sync::Arc;
 
@@ -159,6 +160,14 @@ impl Checker {
 
     pub fn check(&self, request: &CheckRequest) -> CheckResult {
         let text = &request.text;
+        let ctx = RuleContext::from_check_request(request);
+        // Give rules a chance to drop state from previous checks.
+        for rule in &self.rules {
+            rule.reset();
+        }
+        for rule in &self.text_level_rules {
+            rule.reset();
+        }
 
         // Step 1: Split into sentences
         let sentence_ranges = if let Some(ref tokenizer) = self.sentence_tokenizer {
@@ -223,14 +232,15 @@ impl Checker {
                 ) {
                     continue;
                 }
-                let matches = rule.match_sentence(&sentence);
+                let matches = rule.match_sentence_with_context(&sentence, &ctx);
                 all_matches.extend(matches);
             }
 
             analyzed_sentences.push(sentence);
         }
 
-        // Step 3: Apply text-level rules across all sentences
+        // Step 3: Apply text-level rules across the assembled document
+        let document = AnalyzedDocument::new(text.as_str()).with_sentences(analyzed_sentences);
         for rule in &self.text_level_rules {
             if !request.is_rule_enabled(
                 rule.id(),
@@ -239,7 +249,7 @@ impl Checker {
             ) {
                 continue;
             }
-            let matches = rule.match_text(text, &analyzed_sentences);
+            let matches = rule.match_document(&document, &ctx);
             all_matches.extend(matches);
         }
 

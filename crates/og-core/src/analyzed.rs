@@ -308,4 +308,98 @@ impl AnalyzedSentence {
     pub fn non_whitespace_tokens(&self) -> Vec<&AnalyzedTokenReadings> {
         self.tokens.iter().filter(|t| !t.is_whitespace()).collect()
     }
+
+    /// All analyzed tokens including the whitespace tokens between words.
+    ///
+    /// Java LT distinguishes `getTokens()` (whitespace-filtered) from
+    /// `getTokensWithoutWhitespace()`; here `tokens()` already includes
+    /// whitespace, so this is the full-fidelity accessor and
+    /// `non_whitespace_tokens()` is the filtered one. The alias exists so
+    /// ported Java code reads naturally.
+    pub fn get_analyzed_tokens_with_whitespace(&self) -> &[AnalyzedTokenReadings] {
+        &self.tokens
+    }
+}
+
+/// A whole document after sentence splitting, tokenization, and analysis.
+///
+/// This is what [`crate::TextLevelRule::match_document`] receives: the full
+/// text plus every analyzed sentence, with byte offsets into `text`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AnalyzedDocument {
+    text: String,
+    sentences: Vec<AnalyzedSentence>,
+}
+
+impl AnalyzedDocument {
+    pub fn new(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            sentences: Vec::new(),
+        }
+    }
+
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
+    pub fn sentences(&self) -> &[AnalyzedSentence] {
+        &self.sentences
+    }
+
+    pub fn set_sentences(&mut self, sentences: Vec<AnalyzedSentence>) {
+        self.sentences = sentences;
+    }
+
+    pub fn with_sentences(mut self, sentences: Vec<AnalyzedSentence>) -> Self {
+        self.sentences = sentences;
+        self
+    }
+
+    pub fn into_sentences(self) -> Vec<AnalyzedSentence> {
+        self.sentences
+    }
+
+    pub fn sentence_count(&self) -> usize {
+        self.sentences.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn analyzed_document_holds_text_and_sentences() {
+        let sentence = AnalyzedSentence::new("Hi there.", 0, 9);
+        let doc = AnalyzedDocument::new("Hi there.").with_sentences(vec![sentence]);
+        assert_eq!(doc.text(), "Hi there.");
+        assert_eq!(doc.sentence_count(), 1);
+        assert_eq!(doc.sentences()[0].text(), "Hi there.");
+    }
+
+    #[test]
+    fn analyzed_document_offsets_index_into_text() {
+        let first = AnalyzedSentence::new("One.", 0, 4);
+        let second = AnalyzedSentence::new("Two.", 5, 9);
+        let doc = AnalyzedDocument::new("One. Two.").with_sentences(vec![first, second]);
+        for sentence in doc.sentences() {
+            assert_eq!(
+                &doc.text()[sentence.start()..sentence.end()],
+                sentence.text()
+            );
+        }
+    }
+
+    #[test]
+    fn with_whitespace_accessor_matches_tokens() {
+        let mut sentence = AnalyzedSentence::new("a b", 0, 3);
+        sentence.set_tokens(vec![
+            AnalyzedTokenReadings::new(AnalyzedToken::new("a", 0, 1)),
+            AnalyzedTokenReadings::new(AnalyzedToken::new(" ", 1, 2)),
+            AnalyzedTokenReadings::new(AnalyzedToken::new("b", 2, 3)),
+        ]);
+        assert_eq!(sentence.get_analyzed_tokens_with_whitespace().len(), 3);
+        assert_eq!(sentence.non_whitespace_tokens().len(), 2);
+    }
 }
