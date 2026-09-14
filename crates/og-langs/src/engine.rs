@@ -450,6 +450,29 @@ impl LanguageEngine {
         }
     }
 
+    /// Process-wide shared engine for a language code (PLAN Phase 12
+    /// performance item: the eager grammar/style XML loads make an engine
+    /// build expensive — `english()` compiles ~6,000 XML rules, ~8 s cold).
+    ///
+    /// Engines are immutable after construction (`check`/`check_with_request`
+    /// take `&self` and reset all rules per check), so one instance can be
+    /// shared Arc-wise by every consumer in the process. The first call pays
+    /// the build; every later call — for the base code or any variant —
+    /// returns an Arc clone of the same engine (pointer-equal). This is the
+    /// og-langs-side half of engine sharing; og-api additionally wraps its
+    /// own OnceLock map over language codes.
+    pub fn shared_for_code(code: &str) -> Option<std::sync::Arc<Self>> {
+        use std::sync::{Arc, OnceLock};
+        static ENGLISH: OnceLock<Arc<LanguageEngine>> = OnceLock::new();
+        static GERMAN: OnceLock<Arc<LanguageEngine>> = OnceLock::new();
+        let base = code.split('-').next().unwrap_or(code);
+        match base {
+            "en" => Some(ENGLISH.get_or_init(|| Arc::new(Self::english())).clone()),
+            "de" => Some(GERMAN.get_or_init(|| Arc::new(Self::german())).clone()),
+            _ => None,
+        }
+    }
+
     /// Load grammar rules from an XML file
     pub fn load_xml_rules(&mut self, xml: &str) -> Result<usize, String> {
         let compiler = XmlCompiler::new();
@@ -801,6 +824,27 @@ mod tests {
     fn test_for_code_unsupported_language() {
         assert!(LanguageEngine::for_code("fr").is_none());
         assert!(LanguageEngine::for_code("zz").is_none());
+    }
+
+    #[test]
+    fn test_shared_for_code_returns_pointer_equal_engines() {
+        let en = LanguageEngine::shared_for_code("en").expect("shared en");
+        let en_us = LanguageEngine::shared_for_code("en-US").expect("shared en-US");
+        assert!(
+            std::sync::Arc::ptr_eq(&en, &en_us),
+            "variant code must share the base engine instance"
+        );
+        let de = LanguageEngine::shared_for_code("de").expect("shared de");
+        assert!(
+            !std::sync::Arc::ptr_eq(&en, &de),
+            "different languages must not share an engine"
+        );
+        assert!(LanguageEngine::shared_for_code("fr").is_none());
+        // The shared engine is usable for checks (immutable after build) —
+        // doubled spaces fire the generic whitespace rule even without the
+        // resource checkout.
+        let result = en.check("This  has  doubled spaces.");
+        assert!(!result.matches.is_empty());
     }
 
     #[test]

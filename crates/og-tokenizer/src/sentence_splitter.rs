@@ -395,8 +395,12 @@ impl DefaultSentenceSplitter {
         false
     }
 
-    fn is_sentence_boundary(&self, text: &str, pos: usize) -> bool {
-        let chars: Vec<char> = text.chars().collect();
+    /// `chars` is the caller's pre-collected `text.chars().collect::<Vec<_>>()`
+    /// — hoisted out of this method so the per-position scan in `split` stays
+    /// O(n) overall instead of re-collecting the whole text per character
+    /// (PLAN Phase 12 performance fix; behavior identical to the previous
+    /// per-call `text.chars().collect()`).
+    fn is_sentence_boundary(&self, text: &str, chars: &[char], pos: usize) -> bool {
         if pos >= chars.len() {
             return false;
         }
@@ -491,7 +495,7 @@ impl SentenceTokenizer for DefaultSentenceSplitter {
         let mut last_boundary: Option<usize> = None;
 
         for i in 0..chars.len() {
-            if self.is_sentence_boundary(text, i) {
+            if self.is_sentence_boundary(text, &chars, i) {
                 // Find byte offset for char position i + 1 (after the punctuation)
                 let mut byte_pos = 0;
                 for j in 0..=(i) {
