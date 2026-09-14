@@ -1577,14 +1577,17 @@ impl PatternRuleEngine {
             .map(|s| s.as_str())
             .unwrap_or("both");
         let text = sentence.text();
+        // rm.offset()/end are document-relative; sentence.text() is
+        // sentence-local — probe bytes via sentence-local indices.
+        let sent_start = sentence.start();
         let mut offset = rm.offset();
         let mut end = rm.offset() + rm.length();
 
         if mode == "before" || mode == "both" {
-            if offset > 0
+            if offset > sent_start
                 && text
                     .as_bytes()
-                    .get(offset - 1)
+                    .get(offset - 1 - sent_start)
                     .map(|&b| b.is_ascii_whitespace())
                     .unwrap_or(false)
             {
@@ -1592,10 +1595,10 @@ impl PatternRuleEngine {
             }
         }
         if mode == "after" || mode == "both" {
-            if end + 1 < text.len()
+            if end < sentence.end()
                 && text
                     .as_bytes()
-                    .get(end)
+                    .get(end - sent_start)
                     .map(|&b| b.is_ascii_whitespace())
                     .unwrap_or(false)
             {
@@ -2171,6 +2174,65 @@ mod tests {
 
             offset += text.len();
         }
+    }
+
+    /// UnderlineSpacesFilter must probe sentence-local bytes using
+    /// doc-relative offsets adjusted by sentence.start(): in a multi-sentence
+    /// document, the old code probed the WRONG byte (doc offset into the
+    /// sentence-local string) and could expand the span incorrectly.
+    #[test]
+    fn test_underline_spaces_filter_multi_sentence() {
+        use og_core::{AnalyzedSentence, AnalyzedToken, AnalyzedTokenReadings};
+
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <category id="GRAMMAR" name="Grammar">
+                <rule id="UL" name="Underline spaces">
+                    <pattern>
+                        <token>word</token>
+                    </pattern>
+                    <message>Msg</message>
+                    <filter class="org.languagetool.rules.UnderlineSpacesFilter" args="underlineSpaces=both"/>
+                </rule>
+            </category>
+        </rules>"#;
+
+        let compiler = XmlCompiler::new();
+        let rule_set = compiler.compile_file(xml).unwrap();
+        let engine = PatternRuleEngine::new();
+
+        // Short first sentence, longer second one: doc-relative offsets for
+        // sentence 2 are larger than the sentence-local text length of
+        // sentence 1 but land inside sentence 2's own text.
+        let first = "Fine here.";
+        let second = "aaa word bbb";
+        let offset = first.len();
+        let mut sentence = AnalyzedSentence::new(second, offset, offset + second.len());
+        let mut tokens = Vec::new();
+        let mut pos = 0usize;
+        for word in second.split_whitespace() {
+            let start = offset + pos;
+            pos += 1 + word.len();
+            tokens.push(AnalyzedTokenReadings::new(AnalyzedToken::new(
+                word,
+                start,
+                start + word.len(),
+            )));
+        }
+        sentence.set_tokens(tokens);
+
+        let mut matches = Vec::new();
+        for rule in &rule_set.rules {
+            matches.extend(engine.match_rule(rule, &sentence));
+        }
+        assert_eq!(matches.len(), 1);
+        let m = &matches[0];
+        // Span must expand by exactly one whitespace byte on each side of
+        // "word" and stay document-relative: " word " = 6 bytes.
+        let word_start = offset + second.find("word").unwrap();
+        assert_eq!(m.offset(), word_start - 1);
+        assert_eq!(m.length(), "word".len() + 2);
+        assert_eq!(m.offset() + m.length(), word_start + "word".len() + 1);
     }
 
     #[test]
