@@ -22,6 +22,11 @@ pub struct CheckParams {
     pub enabled_categories: Option<String>,
     #[serde(rename = "disabledCategories")]
     pub disabled_categories: Option<String>,
+    /// If true, ONLY the rules/categories listed in `enabledRules`/
+    /// `enabledCategories` run; otherwise those lists are additive
+    /// (LanguageTool semantics, default false).
+    #[serde(rename = "enabledOnly", default)]
+    pub enabled_only: bool,
     pub level: Option<String>,
     #[serde(default)]
     pub picky: bool,
@@ -69,6 +74,7 @@ impl CheckParams {
             disabled_rules: self.disabled_rules.or(other.disabled_rules),
             enabled_categories: self.enabled_categories.or(other.enabled_categories),
             disabled_categories: self.disabled_categories.or(other.disabled_categories),
+            enabled_only: self.enabled_only || other.enabled_only,
             level: self.level.or(other.level),
             picky: self.picky || other.picky,
         }

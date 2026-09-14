@@ -61,6 +61,11 @@ const WHITESPACE_RULE: &str = "WHITESPACE_RULE";
 /// so it only runs with `picky=true` or `level=picky`.
 const LONG_SENTENCE_TEXT: &str = "language=en-US&text=This+sentence+deliberately+contains+many+words+because+the+style+rule+about+excessive+sentence+length+only+runs+when+the+checker+counts+more+than+thirty+alphabetic+word+tokens+inside+one+single+long+sentence.";
 const TOO_LONG_SENTENCE_RULE: &str = "TOO_LONG_SENTENCE";
+/// The same 31-word sentence with a doubled space after "This": triggers
+/// default-on `WHITESPACE_RULE` (TYPOGRAPHY) AND the default-off
+/// `TOO_LONG_SENTENCE` (STYLE) when the latter is enabled — used to test
+/// LT's enabledRules/enabledCategories semantics.
+const LONG_WHITESPACE_TEXT: &str = "language=en-US&text=This++sentence+deliberately+contains+many+words+because+the+style+rule+about+excessive+sentence+length+only+runs+when+the+checker+counts+more+than+thirty+alphabetic+word+tokens+inside+one+single+long+sentence.";
 
 #[tokio::test]
 async fn test_v2_check_returns_json() {
@@ -183,19 +188,163 @@ async fn test_v2_check_disabled_categories_parameter() {
 }
 
 #[tokio::test]
-async fn test_v2_check_enabled_rules_parameter() {
+async fn test_v2_check_enabled_rules_additive() {
     let app = app();
+
+    // Control: the default-on rule fires on the doubled space, the
+    // default-off style rule does not run.
+    let (status, plain) = get(&app, &format!("/v2/check?{LONG_WHITESPACE_TEXT}")).await;
+    assert_eq!(status, StatusCode::OK);
+    let ids = rule_ids(&plain);
+    assert!(
+        ids.contains(&WHITESPACE_RULE.to_string()),
+        "control should contain {WHITESPACE_RULE}: {ids:?}"
+    );
+    assert!(
+        !ids.contains(&TOO_LONG_SENTENCE_RULE.to_string()),
+        "default-off rule must not run unrequested: {ids:?}"
+    );
+
+    // enabledRules ADDS to the defaults (LT semantics, no enabledOnly):
+    // the default-on rule still runs and the listed default-off rule now
+    // runs too.
+    let (status, enriched) = get(
+        &app,
+        &format!("/v2/check?{LONG_WHITESPACE_TEXT}&enabledRules={TOO_LONG_SENTENCE_RULE}"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let ids = rule_ids(&enriched);
+    assert!(
+        ids.contains(&WHITESPACE_RULE.to_string()),
+        "enabledRules must keep the defaults running: {ids:?}"
+    );
+    assert!(
+        ids.contains(&TOO_LONG_SENTENCE_RULE.to_string()),
+        "enabledRules must add the listed rule: {ids:?}"
+    );
+
+    // disabledRules still subtracts in additive mode.
     let (status, filtered) = get(
+        &app,
+        &format!(
+            "/v2/check?{LONG_WHITESPACE_TEXT}&enabledRules={TOO_LONG_SENTENCE_RULE}&disabledRules={WHITESPACE_RULE}"
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let ids = rule_ids(&filtered);
+    assert!(
+        ids.contains(&TOO_LONG_SENTENCE_RULE.to_string()),
+        "added rule must survive disabledRules of another rule: {ids:?}"
+    );
+    assert!(
+        !ids.contains(&WHITESPACE_RULE.to_string()),
+        "disabledRules must still subtract: {ids:?}"
+    );
+}
+
+#[tokio::test]
+async fn test_v2_check_enabled_only_restricts() {
+    let app = app();
+
+    // enabledOnly=true: ONLY the enabled rules run — this is the one mode
+    // where the enabled list is restrictive (LT semantics).
+    let (status, filtered) = get(
+        &app,
+        &format!(
+            "/v2/check?{LONG_WHITESPACE_TEXT}&enabledRules={TOO_LONG_SENTENCE_RULE}&enabledOnly=true"
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let ids = rule_ids(&filtered);
+    assert!(
+        !ids.is_empty() && ids.iter().all(|id| id == TOO_LONG_SENTENCE_RULE),
+        "only {TOO_LONG_SENTENCE_RULE} may run: {ids:?}"
+    );
+
+    // enabledOnly=true with enabledCategories restricts to the category:
+    // the TYPOGRAPHY rules run, the STYLE rule does not.
+    let (status, filtered) = get(
+        &app,
+        &format!("/v2/check?{LONG_WHITESPACE_TEXT}&enabledCategories=TYPOGRAPHY&enabledOnly=true"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let ids = rule_ids(&filtered);
+    assert!(
+        ids.contains(&WHITESPACE_RULE.to_string()),
+        "enabledCategories must run the category's rules: {ids:?}"
+    );
+    assert!(
+        !ids.contains(&TOO_LONG_SENTENCE_RULE.to_string()),
+        "rules outside the category must not run: {ids:?}"
+    );
+}
+
+#[tokio::test]
+async fn test_v2_check_enabled_categories_additive() {
+    let app = app();
+
+    // STYLE contains the default-off TOO_LONG_SENTENCE rule: enabling the
+    // category adds it while the defaults (TYPOGRAPHY) keep running.
+    let (status, enriched) = get(
+        &app,
+        &format!("/v2/check?{LONG_WHITESPACE_TEXT}&enabledCategories=STYLE"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let ids = rule_ids(&enriched);
+    assert!(
+        ids.contains(&WHITESPACE_RULE.to_string()),
+        "enabledCategories must keep the defaults running: {ids:?}"
+    );
+    assert!(
+        ids.contains(&TOO_LONG_SENTENCE_RULE.to_string()),
+        "enabledCategories must add the category's rules: {ids:?}"
+    );
+}
+
+#[tokio::test]
+async fn test_v2_check_enabled_rules_no_duplicates() {
+    let app = app();
+
+    // Enabling a rule that is already default-on must not duplicate its
+    // matches (additive mode runs a defaults pass and a restricted pass
+    // and merges the results).
+    let (status, enriched) = get(
         &app,
         &format!("/v2/check?{WHITESPACE_TEXT}&enabledRules={WHITESPACE_RULE}"),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    let ids = rule_ids(&filtered);
-    assert!(!ids.is_empty(), "enabled rule should have run");
+    let count = rule_ids(&enriched)
+        .iter()
+        .filter(|id| id.as_str() == WHITESPACE_RULE)
+        .count();
+    assert_eq!(
+        count,
+        1,
+        "the match must appear exactly once: {:?}",
+        rule_ids(&enriched)
+    );
+}
+
+#[tokio::test]
+async fn test_v2_check_invalid_mother_tongue_rejected() {
+    let app = app();
+    let (status, json) = get(
+        &app,
+        "/v2/check?language=en-US&motherTongue=klingon&text=Hello+world",
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(
-        ids.iter().all(|id| id == WHITESPACE_RULE),
-        "only {WHITESPACE_RULE} may run: {ids:?}"
+        json["error"].as_str().unwrap().contains("motherTongue"),
+        "error must name the parameter: {}",
+        json["error"]
     );
 }
 
@@ -383,8 +532,8 @@ async fn test_v2_words_pagination() {
 
 #[tokio::test]
 async fn test_v2_configinfo() {
-    let app = bare_app();
-    let (status, json) = get(&app, "/v2/configinfo").await;
+    let bare = bare_app();
+    let (status, json) = get(&bare, "/v2/configinfo").await;
 
     assert_eq!(status, StatusCode::OK);
     assert_eq!(json["maxTextLength"], 100_000);
@@ -394,6 +543,17 @@ async fn test_v2_configinfo() {
     assert!(json["pipelineCaching"].as_bool().unwrap());
     assert_eq!(json["supportedLanguages"], serde_json::json!([]));
     assert_eq!(json["cacheSize"], 0);
+
+    // Full app: three language codes backed by ONE shared engine —
+    // cacheSize counts distinct cached engines, not map entries.
+    let full = app();
+    let (status, json) = get(&full, "/v2/configinfo").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        json["supportedLanguages"],
+        serde_json::json!(["en", "en-GB", "en-US"])
+    );
+    assert_eq!(json["cacheSize"], 1);
 }
 
 #[tokio::test]

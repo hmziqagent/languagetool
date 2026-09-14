@@ -8,6 +8,7 @@ use axum::extract::{Form, Query, State, rejection::FormRejection};
 use axum::http::StatusCode;
 use axum::response::Json;
 use og_core::{CheckRequest, CheckResult, Language};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 /// LT-shaped JSON error body with an HTTP status.
@@ -78,6 +79,26 @@ fn perform_check(state: &AppState, params: CheckParams) -> Result<CheckResult, A
         }
     };
 
+    // `motherTongue` is optional, but a non-blank value that is not a
+    // known language code is rejected (mirroring `language` handling).
+    let mother_tongue = match params.get_mother_tongue() {
+        Some(l) => Some(l),
+        None if params
+            .mother_tongue
+            .as_deref()
+            .is_some_and(|m| !m.trim().is_empty()) =>
+        {
+            return Err(api_error(
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "Unsupported motherTongue: {}",
+                    params.mother_tongue.as_deref().unwrap_or_default()
+                ),
+            ));
+        }
+        None => None,
+    };
+
     // Find the appropriate language engine: exact code first, then the
     // short code (e.g. "en-US" -> "en").
     let engine = {
@@ -94,16 +115,73 @@ fn perform_check(state: &AppState, params: CheckParams) -> Result<CheckResult, A
         }
     };
 
-    let mut request = CheckRequest::new(text, language);
-    request.mother_tongue = params.get_mother_tongue();
-    request.enabled_rules = params.get_enabled_rules();
-    request.disabled_rules = params.get_disabled_rules();
-    request.enabled_categories = params.get_enabled_categories();
-    request.disabled_categories = params.get_disabled_categories();
-    request.level = params.level.clone();
-    request.picky = params.picky;
+    // LanguageTool semantics for the enabled*/disabled* parameters (per
+    // LT's HTTP API docs): `enabledRules`/`enabledCategories` are ADDITIVE
+    // — they turn the listed rules/categories on IN ADDITION to the
+    // defaults — and become RESTRICTIVE only when `enabledOnly=true`.
+    // `disabledRules`/`disabledCategories` always subtract. og-core's
+    // `CheckRequest` treats non-empty enabled lists as restrictive, so
+    // additive mode is emulated with two passes: the defaults pass (empty
+    // enabled lists) plus the restricted pass, merged and deduplicated.
+    let mut base = CheckRequest::new(text, language);
+    base.mother_tongue = mother_tongue;
+    base.disabled_rules = params.get_disabled_rules();
+    base.disabled_categories = params.get_disabled_categories();
+    base.level = params.level.clone();
+    base.picky = params.picky;
 
-    Ok(engine.check_with_request(&request))
+    let enabled_rules = params.get_enabled_rules();
+    let enabled_categories = params.get_enabled_categories();
+
+    if enabled_rules.is_empty() && enabled_categories.is_empty() {
+        // Nothing beyond the defaults to enable (and an empty enabled
+        // list restricts to nothing, so enabledOnly is moot): one pass.
+        return Ok(engine.check_with_request(&base));
+    }
+
+    let mut restricted = base.clone();
+    restricted.enabled_rules = enabled_rules;
+    restricted.enabled_categories = enabled_categories;
+    let restricted_result = engine.check_with_request(&restricted);
+
+    if params.enabled_only {
+        return Ok(restricted_result);
+    }
+
+    // Additive mode: union of the default and restricted rule sets.
+    let mut result = engine.check_with_request(&base);
+    merge_matches(&mut result, restricted_result);
+    Ok(result)
+}
+
+/// Merge `extra` matches into `result`, dropping matches a rule already
+/// produced in the base pass (same rule, position, and message). Used to
+/// union the defaults pass with the restricted pass in additive mode.
+fn merge_matches(result: &mut CheckResult, extra: CheckResult) {
+    let mut seen: HashSet<(String, usize, usize, String)> = result
+        .matches
+        .iter()
+        .map(|m| {
+            (
+                m.rule().id().to_string(),
+                m.offset(),
+                m.length(),
+                m.message().to_string(),
+            )
+        })
+        .collect();
+    for m in extra.matches {
+        let key = (
+            m.rule().id().to_string(),
+            m.offset(),
+            m.length(),
+            m.message().to_string(),
+        );
+        if seen.insert(key) {
+            result.matches.push(m);
+        }
+    }
+    result.matches.sort_by_key(|m| m.offset());
 }
 
 pub async fn handle_languages() -> Json<Vec<LanguagesResponse>> {
@@ -156,7 +234,14 @@ pub async fn handle_config_info(State(state): State<Arc<AppState>>) -> Json<Conf
         },
         // Engines are shared process-wide, so every request reuses them.
         pipeline_caching: true,
-        cache_size: state.engines.len(),
+        // Distinct cached engine instances by pointer identity (all three
+        // codes share one Arc).
+        cache_size: state
+            .engines
+            .values()
+            .map(Arc::as_ptr)
+            .collect::<HashSet<_>>()
+            .len(),
     })
 }
 
