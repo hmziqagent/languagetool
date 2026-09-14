@@ -8,3 +8,7 @@ og-core = { workspace = true }
 regex = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }
+
+[[bench]]
+name = "spans"
+harness = false

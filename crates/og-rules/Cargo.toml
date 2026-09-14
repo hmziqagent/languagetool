@@ -13,3 +13,7 @@ regex = { workspace = true }
 rayon = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }
+
+[[bench]]
+name = "rule_indexing"
+harness = false

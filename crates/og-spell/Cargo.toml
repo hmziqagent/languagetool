@@ -7,3 +7,7 @@ edition.workspace = true
 og-core = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }
+
+[[bench]]
+name = "dictionaries"
+harness = false

@@ -124,4 +124,17 @@ Known response-shape divergence (recorded 2026-09-14, area 8): `matches[].rule` 
 | Comparison fields | — | rule.id, message, offset, length, replacements, category (issueType parsed but not diffed) | Working |
 | expected_java.json generation | frozen-commit Java server | not possible in this checkout (no jar); fixtures carry `expected_rust.json` only | Not started (needs Java host) |
 | CI parity gate | — | `.github/workflows/ci.yml` `test-runner` job: `cargo test -p og-test-runner/-p og-compat -- --include-ignored` (data-backed tests self-skip without the checkout) | Working |
-| Punted defects found by the harness | — | (1) og-rules `pattern_rule.rs:316` panics ("start byte index out of bounds") on multi-sentence text where an offset belongs to a later sentence — e.g. `"Their is a problem with you re spelling.  I has a apple. The dogs barks loudly at the neighbor."` kills the request; fixtures avoid it. (2) response `issue_type`/`sub_id` snake_case (above). | Punted to owners (og-rules / og-api) |
+| Punted defects found by the harness | — | (1) og-rules `pattern_rule.rs:316` multi-sentence panic — FIXED in 6b0ccc6 (+ sibling `UnderlineSpacesFilter` offsets in 854d5b2). (2) response `issue_type`/`sub_id` snake_case (above) — still open, owned by og-api. | (1) resolved; (2) punted to og-api |
+
+## Performance (Phase 12)
+
+| Item | Java LT | Rust OG | Status |
+|------|---------|---------|--------|
+| Benchmark suite | JMH + internal benchmarks | std-only `harness = false` benches (no new deps): `cargo bench -p og-spell` (dictionary lookup / hunspell / suggestions), `cargo bench -p og-tokenizer` (sentence split + token spans), `cargo bench -p og-rules` (XML compile, first-token index build, serial vs rayon matching). Data-backed benches self-skip without the resource checkout. | Working |
+| Sentence splitter hot path | SRX-based | O(n²) per-position `text.chars().collect()` hoisted to a single pass (2026-09-14): 14.5 KB / 290-sentence corpus 136.5 ms → 4.7 ms (~29x); identical output, 194/194 og-tokenizer tests green | Done |
+| Engine sharing | pooled per language | `LanguageEngine::shared_for_code(code) -> Option<Arc<LanguageEngine>>`: process-wide OnceLock per base language (en/de), variants pointer-share; og-api keeps its own OnceLock map over codes | Working |
+| Dictionary memory optimization | FSA/Morfologik automaton | Still `HashSet<String>` (en) / parsed HashMap hunspell (de) — not started | Not started |
+| Suggestion search bound | frequency-indexed | Length-filtered full-dictionary Levenshtein scan remains (~96 µs/suggest on the 472-word en list; 0.5 ms/miss on 279k-entry de hunspell incl. affix analysis) | Partial |
+| "Equal or faster than Java" | reference | Unmeasurable in this checkout (no Java runtime/jar) — bench numbers recorded on the Rust side only | Blocked (needs Java host) |
+
+Measured (this checkout, release build, arm64 macOS): en grammar.xml (5,545 rules) compile 0.98 s cold / 0.68 s warm (regex cache); `PatternRuleEngine::build_index` 0.19 ms; indexed matching 38.8 ms serial vs 15.6 ms rayon for 12 sentences; `Dictionary::contains` 42–68 ns; hunspell `is_known` 113 ns (stem hit) to 0.53 ms (miss w/ affix scan); tokenizer 0.36 ms/sentence-word-span pass.
