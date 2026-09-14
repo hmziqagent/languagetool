@@ -1,0 +1,44 @@
+# CI skeleton for OpenGrammar-RS (plans/07: run `cargo test --workspace`;
+# parity gates against the Java LanguageTool server come later).
+#
+# Note: the read-only `languagetool/` reference checkout is not part of the
+# repository, so CI runs without LanguageTool resources. Data-backed rules
+# degrade to empty data and tests that need real resources skip themselves,
+# so the suite is expected to stay green either way.
+
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  ci:
+    name: fmt + clippy + test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: rustfmt
+        run: cargo fmt --check
+
+      # Kept warning-level (no `-D warnings`) until the pre-existing
+      # clippy::cast_abs_to_unsigned warnings in og-compat are fixed; tighten
+      # to `-- -D warnings` afterwards.
+      - name: clippy
+        run: cargo clippy --workspace
+
+      - name: tests
+        run: cargo test --workspace
