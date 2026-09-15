@@ -63,9 +63,9 @@ impl RuleMatchContext {
 pub struct RuleMatchRule {
     id: String,
     description: String,
-    #[serde(default)]
+    #[serde(rename = "issueType", default)]
     issue_type: String,
-    #[serde(default)]
+    #[serde(rename = "subId", default)]
     sub_id: Option<String>,
     #[serde(default)]
     urls: Vec<String>,

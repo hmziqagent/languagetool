@@ -174,8 +174,8 @@ pub fn parse_matches(json: &str) -> Result<Vec<JavaMatch>, String> {
                     .to_string(),
                 issue_type: m
                     .get("rule")?
-                    // LT uses camelCase (`issueType`); our server currently
-                    // serializes snake_case (`issue_type`) — accept both.
+                    // LT uses camelCase (`issueType`); also accept the
+                    // legacy snake_case spelling (`issue_type`).
                     .get("issueType")
                     .or_else(|| m.get("rule")?.get("issue_type"))?
                     .as_str()

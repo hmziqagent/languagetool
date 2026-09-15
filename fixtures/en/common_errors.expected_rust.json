@@ -27,8 +27,8 @@
         },
         "description": "",
         "id": "THEIR_IS",
-        "issue_type": "misspelling",
-        "sub_id": "1",
+        "issueType": "misspelling",
+        "subId": "1",
         "urls": []
       },
       "sentence": "Their is a problem with you re spelling.",
@@ -78,8 +78,8 @@
         },
         "description": "Possible spelling mistake",
         "id": "SPELLING_RULE",
-        "issue_type": "misspelling",
-        "sub_id": null,
+        "issueType": "misspelling",
+        "subId": null,
         "urls": []
       },
       "sentence": "Their is a problem with you re spelling.",
@@ -113,8 +113,8 @@
         },
         "description": "Whitespace repetition",
         "id": "WHITESPACE_RULE",
-        "issue_type": "whitespace",
-        "sub_id": null,
+        "issueType": "whitespace",
+        "subId": null,
         "urls": []
       },
       "sentence": null,
@@ -148,8 +148,8 @@
         },
         "description": "Missing space between sentences",
         "id": "SENTENCE_WHITESPACE",
-        "issue_type": "whitespace",
-        "sub_id": null,
+        "issueType": "whitespace",
+        "subId": null,
         "urls": []
       },
       "sentence": "I has a apple.",
@@ -199,8 +199,8 @@
         },
         "description": "Possible spelling mistake",
         "id": "SPELLING_RULE",
-        "issue_type": "misspelling",
-        "sub_id": null,
+        "issueType": "misspelling",
+        "subId": null,
         "urls": []
       },
       "sentence": "I has a apple.",
@@ -209,9 +209,9 @@
     },
     {
       "context": {
-        "length": 10,
-        "offset": 4,
-        "text": "s a apple."
+        "length": 14,
+        "offset": 42,
+        "text": "I has a apple."
       },
       "contextForSureMatch": -1,
       "ignoreForIncompleteSentence": false,
@@ -234,8 +234,8 @@
         },
         "description": "",
         "id": "BASE_FORM",
-        "issue_type": "grammar",
-        "sub_id": "2",
+        "issueType": "grammar",
+        "subId": "2",
         "urls": []
       },
       "sentence": "I has a apple.",
@@ -244,9 +244,9 @@
     },
     {
       "context": {
-        "length": 10,
-        "offset": 4,
-        "text": "s a apple."
+        "length": 14,
+        "offset": 42,
+        "text": "I has a apple."
       },
       "contextForSureMatch": -1,
       "ignoreForIncompleteSentence": false,
@@ -269,8 +269,8 @@
         },
         "description": "",
         "id": "NON3PRS_VERB",
-        "issue_type": "grammar",
-        "sub_id": "2",
+        "issueType": "grammar",
+        "subId": "2",
         "urls": []
       },
       "sentence": "I has a apple.",
@@ -304,8 +304,8 @@
         },
         "description": "Use of 'a' vs 'an'",
         "id": "EN_A_VS_AN",
-        "issue_type": "grammar",
-        "sub_id": null,
+        "issueType": "grammar",
+        "subId": null,
         "urls": []
       },
       "sentence": "I has a apple.",
