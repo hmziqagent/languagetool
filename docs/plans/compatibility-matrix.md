@@ -8,7 +8,7 @@
 
 This is the single source of truth for parity tracking. Update these tables in place; other plans reference them instead of duplicating. English port matrix updated 2026-09-14 (WrongWordInContextRule now Ported; EnglishWordRepeatRule ported as a dedicated rule). German module started 2026-09-14 (area 9): generic engine factory + registry wiring landed; see the Language Modules table.
 
-Upstream freeze: the Java LanguageTool reference checkout at `<repo>/languagetool/` is frozen at commit `20b2119977960949c791069b57d191ec1449d211` (recorded 2026-09-14). All Rust resource reads resolve this checkout via the configurable LT resource root (`OG_LT_RESOURCE_ROOT` env var or ancestor search; see `og_spell::resource`).
+Upstream freeze: the Java LanguageTool reference checkout at `<repo>/languagetool/` is frozen at commit `20b2119977960949c791069b57d191ec1449d211` (recorded 2026-09-14; `git describe`: `v6.8-110-g20b21199779`). Replicate with `git clone https://github.com/languagetool-org/languagetool.git languagetool && git -C languagetool checkout 20b2119977960949c791069b57d191ec1449d211`. All Rust resource reads resolve this checkout via the configurable LT resource root (`OG_LT_RESOURCE_ROOT` env var or ancestor search; see `og_spell::resource`).
 
 ## Language Modules (37 total, 2 implemented)
 

@@ -69,9 +69,27 @@ it, resolved by `og_spell::resource::lt_resource_root()` in this order:
    working from any cwd).
 
 When no root is found, data-backed rules degrade gracefully to empty data
-and tests that need real resources skip themselves; nothing panics. The
-upstream commit the port is checked against is frozen in
-[docs/plans/compatibility-matrix.md](docs/plans/compatibility-matrix.md).
+and tests that need real resources skip themselves; nothing panics.
+
+### Frozen upstream revision
+
+The reference checkout is pinned to this exact upstream commit (recorded
+2026-09-14, verified clean):
+
+- Repository: `https://github.com/languagetool-org/languagetool`
+- Commit: `20b2119977960949c791069b57d191ec1449d211`
+  (`git describe`: `v6.8-110-g20b21199779` — 110 commits after the `v6.8` tag)
+
+To replicate the same revision in a fresh environment:
+
+```sh
+git clone https://github.com/languagetool-org/languagetool.git languagetool
+git -C languagetool checkout 20b2119977960949c791069b57d191ec1449d211
+```
+
+The commit is also recorded in
+[docs/plans/compatibility-matrix.md](docs/plans/compatibility-matrix.md);
+all rule-parity claims are made against this revision only.
 
 ## CI
 
