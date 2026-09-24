@@ -10,20 +10,32 @@ impl CompatReport {
     }
 
     pub fn pass_count(&self) -> usize {
-        self.results.iter().filter(|r| r.status == ComparisonStatus::Pass).count()
+        self.results
+            .iter()
+            .filter(|r| r.status == ComparisonStatus::Pass)
+            .count()
     }
 
     pub fn fail_count(&self) -> usize {
-        self.results.iter().filter(|r| r.status != ComparisonStatus::Pass).count()
+        self.results
+            .iter()
+            .filter(|r| r.status != ComparisonStatus::Pass)
+            .count()
     }
 
     pub fn all_passed(&self) -> bool {
-        self.results.iter().all(|r| r.status == ComparisonStatus::Pass)
+        self.results
+            .iter()
+            .all(|r| r.status == ComparisonStatus::Pass)
     }
 
     pub fn format_report(&self) -> String {
         let mut report = String::new();
-        report.push_str(&format!("Compatibility Report: {} pass, {} fail\n", self.pass_count(), self.fail_count()));
+        report.push_str(&format!(
+            "Compatibility Report: {} pass, {} fail\n",
+            self.pass_count(),
+            self.fail_count()
+        ));
         report.push_str(&"-".repeat(60).to_string());
         report.push('\n');
 
@@ -38,7 +50,10 @@ impl CompatReport {
                 ComparisonStatus::CategoryMismatch => "FAIL: category mismatch",
                 ComparisonStatus::LengthMismatch => "FAIL: length mismatch",
             };
-            report.push_str(&format!("{} [{}] {}\n", status_str, result.rule_id, result.details));
+            report.push_str(&format!(
+                "{} [{}] {}\n",
+                status_str, result.rule_id, result.details
+            ));
         }
 
         report

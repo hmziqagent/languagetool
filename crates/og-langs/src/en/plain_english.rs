@@ -1,17 +1,14 @@
-use std::collections::HashMap;
 use og_core::{
-    AnalyzedSentence, Category, IssueType, RuleMatch,
-    RuleMatchContext, RuleMatchRule, SuggestedReplacement,
-    rule::Rule,
+    AnalyzedSentence, Category, IssueType, RuleMatch, RuleMatchContext, RuleMatchRule,
+    SuggestedReplacement, rule::Rule,
 };
+use std::collections::HashMap;
 
 struct WordinessEntry {
     suggestions: Vec<String>,
     message: Option<String>,
 }
 
-/// Rust port of LanguageTool's EnglishPlainEnglishRule.
-/// Suggests simpler alternatives for wordy phrases (e.g., "in order to" → "to").
 pub struct PlainEnglishRule {
     entries: HashMap<String, WordinessEntry>,
     max_words: usize,
@@ -23,7 +20,7 @@ impl PlainEnglishRule {
             entries: HashMap::new(),
             max_words: 0,
         };
-        rule.load_data(include_str!("../../../../../languagetool-language-modules/en/src/main/resources/org/languagetool/rules/en/wordiness.txt"));
+        rule.load_data(include_str!("../../../../languagetool/languagetool-language-modules/en/src/main/resources/org/languagetool/rules/en/wordiness.txt"));
         rule
     }
 
@@ -51,7 +48,13 @@ impl PlainEnglishRule {
             if word_count > self.max_words {
                 self.max_words = word_count;
             }
-            self.entries.insert(phrase.to_lowercase(), WordinessEntry { suggestions, message });
+            self.entries.insert(
+                phrase.to_lowercase(),
+                WordinessEntry {
+                    suggestions,
+                    message,
+                },
+            );
         }
     }
 }
@@ -107,7 +110,9 @@ impl Rule for PlainEnglishRule {
 
                     let default_msg = format!(
                         "Consider using {} instead of \"{}\".",
-                        entry.suggestions.iter()
+                        entry
+                            .suggestions
+                            .iter()
                             .map(|s| format!("\"{}\"", s))
                             .collect::<Vec<_>>()
                             .join(" or "),
@@ -116,21 +121,33 @@ impl Rule for PlainEnglishRule {
                     let message = entry.message.as_deref().unwrap_or(&default_msg);
 
                     let rm_rule = RuleMatchRule::new(self.id(), self.description())
-                        .with_category(self.category());
+                        .with_category(self.category())
+                        .with_issue_type(self.issue_type().as_str());
 
-                    let context_start = if match_start >= 40 { match_start - 40 } else { 0 };
+                    let context_start = match_start.saturating_sub(40);
                     let context_end = std::cmp::min(match_end + 40, sentence.text().len());
                     let context_text = sentence.text()[context_start..context_end].to_string();
 
-                    let replacements: Vec<SuggestedReplacement> = entry.suggestions.iter()
-                        .map(|s| SuggestedReplacement::new(s))
+                    let replacements: Vec<SuggestedReplacement> = entry
+                        .suggestions
+                        .iter()
+                        .map(SuggestedReplacement::new)
                         .collect();
 
                     matches.push(
-                        RuleMatch::new(message, match_start, match_length, rm_rule,
-                            RuleMatchContext::new(context_text, context_start, context_end - context_start))
-                            .with_replacements(replacements)
-                            .with_sentence(sentence.text().to_string())
+                        RuleMatch::new(
+                            message,
+                            match_start,
+                            match_length,
+                            rm_rule,
+                            RuleMatchContext::new(
+                                context_text,
+                                context_start,
+                                context_end - context_start,
+                            ),
+                        )
+                        .with_replacements(replacements)
+                        .with_sentence(sentence.text().to_string()),
                     );
                     break;
                 }
@@ -144,20 +161,22 @@ impl Rule for PlainEnglishRule {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use og_core::{AnalyzedToken, AnalyzedTokenReadings, AnalyzedSentence};
+    use og_core::{AnalyzedSentence, AnalyzedToken, AnalyzedTokenReadings};
 
     fn make_sentence(text: &str) -> AnalyzedSentence {
         let mut sentence = AnalyzedSentence::new(text, 0, text.len());
         let mut tokens = Vec::new();
         let mut byte_pos = 0;
         for part in text.split(|c: char| c.is_whitespace()) {
-            if part.is_empty() { continue; }
+            if part.is_empty() {
+                continue;
+            }
             if let Some(offset) = text[byte_pos..].find(part) {
                 let start = byte_pos + offset;
                 let end = start + part.len();
-                tokens.push(AnalyzedTokenReadings::new(
-                    AnalyzedToken::new(part, start, end)
-                ));
+                tokens.push(AnalyzedTokenReadings::new(AnalyzedToken::new(
+                    part, start, end,
+                )));
                 byte_pos = end;
             }
         }

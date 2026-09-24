@@ -1,9 +1,4 @@
-// N-gram language model support for traditional statistical features
-// No AI/LLM - this is for n-gram probability-based rules only
-
-pub struct LanguageModel {
-    // Will be populated with n-gram data in later phases
-}
+pub struct LanguageModel {}
 
 impl LanguageModel {
     pub fn new() -> Self {
@@ -11,7 +6,6 @@ impl LanguageModel {
     }
 
     pub fn get_probability(&self, _words: &[&str]) -> f64 {
-        // Placeholder - will implement n-gram lookup
         0.0
     }
 }

@@ -1,19 +1,17 @@
 use og_core::{
-    AnalyzedSentence, Category, IssueType, RuleMatch,
-    RuleMatchContext, RuleMatchRule, SuggestedReplacement,
-    rule::Rule,
+    AnalyzedSentence, Category, IssueType, RuleMatch, RuleMatchContext, RuleMatchRule,
+    SuggestedReplacement, rule::Rule,
 };
 
-/// Rust port of LanguageTool's EnglishDashRule (EN_DASH_RULE).
-/// Detects em-dashes and en-dashes used where hyphens should be
-/// in compound words (e.g., "T—shirt" → "T-shirt").
 pub struct DashRule {
     compounds: Vec<String>,
 }
 
 impl DashRule {
     pub fn new() -> Self {
-        let compounds = Self::load_data(include_str!("../../../../../languagetool-language-modules/en/src/main/resources/org/languagetool/resource/en/compounds.txt"));
+        let compounds = Self::load_data(include_str!(
+            "../../../../languagetool/languagetool-language-modules/en/src/main/resources/org/languagetool/resource/en/compounds.txt"
+        ));
         Self { compounds }
     }
 
@@ -24,8 +22,7 @@ impl DashRule {
             if line.is_empty() || line.starts_with('#') {
                 continue;
             }
-            // Strip suffix markers: +, *, ?, $
-            let clean = line.trim_end_matches(|c| c == '+' || c == '*' || c == '?' || c == '$');
+            let clean = line.trim_end_matches(['+', '*', '?', '$']);
             if clean.contains('-') {
                 result.push(clean.to_string());
             }
@@ -38,9 +35,7 @@ impl DashRule {
     }
 
     fn replace_dashes_with_hyphens(s: &str) -> String {
-        s.replace('\u{2014}', "-")
-         .replace('\u{2013}', "-")
-         .replace('\u{2012}', "-")
+        s.replace(['\u{2014}', '\u{2013}', '\u{2012}'], "-")
     }
 }
 
@@ -90,7 +85,12 @@ impl Rule for DashRule {
                     let match_start = token.token().start();
                     let match_length = token.token().end() - match_start;
 
-                    let suggestion = if token_text.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
+                    let suggestion = if token_text
+                        .chars()
+                        .next()
+                        .map(|c| c.is_uppercase())
+                        .unwrap_or(false)
+                    {
                         let mut c = compound.chars();
                         match c.next() {
                             Some(first) => format!("{}{}", first.to_uppercase(), c.as_str()),
@@ -106,17 +106,25 @@ impl Rule for DashRule {
 
                     let rm_rule = RuleMatchRule::new(self.id(), self.description())
                         .with_category(self.category())
-                        .with_urls(vec!["https://languagetool.org/insights/post/hyphen/".to_string()]);
+                        .with_issue_type(self.issue_type().as_str())
+                        .with_urls(vec![
+                            "https://languagetool.org/insights/post/hyphen/".to_string(),
+                        ]);
 
-                    let ctx_start = if match_start >= 40 { match_start - 40 } else { 0 };
+                    let ctx_start = match_start.saturating_sub(40);
                     let ctx_end = std::cmp::min(match_start + match_length + 40, text.len());
                     let context_text = text[ctx_start..ctx_end].to_string();
 
                     matches.push(
-                        RuleMatch::new("A dash was used instead of a hyphen.", match_start, match_length, rm_rule,
-                            RuleMatchContext::new(context_text, ctx_start, ctx_end - ctx_start))
-                            .with_replacements(vec![SuggestedReplacement::new(&suggestion)])
-                            .with_sentence(text.to_string())
+                        RuleMatch::new(
+                            "A dash was used instead of a hyphen.",
+                            match_start,
+                            match_length,
+                            rm_rule,
+                            RuleMatchContext::new(context_text, ctx_start, ctx_end - ctx_start),
+                        )
+                        .with_replacements(vec![SuggestedReplacement::new(&suggestion)])
+                        .with_sentence(text.to_string()),
                     );
                     break;
                 }
@@ -130,20 +138,22 @@ impl Rule for DashRule {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use og_core::{AnalyzedToken, AnalyzedTokenReadings, AnalyzedSentence};
+    use og_core::{AnalyzedSentence, AnalyzedToken, AnalyzedTokenReadings};
 
     fn make_sentence(text: &str) -> AnalyzedSentence {
         let mut sentence = AnalyzedSentence::new(text, 0, text.len());
         let mut tokens = Vec::new();
         let mut byte_pos = 0;
         for part in text.split(|c: char| c.is_whitespace()) {
-            if part.is_empty() { continue; }
+            if part.is_empty() {
+                continue;
+            }
             if let Some(offset) = text[byte_pos..].find(part) {
                 let start = byte_pos + offset;
                 let end = start + part.len();
-                tokens.push(AnalyzedTokenReadings::new(
-                    AnalyzedToken::new(part, start, end)
-                ));
+                tokens.push(AnalyzedTokenReadings::new(AnalyzedToken::new(
+                    part, start, end,
+                )));
                 byte_pos = end;
             }
         }
@@ -158,7 +168,11 @@ mod tests {
         let matches = rule.match_sentence(&sentence);
         assert!(!matches.is_empty(), "Should detect em-dash in T—shirt");
         let repl = matches[0].replacements()[0].value();
-        assert!(repl.contains('-'), "Should suggest hyphenated form, got '{}'", repl);
+        assert!(
+            repl.contains('-'),
+            "Should suggest hyphenated form, got '{}'",
+            repl
+        );
     }
 
     #[test]

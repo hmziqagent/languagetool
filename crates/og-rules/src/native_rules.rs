@@ -1,5 +1,8 @@
-use og_core::{AnalyzedSentence, Category, IssueType, RuleMatch, RuleMatchContext, RuleMatchRule, SuggestedReplacement};
 use og_core::rule::Rule;
+use og_core::{
+    AnalyzedSentence, Category, IssueType, RuleMatch, RuleMatchContext, RuleMatchRule,
+    SuggestedReplacement,
+};
 
 pub struct WordRepeatRule {
     id: String,
@@ -56,7 +59,7 @@ impl Rule for WordRepeatRule {
             {
                 let start = curr.token().start();
                 let end = curr.token().end();
-                let context_start = if start >= 20 { start - 20 } else { 0 };
+                let context_start = start.saturating_sub(20);
                 let context_end = std::cmp::min(end + 20, sentence.text().len());
                 let context_text = sentence.text()[context_start..context_end].to_string();
 
@@ -70,10 +73,14 @@ impl Rule for WordRepeatRule {
                         start,
                         end - start,
                         rule,
-                        RuleMatchContext::new(context_text, context_start, context_end - context_start),
+                        RuleMatchContext::new(
+                            context_text,
+                            context_start,
+                            context_end - context_start,
+                        ),
                     )
                     .with_sentence(sentence.text().to_string())
-                    .with_replacements(vec![SuggestedReplacement::new(curr.token().token())])
+                    .with_replacements(vec![SuggestedReplacement::new(curr.token().token())]),
                 );
             }
         }
@@ -139,7 +146,7 @@ impl Rule for DoublePunctuationRule {
                 if punct_chars.contains(&prev_char) && prev_char == curr_char {
                     let start = curr.token().start();
                     let end = curr.token().end();
-                    let context_start = if start >= 20 { start - 20 } else { 0 };
+                    let context_start = start.saturating_sub(20);
                     let context_end = std::cmp::min(end + 20, sentence.text().len());
                     let context_text = sentence.text()[context_start..context_end].to_string();
 
@@ -153,9 +160,13 @@ impl Rule for DoublePunctuationRule {
                             start,
                             end - start,
                             rule,
-                            RuleMatchContext::new(context_text, context_start, context_end - context_start),
+                            RuleMatchContext::new(
+                                context_text,
+                                context_start,
+                                context_end - context_start,
+                            ),
                         )
-                        .with_sentence(sentence.text().to_string())
+                        .with_sentence(sentence.text().to_string()),
                     );
                 }
             }
@@ -211,16 +222,22 @@ impl Rule for UppercaseSentenceStartRule {
         let first = tokens[0];
         let text = first.token().token();
 
-        if text.chars().next().map(|c| c.is_lowercase()).unwrap_or(false) {
+        if text
+            .chars()
+            .next()
+            .map(|c| c.is_lowercase())
+            .unwrap_or(false)
+        {
             let start = first.token().start();
             let end = first.token().end();
-            let context_start = if start >= 20 { start - 20 } else { 0 };
+            let context_start = start.saturating_sub(20);
             let context_end = std::cmp::min(end + 20, sentence.text().len());
             let context_text = sentence.text()[context_start..context_end].to_string();
 
             let mut capitalized = text.to_string();
             if let Some(first_char) = capitalized.chars().next() {
-                capitalized = first_char.to_uppercase().to_string() + &capitalized[first_char.len_utf8()..];
+                capitalized =
+                    first_char.to_uppercase().to_string() + &capitalized[first_char.len_utf8()..];
             }
 
             let rule = RuleMatchRule::new(&self.id, self.description())
@@ -236,7 +253,7 @@ impl Rule for UppercaseSentenceStartRule {
                     RuleMatchContext::new(context_text, context_start, context_end - context_start),
                 )
                 .with_sentence(sentence.text().to_string())
-                .with_replacements(vec![SuggestedReplacement::new(capitalized)])
+                .with_replacements(vec![SuggestedReplacement::new(capitalized)]),
             ];
         }
 
@@ -244,10 +261,6 @@ impl Rule for UppercaseSentenceStartRule {
     }
 }
 
-/// Checks for whitespace issues around commas, periods, and parentheses:
-/// - Space before comma/period/closing bracket
-/// - No space after comma
-/// - Space after opening bracket
 pub struct CommaWhitespaceRule {
     id: String,
     category: Category,
@@ -304,7 +317,8 @@ impl Rule for CommaWhitespaceRule {
             if is_whitespace && is_left_bracket(prev_token) {
                 msg = Some("Don't put a space after an opening bracket.".to_string());
                 suggestion = Some(prev_token.to_string());
-            } else if !is_whitespace && !prev_was_whitespace
+            } else if !is_whitespace
+                && !prev_was_whitespace
                 && prev_token == ","
                 && !is_quote_char(token)
                 && !is_hyphen_or_comma(token)
@@ -319,9 +333,7 @@ impl Rule for CommaWhitespaceRule {
                     msg = Some("Don't put a space before a closing bracket.".to_string());
                     suggestion = Some(token.to_string());
                 } else if token == "," {
-                    // Check for double comma exception
                     if i + 1 < tokens.len() && tokens[i + 1].token().token() == "," {
-                        // Double comma - skip, handled by DoublePunctuationRule
                     } else {
                         msg = Some("Don't put a space before a comma.".to_string());
                         let next_space = if i + 1 < tokens.len() && !tokens[i + 1].is_whitespace() {
@@ -332,15 +344,16 @@ impl Rule for CommaWhitespaceRule {
                         suggestion = Some(next_space.to_string());
                     }
                 } else if token == "." {
-                    // Exception for ellipsis (.5) and commands (./script.sh)
-                    if i + 1 < tokens.len() && is_digit_or_dot(tokens[i + 1].token().token()) {
-                        // skip
-                    } else if i + 2 < tokens.len()
+                    let next_is_digit_or_dot =
+                        i + 1 < tokens.len() && is_digit_or_dot(tokens[i + 1].token().token());
+                    let next_is_slash_alpha = i + 2 < tokens.len()
                         && tokens[i + 1].token().token() == "/"
-                        && tokens[i + 2].token().token().chars().any(|c| c.is_alphabetic())
-                    {
-                        // skip ./script.sh
-                    } else {
+                        && tokens[i + 2]
+                            .token()
+                            .token()
+                            .chars()
+                            .any(|c| c.is_alphabetic());
+                    if !next_is_digit_or_dot && !next_is_slash_alpha {
                         msg = Some("Don't put a space before a period.".to_string());
                         suggestion = Some(".".to_string());
                     }
@@ -348,16 +361,20 @@ impl Rule for CommaWhitespaceRule {
             }
 
             if let Some(m) = msg {
-                let from_pos = if i >= 1 { tokens[i - 1].token().start() } else { 0 };
+                let from_pos = if i >= 1 {
+                    tokens[i - 1].token().start()
+                } else {
+                    0
+                };
                 let to_pos = token_reading.token().end();
 
-                // Skip if suggestion matches original
                 if let Some(ref s) = suggestion {
-                    let marked = if to_pos <= sentence.text().len() && from_pos <= sentence.text().len() {
-                        &sentence.text()[from_pos..to_pos]
-                    } else {
-                        ""
-                    };
+                    let marked =
+                        if to_pos <= sentence.text().len() && from_pos <= sentence.text().len() {
+                            &sentence.text()[from_pos..to_pos]
+                        } else {
+                            ""
+                        };
                     if marked == s.as_str() {
                         prev_prev_token = prev_token;
                         prev_token = token;
@@ -366,7 +383,7 @@ impl Rule for CommaWhitespaceRule {
                     }
                 }
 
-                let context_start = if from_pos >= 30 { from_pos - 30 } else { 0 };
+                let context_start = from_pos.saturating_sub(30);
                 let context_end = std::cmp::min(to_pos + 30, sentence.text().len());
                 let context_text = sentence.text()[context_start..context_end].to_string();
 
@@ -408,7 +425,10 @@ fn is_right_bracket(s: &str) -> bool {
 }
 
 fn is_quote_char(s: &str) -> bool {
-    matches!(s, "'" | "\"" | "\u{2019}" | "\u{201D}" | "\u{201C}" | "\u{AB}" | "\u{BB}")
+    matches!(
+        s,
+        "'" | "\"" | "\u{2019}" | "\u{201D}" | "\u{201C}" | "\u{AB}" | "\u{BB}"
+    )
 }
 
 fn is_hyphen_or_comma(s: &str) -> bool {
@@ -459,12 +479,17 @@ mod tests {
                     end += 1;
                 }
                 let ws: String = chars[start..end].iter().collect();
-                tokens.push(AnalyzedTokenReadings::new(AnalyzedToken::new(&ws, start, end)));
+                tokens.push(AnalyzedTokenReadings::new(AnalyzedToken::new(
+                    &ws, start, end,
+                )));
                 i = end;
             } else if punct_chars.contains(chars[i]) {
-                // Each punctuation character is its own token
                 let ch = chars[i].to_string();
-                tokens.push(AnalyzedTokenReadings::new(AnalyzedToken::new(&ch, i, i + 1)));
+                tokens.push(AnalyzedTokenReadings::new(AnalyzedToken::new(
+                    &ch,
+                    i,
+                    i + 1,
+                )));
                 i += 1;
             } else {
                 let start = i;
@@ -476,7 +501,9 @@ mod tests {
                     end += 1;
                 }
                 let word: String = chars[start..end].iter().collect();
-                tokens.push(AnalyzedTokenReadings::new(AnalyzedToken::new(&word, start, end)));
+                tokens.push(AnalyzedTokenReadings::new(AnalyzedToken::new(
+                    &word, start, end,
+                )));
                 i = end;
             }
         }
@@ -484,7 +511,6 @@ mod tests {
         sentence
     }
 
-    // WordRepeatRule tests
     #[test]
     fn test_word_repeat_rule() {
         let rule = WordRepeatRule::new();
@@ -526,7 +552,6 @@ mod tests {
         assert!(matches.is_empty(), "Number repetition should not trigger");
     }
 
-    // DoublePunctuationRule tests
     #[test]
     fn test_double_period() {
         let rule = DoublePunctuationRule::new();
@@ -556,8 +581,10 @@ mod tests {
         let rule = DoublePunctuationRule::new();
         let sentence = make_punct_sentence("Hello...");
         let matches = rule.match_sentence(&sentence);
-        // Triple period: ... produces 2 adjacent pairs of periods, which should match
-        assert!(matches.len() >= 1, "Triple period triggers at least one match");
+        assert!(
+            !matches.is_empty(),
+            "Triple period triggers at least one match"
+        );
     }
 
     #[test]
@@ -568,7 +595,6 @@ mod tests {
         assert!(matches.is_empty(), "Single punctuation should not trigger");
     }
 
-    // UppercaseSentenceStartRule tests
     #[test]
     fn test_uppercase_sentence_start() {
         let rule = UppercaseSentenceStartRule::new();
@@ -591,10 +617,12 @@ mod tests {
         let rule = UppercaseSentenceStartRule::new();
         let sentence = make_sentence("123 people");
         let matches = rule.match_sentence(&sentence);
-        assert!(matches.is_empty(), "Starting with number should not trigger");
+        assert!(
+            matches.is_empty(),
+            "Starting with number should not trigger"
+        );
     }
 
-    // CommaWhitespaceRule tests
     #[test]
     fn test_space_before_comma() {
         let rule = CommaWhitespaceRule::new();
@@ -608,7 +636,10 @@ mod tests {
         let rule = CommaWhitespaceRule::new();
         let sentence = make_punct_sentence("Hello,world");
         let matches = rule.match_sentence(&sentence);
-        assert!(!matches.is_empty(), "Missing space after comma should trigger");
+        assert!(
+            !matches.is_empty(),
+            "Missing space after comma should trigger"
+        );
     }
 
     #[test]
@@ -616,7 +647,10 @@ mod tests {
         let rule = CommaWhitespaceRule::new();
         let sentence = make_punct_sentence("Hello, world");
         let matches = rule.match_sentence(&sentence);
-        assert!(matches.is_empty(), "Correct comma spacing should not trigger");
+        assert!(
+            matches.is_empty(),
+            "Correct comma spacing should not trigger"
+        );
     }
 
     #[test]
@@ -624,7 +658,10 @@ mod tests {
         let rule = CommaWhitespaceRule::new();
         let sentence = make_punct_sentence("Hello ( world)");
         let matches = rule.match_sentence(&sentence);
-        assert!(!matches.is_empty(), "Space after opening bracket should trigger");
+        assert!(
+            !matches.is_empty(),
+            "Space after opening bracket should trigger"
+        );
     }
 
     #[test]
@@ -632,7 +669,10 @@ mod tests {
         let rule = CommaWhitespaceRule::new();
         let sentence = make_punct_sentence("Hello (world )");
         let matches = rule.match_sentence(&sentence);
-        assert!(!matches.is_empty(), "Space before closing bracket should trigger");
+        assert!(
+            !matches.is_empty(),
+            "Space before closing bracket should trigger"
+        );
     }
 
     #[test]
@@ -640,7 +680,10 @@ mod tests {
         let rule = CommaWhitespaceRule::new();
         let sentence = make_punct_sentence("Hello (world)");
         let matches = rule.match_sentence(&sentence);
-        assert!(matches.is_empty(), "Correct bracket spacing should not trigger");
+        assert!(
+            matches.is_empty(),
+            "Correct bracket spacing should not trigger"
+        );
     }
 
     #[test]

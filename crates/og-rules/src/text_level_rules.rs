@@ -1,8 +1,9 @@
 use og_core::rule::TextLevelRule;
-use og_core::{AnalyzedSentence, AnalyzedTokenReadings, Category, IssueType, RuleMatch, RuleMatchContext, RuleMatchRule, SuggestedReplacement};
+use og_core::{
+    AnalyzedSentence, AnalyzedTokenReadings, Category, IssueType, RuleMatch, RuleMatchContext,
+    RuleMatchRule, SuggestedReplacement,
+};
 
-/// Detects multiple consecutive whitespace characters that should be a single space.
-/// Text-level rule that checks across all sentences.
 pub struct MultipleWhitespaceRule {
     id: String,
     category: Category,
@@ -53,7 +54,7 @@ impl TextLevelRule for MultipleWhitespaceRule {
                 }
                 let end = i;
                 if end - start > 1 {
-                    let context_start = if start >= 30 { start - 30 } else { 0 };
+                    let context_start = start.saturating_sub(30);
                     let context_end = std::cmp::min(end + 30, text.len());
                     let context_text = text[context_start..context_end].to_string();
 
@@ -67,9 +68,13 @@ impl TextLevelRule for MultipleWhitespaceRule {
                             start,
                             end - start,
                             rule,
-                            RuleMatchContext::new(context_text, context_start, context_end - context_start),
+                            RuleMatchContext::new(
+                                context_text,
+                                context_start,
+                                context_end - context_start,
+                            ),
                         )
-                        .with_replacements(vec![SuggestedReplacement::new(" ")])
+                        .with_replacements(vec![SuggestedReplacement::new(" ")]),
                     );
                 }
             } else {
@@ -81,8 +86,6 @@ impl TextLevelRule for MultipleWhitespaceRule {
     }
 }
 
-/// Detects missing whitespace between sentences.
-/// Text-level rule that checks cross-sentence boundaries.
 pub struct SentenceWhitespaceRule {
     id: String,
     category: Category,
@@ -142,11 +145,14 @@ impl TextLevelRule for SentenceWhitespaceRule {
                 let start = prev_end;
                 let first_char_len = curr_text.chars().next().map(|c| c.len_utf8()).unwrap_or(0);
                 let end = prev_end + first_char_len;
-                let context_start = if start >= 30 { start - 30 } else { 0 };
+                let context_start = start.saturating_sub(30);
                 let context_end = std::cmp::min(end + 30, text.len());
                 let context_text = text[context_start..context_end].to_string();
 
-                let first_word: String = curr_text.chars().take_while(|c| !c.is_whitespace()).collect();
+                let first_word: String = curr_text
+                    .chars()
+                    .take_while(|c| !c.is_whitespace())
+                    .collect();
                 let suggestion = format!(" {}", first_word);
 
                 let rule = RuleMatchRule::new(&self.id, self.description())
@@ -159,10 +165,14 @@ impl TextLevelRule for SentenceWhitespaceRule {
                         start,
                         end - start,
                         rule,
-                        RuleMatchContext::new(context_text, context_start, context_end - context_start),
+                        RuleMatchContext::new(
+                            context_text,
+                            context_start,
+                            context_end - context_start,
+                        ),
                     )
                     .with_sentence(curr_text.to_string())
-                    .with_replacements(vec![SuggestedReplacement::new(suggestion)])
+                    .with_replacements(vec![SuggestedReplacement::new(suggestion)]),
                 );
             }
 
@@ -173,8 +183,6 @@ impl TextLevelRule for SentenceWhitespaceRule {
     }
 }
 
-/// Detects unpaired brackets [] {} () using stack-based pairing.
-/// Text-level rule that tracks opening/closing symbols across sentences.
 pub struct GenericUnpairedBracketsRule {
     id: String,
     category: Category,
@@ -198,7 +206,11 @@ impl GenericUnpairedBracketsRule {
     }
 
     pub fn with_symbols(mut self, start: Vec<&str>, end: Vec<&str>) -> Self {
-        assert_eq!(start.len(), end.len(), "Start and end symbol lists must be equal length");
+        assert_eq!(
+            start.len(),
+            end.len(),
+            "Start and end symbol lists must be equal length"
+        );
         self.start_symbols = start.iter().map(|s| s.to_string()).collect();
         self.end_symbols = end.iter().map(|s| s.to_string()).collect();
         self
@@ -241,17 +253,17 @@ impl TextLevelRule for GenericUnpairedBracketsRule {
         let mut matches = Vec::new();
         let mut stack: Vec<SymbolEntry> = Vec::new();
 
-        // Build all bracket symbols for fast lookup
-        let _all_symbols: Vec<&str> = self.start_symbols.iter()
+        let _all_symbols: Vec<&str> = self
+            .start_symbols
+            .iter()
             .chain(self.end_symbols.iter())
             .map(|s| s.as_str())
             .collect();
 
-        let mut chars = text.char_indices().peekable();
-        while let Some((byte_idx, ch)) = chars.next() {
+        let chars = text.char_indices().peekable();
+        for (byte_idx, ch) in chars {
             let ch_str = ch.to_string();
 
-            // Skip smiley patterns: :) :( ;) ;-(
             if ch == ')' || ch == '(' {
                 if byte_idx >= 1 {
                     let prev = &text[byte_idx - 1..byte_idx];
@@ -279,9 +291,10 @@ impl TextLevelRule for GenericUnpairedBracketsRule {
                     break;
                 }
                 if ch_str == self.end_symbols[j] {
-                    if let Some(idx) = stack.iter().rposition(|s| {
-                        s.is_opening && s.symbol == self.start_symbols[j]
-                    }) {
+                    if let Some(idx) = stack
+                        .iter()
+                        .rposition(|s| s.is_opening && s.symbol == self.start_symbols[j])
+                    {
                         stack.remove(idx);
                     } else {
                         stack.push(SymbolEntry {
@@ -296,19 +309,26 @@ impl TextLevelRule for GenericUnpairedBracketsRule {
             }
         }
 
-        // Report all unpaired symbols
         for entry in &stack {
             let start = entry.start_pos;
             let end = start + entry.symbol.len();
-            let context_start = if start >= 30 { start - 30 } else { 0 };
+            let context_start = start.saturating_sub(30);
             let context_end = std::cmp::min(end + 30, text.len());
             let context_text = text[context_start..context_end].to_string();
 
             let other = if entry.is_opening {
-                let idx = self.start_symbols.iter().position(|s| s == &entry.symbol).unwrap();
+                let idx = self
+                    .start_symbols
+                    .iter()
+                    .position(|s| s == &entry.symbol)
+                    .unwrap();
                 self.end_symbols[idx].clone()
             } else {
-                let idx = self.end_symbols.iter().position(|s| s == &entry.symbol).unwrap();
+                let idx = self
+                    .end_symbols
+                    .iter()
+                    .position(|s| s == &entry.symbol)
+                    .unwrap();
                 self.start_symbols[idx].clone()
             };
 
@@ -325,7 +345,7 @@ impl TextLevelRule for GenericUnpairedBracketsRule {
                     RuleMatchContext::new(context_text, context_start, context_end - context_start),
                 )
                 .with_sentence("".to_string())
-                .with_replacements(vec![SuggestedReplacement::new(entry.symbol.clone())])
+                .with_replacements(vec![SuggestedReplacement::new(entry.symbol.clone())]),
             );
         }
 
@@ -333,7 +353,6 @@ impl TextLevelRule for GenericUnpairedBracketsRule {
     }
 }
 
-/// Detects unpaired quotes using stack-based pairing.
 pub struct GenericUnpairedQuotesRule {
     id: String,
     category: Category,
@@ -346,9 +365,9 @@ impl GenericUnpairedQuotesRule {
             id: "UNPAIRED_QUOTES".to_string(),
             category: Category::new("PUNCTUATION", "Punctuation"),
             quote_symbols: vec![
-                ("\u{201C}".to_string(), "\u{201D}".to_string()), // "" smart double
-                ("\u{2018}".to_string(), "\u{2019}".to_string()), // '' smart single
-                ("\"".to_string(), "\"".to_string()),              // regular double
+                ("\u{201C}".to_string(), "\u{201D}".to_string()),
+                ("\u{2018}".to_string(), "\u{2019}".to_string()),
+                ("\"".to_string(), "\"".to_string()),
             ],
         }
     }
@@ -356,6 +375,22 @@ impl GenericUnpairedQuotesRule {
     pub fn with_id(mut self, id: impl Into<String>) -> Self {
         self.id = id.into();
         self
+    }
+
+    pub fn with_quote_symbols(mut self, symbols: Vec<(String, String)>) -> Self {
+        self.quote_symbols = symbols;
+        self
+    }
+
+    pub fn english() -> Self {
+        Self::new()
+            .with_id("EN_UNPAIRED_QUOTES")
+            .with_quote_symbols(vec![
+                ("\u{201C}".to_string(), "\u{201D}".to_string()),
+                ("\"".to_string(), "\"".to_string()),
+                ("'".to_string(), "'".to_string()),
+                ("\u{2018}".to_string(), "\u{2019}".to_string()),
+            ])
     }
 }
 
@@ -396,34 +431,43 @@ impl TextLevelRule for GenericUnpairedQuotesRule {
                 let token_start = pos + token_reading.token().start();
 
                 for (qi, (open_q, close_q)) in self.quote_symbols.iter().enumerate() {
+                    let apostrophe_guarded = open_q == "'"
+                        && (token_reading.has_pos_tag("POS")
+                            || token_reading.has_pos_tag("NNP")
+                            || token_reading.has_pos_tag("_apostrophe_contraction_"));
+                    if apostrophe_guarded {
+                        continue;
+                    }
                     if open_q == close_q {
-                        // Same symbol for open/close (e.g. regular double quote)
-                        if token_text.contains(open_q.as_str()) {
-                            if open_counts[qi] % 2 == 0 {
+                        if token_text == open_q.as_str() {
+                            if open_counts[qi].is_multiple_of(2) {
                                 open_positions[qi].push(token_start);
+                            } else {
+                                open_positions[qi].pop();
                             }
                             open_counts[qi] += 1;
                         }
                     } else {
-                        if token_text.contains(open_q.as_str()) {
+                        if token_text == open_q.as_str() {
                             open_positions[qi].push(token_start);
                             open_counts[qi] += 1;
                         }
-                        if token_text.contains(close_q.as_str()) {
+                        if token_text == close_q.as_str() {
                             if open_counts[qi] > 0 {
                                 open_positions[qi].pop();
                                 open_counts[qi] -= 1;
                             } else {
-                                // Unpaired closing quote
                                 let start = token_start;
                                 let end = start + close_q.len();
-                                let context_start = if start >= 30 { start - 30 } else { 0 };
+                                let context_start = start.saturating_sub(30);
                                 let context_end = std::cmp::min(end + 30, text.len());
                                 let context_text = text[context_start..context_end].to_string();
 
                                 let rule = RuleMatchRule::new(&self.id, self.description())
                                     .with_category(self.category.clone())
-                                    .with_issue_type(IssueType::Other("other".to_string()).as_str());
+                                    .with_issue_type(
+                                        IssueType::Other("other".to_string()).as_str(),
+                                    );
 
                                 matches.push(
                                     RuleMatch::new(
@@ -431,9 +475,13 @@ impl TextLevelRule for GenericUnpairedQuotesRule {
                                         start,
                                         end - start,
                                         rule,
-                                        RuleMatchContext::new(context_text, context_start, context_end - context_start),
+                                        RuleMatchContext::new(
+                                            context_text,
+                                            context_start,
+                                            context_end - context_start,
+                                        ),
                                     )
-                                    .with_sentence(sentence.text().to_string())
+                                    .with_sentence(sentence.text().to_string()),
                                 );
                             }
                         }
@@ -443,12 +491,11 @@ impl TextLevelRule for GenericUnpairedQuotesRule {
             pos += sentence.text().len();
         }
 
-        // Report unpaired opening quotes
         for (qi, positions) in open_positions.iter().enumerate() {
             let (open_q, _) = &self.quote_symbols[qi];
             for &start_pos in positions {
                 let end = start_pos + open_q.len();
-                let context_start = if start_pos >= 30 { start_pos - 30 } else { 0 };
+                let context_start = start_pos.saturating_sub(30);
                 let context_end = std::cmp::min(end + 30, text.len());
                 let context_text = text[context_start..context_end].to_string();
 
@@ -462,9 +509,13 @@ impl TextLevelRule for GenericUnpairedQuotesRule {
                         start_pos,
                         end - start_pos,
                         rule,
-                        RuleMatchContext::new(context_text, context_start, context_end - context_start),
+                        RuleMatchContext::new(
+                            context_text,
+                            context_start,
+                            context_end - context_start,
+                        ),
                     )
-                    .with_sentence("".to_string())
+                    .with_sentence("".to_string()),
                 );
             }
         }
@@ -473,7 +524,6 @@ impl TextLevelRule for GenericUnpairedQuotesRule {
     }
 }
 
-/// Warns when sentences exceed a configurable word count.
 pub struct LongSentenceRule {
     id: String,
     category: Category,
@@ -514,7 +564,7 @@ impl TextLevelRule for LongSentenceRule {
     }
 
     fn is_default_on(&self) -> bool {
-        false // Only on in picky mode
+        false
     }
 
     fn match_text(&self, text: &str, sentences: &[AnalyzedSentence]) -> Vec<RuleMatch> {
@@ -523,23 +573,24 @@ impl TextLevelRule for LongSentenceRule {
 
         for sentence in sentences {
             let tokens = sentence.non_whitespace_tokens();
-            let word_count = tokens.iter()
+            let word_count = tokens
+                .iter()
                 .filter(|t| t.token().token().chars().any(|c| c.is_alphabetic()))
                 .count();
 
             if word_count > self.max_words {
-                // Find the first and last word token for the match range
-                let first_word = tokens.iter().find(|t|
-                    t.token().token().chars().any(|c| c.is_alphabetic())
-                );
-                let last_word = tokens.iter().rev().find(|t|
-                    t.token().token().chars().any(|c| c.is_alphabetic())
-                );
+                let first_word = tokens
+                    .iter()
+                    .find(|t| t.token().token().chars().any(|c| c.is_alphabetic()));
+                let last_word = tokens
+                    .iter()
+                    .rev()
+                    .find(|t| t.token().token().chars().any(|c| c.is_alphabetic()));
 
                 if let (Some(first), Some(last)) = (first_word, last_word) {
                     let start = pos + first.token().start();
                     let end = pos + last.token().end();
-                    let context_start = if start >= 30 { start - 30 } else { 0 };
+                    let context_start = start.saturating_sub(30);
                     let context_end = std::cmp::min(end + 30, text.len());
                     let context_text = text[context_start..context_end].to_string();
 
@@ -549,13 +600,20 @@ impl TextLevelRule for LongSentenceRule {
 
                     matches.push(
                         RuleMatch::new(
-                            format!("Sentence is too long ({} words, max: {})", word_count, self.max_words),
+                            format!(
+                                "Sentence is too long ({} words, max: {})",
+                                word_count, self.max_words
+                            ),
                             start,
                             end - start,
                             rule,
-                            RuleMatchContext::new(context_text, context_start, context_end - context_start),
+                            RuleMatchContext::new(
+                                context_text,
+                                context_start,
+                                context_end - context_start,
+                            ),
                         )
-                        .with_sentence(sentence.text().to_string())
+                        .with_sentence(sentence.text().to_string()),
                     );
                 }
             }
@@ -567,7 +625,6 @@ impl TextLevelRule for LongSentenceRule {
     }
 }
 
-/// Detects when consecutive sentences start with the same word.
 pub struct WordRepeatBeginningRule {
     id: String,
     category: Category,
@@ -609,7 +666,7 @@ impl TextLevelRule for WordRepeatBeginningRule {
 
     fn match_text(&self, text: &str, sentences: &[AnalyzedSentence]) -> Vec<RuleMatch> {
         let mut matches = Vec::new();
-        let mut first_words: Vec<(String, usize, usize, usize)> = Vec::new(); // (word, pos, start, end)
+        let mut first_words: Vec<(String, usize, usize, usize)> = Vec::new();
 
         let mut pos = 0usize;
         for sentence in sentences {
@@ -623,11 +680,11 @@ impl TextLevelRule for WordRepeatBeginningRule {
             pos += sentence.text().len();
         }
 
-        // Check for runs of same starting word
         let mut i = 0;
         while i < first_words.len() {
             let mut run_len = 1;
-            while i + run_len < first_words.len() && first_words[i + run_len].0 == first_words[i].0 {
+            while i + run_len < first_words.len() && first_words[i + run_len].0 == first_words[i].0
+            {
                 run_len += 1;
             }
 
@@ -644,13 +701,20 @@ impl TextLevelRule for WordRepeatBeginningRule {
 
                     matches.push(
                         RuleMatch::new(
-                            format!("Three or more sentences start with the word '{}'.", first_words[i].0),
+                            format!(
+                                "Three or more sentences start with the word '{}'.",
+                                first_words[i].0
+                            ),
                             *start,
                             *end - start,
                             rule,
-                            RuleMatchContext::new(context_text, context_start, context_end - context_start),
+                            RuleMatchContext::new(
+                                context_text,
+                                context_start,
+                                context_end - context_start,
+                            ),
                         )
-                        .with_sentence("".to_string())
+                        .with_sentence("".to_string()),
                     );
                 }
             }
@@ -661,8 +725,6 @@ impl TextLevelRule for WordRepeatBeginningRule {
         matches
     }
 }
-
-// Helper functions
 
 #[allow(dead_code)]
 fn is_normal_whitespace(token: &AnalyzedTokenReadings) -> bool {
@@ -695,13 +757,11 @@ fn is_smiley_exception(
     all_tokens: &[AnalyzedTokenReadings],
     current: &AnalyzedTokenReadings,
 ) -> bool {
-    // Find current token index in all_tokens
     let current_idx = match all_tokens.iter().position(|t| std::ptr::eq(t, current)) {
         Some(idx) => idx,
         None => return false,
     };
 
-    // Check for :) :(
     if (token_text == ")" || token_text == "(") && current_idx >= 1 {
         let prev = all_tokens[current_idx - 1].token().token();
         if prev == ":" || prev == ";" {
@@ -709,7 +769,6 @@ fn is_smiley_exception(
         }
     }
 
-    // Check for :-) ;-(
     if (token_text == ")" || token_text == "(") && current_idx >= 2 {
         let prev = all_tokens[current_idx - 1].token().token();
         let prev_prev = all_tokens[current_idx - 2].token().token();
@@ -768,14 +827,17 @@ mod tests {
         for word in text.split_whitespace() {
             let start = text[pos..].find(word).unwrap_or(0) + pos;
             let end = start + word.len();
-            tokens.push(AnalyzedTokenReadings::new(AnalyzedToken::new(word, offset + start, offset + end)));
+            tokens.push(AnalyzedTokenReadings::new(AnalyzedToken::new(
+                word,
+                offset + start,
+                offset + end,
+            )));
             pos = end;
         }
         sentence.set_tokens(tokens);
         sentence
     }
 
-    // MultipleWhitespaceRule tests
     #[test]
     fn test_multiple_whitespace_double_space() {
         let rule = MultipleWhitespaceRule::new();
@@ -823,7 +885,6 @@ mod tests {
         assert_eq!(matches.len(), 1, "Double space between sentences");
     }
 
-    // SentenceWhitespaceRule tests
     #[test]
     fn test_sentence_whitespace_missing_space() {
         let rule = SentenceWhitespaceRule::new();
@@ -869,7 +930,43 @@ mod tests {
         sentence.set_tokens(tokens);
     }
 
-    // GenericUnpairedBracketsRule tests
+    #[test]
+    fn test_english_unpaired_quotes_lone_apostrophe() {
+        let rule = GenericUnpairedQuotesRule::english();
+        assert_eq!(rule.id(), "EN_UNPAIRED_QUOTES");
+        let text = "It was ' open";
+        let s = make_simple_sentence(text, 0);
+        let matches = rule.match_text(text, &[s]);
+        assert_eq!(matches.len(), 1, "lone apostrophe is an unpaired quote");
+    }
+
+    #[test]
+    fn test_english_quotes_paired_apostrophes_ok() {
+        let rule = GenericUnpairedQuotesRule::english();
+        let text = "It was ' open ' closed";
+        let s = make_simple_sentence(text, 0);
+        let matches = rule.match_text(text, &[s]);
+        assert_eq!(matches.len(), 0, "paired apostrophes must not match");
+    }
+
+    #[test]
+    fn test_english_quotes_contraction_token_not_flagged() {
+        let rule = GenericUnpairedQuotesRule::english();
+        let text = "I do n't like it";
+        let s = make_simple_sentence(text, 0);
+        let matches = rule.match_text(text, &[s]);
+        assert_eq!(matches.len(), 0, "contraction token is not a quote symbol");
+    }
+
+    #[test]
+    fn test_quotes_attached_marks_are_ignored() {
+        let rule = GenericUnpairedQuotesRule::english();
+        let text = "He said word now";
+        let s = make_simple_sentence(text, 0);
+        let matches = rule.match_text(text, &[s]);
+        assert_eq!(matches.len(), 0);
+    }
+
     #[test]
     fn test_unpaired_opening_bracket() {
         let rule = GenericUnpairedBracketsRule::new();
@@ -904,7 +1001,10 @@ mod tests {
         let s = make_simple_sentence("Hello world", 0);
         let text = "Hello ((world))";
         let matches = rule.match_text(text, &[s]);
-        assert!(matches.is_empty(), "Nested paired brackets should not trigger");
+        assert!(
+            matches.is_empty(),
+            "Nested paired brackets should not trigger"
+        );
     }
 
     #[test]
@@ -913,7 +1013,10 @@ mod tests {
         let s = make_simple_sentence("Hello world", 0);
         let text = "Hello :) world";
         let matches = rule.match_text(text, &[s]);
-        assert!(matches.is_empty(), "Smiley :) should not trigger unpaired bracket");
+        assert!(
+            matches.is_empty(),
+            "Smiley :) should not trigger unpaired bracket"
+        );
     }
 
     #[test]
@@ -925,7 +1028,24 @@ mod tests {
         assert!(matches.is_empty(), "All paired should not trigger");
     }
 
-    // LongSentenceRule tests
+    #[test]
+    fn test_long_sentence_below_java_threshold_not_flagged() {
+        let words: Vec<String> = (0..35).map(|i| format!("w{i}")).collect();
+        let text = words.join(" ");
+        let rule = LongSentenceRule::new(40);
+        assert!(
+            rule.match_text(&text, &[make_simple_sentence(&text, 0)])
+                .is_empty()
+        );
+        let rule30 = LongSentenceRule::new(30);
+        assert_eq!(
+            rule30
+                .match_text(&text, &[make_simple_sentence(&text, 0)])
+                .len(),
+            1
+        );
+    }
+
     #[test]
     fn test_long_sentence_triggers() {
         let rule = LongSentenceRule::new(5);
@@ -943,7 +1063,11 @@ mod tests {
 
         let text = "one two three four five six";
         let matches = rule.match_text(text, &[sentence]);
-        assert_eq!(matches.len(), 1, "Sentence with 6 words, max 5, should trigger");
+        assert_eq!(
+            matches.len(),
+            1,
+            "Sentence with 6 words, max 5, should trigger"
+        );
     }
 
     #[test]
@@ -963,7 +1087,6 @@ mod tests {
         assert!(matches.is_empty(), "Short sentence should not trigger");
     }
 
-    // WordRepeatBeginningRule tests
     #[test]
     fn test_repeat_beginning_triggers() {
         let rule = WordRepeatBeginningRule::new();
@@ -978,7 +1101,11 @@ mod tests {
 
         let text = "The cat sat. The dog ran. The bird flew.";
         let matches = rule.match_text(text, &[s1, s2, s3]);
-        assert_eq!(matches.len(), 3, "Three sentences starting with 'The' should trigger 3 matches");
+        assert_eq!(
+            matches.len(),
+            3,
+            "Three sentences starting with 'The' should trigger 3 matches"
+        );
     }
 
     #[test]
@@ -995,7 +1122,10 @@ mod tests {
 
         let text = "The cat sat. A dog ran. Some bird flew.";
         let matches = rule.match_text(text, &[s1, s2, s3]);
-        assert!(matches.is_empty(), "Different starting words should not trigger");
+        assert!(
+            matches.is_empty(),
+            "Different starting words should not trigger"
+        );
     }
 
     #[test]
@@ -1011,5 +1141,334 @@ mod tests {
         let text = "The cat sat. The dog ran.";
         let matches = rule.match_text(text, &[s1, s2]);
         assert!(matches.is_empty(), "Only 2 repeats, need 3");
+    }
+}
+
+fn is_linebreak_token(token: &AnalyzedTokenReadings) -> bool {
+    let text = token.token().token();
+    text == "\n" || text == "\r"
+}
+
+fn is_paragraph_end(sentences: &[AnalyzedSentence], index: usize) -> bool {
+    if index >= sentences.len() - 1 {
+        return true;
+    }
+    let text = sentences[index].text();
+    if text.ends_with("\n\n") || text.ends_with("\n\r\n\r") || text.ends_with("\r\n\r\n") {
+        return true;
+    }
+    let next = sentences[index + 1].text();
+    next.starts_with('\n') || next.starts_with("\r\n")
+}
+
+pub struct WhiteSpaceBeforeParagraphEndRule {
+    category: Category,
+}
+
+impl WhiteSpaceBeforeParagraphEndRule {
+    pub fn new() -> Self {
+        Self {
+            category: Category::new("STYLE", "Style"),
+        }
+    }
+}
+
+impl Default for WhiteSpaceBeforeParagraphEndRule {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl TextLevelRule for WhiteSpaceBeforeParagraphEndRule {
+    fn id(&self) -> &str {
+        "WHITESPACE_PARAGRAPH"
+    }
+
+    fn description(&self) -> &str {
+        "Whitespace before paragraph end"
+    }
+
+    fn is_default_on(&self) -> bool {
+        false
+    }
+
+    fn category(&self) -> Category {
+        self.category.clone()
+    }
+
+    fn issue_type(&self) -> IssueType {
+        IssueType::Style
+    }
+
+    fn match_text(&self, _text: &str, sentences: &[AnalyzedSentence]) -> Vec<RuleMatch> {
+        let mut matches = Vec::new();
+        for (index, sentence) in sentences.iter().enumerate() {
+            if !is_paragraph_end(sentences, index) {
+                continue;
+            }
+            let tokens = sentence.tokens();
+            let mut line_break = tokens.len().saturating_sub(1);
+            while line_break > 0 && is_linebreak_token(&tokens[line_break]) {
+                line_break -= 1;
+            }
+            let mut whitespace = line_break;
+            while whitespace > 0
+                && tokens[whitespace].is_whitespace()
+                && tokens[whitespace].token().token() != "\u{200B}"
+            {
+                whitespace -= 1;
+            }
+            if whitespace >= line_break {
+                continue;
+            }
+            let from = if tokens[whitespace].is_whitespace() {
+                tokens[whitespace + 1].token().start()
+            } else {
+                tokens[whitespace].token().start()
+            };
+            let to = tokens[line_break].token().end();
+            let replacement = if whitespace > 0 && !tokens[whitespace].is_whitespace() {
+                tokens[whitespace].token().token().to_string()
+            } else {
+                String::new()
+            };
+            let rule = RuleMatchRule::new(self.id(), self.description())
+                .with_category(self.category.clone())
+                .with_issue_type(IssueType::Style.as_str());
+            matches.push(
+                RuleMatch::new(
+                    "Whitespace before the end of the paragraph.".to_string(),
+                    sentence.start() + from,
+                    to - from,
+                    rule,
+                    RuleMatchContext::new(sentence.text().to_string(), from, to - from),
+                )
+                .with_replacements(vec![SuggestedReplacement::new(&replacement)])
+                .with_sentence(sentence.text().to_string()),
+            );
+        }
+        matches
+    }
+}
+
+pub struct WhiteSpaceAtBeginOfParagraphRule {
+    category: Category,
+}
+
+impl WhiteSpaceAtBeginOfParagraphRule {
+    pub fn new() -> Self {
+        Self {
+            category: Category::new("STYLE", "Style"),
+        }
+    }
+}
+
+impl Default for WhiteSpaceAtBeginOfParagraphRule {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+fn deletable_whitespace(token: &AnalyzedTokenReadings) -> bool {
+    token.is_whitespace() && token.token().token() != "\u{200B}" && !is_linebreak_token(token)
+}
+
+pub struct EmptyLineRule {
+    category: Category,
+}
+
+impl EmptyLineRule {
+    pub fn new() -> Self {
+        Self {
+            category: Category::new("STYLE", "Style"),
+        }
+    }
+}
+
+impl Default for EmptyLineRule {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl TextLevelRule for EmptyLineRule {
+    fn id(&self) -> &str {
+        "EMPTY_LINE"
+    }
+
+    fn description(&self) -> &str {
+        "Empty line"
+    }
+
+    fn is_default_on(&self) -> bool {
+        false
+    }
+
+    fn category(&self) -> Category {
+        self.category.clone()
+    }
+
+    fn issue_type(&self) -> IssueType {
+        IssueType::Style
+    }
+
+    fn match_text(&self, _text: &str, sentences: &[AnalyzedSentence]) -> Vec<RuleMatch> {
+        let mut matches = Vec::new();
+        for index in 0..sentences.len().saturating_sub(1) {
+            let sentence = &sentences[index];
+            if !is_paragraph_end(sentences, index) {
+                continue;
+            }
+            let text = sentence.text();
+            let double_break = text.ends_with("\n\n\n\n")
+                || text.ends_with("\n\r\n\r\n\r\n\r")
+                || text.ends_with("\r\n\r\n\r\n\r\n");
+            if !double_break {
+                continue;
+            }
+            let tokens = sentence.non_whitespace_tokens();
+            let Some(last) = tokens.last() else {
+                continue;
+            };
+            let from = last.token().start();
+            let to = last.token().end();
+            let rule = RuleMatchRule::new(self.id(), self.description())
+                .with_category(self.category.clone())
+                .with_issue_type(IssueType::Style.as_str());
+            matches.push(RuleMatch::new(
+                "Empty line.".to_string(),
+                sentence.start() + from,
+                to - from,
+                rule,
+                RuleMatchContext::new(sentence.text().to_string(), from, to - from),
+            ));
+        }
+        matches
+    }
+}
+
+impl og_core::rule::Rule for WhiteSpaceAtBeginOfParagraphRule {
+    fn id(&self) -> &str {
+        "WHITESPACE_PARAGRAPH_BEGIN"
+    }
+
+    fn description(&self) -> &str {
+        "Whitespace at the beginning of a paragraph"
+    }
+
+    fn is_default_on(&self) -> bool {
+        false
+    }
+
+    fn category(&self) -> Category {
+        self.category.clone()
+    }
+
+    fn issue_type(&self) -> IssueType {
+        IssueType::Style
+    }
+
+    fn match_sentence(&self, sentence: &AnalyzedSentence) -> Vec<RuleMatch> {
+        let tokens = sentence.tokens();
+        let mut i = 1;
+        while i < tokens.len() && deletable_whitespace(&tokens[i]) {
+            i += 1;
+        }
+        if i <= 1 || i >= tokens.len() || is_linebreak_token(&tokens[i]) {
+            return Vec::new();
+        }
+        let from = tokens[1].token().start();
+        let to = tokens[i].token().end();
+        let rule = RuleMatchRule::new(self.id(), self.description())
+            .with_category(self.category.clone())
+            .with_issue_type(IssueType::Style.as_str());
+        vec![
+            RuleMatch::new(
+                "Whitespace at the beginning of a paragraph.".to_string(),
+                sentence.start() + from,
+                to - from,
+                rule,
+                RuleMatchContext::new(sentence.text().to_string(), from, to - from),
+            )
+            .with_replacements(vec![SuggestedReplacement::new(tokens[i].token().token())]),
+        ]
+    }
+}
+
+#[cfg(test)]
+mod paragraph_tests {
+    use super::*;
+    use og_core::rule::{Rule, TextLevelRule};
+
+    fn sentence_from_text(text: &str, offset: usize) -> AnalyzedSentence {
+        let mut sentence = AnalyzedSentence::new(text, offset, offset + text.len());
+        let mut tokens = vec![og_core::AnalyzedTokenReadings::new(
+            og_core::AnalyzedToken::new("<S>", offset, offset)
+                .with_pos_tags(vec!["SENT_START".to_string()]),
+        )];
+        let mut pos = offset;
+        let mut last = 0;
+        let mut parts: Vec<&str> = Vec::new();
+        for (i, c) in text.char_indices() {
+            if c == ' ' || c == '\n' || c == '\r' {
+                if i > last {
+                    parts.push(&text[last..i]);
+                }
+                parts.push(&text[i..i + c.len_utf8()]);
+                last = i + c.len_utf8();
+            }
+        }
+        if last < text.len() {
+            parts.push(&text[last..]);
+        }
+        for part in parts {
+            tokens.push(og_core::AnalyzedTokenReadings::new(
+                og_core::AnalyzedToken::new(part, pos, pos + part.len()),
+            ));
+            pos += part.len();
+        }
+        sentence.set_tokens(tokens);
+        sentence
+    }
+
+    #[test]
+    fn whitespace_before_paragraph_end_is_flagged() {
+        let rule = WhiteSpaceBeforeParagraphEndRule::new();
+        let sentences = vec![
+            sentence_from_text("Hello world. \n\n", 0),
+            sentence_from_text("Next", 19),
+        ];
+        let matches = rule.match_text("", &sentences);
+        assert_eq!(matches.len(), 1, "{matches:?}");
+        assert!(matches[0].message().contains("Whitespace before"));
+    }
+
+    #[test]
+    fn no_match_without_trailing_whitespace() {
+        let rule = WhiteSpaceBeforeParagraphEndRule::new();
+        let sentences = vec![
+            sentence_from_text("Hello world.\n\n", 0),
+            sentence_from_text("Next", 15),
+        ];
+        assert!(rule.match_text("", &sentences).is_empty());
+    }
+
+    #[test]
+    fn whitespace_at_begin_of_paragraph_is_flagged() {
+        let rule = WhiteSpaceAtBeginOfParagraphRule::new();
+        let sentence = sentence_from_text("  Hello world.", 0);
+        let matches = rule.match_sentence(&sentence);
+        assert_eq!(matches.len(), 1, "{matches:?}");
+    }
+
+    #[test]
+    fn empty_line_is_flagged_between_paragraphs() {
+        let rule = EmptyLineRule::new();
+        let sentences = vec![
+            sentence_from_text("One.\n\n\n\n", 0),
+            sentence_from_text("Two.", 9),
+        ];
+        let matches = rule.match_text("", &sentences);
+        assert_eq!(matches.len(), 1, "{matches:?}");
     }
 }

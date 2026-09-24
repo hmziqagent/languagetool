@@ -1,15 +1,62 @@
-use crate::types::*;
 use crate::parser::*;
+use crate::types::*;
+use rayon::prelude::*;
 
-pub struct XmlCompiler;
+const REGEX_CACHE_SHARDS: usize = 16;
+
+type RegexCacheShard = std::sync::Mutex<std::collections::HashMap<String, Option<regex::Regex>>>;
+
+pub struct XmlCompiler {
+    regex_cache: Vec<RegexCacheShard>,
+    ci_regex_cache: Vec<RegexCacheShard>,
+}
 
 impl XmlCompiler {
     pub fn new() -> Self {
-        Self
+        Self {
+            regex_cache: (0..REGEX_CACHE_SHARDS)
+                .map(|_| std::sync::Mutex::new(std::collections::HashMap::new()))
+                .collect(),
+            ci_regex_cache: (0..REGEX_CACHE_SHARDS)
+                .map(|_| std::sync::Mutex::new(std::collections::HashMap::new()))
+                .collect(),
+        }
     }
 
-    /// Anchor a regex pattern for full-string matching (Java String.matches() behavior).
-    /// Wraps the pattern with `^(?:...)$` unless already anchored.
+    fn cached_regex(&self, pattern: &str) -> Option<regex::Regex> {
+        let shard = &self.regex_cache[Self::shard_index(pattern, REGEX_CACHE_SHARDS)];
+        let mut cache = shard.lock().unwrap();
+        if let Some(re) = cache.get(pattern) {
+            return re.clone();
+        }
+        let built = regex::Regex::new(pattern).ok();
+        cache.insert(pattern.to_string(), built.clone());
+        built
+    }
+
+    fn cached_regex_ci(&self, pattern: &str) -> Option<regex::Regex> {
+        let shard = &self.ci_regex_cache[Self::shard_index(pattern, REGEX_CACHE_SHARDS)];
+        let mut cache = shard.lock().unwrap();
+        if let Some(re) = cache.get(pattern) {
+            return re.clone();
+        }
+        let built = regex::RegexBuilder::new(pattern)
+            .case_insensitive(true)
+            .build()
+            .ok();
+        cache.insert(pattern.to_string(), built.clone());
+        built
+    }
+
+    fn shard_index(pattern: &str, shards: usize) -> usize {
+        let mut h: u64 = 14_695_981_039_346_656_037;
+        for b in pattern.as_bytes() {
+            h ^= *b as u64;
+            h = h.wrapping_mul(1_099_511_628_211);
+        }
+        (h % shards as u64) as usize
+    }
+
     fn anchor_regex(pattern: &str) -> String {
         let trimmed = pattern.trim();
         if trimmed.starts_with('^') && trimmed.ends_with('$') {
@@ -25,32 +72,60 @@ impl XmlCompiler {
         let mut compiled = CompiledRuleSet {
             rules: Vec::new(),
             categories: rule_file.categories.clone(),
+            unifications: rule_file
+                .unifications
+                .iter()
+                .map(|uni| CompiledUnification {
+                    feature: uni.feature.clone(),
+                    equivalences: uni
+                        .equivalences
+                        .iter()
+                        .filter_map(|eq| {
+                            let pattern = if eq.exact {
+                                format!(r"\A(?:{})\z", regex::escape(&eq.postag))
+                            } else {
+                                format!(r"\A(?:{})\z", eq.postag)
+                            };
+                            regex::Regex::new(&pattern)
+                                .ok()
+                                .map(|re| (eq.eq_type.clone(), re))
+                        })
+                        .collect(),
+                })
+                .collect(),
         };
 
-        for rule in &rule_file.rules {
-            compiled.rules.push(self.compile_rule(rule));
-        }
+        let mut compiled_rules: Vec<CompiledRule> = rule_file
+            .rules
+            .par_iter()
+            .map(|rule| self.compile_rule(rule))
+            .collect();
 
         for group in &rule_file.rule_groups {
-            for (i, rule) in group.rules.iter().enumerate() {
-                let mut compiled_rule = self.compile_rule(rule);
-                // If rule doesn't have its own ID, inherit the group's ID
-                if compiled_rule.id.is_empty() {
-                    if let Some(ref group_id) = group.id {
-                        compiled_rule.id = group_id.clone();
-                        // Add sub-id based on position within group
-                        compiled_rule.sub_id = Some(format!("{}", i + 1));
-                    }
+            let group_rules: Vec<CompiledRule> = group
+                .rules
+                .par_iter()
+                .map(|rule| self.compile_rule(rule))
+                .collect();
+            for (i, mut compiled_rule) in group_rules.into_iter().enumerate() {
+                if compiled_rule.id.is_empty()
+                    && let Some(ref group_id) = group.id
+                {
+                    compiled_rule.id = group_id.clone();
+                    compiled_rule.sub_id = Some(format!("{}", i + 1));
                 }
-                // Inherit group-level issue_type if rule doesn't have its own
-                if compiled_rule.issue_type == "grammar" {
-                    if let Some(ref git) = group.issue_type {
-                        compiled_rule.issue_type = git.clone();
-                    }
+                if compiled_rule.issue_type == "grammar"
+                    && let Some(ref git) = group.issue_type
+                {
+                    compiled_rule.issue_type = git.clone();
                 }
-                compiled.rules.push(compiled_rule);
+                compiled_rules.push(compiled_rule);
             }
         }
+        for rule in &mut compiled_rules {
+            rule.unifications = compiled.unifications.clone();
+        }
+        compiled.rules = compiled_rules;
 
         Ok(compiled)
     }
@@ -61,147 +136,217 @@ impl XmlCompiler {
             sub_id: rule.sub_id.clone(),
             name: rule.name.clone(),
             description: rule.description.clone(),
+            source_file: None,
             category: rule.category.clone(),
-            antipatterns: rule.antipatterns.iter().map(|ap| {
-                let pat_cs = ap.case_sensitive;
-                CompiledPattern {
-                    tokens: ap.tokens.iter().map(|t| {
-                        let mut ct = self.compile_token(t);
-                        if pat_cs { ct.case_sensitive = true; }
-                        ct
-                    }).collect(),
-                    elements: ap.elements.iter().map(|e| {
-                        match e {
-                            XmlPatternElement::Token(t) => {
+            antipatterns: rule
+                .antipatterns
+                .iter()
+                .map(|ap| {
+                    let pat_cs = ap.case_sensitive;
+                    CompiledPattern {
+                        marker_elem_start: ap.marker_elem_start,
+                        marker_elem_end: ap.marker_elem_end,
+                        unify_groups: ap.unify_groups.clone(),
+                        tokens: ap
+                            .tokens
+                            .iter()
+                            .map(|t| {
                                 let mut ct = self.compile_token(t);
-                                if pat_cs { ct.case_sensitive = true; }
-                                CompiledPatternElement::Token(ct)
-                            }
-                            XmlPatternElement::OrGroup(g) => {
-                                CompiledPatternElement::OrGroup(
-                                    g.alternatives.iter().map(|t| {
-                                        let mut ct = self.compile_token(t);
-                                        if pat_cs { ct.case_sensitive = true; }
-                                        ct
-                                    }).collect()
-                                )
-                            }
-                            XmlPatternElement::AndGroup(g) => {
-                                CompiledPatternElement::AndGroup(
-                                    g.constraints.iter().map(|t| {
-                                        let mut ct = self.compile_token(t);
-                                        if pat_cs { ct.case_sensitive = true; }
-                                        ct
-                                    }).collect()
-                                )
-                            }
-                        }
-                    }).collect(),
-                    case_sensitive: pat_cs,
-                    marker_start: None,
-                    marker_end: None,
-                }
-            }).collect(),
+                                if pat_cs {
+                                    ct.case_sensitive = true;
+                                }
+                                ct
+                            })
+                            .collect(),
+                        elements: ap
+                            .elements
+                            .iter()
+                            .map(|e| match e {
+                                XmlPatternElement::Token(t) => {
+                                    let mut ct = self.compile_token(t);
+                                    if pat_cs {
+                                        ct.case_sensitive = true;
+                                    }
+                                    CompiledPatternElement::Token(Box::new(ct))
+                                }
+                                XmlPatternElement::OrGroup(g) => CompiledPatternElement::OrGroup(
+                                    g.alternatives
+                                        .iter()
+                                        .map(|t| {
+                                            let mut ct = self.compile_token(t);
+                                            if pat_cs {
+                                                ct.case_sensitive = true;
+                                            }
+                                            ct
+                                        })
+                                        .collect(),
+                                ),
+                                XmlPatternElement::AndGroup(g) => CompiledPatternElement::AndGroup(
+                                    g.constraints
+                                        .iter()
+                                        .map(|t| {
+                                            let mut ct = self.compile_token(t);
+                                            if pat_cs {
+                                                ct.case_sensitive = true;
+                                            }
+                                            ct
+                                        })
+                                        .collect(),
+                                ),
+                            })
+                            .collect(),
+                        case_sensitive: pat_cs,
+                        marker_start: None,
+                        marker_end: None,
+                        has_structured_elements: ap.elements.iter().any(|e| {
+                            matches!(
+                                e,
+                                XmlPatternElement::OrGroup(_) | XmlPatternElement::AndGroup(_)
+                            )
+                        }),
+                    }
+                })
+                .collect(),
             pattern: {
                 let pat_cs = rule.pattern.case_sensitive;
                 CompiledPattern {
-                    tokens: rule.pattern.tokens.iter().map(|t| {
-                        let mut ct = self.compile_token(t);
-                        if pat_cs { ct.case_sensitive = true; }
-                        ct
-                    }).collect(),
-                    elements: rule.pattern.elements.iter().map(|e| {
-                        match e {
+                    marker_elem_start: rule.pattern.marker_elem_start,
+                    marker_elem_end: rule.pattern.marker_elem_end,
+                    unify_groups: rule.pattern.unify_groups.clone(),
+                    tokens: rule
+                        .pattern
+                        .tokens
+                        .iter()
+                        .map(|t| {
+                            let mut ct = self.compile_token(t);
+                            if pat_cs {
+                                ct.case_sensitive = true;
+                            }
+                            ct
+                        })
+                        .collect(),
+                    elements: rule
+                        .pattern
+                        .elements
+                        .iter()
+                        .map(|e| match e {
                             XmlPatternElement::Token(t) => {
                                 let mut ct = self.compile_token(t);
-                                if pat_cs { ct.case_sensitive = true; }
-                                CompiledPatternElement::Token(ct)
+                                if pat_cs {
+                                    ct.case_sensitive = true;
+                                }
+                                CompiledPatternElement::Token(Box::new(ct))
                             }
-                            XmlPatternElement::OrGroup(g) => {
-                                CompiledPatternElement::OrGroup(
-                                    g.alternatives.iter().map(|t| {
+                            XmlPatternElement::OrGroup(g) => CompiledPatternElement::OrGroup(
+                                g.alternatives
+                                    .iter()
+                                    .map(|t| {
                                         let mut ct = self.compile_token(t);
-                                        if pat_cs { ct.case_sensitive = true; }
+                                        if pat_cs {
+                                            ct.case_sensitive = true;
+                                        }
                                         ct
-                                    }).collect()
-                                )
-                            }
-                            XmlPatternElement::AndGroup(g) => {
-                                CompiledPatternElement::AndGroup(
-                                    g.constraints.iter().map(|t| {
+                                    })
+                                    .collect(),
+                            ),
+                            XmlPatternElement::AndGroup(g) => CompiledPatternElement::AndGroup(
+                                g.constraints
+                                    .iter()
+                                    .map(|t| {
                                         let mut ct = self.compile_token(t);
-                                        if pat_cs { ct.case_sensitive = true; }
+                                        if pat_cs {
+                                            ct.case_sensitive = true;
+                                        }
                                         ct
-                                    }).collect()
-                                )
-                            }
-                        }
-                    }).collect(),
+                                    })
+                                    .collect(),
+                            ),
+                        })
+                        .collect(),
                     case_sensitive: pat_cs,
                     marker_start: rule.pattern.marker_start,
                     marker_end: rule.pattern.marker_end,
+                    has_structured_elements: rule.pattern.elements.iter().any(|e| {
+                        matches!(
+                            e,
+                            XmlPatternElement::OrGroup(_) | XmlPatternElement::AndGroup(_)
+                        )
+                    }),
                 }
             },
             message: rule.message.clone(),
             short_message: rule.short_message.clone(),
-            suggestions: rule.suggestions.iter().map(|s| CompiledSuggestion {
-                text: s.text.clone(),
-                parts: s.parts.clone(),
-            }).collect(),
+            suggestions: rule
+                .suggestions
+                .iter()
+                .map(|s| CompiledSuggestion {
+                    text: s.text.clone(),
+                    parts: s.parts.clone(),
+                })
+                .collect(),
             examples: rule.examples.clone(),
+            unifications: Vec::new(),
             url: rule.url.clone(),
             default_on: rule.default_on,
             deprecated: rule.deprecated,
             filter: rule.filter.clone(),
-            issue_type: rule.issue_type.clone()
+            issue_type: rule
+                .issue_type
+                .clone()
                 .or_else(|| rule.category.issue_type.clone())
                 .unwrap_or_else(|| "grammar".to_string()),
         }
     }
 
     pub fn compile_token(&self, token: &XmlPatternToken) -> CompiledPatternToken {
-        // When regexp="yes", the token text IS the regex pattern.
         // Java's String.matches() requires full-string match, so anchor with ^(?:...)$
         let compiled_re = if token.regexp.as_deref() == Some("yes") {
             token.text.as_ref().and_then(|t| {
                 let anchored = Self::anchor_regex(t);
-                regex::Regex::new(&anchored).ok()
+                self.cached_regex(&anchored)
             })
         } else {
             token.regexp.as_ref().and_then(|r| {
                 let anchored = Self::anchor_regex(r);
-                regex::Regex::new(&anchored).ok()
+                self.cached_regex(&anchored)
             })
         };
-        // Pre-compile case-insensitive version for non-case-sensitive regex matching
         let compiled_re_ci = if token.regexp.as_deref() == Some("yes") {
             token.text.as_ref().and_then(|t| {
                 let anchored = Self::anchor_regex(t);
-                regex::RegexBuilder::new(&anchored).case_insensitive(true).build().ok()
+                self.cached_regex_ci(&anchored)
             })
         } else {
             token.regexp.as_ref().and_then(|r| {
                 let anchored = Self::anchor_regex(r);
-                regex::RegexBuilder::new(&anchored).case_insensitive(true).build().ok()
+                self.cached_regex_ci(&anchored)
             })
         };
         let postag_re = if token.postag_regexp.as_deref() == Some("yes") {
-            token.postag.as_ref().and_then(|t| regex::Regex::new(t).ok())
+            token
+                .postag
+                .as_ref()
+                .and_then(|t| self.cached_regex(&Self::anchor_regex(t)))
         } else {
-            token.postag_regexp.as_ref().and_then(|r| regex::Regex::new(r).ok())
+            token
+                .postag_regexp
+                .as_ref()
+                .and_then(|r| self.cached_regex(r))
         };
 
-        // When regexp="yes", text is the pattern, not a literal match
         let text_value = if token.regexp.as_deref() == Some("yes") {
-            None // Don't use as literal text match
+            None
         } else {
             token.text.clone()
         };
 
         CompiledPatternToken {
+            unify_neutral: token.unify_neutral,
+            is_regexp: token.regexp.as_deref() == Some("yes"),
             text: text_value,
-            compiled_regexp: compiled_re,
+            compiled_regexp: compiled_re.clone(),
             compiled_regexp_ci: compiled_re_ci,
+            compiled_regexp_fancy: compile_fancy(compiled_re.is_none(), token),
             postag: token.postag.clone(),
             compiled_postag_regexp: postag_re,
             negate: token.negate,
@@ -211,12 +356,16 @@ impl XmlCompiler {
             min: token.min,
             max: token.max,
             skip: token.skip,
-            exceptions: token.exceptions.iter().map(|e| self.compile_exception(e)).collect(),
+            exceptions: token
+                .exceptions
+                .iter()
+                .map(|e| self.compile_exception(e))
+                .collect(),
             space_before: token.space_before.clone(),
             chunk: token.chunk.clone(),
             chunk_re: token.chunk_re.as_ref().and_then(|r| {
                 let anchored = Self::anchor_regex(r);
-                regex::Regex::new(&anchored).ok()
+                self.cached_regex(&anchored)
             }),
             match_no: token.match_no,
         }
@@ -224,17 +373,21 @@ impl XmlCompiler {
 
     pub fn compile_element(&self, element: &XmlPatternElement) -> CompiledPatternElement {
         match element {
-            XmlPatternElement::Token(t) => CompiledPatternElement::Token(self.compile_token(t)),
-            XmlPatternElement::OrGroup(g) => {
-                CompiledPatternElement::OrGroup(
-                    g.alternatives.iter().map(|t| self.compile_token(t)).collect()
-                )
+            XmlPatternElement::Token(t) => {
+                CompiledPatternElement::Token(Box::new(self.compile_token(t)))
             }
-            XmlPatternElement::AndGroup(g) => {
-                CompiledPatternElement::AndGroup(
-                    g.constraints.iter().map(|t| self.compile_token(t)).collect()
-                )
-            }
+            XmlPatternElement::OrGroup(g) => CompiledPatternElement::OrGroup(
+                g.alternatives
+                    .iter()
+                    .map(|t| self.compile_token(t))
+                    .collect(),
+            ),
+            XmlPatternElement::AndGroup(g) => CompiledPatternElement::AndGroup(
+                g.constraints
+                    .iter()
+                    .map(|t| self.compile_token(t))
+                    .collect(),
+            ),
         }
     }
 
@@ -242,22 +395,25 @@ impl XmlCompiler {
         let compiled_re = if exc.regexp.as_deref() == Some("yes") {
             exc.text.as_ref().and_then(|t| {
                 let anchored = Self::anchor_regex(t);
-                regex::Regex::new(&anchored).ok()
+                self.cached_regex(&anchored)
             })
         } else {
             exc.regexp.as_ref().and_then(|r| {
                 let anchored = Self::anchor_regex(r);
-                regex::Regex::new(&anchored).ok()
+                self.cached_regex(&anchored)
             })
         };
         let compiled_postag_re = if exc.postag_regexp.as_deref() == Some("yes") {
-            exc.postag.as_ref().and_then(|t| regex::Regex::new(t).ok())
+            exc.postag
+                .as_ref()
+                .and_then(|t| self.cached_regex(&Self::anchor_regex(t)))
         } else {
             None
         };
         CompiledException {
             text: exc.text.clone(),
-            compiled_regexp: compiled_re,
+            compiled_regexp: compiled_re.clone(),
+            compiled_regexp_fancy: compile_fancy_exception(compiled_re.is_none(), exc),
             postag: exc.postag.clone(),
             compiled_postag_regexp: compiled_postag_re,
             negate: exc.negate,
@@ -267,6 +423,34 @@ impl XmlCompiler {
             scope: exc.scope.clone(),
         }
     }
+}
+
+fn compile_fancy(
+    needed: bool,
+    token: &crate::types::XmlPatternToken,
+) -> Option<fancy_regex::Regex> {
+    if !needed {
+        return None;
+    }
+    let pattern = if token.regexp.as_deref() == Some("yes") {
+        token.text.clone()
+    } else {
+        token.regexp.clone()
+    }?;
+    let anchored = XmlCompiler::anchor_regex(&pattern);
+    fancy_regex::Regex::new(&anchored).ok()
+}
+
+fn compile_fancy_exception(
+    needed: bool,
+    exc: &crate::types::XmlException,
+) -> Option<fancy_regex::Regex> {
+    if !needed {
+        return None;
+    }
+    let pattern = exc.text.clone()?;
+    let anchored = XmlCompiler::anchor_regex(&pattern);
+    fancy_regex::Regex::new(&anchored).ok()
 }
 
 impl Default for XmlCompiler {
@@ -279,6 +463,13 @@ impl Default for XmlCompiler {
 pub struct CompiledRuleSet {
     pub rules: Vec<CompiledRule>,
     pub categories: Vec<XmlCategory>,
+    pub unifications: Vec<CompiledUnification>,
+}
+
+#[derive(Debug, Clone)]
+pub struct CompiledUnification {
+    pub feature: String,
+    pub equivalences: Vec<(String, regex::Regex)>,
 }
 
 #[derive(Debug, Clone)]
@@ -287,6 +478,7 @@ pub struct CompiledRule {
     pub sub_id: Option<String>,
     pub name: String,
     pub description: String,
+    pub source_file: Option<String>,
     pub category: XmlCategory,
     pub antipatterns: Vec<CompiledPattern>,
     pub pattern: CompiledPattern,
@@ -294,6 +486,7 @@ pub struct CompiledRule {
     pub short_message: Option<String>,
     pub suggestions: Vec<CompiledSuggestion>,
     pub examples: Vec<XmlExample>,
+    pub unifications: Vec<CompiledUnification>,
     pub url: Option<String>,
     pub default_on: bool,
     pub deprecated: bool,
@@ -301,10 +494,9 @@ pub struct CompiledRule {
     pub issue_type: String,
 }
 
-/// A compiled pattern element - either a single token, an or-group, or an and-group
 #[derive(Debug, Clone)]
 pub enum CompiledPatternElement {
-    Token(CompiledPatternToken),
+    Token(Box<CompiledPatternToken>),
     OrGroup(Vec<CompiledPatternToken>),
     AndGroup(Vec<CompiledPatternToken>),
 }
@@ -312,21 +504,24 @@ pub enum CompiledPatternElement {
 #[derive(Debug, Clone)]
 pub struct CompiledPattern {
     pub tokens: Vec<CompiledPatternToken>,
-    /// Structured elements including or/and groups
     pub elements: Vec<CompiledPatternElement>,
     pub case_sensitive: bool,
-    /// Index of first token inside <marker>, if any
     pub marker_start: Option<usize>,
-    /// Index after last token inside <marker>, if any
     pub marker_end: Option<usize>,
+    pub marker_elem_start: Option<usize>,
+    pub marker_elem_end: Option<usize>,
+    pub has_structured_elements: bool,
+    pub unify_groups: Vec<crate::types::XmlUnifyGroup>,
 }
 
 #[derive(Debug, Clone)]
 pub struct CompiledPatternToken {
+    pub unify_neutral: bool,
+    pub is_regexp: bool,
     pub text: Option<String>,
     pub compiled_regexp: Option<regex::Regex>,
-    /// Case-insensitive version of compiled_regexp (pre-compiled for performance)
     pub compiled_regexp_ci: Option<regex::Regex>,
+    pub compiled_regexp_fancy: Option<fancy_regex::Regex>,
     pub postag: Option<String>,
     pub compiled_postag_regexp: Option<regex::Regex>,
     pub negate: bool,
@@ -340,7 +535,6 @@ pub struct CompiledPatternToken {
     pub space_before: Option<String>,
     pub chunk: Option<String>,
     pub chunk_re: Option<regex::Regex>,
-    /// Backreference: match the same text as pattern token N (1-based).
     pub match_no: Option<i32>,
 }
 
@@ -348,6 +542,7 @@ pub struct CompiledPatternToken {
 pub struct CompiledException {
     pub text: Option<String>,
     pub compiled_regexp: Option<regex::Regex>,
+    pub compiled_regexp_fancy: Option<fancy_regex::Regex>,
     pub postag: Option<String>,
     pub compiled_postag_regexp: Option<regex::Regex>,
     pub negate: bool,
@@ -413,10 +608,14 @@ mod tests {
         let compiler = XmlCompiler::new();
         let result = compiler.compile_file(xml).unwrap();
 
-        // Non-regexp tokens preserve text as literal match
-        assert_eq!(result.rules[0].pattern.tokens[0].text.as_deref(), Some("foo"));
-        assert_eq!(result.rules[0].pattern.tokens[1].text.as_deref(), Some("bar"));
-        // No compiled regexp for literal tokens
+        assert_eq!(
+            result.rules[0].pattern.tokens[0].text.as_deref(),
+            Some("foo")
+        );
+        assert_eq!(
+            result.rules[0].pattern.tokens[1].text.as_deref(),
+            Some("bar")
+        );
         assert!(result.rules[0].pattern.tokens[0].compiled_regexp.is_none());
         assert!(result.rules[0].pattern.tokens[1].compiled_regexp.is_none());
     }
@@ -439,9 +638,7 @@ mod tests {
         let result = compiler.compile_file(xml).unwrap();
 
         let token = &result.rules[0].pattern.tokens[0];
-        // When regexp="yes", text is not used as literal match
         assert!(token.text.is_none());
-        // But compiled_regexp should be present
         assert!(token.compiled_regexp.is_some());
         assert!(token.compiled_regexp.as_ref().unwrap().is_match("foo"));
         assert!(token.compiled_regexp.as_ref().unwrap().is_match("bar"));
@@ -489,7 +686,10 @@ mod tests {
         let result = compiler.compile_file(xml).unwrap();
 
         assert!(result.rules[0].pattern.tokens[0].negate);
-        assert_eq!(result.rules[0].pattern.tokens[0].text.as_deref(), Some("bad"));
+        assert_eq!(
+            result.rules[0].pattern.tokens[0].text.as_deref(),
+            Some("bad")
+        );
     }
 
     #[test]
@@ -574,9 +774,15 @@ mod tests {
         let compiler = XmlCompiler::new();
         let result = compiler.compile_file(xml).unwrap();
 
-        assert_eq!(result.rules[0].pattern.tokens[0].postag.as_deref(), Some("JJ"));
-        // No compiled postag regexp when postag_regexp is not "yes"
-        assert!(result.rules[0].pattern.tokens[0].compiled_postag_regexp.is_none());
+        assert_eq!(
+            result.rules[0].pattern.tokens[0].postag.as_deref(),
+            Some("JJ")
+        );
+        assert!(
+            result.rules[0].pattern.tokens[0]
+                .compiled_postag_regexp
+                .is_none()
+        );
     }
 
     #[test]
@@ -599,14 +805,31 @@ mod tests {
         let token = &result.rules[0].pattern.tokens[0];
         assert_eq!(token.postag.as_deref(), Some("NN.*"));
         assert!(token.compiled_postag_regexp.is_some());
-        assert!(token.compiled_postag_regexp.as_ref().unwrap().is_match("NN"));
-        assert!(token.compiled_postag_regexp.as_ref().unwrap().is_match("NNS"));
-        assert!(!token.compiled_postag_regexp.as_ref().unwrap().is_match("VB"));
+        assert!(
+            token
+                .compiled_postag_regexp
+                .as_ref()
+                .unwrap()
+                .is_match("NN")
+        );
+        assert!(
+            token
+                .compiled_postag_regexp
+                .as_ref()
+                .unwrap()
+                .is_match("NNS")
+        );
+        assert!(
+            !token
+                .compiled_postag_regexp
+                .as_ref()
+                .unwrap()
+                .is_match("VB")
+        );
     }
 
     #[test]
     fn test_compile_exception_on_token() {
-        // Uses self-closing exception to avoid text accumulation issues
         let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
         <rules lang="en">
             <category id="GRAMMAR" name="Grammar">
@@ -673,12 +896,17 @@ mod tests {
         let compiler = XmlCompiler::new();
         let result = compiler.compile_file(xml).unwrap();
 
-        // Grouped rules should appear in compiled.rules
         assert_eq!(result.rules.len(), 2);
         assert_eq!(result.rules[0].id, "GR1");
-        assert_eq!(result.rules[0].pattern.tokens[0].text.as_deref(), Some("alpha"));
+        assert_eq!(
+            result.rules[0].pattern.tokens[0].text.as_deref(),
+            Some("alpha")
+        );
         assert_eq!(result.rules[1].id, "GR2");
-        assert_eq!(result.rules[1].pattern.tokens[0].text.as_deref(), Some("beta"));
+        assert_eq!(
+            result.rules[1].pattern.tokens[0].text.as_deref(),
+            Some("beta")
+        );
     }
 
     #[test]
@@ -740,7 +968,6 @@ mod tests {
         assert_eq!(result.categories.len(), 1);
         assert_eq!(result.categories[0].id, "STYLE");
         assert_eq!(result.categories[0].name, "Style");
-        // Rule also carries category
         assert_eq!(result.rules[0].category.id, "STYLE");
     }
 
@@ -782,8 +1009,14 @@ mod tests {
         let result = compiler.compile_file(xml).unwrap();
 
         assert_eq!(result.rules[0].examples.len(), 2);
-        assert_eq!(result.rules[0].examples[0].example_type, XmlExampleType::Incorrect);
-        assert_eq!(result.rules[0].examples[1].example_type, XmlExampleType::Correct);
+        assert_eq!(
+            result.rules[0].examples[0].example_type,
+            XmlExampleType::Incorrect
+        );
+        assert_eq!(
+            result.rules[0].examples[1].example_type,
+            XmlExampleType::Correct
+        );
     }
 
     #[test]
@@ -807,7 +1040,6 @@ mod tests {
         let compiler = XmlCompiler::new();
         let result = compiler.compile_file(xml).unwrap();
 
-        // Both standalone rules and grouped rules appear in compiled.rules
         assert_eq!(result.rules.len(), 2);
         assert_eq!(result.rules[0].id, "STANDALONE");
         assert_eq!(result.rules[1].id, "G1");
@@ -903,7 +1135,6 @@ mod tests {
 
     #[test]
     fn test_compile_exception_with_postag() {
-        // Uses self-closing exception to avoid text accumulation issues
         let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
         <rules lang="en">
             <category id="GRAMMAR" name="Grammar">
@@ -953,7 +1184,6 @@ mod tests {
 
     #[test]
     fn test_compile_multiple_exceptions() {
-        // Uses self-closing exceptions to avoid text accumulation issues
         let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
         <rules lang="en">
             <category id="GRAMMAR" name="Grammar">
@@ -1033,7 +1263,7 @@ mod tests {
         let result = compiler.compile_file(xml).unwrap();
 
         let token = &result.rules[0].pattern.tokens[0];
-        assert!(token.text.is_none()); // regexp="yes" means text is pattern, not literal
+        assert!(token.text.is_none());
         assert!(token.compiled_regexp.is_some());
         assert!(token.compiled_postag_regexp.is_some());
         assert!(token.negate);
@@ -1047,7 +1277,6 @@ mod tests {
 
     #[test]
     fn test_antipattern_token_text_capture() {
-        // Test that antipattern tokens with text content are properly captured
         let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
         <rules lang="en">
             <category id="GRAMMAR" name="Grammar">
@@ -1072,25 +1301,54 @@ mod tests {
 
         assert_eq!(result.rules.len(), 1);
         let rule = &result.rules[0];
-        // Rule should inherit group-level antipatterns
-        assert!(!rule.antipatterns.is_empty(), "Rule should have inherited antipatterns from group");
+        assert!(
+            !rule.antipatterns.is_empty(),
+            "Rule should have inherited antipatterns from group"
+        );
 
         let ap = &rule.antipatterns[0];
         assert_eq!(ap.tokens.len(), 2, "Antipattern should have 2 tokens");
 
-        // Token 0: inflected="yes" be
         let tok0 = &ap.tokens[0];
-        assert_eq!(tok0.text.as_deref(), Some("be"), "Token 0 should have text 'be'");
+        assert_eq!(
+            tok0.text.as_deref(),
+            Some("be"),
+            "Token 0 should have text 'be'"
+        );
         assert!(tok0.inflected, "Token 0 should be inflected");
 
-        // Token 1: regexp="yes" romeo|matt|mike
         let tok1 = &ap.tokens[1];
-        // With regexp="yes", text is None (used as pattern) but compiled_regexp should be Some
-        assert!(tok1.compiled_regexp.is_some(),
+        assert!(
+            tok1.compiled_regexp.is_some(),
             "Token 1 should have compiled_regexp (text={:?}, regexp_attr={:?})",
-            tok1.text, "yes");
+            tok1.text,
+            "yes"
+        );
         assert!(tok1.compiled_regexp.as_ref().unwrap().is_match("romeo"));
         assert!(tok1.compiled_regexp.as_ref().unwrap().is_match("matt"));
         assert!(!tok1.compiled_regexp.as_ref().unwrap().is_match("other"));
+    }
+    #[test]
+    fn test_postag_regexes_match_fully_like_java() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <category id="GRAMMAR" name="Grammar">
+                <rule id="FULLMATCH" name="Test">
+                    <pattern>
+                        <token postag="NN" postag_regexp="yes"/>
+                    </pattern>
+                    <message>Fix</message>
+                </rule>
+            </category>
+        </rules>"#;
+        let rule_set = XmlCompiler::new().compile_file(xml).unwrap();
+        let token = &rule_set.rules[0].pattern.tokens[0];
+        let re = token.compiled_postag_regexp.as_ref().unwrap();
+        assert!(re.is_match("NN"));
+        assert!(
+            !re.is_match("NN:U"),
+            "postag NN must not match NN:U (Java uses matches())"
+        );
+        assert!(!re.is_match("NNS"));
     }
 }

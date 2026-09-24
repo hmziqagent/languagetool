@@ -1,5 +1,5 @@
-use og_core::AnalyzedTokenReadings;
 use crate::Tagger;
+use og_core::AnalyzedTokenReadings;
 
 pub struct DefaultTagger;
 
@@ -19,8 +19,7 @@ impl Tagger for DefaultTagger {
     fn tag(&self, tokens: &[&str]) -> Vec<AnalyzedTokenReadings> {
         tokens
             .iter()
-            .enumerate()
-            .map(|(_i, token)| {
+            .map(|token| {
                 use og_core::AnalyzedToken;
                 let at = AnalyzedToken::new(*token, 0, token.len());
                 AnalyzedTokenReadings::new(at)

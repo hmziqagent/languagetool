@@ -1,8 +1,9 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 pub enum IssueType {
     #[serde(rename = "grammar")]
+    #[default]
     Grammar,
     #[serde(rename = "spelling")]
     Spelling,
@@ -71,11 +72,5 @@ impl IssueType {
             IssueType::De => "de",
             IssueType::Other(s) => s.as_str(),
         }
-    }
-}
-
-impl Default for IssueType {
-    fn default() -> Self {
-        IssueType::Grammar
     }
 }

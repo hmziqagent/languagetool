@@ -1,12 +1,16 @@
 use crate::dictionary::Dictionary;
 use crate::suggestion::SuggestionEngine;
-use og_core::{AnalyzedSentence, Category, IssueType, RuleMatch, RuleMatchContext, RuleMatchRule, SuggestedReplacement};
 use og_core::rule::Rule;
+use og_core::{
+    AnalyzedSentence, Category, IssueType, RuleMatch, RuleMatchContext, RuleMatchKind,
+    RuleMatchRule, SuggestedReplacement,
+};
 use std::collections::HashSet;
 
 pub struct SpellingCheckRule {
     id: String,
-    dictionary: Dictionary,
+    dictionary: std::sync::Arc<Dictionary>,
+    extra_words: HashSet<String>,
     ignore_words: HashSet<String>,
     category: Category,
     suggestion_engine: SuggestionEngine,
@@ -17,12 +21,28 @@ impl SpellingCheckRule {
         let suggestion_engine = SuggestionEngine::new(&dictionary);
         Self {
             id: "SPELLING_RULE".to_string(),
-            dictionary,
+            dictionary: std::sync::Arc::new(dictionary),
+            extra_words: HashSet::new(),
             ignore_words: HashSet::new(),
             category: Category::new("TYPOS", "Possible Typo")
                 .with_description("Possible spelling mistake"),
             suggestion_engine,
         }
+    }
+
+    pub fn new_shared(
+        dictionary: std::sync::Arc<Dictionary>,
+        id: impl Into<String>,
+        extra_words: HashSet<String>,
+    ) -> Self {
+        let mut rule = Self::new((*dictionary).clone());
+        rule.id = id.into();
+        rule.extra_words = extra_words;
+        rule
+    }
+
+    pub fn shared_dictionary(&self) -> std::sync::Arc<Dictionary> {
+        self.dictionary.clone()
     }
 
     pub fn with_ignore_words(mut self, words: HashSet<String>) -> Self {
@@ -49,15 +69,17 @@ impl SpellingCheckRule {
         if word.len() == 1 && word.chars().next().unwrap().is_alphabetic() {
             return true;
         }
-        // Skip words that look like URLs, email addresses, or file paths
-        if word.contains('/') || word.contains('@') || word.starts_with("http") || word.starts_with("www.") {
+        if word.contains('/')
+            || word.contains('@')
+            || word.starts_with("http")
+            || word.starts_with("www.")
+        {
             return true;
         }
-        // Skip words with digits (likely codes, part numbers, etc.)
         if word.chars().any(|c| c.is_ascii_digit()) {
             return true;
         }
-        self.dictionary.contains(word)
+        self.dictionary.contains(word) || self.extra_words.contains(word)
     }
 
     pub fn get_suggestions(&self, word: &str, max: usize) -> Vec<String> {
@@ -92,12 +114,14 @@ impl Rule for SpellingCheckRule {
 
             let text = token_readings.token().token();
 
-            // Skip non-word tokens
+            if text == "<S>" || token_readings.is_sentence_start() {
+                continue;
+            }
+
             if !text.chars().any(|c| c.is_alphabetic()) {
                 continue;
             }
 
-            // Skip mixed alphanumeric (URLs, etc.)
             if text.contains('.') && text.chars().filter(|c| *c == '.').count() > 1 {
                 continue;
             }
@@ -105,14 +129,14 @@ impl Rule for SpellingCheckRule {
             if !self.is_known_word(text) {
                 let start = token_readings.token().start();
                 let end = token_readings.token().end();
-                let context_start = if start >= 40 { start - 40 } else { 0 };
+                let context_start = start.saturating_sub(40);
                 let context_end = std::cmp::min(end + 40, sentence.text().len());
                 let context_text = sentence.text()[context_start..context_end].to_string();
 
                 let suggestions = self.get_suggestions(text, 5);
                 let replacements: Vec<SuggestedReplacement> = suggestions
                     .into_iter()
-                    .map(|s| SuggestedReplacement::new(s))
+                    .map(SuggestedReplacement::new)
                     .collect();
 
                 let rule = RuleMatchRule::new(&self.id, self.description())
@@ -125,10 +149,15 @@ impl Rule for SpellingCheckRule {
                         start,
                         end - start,
                         rule,
-                        RuleMatchContext::new(context_text, context_start, context_end - context_start),
+                        RuleMatchContext::new(
+                            context_text,
+                            context_start,
+                            context_end - context_start,
+                        ),
                     )
                     .with_sentence(sentence.text().to_string())
                     .with_replacements(replacements)
+                    .with_match_type(RuleMatchKind::UnknownWord),
                 );
             }
         }
@@ -187,8 +216,8 @@ mod tests {
 
     #[test]
     fn test_load_real_english_spelling() {
-        let hunspell_dir = "/home/agent/languagetool/languagetool-language-modules/en/src/main/resources/org/languagetool/resource/en/hunspell";
-        let resource_dir = "/home/agent/languagetool/languagetool-language-modules/en/src/main/resources/org/languagetool/resource/en";
+        let hunspell_dir = "/home/agent/opengrammar-rs/languagetool/languagetool-language-modules/en/src/main/resources/org/languagetool/resource/en/hunspell";
+        let resource_dir = "/home/agent/opengrammar-rs/languagetool/languagetool-language-modules/en/src/main/resources/org/languagetool/resource/en";
 
         if !std::path::Path::new(hunspell_dir).exists() {
             eprintln!("Skipping: hunspell dir not found");
@@ -197,7 +226,6 @@ mod tests {
 
         let mut dict = Dictionary::new();
 
-        // Load common words
         if let Ok(words) = std::fs::read_to_string(format!("{}/common_words.txt", resource_dir)) {
             for line in words.lines() {
                 let word = line.trim();
@@ -207,7 +235,6 @@ mod tests {
             }
         }
 
-        // Load spelling
         if let Ok(words) = std::fs::read_to_string(format!("{}/spelling.txt", hunspell_dir)) {
             for line in words.lines() {
                 let word = line.trim();
@@ -217,8 +244,8 @@ mod tests {
             }
         }
 
-        // Load spelling_merged
-        if let Ok(words) = std::fs::read_to_string(format!("{}/spelling_merged.txt", hunspell_dir)) {
+        if let Ok(words) = std::fs::read_to_string(format!("{}/spelling_merged.txt", hunspell_dir))
+        {
             for line in words.lines() {
                 let word = line.trim();
                 if !word.is_empty() && !word.starts_with('#') {
@@ -230,12 +257,10 @@ mod tests {
         println!("Loaded {} words into dictionary", dict.len());
         assert!(dict.len() > 1000, "Expected at least 1000 words");
 
-        // Test common words are known
         assert!(dict.contains("the"));
         assert!(dict.contains("hello"));
         assert!(dict.contains("world"));
 
-        // Test the rule detects unknown words
         let rule = SpellingCheckRule::new(dict);
         let sentence = make_sentence_with_words("hello qzrmple test");
         let matches = rule.match_sentence(&sentence);

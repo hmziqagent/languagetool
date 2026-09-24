@@ -189,15 +189,16 @@ impl Language {
         }
     }
 
-    /// Short language code (e.g. "en" for English variants, "de" for German).
-    /// The full code() is the longCode.
     pub fn short_code(&self) -> &str {
         match self {
-            Language::English | Language::EnglishUs | Language::EnglishGb
-            | Language::EnglishAu | Language::EnglishCa | Language::EnglishNz
+            Language::English
+            | Language::EnglishUs
+            | Language::EnglishGb
+            | Language::EnglishAu
+            | Language::EnglishCa
+            | Language::EnglishNz
             | Language::EnglishZa => "en",
-            Language::German | Language::GermanDe | Language::GermanAt
-            | Language::GermanCh => "de",
+            Language::German | Language::GermanDe | Language::GermanAt | Language::GermanCh => "de",
             Language::French => "fr",
             Language::Spanish => "es",
             Language::Portuguese | Language::PortugueseBr | Language::PortuguesePt => "pt",
@@ -245,13 +246,12 @@ impl Language {
             | Language::EnglishCa
             | Language::EnglishNz
             | Language::EnglishZa => Language::English,
-            Language::German
-            | Language::GermanDe
-            | Language::GermanAt
-            | Language::GermanCh => Language::German,
-            Language::Portuguese
-            | Language::PortugueseBr
-            | Language::PortuguesePt => Language::Portuguese,
+            Language::German | Language::GermanDe | Language::GermanAt | Language::GermanCh => {
+                Language::German
+            }
+            Language::Portuguese | Language::PortugueseBr | Language::PortuguesePt => {
+                Language::Portuguese
+            }
             Language::Dutch | Language::DutchBe | Language::DutchNl => Language::Dutch,
             other => other.clone(),
         }
@@ -378,6 +378,7 @@ impl Serialize for Language {
 impl<'de> Deserialize<'de> for Language {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let code = String::deserialize(deserializer)?;
-        Language::from_code(&code).ok_or_else(|| serde::de::Error::custom(format!("unknown language: {code}")))
+        Language::from_code(&code)
+            .ok_or_else(|| serde::de::Error::custom(format!("unknown language: {code}")))
     }
 }

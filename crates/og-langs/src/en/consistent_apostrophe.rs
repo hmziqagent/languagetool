@@ -1,15 +1,11 @@
 use og_core::{
-    AnalyzedSentence, Category, IssueType, RuleMatch,
-    RuleMatchContext, RuleMatchRule, SuggestedReplacement,
-    rule::TextLevelRule,
+    AnalyzedSentence, Category, IssueType, RuleMatch, RuleMatchContext, RuleMatchRule,
+    SuggestedReplacement, rule::TextLevelRule,
 };
 
 const TYPEWRITER_APOS: char = '\'';
 const TYPOGRAPHIC_APOS: char = '\u{2019}';
 
-/// Rust port of LanguageTool's ConsistentApostrophesRule.
-/// Detects mixed use of typewriter (`'`) and typographic (`'`) apostrophes.
-/// Default-off style rule.
 pub struct ConsistentApostrophesRule;
 
 impl ConsistentApostrophesRule {
@@ -62,7 +58,6 @@ impl TextLevelRule for ConsistentApostrophesRule {
     }
 
     fn match_text(&self, text: &str, sentences: &[AnalyzedSentence]) -> Vec<RuleMatch> {
-        // First pass: check if both apostrophe types appear in the text
         let has_tw = Self::has_typewriter_apos(text);
         let has_tg = Self::has_typographic_apos(text);
 
@@ -72,7 +67,8 @@ impl TextLevelRule for ConsistentApostrophesRule {
 
         let mut matches = Vec::new();
         let rm_rule = RuleMatchRule::new(self.id(), self.description())
-            .with_category(self.category());
+            .with_category(self.category())
+            .with_issue_type(self.issue_type().as_str());
 
         for sentence in sentences {
             let tokens = sentence.non_whitespace_tokens();
@@ -84,9 +80,10 @@ impl TextLevelRule for ConsistentApostrophesRule {
                 if has_typewriter && !has_typographic {
                     let match_start = token.token().start();
                     let match_length = token.token().end() - match_start;
-                    let replacement = token_text.replace(TYPEWRITER_APOS, &TYPOGRAPHIC_APOS.to_string());
+                    let replacement =
+                        token_text.replace(TYPEWRITER_APOS, &TYPOGRAPHIC_APOS.to_string());
 
-                    let context_start = if match_start >= 40 { match_start - 40 } else { 0 };
+                    let context_start = match_start.saturating_sub(40);
                     let context_end = std::cmp::min(match_start + match_length + 40, text.len());
                     let context_text = text[context_start..context_end].to_string();
 
@@ -103,9 +100,10 @@ impl TextLevelRule for ConsistentApostrophesRule {
                 } else if has_typographic {
                     let match_start = token.token().start();
                     let match_length = token.token().end() - match_start;
-                    let replacement = token_text.replace(TYPOGRAPHIC_APOS, &TYPEWRITER_APOS.to_string());
+                    let replacement =
+                        token_text.replace(TYPOGRAPHIC_APOS, &TYPEWRITER_APOS.to_string());
 
-                    let context_start = if match_start >= 40 { match_start - 40 } else { 0 };
+                    let context_start = match_start.saturating_sub(40);
                     let context_end = std::cmp::min(match_start + match_length + 40, text.len());
                     let context_text = text[context_start..context_end].to_string();
 
@@ -137,13 +135,15 @@ mod tests {
         let mut tokens = Vec::new();
         let mut byte_pos = 0;
         for part in text.split(|c: char| c.is_whitespace()) {
-            if part.is_empty() { continue; }
+            if part.is_empty() {
+                continue;
+            }
             if let Some(offset) = text[byte_pos..].find(part) {
                 let start = byte_pos + offset;
                 let end = start + part.len();
-                tokens.push(og_core::AnalyzedTokenReadings::new(
-                    AnalyzedToken::new(part, start, end)
-                ));
+                tokens.push(og_core::AnalyzedTokenReadings::new(AnalyzedToken::new(
+                    part, start, end,
+                )));
                 byte_pos = end;
             }
         }
@@ -157,8 +157,15 @@ mod tests {
         let text = "it\u{2019}s a don't";
         let (text, sentences) = make_sentences(text);
         let matches = rule.match_text(&text, &sentences);
-        assert!(!matches.is_empty(), "Should detect typewriter apostrophe in mixed text");
-        assert!(matches.iter().any(|m| m.replacements().iter().any(|r| r.value().contains('\u{2019}'))));
+        assert!(
+            !matches.is_empty(),
+            "Should detect typewriter apostrophe in mixed text"
+        );
+        assert!(matches.iter().any(|m| {
+            m.replacements()
+                .iter()
+                .any(|r| r.value().contains('\u{2019}'))
+        }));
     }
 
     #[test]
@@ -167,7 +174,10 @@ mod tests {
         let text = "it\u{2019}s a don\u{2019}t";
         let (text, sentences) = make_sentences(text);
         let matches = rule.match_text(&text, &sentences);
-        assert!(matches.is_empty(), "No match when all apostrophes are consistent");
+        assert!(
+            matches.is_empty(),
+            "No match when all apostrophes are consistent"
+        );
     }
 
     #[test]
@@ -176,7 +186,10 @@ mod tests {
         let text = "it's a don't";
         let (text, sentences) = make_sentences(text);
         let matches = rule.match_text(&text, &sentences);
-        assert!(matches.is_empty(), "No match when all apostrophes are consistent");
+        assert!(
+            matches.is_empty(),
+            "No match when all apostrophes are consistent"
+        );
     }
 
     #[test]

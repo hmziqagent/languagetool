@@ -11,6 +11,7 @@ pub enum DictionaryError {
     InvalidFormat(String),
 }
 
+#[derive(Clone)]
 pub struct Dictionary {
     words: HashSet<String>,
     lowercased: HashSet<String>,
@@ -41,8 +42,6 @@ impl Dictionary {
         Ok(dict)
     }
 
-    /// Load from Morfologik decoded dictionary format (word\tlemma\tPOS).
-    /// Only the first column (surface form) is used for spell checking.
     pub fn from_morfologik(path: &Path) -> Result<Self, DictionaryError> {
         let file = File::open(path)?;
         let reader = BufReader::new(file);

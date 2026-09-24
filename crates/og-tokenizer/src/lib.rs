@@ -1,4 +1,5 @@
 pub mod sentence_splitter;
+pub mod srx;
 pub mod word_tokenizer;
 
 pub use sentence_splitter::*;

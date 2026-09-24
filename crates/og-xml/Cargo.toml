@@ -7,5 +7,7 @@ edition.workspace = true
 og-core = { workspace = true }
 serde = { workspace = true }
 quick-xml = { workspace = true }
+fancy-regex = "0.14"
 regex = { workspace = true }
 thiserror = { workspace = true }
+rayon = { workspace = true }

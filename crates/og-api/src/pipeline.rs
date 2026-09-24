@@ -5,13 +5,18 @@ pub struct SentenceSplitterAdapter;
 
 impl SentenceTokenizer for SentenceSplitterAdapter {
     fn split(&self, text: &str) -> Vec<SentenceRange> {
-        let splitter = og_tokenizer::DefaultSentenceSplitter::new();
+        static SPLITTER: std::sync::OnceLock<og_tokenizer::DefaultSentenceSplitter> =
+            std::sync::OnceLock::new();
+        let splitter = SPLITTER.get_or_init(og_tokenizer::DefaultSentenceSplitter::new);
         use og_tokenizer::SentenceTokenizer as _;
         let sentences = splitter.split(text);
-        sentences.into_iter().map(|s| SentenceRange {
-            start: s.start(),
-            end: s.end(),
-        }).collect()
+        sentences
+            .into_iter()
+            .map(|s| SentenceRange {
+                start: s.start(),
+                end: s.end(),
+            })
+            .collect()
     }
 }
 
@@ -22,9 +27,12 @@ impl WordTokenizer for WordTokenizerAdapter {
         let tokenizer = og_tokenizer::DefaultWordTokenizer::new();
         use og_tokenizer::WordTokenizer as _;
         let tokens = tokenizer.tokenize(text);
-        tokens.into_iter().map(|t| {
-            let at = AnalyzedToken::new(t.text(), t.start() + offset, t.end() + offset);
-            AnalyzedTokenReadings::new(at)
-        }).collect()
+        tokens
+            .into_iter()
+            .map(|t| {
+                let at = AnalyzedToken::new(t.text(), t.start() + offset, t.end() + offset);
+                AnalyzedTokenReadings::new(at)
+            })
+            .collect()
     }
 }

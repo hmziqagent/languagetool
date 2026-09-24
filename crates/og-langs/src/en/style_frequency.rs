@@ -1,12 +1,9 @@
-use std::collections::HashMap;
 use og_core::{
-    AnalyzedSentence, Category, IssueType, RuleMatch,
-    RuleMatchContext, RuleMatchRule,
+    AnalyzedSentence, Category, IssueType, RuleMatch, RuleMatchContext, RuleMatchRule,
     rule::TextLevelRule,
 };
+use std::collections::HashMap;
 
-/// Rust port of LanguageTool's AbstractStyleTooOftenUsedWordRule.
-/// Text-level rule that detects words of a specific POS category used too frequently.
 pub struct StyleFrequencyRule {
     id: &'static str,
     description: &'static str,
@@ -55,24 +52,25 @@ impl StyleFrequencyRule {
     }
 
     fn is_target_word(&self, token: &og_core::AnalyzedTokenReadings) -> bool {
-        token.readings().iter().any(|r| {
-            r.pos_tags().iter().any(|t| t.starts_with(self.pos_prefix))
-        })
+        token
+            .readings()
+            .iter()
+            .any(|r| r.pos_tags().iter().any(|t| t.starts_with(self.pos_prefix)))
     }
 
     fn is_exception(&self, token: &og_core::AnalyzedTokenReadings) -> bool {
-        // Check exception POS tags
         for exc_pos in self.exception_pos {
             if token.has_pos_tag(exc_pos) {
                 return true;
             }
         }
-        // Check exception lemmas
         for reading in token.readings() {
-            if let Some(lemma) = reading.lemma() {
-                if self.exception_lemmas.contains(&lemma.to_lowercase().as_str()) {
-                    return true;
-                }
+            if let Some(lemma) = reading.lemma()
+                && self
+                    .exception_lemmas
+                    .contains(&lemma.to_lowercase().as_str())
+            {
+                return true;
             }
         }
         false
@@ -80,10 +78,13 @@ impl StyleFrequencyRule {
 
     fn get_lemma(&self, token: &og_core::AnalyzedTokenReadings) -> Option<String> {
         for reading in token.readings() {
-            if reading.pos_tags().iter().any(|t| t.starts_with(self.pos_prefix)) {
-                if let Some(lemma) = reading.lemma() {
-                    return Some(lemma.to_string());
-                }
+            if reading
+                .pos_tags()
+                .iter()
+                .any(|t| t.starts_with(self.pos_prefix))
+                && let Some(lemma) = reading.lemma()
+            {
+                return Some(lemma.to_string());
             }
         }
         None
@@ -112,7 +113,6 @@ impl TextLevelRule for StyleFrequencyRule {
     }
 
     fn match_text(&self, text: &str, sentences: &[AnalyzedSentence]) -> Vec<RuleMatch> {
-        // Pass 1: count lemma frequencies
         let mut word_counts: HashMap<String, usize> = HashMap::new();
         for sentence in sentences {
             for token in sentence.non_whitespace_tokens() {
@@ -130,8 +130,8 @@ impl TextLevelRule for StyleFrequencyRule {
             return Vec::new();
         }
 
-        // Find overused words
-        let overused: HashMap<String, u32> = word_counts.iter()
+        let overused: HashMap<String, u32> = word_counts
+            .iter()
             .filter_map(|(lemma, &count)| {
                 let percent = (count as u32 * 100) / total as u32;
                 if percent >= self.min_percent {
@@ -146,7 +146,6 @@ impl TextLevelRule for StyleFrequencyRule {
             return Vec::new();
         }
 
-        // Pass 2: create matches
         let mut matches = Vec::new();
         let mut pos = 0usize;
 
@@ -155,30 +154,36 @@ impl TextLevelRule for StyleFrequencyRule {
                 if !self.is_target_word(token) || self.is_exception(token) {
                     continue;
                 }
-                if let Some(lemma) = self.get_lemma(token) {
-                    if let Some(&percent) = overused.get(&lemma) {
-                        let from_pos = pos + token.token().start();
-                        let to_pos = pos + token.token().end();
-                        let length = to_pos - from_pos;
+                if let Some(lemma) = self.get_lemma(token)
+                    && let Some(&percent) = overused.get(&lemma)
+                {
+                    let from_pos = pos + token.token().start();
+                    let to_pos = pos + token.token().end();
+                    let length = to_pos - from_pos;
 
-                        let message = format!(
-                            "'{}' is used quite often ({}% of all {}). Consider using a synonym.",
-                            lemma, percent, self.pos_prefix
-                        );
+                    let message = format!(
+                        "'{}' is used quite often ({}% of all {}). Consider using a synonym.",
+                        lemma, percent, self.pos_prefix
+                    );
 
-                        let rm_rule = RuleMatchRule::new(self.id(), self.description())
-                            .with_category(self.category());
+                    let rm_rule = RuleMatchRule::new(self.id(), self.description())
+                        .with_category(self.category())
+                        .with_issue_type(self.issue_type().as_str());
 
-                        let ctx_start = if from_pos >= 40 { from_pos - 40 } else { 0 };
-                        let ctx_end = std::cmp::min(to_pos + 40, pos + text.len());
-                        let context_text = text[ctx_start..ctx_end].to_string();
+                    let ctx_start = from_pos.saturating_sub(40);
+                    let ctx_end = std::cmp::min(to_pos + 40, pos + text.len());
+                    let context_text = text[ctx_start..ctx_end].to_string();
 
-                        matches.push(
-                            RuleMatch::new(&message, from_pos, length, rm_rule,
-                                RuleMatchContext::new(context_text, ctx_start, ctx_end - ctx_start))
-                                .with_sentence(sentence.text().to_string())
-                        );
-                    }
+                    matches.push(
+                        RuleMatch::new(
+                            &message,
+                            from_pos,
+                            length,
+                            rm_rule,
+                            RuleMatchContext::new(context_text, ctx_start, ctx_end - ctx_start),
+                        )
+                        .with_sentence(sentence.text().to_string()),
+                    );
                 }
             }
             pos += sentence.text().len();
@@ -191,7 +196,7 @@ impl TextLevelRule for StyleFrequencyRule {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use og_core::{AnalyzedToken, AnalyzedTokenReadings, AnalyzedSentence};
+    use og_core::{AnalyzedSentence, AnalyzedToken, AnalyzedTokenReadings};
 
     fn make_sentence_with_pos(text: &str, pos_tags: &[&str]) -> AnalyzedSentence {
         let mut sentence = AnalyzedSentence::new(text, 0, text.len());

@@ -1,5 +1,5 @@
-pub mod runner;
 pub mod fixture;
+pub mod runner;
 
-pub use runner::*;
 pub use fixture::*;
+pub use runner::*;

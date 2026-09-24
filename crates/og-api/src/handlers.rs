@@ -1,18 +1,18 @@
-use axum::extract::{Query, State};
-use axum::http::StatusCode;
-use axum::response::Json;
-use og_core::{CheckResult, Language};
-use crate::request::CheckParams;
+use crate::request::MergedCheckParams;
 use crate::response::{InfoResponse, LanguagesResponse, MaxTextLengthResponse, VersionResponse};
 use crate::server::{AppState, MAX_TEXT_LENGTH};
+use axum::extract::State;
+use axum::http::StatusCode;
+use axum::response::Json;
+use og_core::{CheckRequest, CheckResult, Language};
 use std::sync::Arc;
 
 pub async fn handle_check(
     State(state): State<Arc<AppState>>,
-    Query(params): Query<CheckParams>,
+    MergedCheckParams(params): MergedCheckParams,
 ) -> Result<Json<CheckResult>, (StatusCode, Json<serde_json::Value>)> {
     let text = match params.get_text() {
-        Some(t) if !t.is_empty() => t.to_string(),
+        Some(t) if !t.is_empty() => t,
         _ => {
             return Err((
                 StatusCode::BAD_REQUEST,
@@ -40,36 +40,45 @@ pub async fn handle_check(
         }
     };
 
-    // Find the appropriate language engine
-    let engine = {
-        let engines = &state.engines;
-        let lang_code = language.code();
-        // Try exact match first, then short code
-        if let Some(e) = engines.get(lang_code) {
-            e
-        } else if let Some(e) = engines.get(language.short_code()) {
-            e
-        } else {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({
-                    "error": format!("Unsupported language: {}", lang_code)
-                })),
-            ));
-        }
+    let engine = if let Some(e) = state.engine_for(language.code()) {
+        e
+    } else if let Some(e) = state.engine_for(language.short_code()) {
+        e
+    } else {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": format!("Unsupported language: {}", language.code())
+            })),
+        ));
     };
 
-    let result = engine.check(&text);
+    let mut request = CheckRequest::new(text, language);
+    request.enabled_rules = params.get_enabled_rules();
+    request.disabled_rules = params.get_disabled_rules();
+    request.enabled_categories = params.get_enabled_categories();
+    request.disabled_categories = params.get_disabled_categories();
+    request.level = params.level.clone();
+    request.picky = params.picky;
+    request.mother_tongue = params
+        .mother_tongue
+        .as_deref()
+        .and_then(Language::from_code);
+
+    let result = engine.check_with_request(&request);
     Ok(Json(result))
 }
 
-pub async fn handle_languages() -> Json<Vec<LanguagesResponse>> {
-    let languages = Language::all_languages()
+pub async fn handle_languages(State(state): State<Arc<AppState>>) -> Json<Vec<LanguagesResponse>> {
+    let languages = state
+        .language_codes()
         .into_iter()
-        .map(|l| LanguagesResponse {
-            name: l.name().to_string(),
-            code: l.short_code().to_string(),
-            long_code: l.code().to_string(),
+        .filter_map(|code| {
+            Language::from_code(code).map(|l| LanguagesResponse {
+                name: l.name().to_string(),
+                code: l.short_code().to_string(),
+                long_code: l.code().to_string(),
+            })
         })
         .collect();
     Json(languages)

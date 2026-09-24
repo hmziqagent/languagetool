@@ -8,7 +8,11 @@ og-core = { workspace = true }
 og-xml = { workspace = true }
 og-tokenizer = { workspace = true }
 og-tagger = { workspace = true }
+og-spell = { workspace = true }
 regex = { workspace = true }
 rayon = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

@@ -17,11 +17,11 @@ impl CategoryId {
 pub struct Category {
     id: CategoryId,
     name: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
     description: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
     enabled: bool,
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
     default_on: bool,
 }
 

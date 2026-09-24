@@ -1,5 +1,5 @@
-use og_core::Sentence;
 use crate::SentenceTokenizer;
+use og_core::Sentence;
 
 pub struct DefaultSentenceSplitter {
     abbreviations: Vec<String>,
@@ -14,116 +14,343 @@ impl DefaultSentenceSplitter {
 
     fn default_abbreviations() -> Vec<String> {
         vec![
-            // Titles and honorifics
-            "Mr.".into(), "Mrs.".into(), "Ms.".into(), "Miss.".into(), "Dr.".into(),
-            "Prof.".into(), "Sr.".into(), "Jr.".into(), "St.".into(),
-            "Rev.".into(), "Gen.".into(), "Gov.".into(), "Hon.".into(),
-            "Atty.".into(), "Sgt.".into(), "Col.".into(), "Maj.".into(),
-            "Lt.".into(), "Brig.".into(), "Capt.".into(), "Cmdr.".into(),
-            "Revd.".into(), "Rep.".into(), "Sen.".into(), "Pres.".into(),
-            "Drs.".into(), "Messrs.".into(), "Mmes.".into(), "Msgr.".into(),
-            "Supt.".into(), "Det.".into(), "Insp.".into(), "Pvt.".into(),
-            "Cpl.".into(), "Adm.".into(), "Rt.".into(),
-
-            // Business and legal
-            "Inc.".into(), "Ltd.".into(), "Co.".into(), "Corp.".into(),
-            "Bros.".into(), "Assoc.".into(), "Dept.".into(), "Dist.".into(),
-            "Div.".into(), "Est.".into(), "Assn.".into(),
-
-            // Academic degrees
-            "B.A.".into(), "B.S.".into(), "M.A.".into(), "M.S.".into(),
-            "Ph.D.".into(), "M.D.".into(), "J.D.".into(), "D.D.S.".into(),
-            "B.Sc.".into(), "M.Sc.".into(), "LL.B.".into(), "LL.M.".into(),
-            "LL.D.".into(), "B.Eng.".into(), "M.Eng.".into(),
-
-            // Latin abbreviations
-            "vs.".into(), "etc.".into(), "e.g.".into(), "i.e.".into(),
-            "al.".into(), "ca.".into(), "approx.".into(), "cf.".into(),
-            "viz.".into(), "n.b.".into(), "N.B.".into(), "q.v.".into(),
-            "s.v.".into(), "v.".into(), "op.".into(), "cit.".into(),
-            "ibid.".into(), "id.".into(), "ff.".into(), "et al.".into(),
-
-            // Months
-            "Jan.".into(), "Feb.".into(), "Mar.".into(), "Apr.".into(),
-            "Jun.".into(), "Jul.".into(), "Aug.".into(), "Sep.".into(),
-            "Sept.".into(), "Oct.".into(), "Nov.".into(), "Dec.".into(),
-
-            // Days
-            "Mon.".into(), "Tue.".into(), "Tues.".into(), "Wed.".into(),
-            "Thu.".into(), "Thur.".into(), "Thurs.".into(), "Fri.".into(),
-            "Sat.".into(), "Sun.".into(),
-
-            // Publication/science abbreviations
-            "Vol.".into(), "Fig.".into(), "No.".into(), "pp.".into(),
-            "Def.".into(), "Eq.".into(), "Lem.".into(), "Prop.".into(),
-            "Thm.".into(), "Cor.".into(), "Sec.".into(), "Ch.".into(),
-            "App.".into(), "Ref.".into(), "Refs.".into(),
-
-            // Common word-stem abbreviations
-            "abbr.".into(), "acad.".into(), "acc.".into(), "admin.".into(),
-            "adv.".into(), "a.m.".into(), "p.m.".into(), "A.M.".into(), "P.M.".into(),
-            "arch.".into(), "asst.".into(), "atty.".into(), "aud.".into(),
-            "bldg.".into(), "blvd.".into(), "ave.".into(), "Ave.".into(),
-            "cap.".into(), "capt.".into(), "cert.".into(), "chm.".into(),
-            "chron.".into(), "clin.".into(), "cmte.".into(), "col.".into(),
-            "coll.".into(), "comdr.".into(), "con.".into(), "cont.".into(),
-            "corp.".into(), "cpl.".into(), "cr.".into(), "ctr.".into(),
-            "dept.".into(), "dev.".into(), "dir.".into(), "disc.".into(),
-            "dist.".into(), "div.".into(), "doc.".into(), "doz.".into(),
-            "dr.".into(), "Drv.".into(), "ed.".into(), "educ.".into(),
-            "elec.".into(), "eng.".into(), "ens.".into(), "equip.".into(),
-            "esp.".into(), "est.".into(), "eval.".into(), "ex.".into(),
-            "exec.".into(), "exp.".into(), "ext.".into(),
-            "fac.".into(), "fem.".into(), "ff.".into(), "fig.".into(),
-            "fin.".into(), "fl.".into(), "fst.".into(), "ft.".into(),
-            "gen.".into(), "geo.".into(), "geog.".into(), "geol.".into(),
-            "gov.".into(), "govt.".into(), "grp.".into(), "hist.".into(),
-            "hosp.".into(), "hr.".into(), "hrs.".into(), "ht.".into(),
-            "hwy.".into(), "ill.".into(), "illus.".into(), "inc.".into(),
-            "ind.".into(), "inst.".into(), "int.".into(), "intl.".into(),
-            "jr.".into(), "lab.".into(), "lat.".into(), "lib.".into(),
-            "lng.".into(), "loc.".into(), "lt.".into(), "ltd.".into(),
-            "masc.".into(), "math.".into(), "meas.".into(), "med.".into(),
-            "mil.".into(), "min.".into(), "misc.".into(), "mod.".into(),
-            "mont.".into(), "mr.".into(), "mrs.".into(), "ms.".into(),
-            "narr.".into(), "nat.".into(), "neg.".into(), "no.".into(),
-            "nom.".into(), "nr.".into(), "obj.".into(), "obs.".into(),
-            "off.".into(), "ord.".into(), "org.".into(), "orig.".into(),
-            "pl.".into(), "pop.".into(), "pos.".into(), "pow.".into(),
-            "pp.".into(), "pr.".into(), "pref.".into(), "pres.".into(),
-            "prob.".into(), "proc.".into(), "prod.".into(), "prof.".into(),
-            "pron.".into(), "prop.".into(), "pub.".into(), "pwr.".into(),
-            "qt.".into(), "quot.".into(), "rad.".into(), "rcvd.".into(),
-            "rec.".into(), "ref.".into(), "reg.".into(), "rep.".into(),
-            "reps.".into(), "res.".into(), "rev.".into(), "rte.".into(),
-            "sci.".into(), "sec.".into(), "sect.".into(), "sel.".into(),
-            "sen.".into(), "sep.".into(), "sept.".into(), "seq.".into(),
-            "sgt.".into(), "soc.".into(), "sp.".into(), "spec.".into(),
-            "sr.".into(), "supt.".into(), "sur.".into(), "surg.".into(),
-            "syn.".into(), "tech.".into(), "tel.".into(), "temp.".into(),
-            "theol.".into(), "tmb.".into(), "tsp.".into(), "univ.".into(),
-            "U.S.".into(), "U.K.".into(), "U.N.".into(), "E.U.".into(),
-            "vol.".into(), "vs.".into(), "wk.".into(), "yr.".into(),
-
-            // Street/state abbreviations
-            "Blvd.".into(), "Ave.".into(), "Rd.".into(), "Ln.".into(),
-            "Dr.".into(), "Ct.".into(), "Pl.".into(), "Ter.".into(),
-            "Cir.".into(), "Pkwy.".into(), "Hwy.".into(), "Fwy.".into(),
-            "Mt.".into(), "Mts.".into(), "Ft.".into(), "Pt.".into(),
-            "Ste.".into(), "Fl.".into(),
-
-            // Time zones
-            "A.M.".into(), "P.M.".into(), "EST.".into(), "CST.".into(),
-            "MST.".into(), "PST.".into(), "EDT.".into(), "CDT.".into(),
-            "MDT.".into(), "PDT.".into(),
-
-            // Measurement abbreviations
-            "in.".into(), "ft.".into(), "yd.".into(), "mi.".into(),
-            "oz.".into(), "lb.".into(), "lbs.".into(), "kg.".into(),
-            "gm.".into(), "mm.".into(), "cm.".into(), "km.".into(),
-            "sq.".into(), "cu.".into(),
-
-            // Currency abbreviations that can end sentences
+            "Mr.".into(),
+            "Mrs.".into(),
+            "Ms.".into(),
+            "Miss.".into(),
+            "Dr.".into(),
+            "Prof.".into(),
+            "Sr.".into(),
+            "Jr.".into(),
+            "St.".into(),
+            "Rev.".into(),
+            "Gen.".into(),
+            "Gov.".into(),
+            "Hon.".into(),
+            "Atty.".into(),
+            "Sgt.".into(),
+            "Col.".into(),
+            "Maj.".into(),
+            "Lt.".into(),
+            "Brig.".into(),
+            "Capt.".into(),
+            "Cmdr.".into(),
+            "Revd.".into(),
+            "Rep.".into(),
+            "Sen.".into(),
+            "Pres.".into(),
+            "Drs.".into(),
+            "Messrs.".into(),
+            "Mmes.".into(),
+            "Msgr.".into(),
+            "Supt.".into(),
+            "Det.".into(),
+            "Insp.".into(),
+            "Pvt.".into(),
+            "Cpl.".into(),
+            "Adm.".into(),
+            "Rt.".into(),
+            "Inc.".into(),
+            "Ltd.".into(),
+            "Co.".into(),
+            "Corp.".into(),
+            "Bros.".into(),
+            "Assoc.".into(),
+            "Dept.".into(),
+            "Dist.".into(),
+            "Div.".into(),
+            "Est.".into(),
+            "Assn.".into(),
+            "B.A.".into(),
+            "B.S.".into(),
+            "M.A.".into(),
+            "M.S.".into(),
+            "Ph.D.".into(),
+            "M.D.".into(),
+            "J.D.".into(),
+            "D.D.S.".into(),
+            "B.Sc.".into(),
+            "M.Sc.".into(),
+            "LL.B.".into(),
+            "LL.M.".into(),
+            "LL.D.".into(),
+            "B.Eng.".into(),
+            "M.Eng.".into(),
+            "vs.".into(),
+            "etc.".into(),
+            "e.g.".into(),
+            "i.e.".into(),
+            "al.".into(),
+            "ca.".into(),
+            "approx.".into(),
+            "cf.".into(),
+            "viz.".into(),
+            "n.b.".into(),
+            "N.B.".into(),
+            "q.v.".into(),
+            "s.v.".into(),
+            "v.".into(),
+            "op.".into(),
+            "cit.".into(),
+            "ibid.".into(),
+            "id.".into(),
+            "ff.".into(),
+            "et al.".into(),
+            "Jan.".into(),
+            "Feb.".into(),
+            "Mar.".into(),
+            "Apr.".into(),
+            "Jun.".into(),
+            "Jul.".into(),
+            "Aug.".into(),
+            "Sep.".into(),
+            "Sept.".into(),
+            "Oct.".into(),
+            "Nov.".into(),
+            "Dec.".into(),
+            "Mon.".into(),
+            "Tue.".into(),
+            "Tues.".into(),
+            "Wed.".into(),
+            "Thu.".into(),
+            "Thur.".into(),
+            "Thurs.".into(),
+            "Fri.".into(),
+            "Sat.".into(),
+            "Sun.".into(),
+            "Vol.".into(),
+            "Fig.".into(),
+            "No.".into(),
+            "pp.".into(),
+            "Def.".into(),
+            "Eq.".into(),
+            "Lem.".into(),
+            "Prop.".into(),
+            "Thm.".into(),
+            "Cor.".into(),
+            "Sec.".into(),
+            "Ch.".into(),
+            "App.".into(),
+            "Ref.".into(),
+            "Refs.".into(),
+            "abbr.".into(),
+            "acad.".into(),
+            "acc.".into(),
+            "admin.".into(),
+            "adv.".into(),
+            "a.m.".into(),
+            "p.m.".into(),
+            "A.M.".into(),
+            "P.M.".into(),
+            "arch.".into(),
+            "asst.".into(),
+            "atty.".into(),
+            "aud.".into(),
+            "bldg.".into(),
+            "blvd.".into(),
+            "ave.".into(),
+            "Ave.".into(),
+            "cap.".into(),
+            "capt.".into(),
+            "cert.".into(),
+            "chm.".into(),
+            "chron.".into(),
+            "clin.".into(),
+            "cmte.".into(),
+            "col.".into(),
+            "coll.".into(),
+            "comdr.".into(),
+            "con.".into(),
+            "cont.".into(),
+            "corp.".into(),
+            "cpl.".into(),
+            "cr.".into(),
+            "ctr.".into(),
+            "dept.".into(),
+            "dev.".into(),
+            "dir.".into(),
+            "disc.".into(),
+            "dist.".into(),
+            "div.".into(),
+            "doc.".into(),
+            "doz.".into(),
+            "dr.".into(),
+            "Drv.".into(),
+            "ed.".into(),
+            "educ.".into(),
+            "elec.".into(),
+            "eng.".into(),
+            "ens.".into(),
+            "equip.".into(),
+            "esp.".into(),
+            "est.".into(),
+            "eval.".into(),
+            "ex.".into(),
+            "exec.".into(),
+            "exp.".into(),
+            "ext.".into(),
+            "fac.".into(),
+            "fem.".into(),
+            "ff.".into(),
+            "fig.".into(),
+            "fin.".into(),
+            "fl.".into(),
+            "fst.".into(),
+            "ft.".into(),
+            "gen.".into(),
+            "geo.".into(),
+            "geog.".into(),
+            "geol.".into(),
+            "gov.".into(),
+            "govt.".into(),
+            "grp.".into(),
+            "hist.".into(),
+            "hosp.".into(),
+            "hr.".into(),
+            "hrs.".into(),
+            "ht.".into(),
+            "hwy.".into(),
+            "ill.".into(),
+            "illus.".into(),
+            "inc.".into(),
+            "ind.".into(),
+            "inst.".into(),
+            "int.".into(),
+            "intl.".into(),
+            "jr.".into(),
+            "lab.".into(),
+            "lat.".into(),
+            "lib.".into(),
+            "lng.".into(),
+            "loc.".into(),
+            "lt.".into(),
+            "ltd.".into(),
+            "masc.".into(),
+            "math.".into(),
+            "meas.".into(),
+            "med.".into(),
+            "mil.".into(),
+            "min.".into(),
+            "misc.".into(),
+            "mod.".into(),
+            "mont.".into(),
+            "mr.".into(),
+            "mrs.".into(),
+            "ms.".into(),
+            "narr.".into(),
+            "nat.".into(),
+            "neg.".into(),
+            "no.".into(),
+            "nom.".into(),
+            "nr.".into(),
+            "obj.".into(),
+            "obs.".into(),
+            "off.".into(),
+            "ord.".into(),
+            "org.".into(),
+            "orig.".into(),
+            "pl.".into(),
+            "pop.".into(),
+            "pos.".into(),
+            "pow.".into(),
+            "pp.".into(),
+            "pr.".into(),
+            "pref.".into(),
+            "pres.".into(),
+            "prob.".into(),
+            "proc.".into(),
+            "prod.".into(),
+            "prof.".into(),
+            "pron.".into(),
+            "prop.".into(),
+            "pub.".into(),
+            "pwr.".into(),
+            "qt.".into(),
+            "quot.".into(),
+            "rad.".into(),
+            "rcvd.".into(),
+            "rec.".into(),
+            "ref.".into(),
+            "reg.".into(),
+            "rep.".into(),
+            "reps.".into(),
+            "res.".into(),
+            "rev.".into(),
+            "rte.".into(),
+            "sci.".into(),
+            "sec.".into(),
+            "sect.".into(),
+            "sel.".into(),
+            "sen.".into(),
+            "sep.".into(),
+            "sept.".into(),
+            "seq.".into(),
+            "sgt.".into(),
+            "soc.".into(),
+            "sp.".into(),
+            "spec.".into(),
+            "sr.".into(),
+            "supt.".into(),
+            "sur.".into(),
+            "surg.".into(),
+            "syn.".into(),
+            "tech.".into(),
+            "tel.".into(),
+            "temp.".into(),
+            "theol.".into(),
+            "tmb.".into(),
+            "tsp.".into(),
+            "univ.".into(),
+            "U.S.".into(),
+            "U.K.".into(),
+            "U.N.".into(),
+            "E.U.".into(),
+            "vol.".into(),
+            "vs.".into(),
+            "wk.".into(),
+            "yr.".into(),
+            "Blvd.".into(),
+            "Ave.".into(),
+            "Rd.".into(),
+            "Ln.".into(),
+            "Dr.".into(),
+            "Ct.".into(),
+            "Pl.".into(),
+            "Ter.".into(),
+            "Cir.".into(),
+            "Pkwy.".into(),
+            "Hwy.".into(),
+            "Fwy.".into(),
+            "Mt.".into(),
+            "Mts.".into(),
+            "Ft.".into(),
+            "Pt.".into(),
+            "Ste.".into(),
+            "Fl.".into(),
+            "A.M.".into(),
+            "P.M.".into(),
+            "EST.".into(),
+            "CST.".into(),
+            "MST.".into(),
+            "PST.".into(),
+            "EDT.".into(),
+            "CDT.".into(),
+            "MDT.".into(),
+            "PDT.".into(),
+            "in.".into(),
+            "ft.".into(),
+            "yd.".into(),
+            "mi.".into(),
+            "oz.".into(),
+            "lb.".into(),
+            "lbs.".into(),
+            "kg.".into(),
+            "gm.".into(),
+            "mm.".into(),
+            "cm.".into(),
+            "km.".into(),
+            "sq.".into(),
+            "cu.".into(),
             "U.S.".into(),
         ]
     }
@@ -134,22 +361,19 @@ impl DefaultSentenceSplitter {
     }
 
     fn is_abbreviation_boundary(&self, text: &str, period_pos: usize) -> bool {
-        // Check if the period at period_pos is part of an abbreviation
         let before = &text[..period_pos];
         for abbr in &self.abbreviations {
             let abbr_stem = abbr.trim_end_matches('.');
             if before.ends_with(abbr_stem) {
-                // Verify word boundary: the character before the abbreviation stem
-                // must be a space, start of string, or punctuation
                 let prefix_len = before.len() - abbr_stem.len();
                 if prefix_len == 0 {
                     return true;
                 }
                 let char_before = before.as_bytes().get(prefix_len - 1).copied();
-                if let Some(b) = char_before {
-                    if b.is_ascii_whitespace() || b.is_ascii_punctuation() {
-                        return true;
-                    }
+                if let Some(b) = char_before
+                    && (b.is_ascii_whitespace() || b.is_ascii_punctuation())
+                {
+                    return true;
                 }
             }
         }
@@ -167,44 +391,36 @@ impl DefaultSentenceSplitter {
             return false;
         }
 
-        // Ellipsis: don't split on dots that have a dot to their right (first two dots of "...")
         if ch == '.' && pos + 1 < chars.len() && chars[pos + 1] == '.' {
             return false;
         }
 
-        // Decimal numbers: don't split "3.14" or ".5"
-        if ch == '.' {
-            if pos > 0 && chars[pos - 1].is_ascii_digit() {
-                if pos + 1 < chars.len() && chars[pos + 1].is_ascii_digit() {
-                    return false;
-                }
-            }
-            // Standalone period after digit with no following uppercase (e.g., "item 1.")
-            if pos > 0 && chars[pos - 1].is_ascii_digit() {
-                // only split if followed by whitespace + uppercase
-            }
+        if ch == '.'
+            && pos > 0
+            && chars[pos - 1].is_ascii_digit()
+            && pos + 1 < chars.len()
+            && chars[pos + 1].is_ascii_digit()
+        {
+            return false;
         }
 
-        // Skip if abbreviation
         if ch == '.' && self.is_abbreviation_boundary(text, pos) {
             return false;
         }
 
-        // Skip trailing punctuation: quotes, parentheses
         let mut next_pos = pos + 1;
         while next_pos < chars.len() && is_closing_punct(chars[next_pos]) {
             next_pos += 1;
         }
 
         if next_pos >= chars.len() {
-            return true; // End of text
+            return true;
         }
 
         if !chars[next_pos].is_whitespace() {
             return false;
         }
 
-        // Skip whitespace to find next non-whitespace
         while next_pos < chars.len() && chars[next_pos].is_whitespace() {
             next_pos += 1;
         }
@@ -213,19 +429,23 @@ impl DefaultSentenceSplitter {
             return true;
         }
 
-        // Check if next character is uppercase (sentence start) or digit
         let next_ch = chars[next_pos];
-        next_ch.is_uppercase() || next_ch.is_ascii_digit()
-            || is_opening_punct(next_ch)
+        next_ch.is_uppercase() || next_ch.is_ascii_digit() || is_opening_punct(next_ch)
     }
 }
 
 fn is_closing_punct(c: char) -> bool {
-    matches!(c, '"' | '\'' | '\u{201D}' | '\u{2019}' | ')' | ']' | '\u{300B}')
+    matches!(
+        c,
+        '"' | '\'' | '\u{201D}' | '\u{2019}' | ')' | ']' | '\u{300B}'
+    )
 }
 
 fn is_opening_punct(c: char) -> bool {
-    matches!(c, '"' | '\'' | '\u{201C}' | '\u{2018}' | '(' | '[' | '\u{300A}')
+    matches!(
+        c,
+        '"' | '\'' | '\u{201C}' | '\u{2018}' | '(' | '[' | '\u{300A}'
+    )
 }
 
 impl Default for DefaultSentenceSplitter {
@@ -248,13 +468,11 @@ impl SentenceTokenizer for DefaultSentenceSplitter {
 
         for i in 0..chars.len() {
             if self.is_sentence_boundary(text, i) {
-                // Find byte offset for char position i + 1 (after the punctuation)
                 let mut byte_pos = 0;
-                for j in 0..=(i) {
-                    byte_pos += chars[j].len_utf8();
+                for c in chars.iter().take(i + 1) {
+                    byte_pos += c.len_utf8();
                 }
 
-                // Skip trailing whitespace for the sentence end
                 let mut end_pos = byte_pos;
                 while end_pos < text.len() && text.as_bytes()[end_pos] == b' ' {
                     end_pos += 1;
@@ -270,7 +488,6 @@ impl SentenceTokenizer for DefaultSentenceSplitter {
             }
         }
 
-        // Handle remaining text
         if sentence_start < text.len() {
             let remaining = text[sentence_start..].trim();
             if !remaining.is_empty() {
@@ -350,15 +567,8 @@ mod tests {
         let splitter = DefaultSentenceSplitter::new();
         let text = "He said \"Hello world.\" She nodded.";
         let sentences = splitter.split(text);
-        // Should still split at period+space+uppercase after closing quote
-        assert!(sentences.len() >= 1);
+        assert!(!sentences.is_empty());
     }
-
-    // ========================================================================
-    // Comprehensive test suite
-    // ========================================================================
-
-    // --- 1. Basic sentence splitting ---
 
     #[test]
     fn test_basic_two_sentences_period() {
@@ -389,8 +599,6 @@ mod tests {
         assert_eq!(sentences.len(), 1);
         assert_eq!(sentences[0].text(), "This is a sentence.");
     }
-
-    // --- 2. Abbreviations ---
 
     #[test]
     fn test_abbreviation_mr() {
@@ -510,7 +718,6 @@ mod tests {
         let splitter = DefaultSentenceSplitter::new();
         let text = "Some fruits (e.g. apples) are sweet.";
         let sentences = splitter.split(text);
-        // e.g. does not end with space+uppercase after it, so should be 1 sentence
         assert_eq!(sentences.len(), 1, "Should not split on 'e.g.'");
     }
 
@@ -546,14 +753,16 @@ mod tests {
         assert_eq!(sentences.len(), 1, "Should not split on 'approx.'");
     }
 
-    // --- 3. Multiple abbreviations ---
-
     #[test]
     fn test_multiple_abbreviations_jekyll_hyde() {
         let splitter = DefaultSentenceSplitter::new();
         let text = "Dr. Jekyll and Mr. Hyde";
         let sentences = splitter.split(text);
-        assert_eq!(sentences.len(), 1, "Should not split on abbreviations 'Dr.' and 'Mr.'");
+        assert_eq!(
+            sentences.len(),
+            1,
+            "Should not split on abbreviations 'Dr.' and 'Mr.'"
+        );
         assert_eq!(sentences[0].text(), "Dr. Jekyll and Mr. Hyde");
     }
 
@@ -577,22 +786,14 @@ mod tests {
 
     #[test]
     fn test_abbreviation_at_end_of_sentence() {
-        // "Inc." is the abbreviation, but here it's also the sentence end
-        // The period after Inc is followed by " The" (space+uppercase)
-        // But since "Inc" is in the abbreviation list, the splitter treats it as abbreviation
-        // and does NOT split there. This is a known limitation of abbreviation-based splitters.
         let splitter = DefaultSentenceSplitter::new();
         let text = "I work at Acme Inc. The pay is good.";
         let sentences = splitter.split(text);
-        // The splitter does not split on abbreviation periods even when they
-        // happen to end a sentence. This is a known heuristic tradeoff.
         assert!(
             sentences.len() == 1 || sentences.len() == 2,
             "Abbreviation at sentence boundary has ambiguous behavior"
         );
     }
-
-    // --- 4. Numbers with periods ---
 
     #[test]
     fn test_number_with_period_no_split() {
@@ -624,24 +825,16 @@ mod tests {
     #[test]
     fn test_number_starting_sentence() {
         let splitter = DefaultSentenceSplitter::new();
-        // The is_sentence_boundary checks for digit after period+space, so
-        // "item. 3" would be treated as a boundary.
         let text = "See item. 3 items total.";
         let sentences = splitter.split(text);
-        // Period after "item" followed by space+digit => split
         assert_eq!(sentences.len(), 2);
     }
-
-    // --- 5. URLs should not be split ---
 
     #[test]
     fn test_url_no_split() {
         let splitter = DefaultSentenceSplitter::new();
         let text = "Visit http://example.com. Now go.";
         let sentences = splitter.split(text);
-        // The period after "com" is followed by space + "Now" (uppercase),
-        // so the splitter will split there. The URL itself has no periods
-        // followed by space+uppercase, so it stays intact within its sentence.
         assert_eq!(sentences.len(), 2);
         assert!(sentences[0].text().contains("http://example.com."));
         assert_eq!(sentences[1].text(), "Now go.");
@@ -652,7 +845,11 @@ mod tests {
         let splitter = DefaultSentenceSplitter::new();
         let text = "Visit http://example.com/page.html for info.";
         let sentences = splitter.split(text);
-        assert_eq!(sentences.len(), 1, "URL with path should stay as one sentence");
+        assert_eq!(
+            sentences.len(),
+            1,
+            "URL with path should stay as one sentence"
+        );
     }
 
     #[test]
@@ -663,16 +860,11 @@ mod tests {
         assert_eq!(sentences.len(), 1);
     }
 
-    // --- 6. Ellipsis ---
-
     #[test]
     fn test_ellipsis_three_dots() {
         let splitter = DefaultSentenceSplitter::new();
         let text = "Wait... Then go.";
         let sentences = splitter.split(text);
-        // Each dot is checked individually. The first dot after "Wait" is followed
-        // by another dot (not whitespace), so no split. The third dot is followed
-        // by space + "Then" (uppercase) => split.
         assert_eq!(sentences.len(), 2);
     }
 
@@ -690,7 +882,6 @@ mod tests {
         let splitter = DefaultSentenceSplitter::new();
         let text = "Well... Hello there.";
         let sentences = splitter.split(text);
-        // Third dot is followed by space + "Hello" => split
         assert_eq!(sentences.len(), 2);
     }
 
@@ -699,12 +890,8 @@ mod tests {
         let splitter = DefaultSentenceSplitter::new();
         let text = "Wait\u{2026} Then go.";
         let sentences = splitter.split(text);
-        // The Unicode ellipsis is not '.', '!' or '?' so is_sentence_boundary returns false.
-        // Result: one sentence because no punctuation boundary is found.
         assert_eq!(sentences.len(), 1);
     }
-
-    // --- 7. Question marks and exclamation marks ---
 
     #[test]
     fn test_question_and_exclamation() {
@@ -745,8 +932,6 @@ mod tests {
         assert_eq!(sentences[3].text(), "Great.");
     }
 
-    // --- 8. Parenthetical ---
-
     #[test]
     fn test_parenthetical_with_period() {
         let splitter = DefaultSentenceSplitter::new();
@@ -778,12 +963,8 @@ mod tests {
         let splitter = DefaultSentenceSplitter::new();
         let text = "Hello. (This is a note.) Goodbye.";
         let sentences = splitter.split(text);
-        // After first period: space + '(' => split (parenthesis check in is_sentence_boundary)
-        // After ')' from "note.)": check next char which is space, then 'G' uppercase => split
         assert_eq!(sentences.len(), 3);
     }
-
-    // --- 9. Multiple spaces between sentences ---
 
     #[test]
     fn test_multiple_spaces_between_sentences() {
@@ -819,8 +1000,6 @@ mod tests {
         assert_eq!(sentences.len(), 2);
     }
 
-    // --- 10. Empty / edge cases ---
-
     #[test]
     fn test_empty_string() {
         let splitter = DefaultSentenceSplitter::new();
@@ -843,8 +1022,6 @@ mod tests {
         let splitter = DefaultSentenceSplitter::new();
         let text = "   ";
         let sentences = splitter.split(text);
-        // The remaining text after trim is empty, so no sentence is pushed in the loop.
-        // The fallback at the end pushes the trimmed text.
         assert_eq!(sentences.len(), 1);
         assert_eq!(sentences[0].text(), "");
     }
@@ -854,11 +1031,7 @@ mod tests {
         let splitter = DefaultSentenceSplitter::new();
         let text = "...";
         let sentences = splitter.split(text);
-        // Each period is checked: first '.' followed by '.', no whitespace => no split.
-        // Second '.' followed by '.', no whitespace => no split.
-        // Third '.' is at end of text => is_sentence_boundary returns true (end of text).
-        // But the sentence text would be "..." which is not empty, so it's pushed.
-        assert!(sentences.len() >= 1);
+        assert!(!sentences.is_empty());
     }
 
     #[test]
@@ -866,7 +1039,7 @@ mod tests {
         let splitter = DefaultSentenceSplitter::new();
         let text = ".";
         let sentences = splitter.split(text);
-        assert!(sentences.len() >= 1);
+        assert!(!sentences.is_empty());
     }
 
     #[test]
@@ -874,7 +1047,7 @@ mod tests {
         let splitter = DefaultSentenceSplitter::new();
         let text = "?";
         let sentences = splitter.split(text);
-        assert!(sentences.len() >= 1);
+        assert!(!sentences.is_empty());
     }
 
     #[test]
@@ -882,7 +1055,7 @@ mod tests {
         let splitter = DefaultSentenceSplitter::new();
         let text = "!";
         let sentences = splitter.split(text);
-        assert!(sentences.len() >= 1);
+        assert!(!sentences.is_empty());
     }
 
     #[test]
@@ -913,18 +1086,15 @@ mod tests {
         assert_eq!(sentences[0].text(), "A");
     }
 
-    // --- 11. Direct speech with quotes ---
-
     #[test]
     fn test_direct_speech_with_quotes() {
         let splitter = DefaultSentenceSplitter::new();
         let text = "\"Hello,\" she said. \"How are you?\"";
         let sentences = splitter.split(text);
-        // The period after "said" triggers a split (followed by space + '"' => matches quote check).
-        // The '?' triggers another boundary (end of text after skipping closing quote).
-        // This produces 3 fragments: "\"Hello,\" she said.", "\"How are you?", and "\""
-        // The trailing quote becomes its own sentence due to the boundary logic.
-        assert!(sentences.len() >= 2, "Should produce at least 2 sentences for direct speech");
+        assert!(
+            sentences.len() >= 2,
+            "Should produce at least 2 sentences for direct speech"
+        );
         assert_eq!(sentences[0].text(), "\"Hello,\" she said.");
         assert!(sentences[1].text().contains("How are you?"));
     }
@@ -934,7 +1104,6 @@ mod tests {
         let splitter = DefaultSentenceSplitter::new();
         let text = "He said \"Hello.\" She replied.";
         let sentences = splitter.split(text);
-        // After '.': next char is '"', skip quotes, then space, then 'S' uppercase => split
         assert_eq!(sentences.len(), 2);
     }
 
@@ -943,8 +1112,6 @@ mod tests {
         let splitter = DefaultSentenceSplitter::new();
         let text = "\"Stop!\" he yelled. She flinched.";
         let sentences = splitter.split(text);
-        // After '!': next char is '"', skip quotes, then space, then 'h' (lowercase) => no split at "Stop!"
-        // After "yelled.": period then space then 'S' uppercase => split
         assert_eq!(sentences.len(), 2);
     }
 
@@ -953,11 +1120,8 @@ mod tests {
         let splitter = DefaultSentenceSplitter::new();
         let text = "\"Really?\" she asked.";
         let sentences = splitter.split(text);
-        // After '?': next char is '"', skip quotes, then space, then 's' (lowercase) => no split
         assert_eq!(sentences.len(), 1);
     }
-
-    // --- 12. Decimal numbers ---
 
     #[test]
     fn test_decimal_numbers_pi_and_euler() {
@@ -974,7 +1138,6 @@ mod tests {
         let splitter = DefaultSentenceSplitter::new();
         let text = "The answer is 42. 3.14 is pi.";
         let sentences = splitter.split(text);
-        // After "42." is followed by space + '3' (digit) => split
         assert_eq!(sentences.len(), 2);
     }
 
@@ -993,8 +1156,6 @@ mod tests {
         let sentences = splitter.split(text);
         assert_eq!(sentences.len(), 1);
     }
-
-    // --- 13. Date patterns ---
 
     #[test]
     fn test_date_with_jan_abbreviation() {
@@ -1022,13 +1183,16 @@ mod tests {
 
     #[test]
     fn test_all_month_abbreviations() {
-        let months = ["Jan.", "Feb.", "Mar.", "Apr.", "Jun.", "Jul.", "Aug.", "Sep.", "Oct.", "Nov.", "Dec."];
+        let months = [
+            "Jan.", "Feb.", "Mar.", "Apr.", "Jun.", "Jul.", "Aug.", "Sep.", "Oct.", "Nov.", "Dec.",
+        ];
         let splitter = DefaultSentenceSplitter::new();
         for month in &months {
             let text = format!("On {} 1, we met.", month);
             let sentences = splitter.split(&text);
             assert_eq!(
-                sentences.len(), 1,
+                sentences.len(),
+                1,
                 "Should not split on abbreviation '{}'",
                 month
             );
@@ -1043,7 +1207,8 @@ mod tests {
             let text = format!("On {} we met.", day);
             let sentences = splitter.split(&text);
             assert_eq!(
-                sentences.len(), 1,
+                sentences.len(),
+                1,
                 "Should not split on abbreviation '{}'",
                 day
             );
@@ -1060,17 +1225,11 @@ mod tests {
         assert_eq!(sentences[1].text(), "It was cold.");
     }
 
-    // --- 14. Single letter abbreviations ---
-
     #[test]
     fn test_single_letter_abbreviations() {
         let splitter = DefaultSentenceSplitter::new();
-        // "A." and "B." are NOT in the abbreviation list, so the splitter
-        // WILL split on them if followed by space+uppercase.
         let text = "A. Smith went to B. Jones";
         let sentences = splitter.split(text);
-        // "A." is followed by space + 'S' uppercase => split
-        // "B." is followed by space + 'J' uppercase => split
         assert_eq!(sentences.len(), 3);
     }
 
@@ -1079,20 +1238,19 @@ mod tests {
         let splitter = DefaultSentenceSplitter::new();
         let text = "X. Y went home.";
         let sentences = splitter.split(text);
-        // "X." followed by space + 'Y' uppercase => split
         assert_eq!(sentences.len(), 2);
     }
-
-    // --- 15. Run-on text (no space after period) ---
 
     #[test]
     fn test_run_on_text() {
         let splitter = DefaultSentenceSplitter::new();
         let text = "Hello.World.";
         let sentences = splitter.split(text);
-        // After first '.': next char is 'W' (not whitespace) => no split
-        // After second '.': end of text => is_sentence_boundary returns true
-        assert_eq!(sentences.len(), 1, "No split without whitespace after period");
+        assert_eq!(
+            sentences.len(),
+            1,
+            "No split without whitespace after period"
+        );
     }
 
     #[test]
@@ -1100,8 +1258,11 @@ mod tests {
         let splitter = DefaultSentenceSplitter::new();
         let text = "Hello!World.";
         let sentences = splitter.split(text);
-        // After '!': next char is 'W' (not whitespace) => no split
-        assert_eq!(sentences.len(), 1, "No split without whitespace after exclamation");
+        assert_eq!(
+            sentences.len(),
+            1,
+            "No split without whitespace after exclamation"
+        );
     }
 
     #[test]
@@ -1109,28 +1270,30 @@ mod tests {
         let splitter = DefaultSentenceSplitter::new();
         let text = "Hello?World.";
         let sentences = splitter.split(text);
-        // After '?': next char is 'W' (not whitespace) => no split
-        assert_eq!(sentences.len(), 1, "No split without whitespace after question mark");
+        assert_eq!(
+            sentences.len(),
+            1,
+            "No split without whitespace after question mark"
+        );
     }
-
-    // --- Additional coverage tests ---
 
     #[test]
     fn test_with_custom_abbreviations() {
-        let splitter = DefaultSentenceSplitter::new()
-            .with_abbreviations(vec!["Custom.".into()]);
+        let splitter = DefaultSentenceSplitter::new().with_abbreviations(vec!["Custom.".into()]);
         let text = "Custom. value is high.";
         let sentences = splitter.split(text);
-        assert_eq!(sentences.len(), 1, "Should not split on custom abbreviation");
+        assert_eq!(
+            sentences.len(),
+            1,
+            "Should not split on custom abbreviation"
+        );
     }
 
     #[test]
     fn test_with_empty_abbreviations() {
-        let splitter = DefaultSentenceSplitter::new()
-            .with_abbreviations(vec![]);
+        let splitter = DefaultSentenceSplitter::new().with_abbreviations(vec![]);
         let text = "Mr. Smith went home.";
         let sentences = splitter.split(text);
-        // Without abbreviation list, "Mr." followed by space + 'S' => split
         assert_eq!(sentences.len(), 2);
     }
 
@@ -1140,10 +1303,13 @@ mod tests {
         let text = "First. Second. Third.";
         let sentences = splitter.split(text);
         assert_eq!(sentences.len(), 3);
-        // Verify offsets point to valid slices
         for s in &sentences {
             let slice = &text[s.start()..s.end()];
-            assert!(slice.contains(s.text().trim()), "Offset mismatch for '{}'", s.text());
+            assert!(
+                slice.contains(s.text().trim()),
+                "Offset mismatch for '{}'",
+                s.text()
+            );
         }
     }
 
@@ -1152,8 +1318,6 @@ mod tests {
         let splitter = DefaultSentenceSplitter::new();
         let text = "e.g. apples are sweet.";
         let sentences = splitter.split(text);
-        // "e.g." has second period followed by space + 'a' (lowercase) => not a boundary
-        // unless abbreviation check catches it first (it does: "g" matches "g" from "e.g.")
         assert_eq!(sentences.len(), 1);
     }
 
@@ -1162,11 +1326,6 @@ mod tests {
         let splitter = DefaultSentenceSplitter::new();
         let text = "Hello. [This is a note.] Goodbye.";
         let sentences = splitter.split(text);
-        // After first '.': space + '[' => split
-        // After ']': period at end of "note.]" => the period is after ']'
-        // Actually let's trace: "note.]" - the period after "note" is followed by ']', not whitespace => no split
-        // The ']' is not sentence-ending punctuation.
-        // After second '.' at end: end of text => boundary
         assert!(sentences.len() >= 2);
     }
 
@@ -1194,17 +1353,14 @@ mod tests {
         let splitter = DefaultSentenceSplitter::new();
         let text = "Go. 3 people came.";
         let sentences = splitter.split(text);
-        // After first '.': space + '3' (digit) => split
         assert_eq!(sentences.len(), 2);
     }
 
     #[test]
     fn test_apostrophe_after_period() {
         let splitter = DefaultSentenceSplitter::new();
-        // After '.': skip apostrophes, then check what follows
         let text = "Hello.' She said.";
         let sentences = splitter.split(text);
-        // After '.': next char is '\'' => skip apostrophes, then space, then 'S' uppercase => split
         assert_eq!(sentences.len(), 2);
     }
 
