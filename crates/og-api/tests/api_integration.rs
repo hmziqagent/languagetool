@@ -257,7 +257,8 @@ async fn test_v2_languages_lists_only_implementable_languages() {
             .any(|l| l["code"] == "en" && l["longCode"] == "en-US")
     );
     assert!(
-        json.iter().any(|l| l["code"] == "de" && l["longCode"] == "de-DE"),
+        json.iter()
+            .any(|l| l["code"] == "de" && l["longCode"] == "de-DE"),
         "/v2/languages must advertise the implemented German engine"
     );
     assert!(
