@@ -80,8 +80,6 @@ impl XmlRuleParser {
         let mut url_text = String::new();
         // Example correction attribute
         let mut example_correction: Option<String> = None;
-        // Track if example contains <marker> (implies Incorrect if no explicit type)
-        let mut example_has_marker = false;
 
         loop {
             match reader.read_event_into(&mut buf) {
@@ -290,13 +288,11 @@ impl XmlRuleParser {
                             };
                             in_example = true;
                             example_text.clear();
-                            example_has_marker = false;
                         }
                         "marker" => {
                             // Inside example - preserve <marker> tags for position extraction
                             if in_example {
                                 example_text.push_str("<marker>");
-                                example_has_marker = true;
                             } else if current_pattern.is_some() || current_antipattern.is_some() {
                                 // Inside pattern - track which tokens are in the marker
                                 in_pattern_marker = true;
@@ -707,7 +703,6 @@ impl XmlRuleParser {
                                 });
                             }
                             example_correction = None;
-                            example_has_marker = false;
                         }
                         "marker" => {
                             if in_example {
@@ -1503,7 +1498,6 @@ mod tests {
         let parser = XmlRuleParser::new();
         let result = parser.parse(xml).unwrap();
 
-        // Examples with <marker> tags are implicitly incorrect
         assert_eq!(
             result.rules[0].examples[0].example_type,
             XmlExampleType::Correct
