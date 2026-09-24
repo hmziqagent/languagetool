@@ -813,9 +813,7 @@ impl XmlRuleParser {
         xml.to_string()
     }
 
-    fn expand_entities(xml: &str) -> String {
-        let mut result = xml.to_string();
-        // Extract all entity definitions
+    pub fn expand_entities(xml: &str) -> String {
         let double_q = regex::Regex::new(r#"<!ENTITY\s+(\w+)\s+"([^"]*)">"#).unwrap();
         let single_q = regex::Regex::new(r#"<!ENTITY\s+(\w+)\s+'([^']*)'>"#).unwrap();
         let mut entities: std::collections::HashMap<String, String> =
@@ -827,20 +825,80 @@ impl XmlRuleParser {
             entities.insert(cap[1].to_string(), cap[2].to_string());
         }
 
-        // Iteratively expand entities until no more changes (handles nested entities)
-        loop {
-            let mut changed = false;
-            for (name, value) in &entities {
-                let placeholder = format!("&{};", name);
-                if result.contains(&placeholder) {
-                    result = result.replace(&placeholder, value);
-                    changed = true;
-                }
-            }
-            if !changed {
-                break;
-            }
+        fn valid_entity_name(name: &str) -> bool {
+            !name.is_empty()
+                && name
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.' || c == '-')
         }
+
+        fn expand_value(
+            value: &str,
+            entities: &std::collections::HashMap<String, String>,
+            memo: &mut std::collections::HashMap<String, String>,
+            depth: usize,
+        ) -> String {
+            if depth > 16 || !value.contains('&') {
+                return value.to_string();
+            }
+            let mut out = String::with_capacity(value.len());
+            let mut rest = value;
+            while let Some(pos) = rest.find('&') {
+                out.push_str(&rest[..pos]);
+                let after = &rest[pos..];
+                let Some(semi) = after.find(';') else {
+                    out.push_str(after);
+                    return out;
+                };
+                let name = &after[1..semi];
+                if !valid_entity_name(name) {
+                    out.push('&');
+                    rest = &after[1..];
+                    continue;
+                }
+                if let Some(expanded) = memo.get(name) {
+                    out.push_str(expanded);
+                } else if let Some(nested) = entities.get(name) {
+                    let expanded = expand_value(nested, entities, memo, depth + 1);
+                    memo.insert(name.to_string(), expanded.clone());
+                    out.push_str(&expanded);
+                } else {
+                    out.push_str(&after[..=semi]);
+                }
+                rest = &after[semi + 1..];
+            }
+            out.push_str(rest);
+            out
+        }
+
+        let mut memo: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        let mut result = String::with_capacity(xml.len() + 128 * 1024);
+        let mut rest = xml;
+        while let Some(pos) = rest.find('&') {
+            result.push_str(&rest[..pos]);
+            let after = &rest[pos..];
+            let Some(semi) = after.find(';') else {
+                result.push_str(after);
+                break;
+            };
+            let name = &after[1..semi];
+            if !valid_entity_name(name) {
+                result.push('&');
+                rest = &after[1..];
+                continue;
+            }
+            if let Some(expanded) = memo.get(name) {
+                result.push_str(expanded);
+            } else if let Some(nested) = entities.get(name) {
+                let expanded = expand_value(nested, &entities, &mut memo, 0);
+                memo.insert(name.to_string(), expanded.clone());
+                result.push_str(&expanded);
+            } else {
+                result.push_str(&after[..=semi]);
+            }
+            rest = &after[semi + 1..];
+        }
+        result.push_str(rest);
         result
     }
 }

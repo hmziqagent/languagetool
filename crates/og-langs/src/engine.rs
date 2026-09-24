@@ -741,10 +741,25 @@ pub fn grammar_xml_path(lang_code: &str, lt_root: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, OnceLock};
+
+    fn shared_english() -> Arc<LanguageEngine> {
+        static ENGINE: OnceLock<Arc<LanguageEngine>> = OnceLock::new();
+        ENGINE
+            .get_or_init(|| Arc::new(LanguageEngine::english()))
+            .clone()
+    }
+
+    fn shared_german() -> Arc<LanguageEngine> {
+        static ENGINE: OnceLock<Arc<LanguageEngine>> = OnceLock::new();
+        ENGINE
+            .get_or_init(|| Arc::new(LanguageEngine::german()))
+            .clone()
+    }
 
     #[test]
     fn mother_tongue_adds_l2_rules_to_the_check() {
-        let base = LanguageEngine::english();
+        let base = shared_english();
         let plain = base.rules.len();
         let mut request = CheckRequest::new("Test", Language::English);
         request.mother_tongue = Some(Language::German);
@@ -765,7 +780,7 @@ mod tests {
 
     #[test]
     fn paragraph_rules_fire_through_the_srx_pipeline() {
-        let engine = LanguageEngine::english();
+        let engine = shared_english();
         let mut request = CheckRequest::new("Hello world. \n\nNext paragraph", Language::English);
         request.enabled_rules = vec![
             "WHITESPACE_PARAGRAPH".to_string(),
@@ -782,7 +797,7 @@ mod tests {
 
     #[test]
     fn german_engine_loads_rules_and_checks_text() {
-        let engine = LanguageEngine::german();
+        let engine = shared_german();
         assert!(
             engine.rule_count() > 100,
             "expected German rules to load, got {}",
@@ -814,7 +829,7 @@ mod tests {
 
     #[test]
     fn regional_variants_carry_their_own_morfologik_rule() {
-        let base = LanguageEngine::english();
+        let base = shared_english();
         let ids: Vec<String> = base.rules.iter().map(|r| r.id().to_string()).collect();
         assert!(ids.iter().any(|i| i == "MORFOLOGIK_RULE_EN_US"));
         assert!(!ids.iter().any(|i| i == "MORFOLOGIK_RULE_EN_GB"));
