@@ -94,6 +94,10 @@ impl GoldenRunner {
         }
     }
 
+    pub fn rule_count(&self) -> usize {
+        self.engine.rule_count()
+    }
+
     pub fn from_engine(engine: Arc<LanguageEngine>) -> Self {
         Self {
             engine,

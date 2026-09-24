@@ -6,7 +6,10 @@ use og_core::{
 };
 use og_rules::pattern_rule::PatternRuleEngine;
 use og_spell::SpellingCheckRule;
-use og_tagger::{ChainedDisambiguator, ContextualDisambiguator, EnglishTagger, XmlDisambiguator};
+use og_tagger::{
+    ChainedDisambiguator, ContextualDisambiguator, EnglishTagger, MultiWordChunkerDisambiguator,
+    XmlDisambiguator,
+};
 use og_xml::compiler::{CompiledRule, XmlCompiler};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -188,10 +191,14 @@ impl LanguageEngine {
                             "Loaded {} disambiguation rules for English",
                             disambiguator.rule_count()
                         );
-                        engine.disambiguator = Some(Arc::new(ChainedDisambiguator::new(vec![
-                            Arc::new(disambiguator),
-                            Arc::new(ContextualDisambiguator),
-                        ])));
+                        let mut chain: Vec<Arc<dyn og_core::checker::Disambiguator>> =
+                            vec![Arc::new(disambiguator), Arc::new(ContextualDisambiguator)];
+                        if let Some(multiword) =
+                            MultiWordChunkerDisambiguator::from_resource_dir(&resource_dir)
+                        {
+                            chain.insert(0, Arc::new(multiword));
+                        }
+                        engine.disambiguator = Some(Arc::new(ChainedDisambiguator::new(chain)));
                     }
                     Err(e) => eprintln!("Warning: Failed to load disambiguation rules: {}", e),
                 }

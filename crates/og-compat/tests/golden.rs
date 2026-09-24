@@ -27,8 +27,18 @@ fn cases() -> Vec<GoldenCase> {
 
 #[test]
 fn golden_parity_cases_pass() {
+    let build_start = std::time::Instant::now();
     let runner = GoldenRunner::english();
+    let build_elapsed = build_start.elapsed();
+    let run_start = std::time::Instant::now();
     let report = runner.run(&cases());
+    let run_elapsed = run_start.elapsed();
+    eprintln!(
+        "engine-build: {} ms ({} rules), golden-run: {} ms",
+        build_elapsed.as_millis(),
+        runner.rule_count(),
+        run_elapsed.as_millis()
+    );
     let failures: Vec<String> = report
         .results
         .iter()
