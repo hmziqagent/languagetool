@@ -630,10 +630,7 @@ impl LanguageEngine {
 }
 
 fn load_german_wordlist(resource_dir: &Path) -> Option<Vec<String>> {
-    let dict = og_tagger::morfologik::MorfologikDictionary::load(
-        &resource_dir.join("german.dict"),
-        &resource_dir.join("german.info"),
-    )?;
+    let dict = og_tagger::german_tagger::shared_german_dictionary(resource_dir)?;
     Some(dict.word_list())
 }
 

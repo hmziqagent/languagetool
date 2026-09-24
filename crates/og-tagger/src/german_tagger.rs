@@ -8,15 +8,34 @@ type Readings = Vec<(Box<str>, Box<str>)>;
 type ReadingMap = std::collections::HashMap<Box<str>, Readings>;
 
 pub struct GermanTagger {
-    dictionary: MorfologikDictionary,
+    dictionary: std::sync::Arc<MorfologikDictionary>,
     manual: ReadingMap,
     removals: ReadingMap,
 }
 
+pub fn shared_german_dictionary(dir: &Path) -> Option<std::sync::Arc<MorfologikDictionary>> {
+    static CACHE: std::sync::OnceLock<
+        std::sync::Mutex<
+            std::collections::HashMap<std::path::PathBuf, std::sync::Arc<MorfologikDictionary>>,
+        >,
+    > = std::sync::OnceLock::new();
+    let cache = CACHE.get_or_init(Default::default);
+    let key = dir.join("german.dict");
+    let mut guard = cache.lock().unwrap();
+    if let Some(dict) = guard.get(&key) {
+        return Some(dict.clone());
+    }
+    let dictionary = std::sync::Arc::new(MorfologikDictionary::load(
+        &dir.join("german.dict"),
+        &dir.join("german.info"),
+    )?);
+    guard.insert(key, dictionary.clone());
+    Some(dictionary)
+}
+
 impl GermanTagger {
     pub fn from_resource_dir(dir: &Path) -> Option<Self> {
-        let dictionary =
-            MorfologikDictionary::load(&dir.join("german.dict"), &dir.join("german.info"))?;
+        let dictionary = shared_german_dictionary(dir)?;
         Some(Self {
             dictionary,
             manual: std::collections::HashMap::new(),

@@ -9,24 +9,88 @@ use tracing::info;
 pub const MAX_TEXT_LENGTH: usize = 100_000;
 
 pub struct AppState {
-    engines: Arc<HashMap<String, Arc<LanguageEngine>>>,
+    engines: HashMap<String, OnceLock<Arc<LanguageEngine>>>,
 }
 
 impl AppState {
     pub fn new() -> Self {
         Self {
-            engines: Arc::new(build_engines()),
+            engines: ENGINE_CODES
+                .iter()
+                .map(|code| (code.to_string(), OnceLock::new()))
+                .collect(),
         }
     }
 
     pub fn engine_for(&self, code: &str) -> Option<&Arc<LanguageEngine>> {
-        self.engines.get(code)
+        let lock = self.engines.get(code)?;
+        Some(lock.get_or_init(|| build_engine_for(code)))
     }
 
     pub fn language_codes(&self) -> Vec<&str> {
         let mut codes: Vec<&str> = self.engines.keys().map(String::as_str).collect();
         codes.sort_unstable();
         codes
+    }
+}
+
+pub const ENGINE_CODES: &[&str] = &[
+    "en", "en-US", "en-GB", "en-CA", "en-AU", "en-NZ", "en-ZA", "de", "de-DE",
+];
+
+enum EngineSource {
+    EnglishBase,
+    EnglishVariant(&'static str),
+    German,
+}
+
+fn engine_source(code: &str) -> Option<EngineSource> {
+    match code {
+        "en" | "en-US" => Some(EngineSource::EnglishBase),
+        "en-GB" => Some(EngineSource::EnglishVariant("en-GB")),
+        "en-CA" => Some(EngineSource::EnglishVariant("en-CA")),
+        "en-AU" => Some(EngineSource::EnglishVariant("en-AU")),
+        "en-NZ" => Some(EngineSource::EnglishVariant("en-NZ")),
+        "en-ZA" => Some(EngineSource::EnglishVariant("en-ZA")),
+        "de" | "de-DE" => Some(EngineSource::German),
+        _ => None,
+    }
+}
+
+fn shared_english_engine() -> Arc<LanguageEngine> {
+    static ENGINE: OnceLock<Arc<LanguageEngine>> = OnceLock::new();
+    ENGINE
+        .get_or_init(|| {
+            info!("Loading English language engine...");
+            let engine = Arc::new(LanguageEngine::english());
+            info!("English engine loaded with {} rules", engine.rule_count());
+            engine
+        })
+        .clone()
+}
+
+fn shared_german_engine() -> Arc<LanguageEngine> {
+    static ENGINE: OnceLock<Arc<LanguageEngine>> = OnceLock::new();
+    ENGINE
+        .get_or_init(|| {
+            info!("Loading German language engine...");
+            let engine = Arc::new(LanguageEngine::german());
+            info!("German engine loaded with {} rules", engine.rule_count());
+            engine
+        })
+        .clone()
+}
+
+fn build_engine_for(code: &str) -> Arc<LanguageEngine> {
+    match engine_source(code) {
+        Some(EngineSource::EnglishBase) => shared_english_engine(),
+        Some(EngineSource::EnglishVariant(code)) => {
+            info!("Loading {code} engine...");
+            let variant = shared_english_engine().variant(code);
+            info!("Loaded {code} engine with {} rules", variant.rule_count());
+            Arc::new(variant)
+        }
+        Some(EngineSource::German) | None => shared_german_engine(),
     }
 }
 
@@ -39,35 +103,6 @@ impl Default for AppState {
 pub fn shared_state() -> Arc<AppState> {
     static STATE: OnceLock<Arc<AppState>> = OnceLock::new();
     STATE.get_or_init(|| Arc::new(AppState::new())).clone()
-}
-
-pub fn build_engines() -> HashMap<String, Arc<LanguageEngine>> {
-    info!("Loading English language engine...");
-    let en_engine = Arc::new(LanguageEngine::english());
-    info!(
-        "English engine loaded with {} rules",
-        en_engine.rule_count()
-    );
-    let mut engines = engines_for_variants(en_engine);
-
-    info!("Loading German language engine...");
-    let de_engine = Arc::new(LanguageEngine::german());
-    info!("German engine loaded with {} rules", de_engine.rule_count());
-    engines.insert("de".to_string(), de_engine.clone());
-    engines.insert("de-DE".to_string(), de_engine);
-    engines
-}
-
-fn engines_for_variants(engine: Arc<LanguageEngine>) -> HashMap<String, Arc<LanguageEngine>> {
-    let mut engines = HashMap::new();
-    engines.insert("en".to_string(), engine.clone());
-    engines.insert("en-US".to_string(), engine.clone());
-    for code in ["en-GB", "en-CA", "en-AU", "en-NZ", "en-ZA"] {
-        let variant = engine.variant(code);
-        info!("Loaded {} engine with {} rules", code, variant.rule_count());
-        engines.insert(code.to_string(), Arc::new(variant));
-    }
-    engines
 }
 
 pub fn build_app(state: Arc<AppState>) -> Router {
@@ -100,32 +135,36 @@ pub async fn run_server(port: u16) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use og_core::Language;
 
     #[test]
     fn engine_variants_default_to_one_shared_instance() {
-        let engines = engines_for_variants(Arc::new(LanguageEngine::new(Language::English)));
-        let en = engines.get("en").expect("en engine");
-        assert!(Arc::ptr_eq(en, engines.get("en-US").expect("en-US engine")));
+        assert!(matches!(
+            engine_source("en"),
+            Some(EngineSource::EnglishBase)
+        ));
+        assert!(matches!(
+            engine_source("en-US"),
+            Some(EngineSource::EnglishBase)
+        ));
     }
 
     #[test]
     fn regional_variants_get_their_own_engine() {
-        let engines = engines_for_variants(Arc::new(LanguageEngine::new(Language::English)));
-        let en = engines.get("en").expect("en engine");
         for code in ["en-GB", "en-CA", "en-AU", "en-NZ", "en-ZA"] {
-            assert!(!Arc::ptr_eq(en, engines.get(code).unwrap_or(en)));
+            assert!(matches!(
+                engine_source(code),
+                Some(EngineSource::EnglishVariant(_))
+            ));
         }
     }
 
     #[test]
     fn app_state_resolves_variant_codes() {
-        let engines = engines_for_variants(Arc::new(LanguageEngine::new(Language::English)));
-        let state = AppState {
-            engines: Arc::new(engines),
-        };
-        assert!(state.engine_for("en-US").is_some());
-        assert!(state.engine_for("en-GB").is_some());
-        assert!(state.engine_for("de-DE").is_none());
+        let state = AppState::new();
+        let codes = state.language_codes();
+        for code in ["en", "en-US", "en-GB", "de", "de-DE"] {
+            assert!(codes.contains(&code), "missing {code}");
+        }
+        assert!(!codes.contains(&"fr"));
     }
 }
