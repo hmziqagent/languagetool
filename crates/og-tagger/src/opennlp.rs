@@ -1,5 +1,5 @@
 use std::cmp::Ordering;
-use std::collections::{BinaryHeap, HashMap};
+use std::collections::HashMap;
 use std::path::Path;
 
 pub struct GisModel {
@@ -153,25 +153,107 @@ struct BeamSequence {
     outcomes: Vec<usize>,
 }
 
-impl Eq for BeamSequence {}
-
-impl PartialEq for BeamSequence {
-    fn eq(&self, other: &Self) -> bool {
-        self.score == other.score
-    }
-}
-
-impl PartialOrd for BeamSequence {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for BeamSequence {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.score
-            .partial_cmp(&other.score)
+impl BeamSequence {
+    fn java_cmp(&self, other: &Self) -> Ordering {
+        other
+            .score
+            .partial_cmp(&self.score)
             .unwrap_or(Ordering::Equal)
+    }
+}
+
+struct JavaPriorityQueue {
+    items: Vec<BeamSequence>,
+}
+
+impl JavaPriorityQueue {
+    fn new() -> Self {
+        Self { items: Vec::new() }
+    }
+
+    fn len(&self) -> usize {
+        self.items.len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
+
+    fn add(&mut self, element: BeamSequence) {
+        self.items.push(element);
+        self.sift_up(self.items.len() - 1);
+    }
+
+    fn poll(&mut self) -> Option<BeamSequence> {
+        if self.items.is_empty() {
+            return None;
+        }
+        if self.items.len() == 1 {
+            return self.items.pop();
+        }
+        let result = std::mem::replace(
+            &mut self.items[0],
+            BeamSequence {
+                score: 0.0,
+                outcomes: Vec::new(),
+            },
+        );
+        let x = self.items.pop().unwrap();
+        self.sift_down(0, x);
+        Some(result)
+    }
+
+    fn sift_up(&mut self, start: usize) {
+        let x = std::mem::replace(
+            &mut self.items[start],
+            BeamSequence {
+                score: 0.0,
+                outcomes: Vec::new(),
+            },
+        );
+        let mut k = start;
+        while k > 0 {
+            let parent = (k - 1) / 2;
+            if x.java_cmp(&self.items[parent]) != Ordering::Less {
+                break;
+            }
+            let parent_val = std::mem::replace(
+                &mut self.items[parent],
+                BeamSequence {
+                    score: 0.0,
+                    outcomes: Vec::new(),
+                },
+            );
+            self.items[k] = parent_val;
+            k = parent;
+        }
+        self.items[k] = x;
+    }
+
+    fn sift_down(&mut self, start: usize, x: BeamSequence) {
+        let n = self.items.len();
+        let mut k = start;
+        let half = n / 2;
+        while k < half {
+            let mut child = 2 * k + 1;
+            let right = child + 1;
+            if right < n && self.items[child].java_cmp(&self.items[right]) == Ordering::Greater {
+                child = right;
+            }
+            if x.java_cmp(&self.items[child]) != Ordering::Greater {
+                break;
+            }
+            let child_val = std::mem::replace(
+                &mut self.items[child],
+                BeamSequence {
+                    score: 0.0,
+                    outcomes: Vec::new(),
+                },
+            );
+            self.items[k] = child_val;
+            k = child;
+        }
+        self.items[k] = x;
     }
 }
 
@@ -184,8 +266,8 @@ fn beam_search(
     contexts_for: &mut dyn FnMut(usize, &[usize]) -> Vec<String>,
     valid: &dyn Fn(usize, &[usize], usize) -> bool,
 ) -> Vec<usize> {
-    let mut prev: BinaryHeap<BeamSequence> = BinaryHeap::new();
-    prev.push(BeamSequence {
+    let mut prev: JavaPriorityQueue = JavaPriorityQueue::new();
+    prev.add(BeamSequence {
         score: 0.0,
         outcomes: Vec::new(),
     });
@@ -194,23 +276,23 @@ fn beam_search(
 
     for i in 0..sequence_len {
         let sz = beam_size.min(prev.len());
-        let mut next: BinaryHeap<BeamSequence> = BinaryHeap::new();
+        let mut next: JavaPriorityQueue = JavaPriorityQueue::new();
         for _ in 0..sz {
-            let top = prev.pop().unwrap();
+            let top = prev.poll().unwrap();
             let contexts = contexts_for(i, &top.outcomes);
             model.eval(&contexts, &mut probs);
             let mut sorted = probs.clone();
             sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
             let min = sorted[probs.len().saturating_sub(beam_size).min(probs.len() - 1)];
 
-            let advance = |next: &mut BinaryHeap<BeamSequence>, threshold: f64| {
+            let advance = |next: &mut JavaPriorityQueue, threshold: f64| {
                 for (p, probability) in probs.iter().enumerate() {
                     if *probability >= threshold && valid(i, &top.outcomes, p) {
                         let score = top.score + probability.ln();
                         if score > ZERO_LOG {
                             let mut outcomes = top.outcomes.clone();
                             outcomes.push(p);
-                            next.push(BeamSequence { score, outcomes });
+                            next.add(BeamSequence { score, outcomes });
                         }
                     }
                 }
@@ -224,7 +306,7 @@ fn beam_search(
         prev = next;
     }
 
-    prev.pop().map(|s| s.outcomes).unwrap_or_default()
+    prev.poll().map(|s| s.outcomes).unwrap_or_default()
 }
 
 pub struct OpenNlpTokenizer {
@@ -1069,5 +1151,121 @@ mod tests {
         assert!(chunks[8].contains("E-NP"), "got {:?}", chunks);
         assert!(chunks[10].contains("B-PP"), "got {:?}", chunks);
         assert!(chunks[16].is_empty(), "got {:?}", chunks);
+    }
+}
+
+#[cfg(test)]
+mod opennlp_docs_parity_tests {
+    use super::*;
+
+    fn chunker() -> OpenNlpEnglishChunker {
+        let resource_dir = std::path::Path::new(
+            "/home/agent/opengrammar-rs/languagetool/languagetool-language-modules/en/src/main/resources/org/languagetool/resource/en",
+        );
+        OpenNlpEnglishChunker::from_resource_dir(resource_dir).expect("opennlp models")
+    }
+
+    #[test]
+    fn pos_tagger_matches_official_docs_output() {
+        let chunker = chunker();
+        let words: Vec<&str> =
+            "Pierre Vinken , 61 years old , will join the board as a nonexecutive director Nov. 29 ."
+                .split(' ')
+                .collect();
+        let expected: Vec<&str> = "NNP NNP , CD NNS JJ , MD VB DT NN IN DT JJ NN NNP CD ."
+            .split(' ')
+            .collect();
+        let tag_indices = chunker.pos.tag(&words);
+        let got: Vec<&str> = tag_indices
+            .iter()
+            .map(|i| chunker.pos.model.outcome(*i))
+            .collect();
+        assert_eq!(got, expected);
+    }
+
+    #[test]
+    fn chunker_matches_official_docs_output() {
+        let chunker = chunker();
+        let cases: Vec<(Vec<&str>, Vec<&str>, Vec<&str>)> = vec![
+            (
+                vec![
+                    "Rockwell",
+                    "International",
+                    "Corp.",
+                    "'s",
+                    "Tulsa",
+                    "unit",
+                    "said",
+                    "it",
+                    "signed",
+                    "a",
+                    "tentative",
+                    "agreement",
+                    "extending",
+                    "its",
+                    "contract",
+                    "with",
+                    "Boeing",
+                    "Co.",
+                    "to",
+                    "provide",
+                    "structural",
+                    "parts",
+                    "for",
+                    "Boeing",
+                    "'s",
+                    "747",
+                    "jetliners",
+                    ".",
+                ],
+                vec![
+                    "NNP", "NNP", "NNP", "POS", "NNP", "NN", "VBD", "PRP", "VBD", "DT", "JJ", "NN",
+                    "VBG", "PRP$", "NN", "IN", "NNP", "NNP", "TO", "VB", "JJ", "NNS", "IN", "NNP",
+                    "POS", "CD", "NNS", ".",
+                ],
+                vec![
+                    "B-NP", "I-NP", "I-NP", "B-NP", "I-NP", "I-NP", "B-VP", "B-NP", "B-VP", "B-NP",
+                    "I-NP", "I-NP", "B-VP", "B-NP", "I-NP", "B-PP", "B-NP", "I-NP", "B-VP", "I-VP",
+                    "B-NP", "I-NP", "B-PP", "B-NP", "B-NP", "I-NP", "I-NP", "O",
+                ],
+            ),
+            (
+                vec![
+                    "Rockwell",
+                    "said",
+                    "the",
+                    "agreement",
+                    "calls",
+                    "for",
+                    "it",
+                    "to",
+                    "supply",
+                    "200",
+                    "additional",
+                    "so-called",
+                    "shipsets",
+                    "for",
+                    "the",
+                    "planes",
+                    ".",
+                ],
+                vec![
+                    "NNP", "VBD", "DT", "NN", "VBZ", "IN", "PRP", "TO", "VB", "CD", "JJ", "JJ",
+                    "NNS", "IN", "DT", "NNS", ".",
+                ],
+                vec![
+                    "B-NP", "B-VP", "B-NP", "I-NP", "B-VP", "B-SBAR", "B-NP", "B-VP", "I-VP",
+                    "B-NP", "I-NP", "I-NP", "I-NP", "B-PP", "B-NP", "I-NP", "O",
+                ],
+            ),
+        ];
+        for (words, tags, expected) in &cases {
+            let chunk_indices = chunker.chunker.chunk(words, tags);
+            let got: Vec<&str> = chunk_indices
+                .iter()
+                .map(|i| chunker.chunker.model.outcome(*i))
+                .collect();
+            assert_eq!(&got, expected, "input: {:?}", words);
+        }
     }
 }
