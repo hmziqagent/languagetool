@@ -25,26 +25,30 @@ impl XmlCompiler {
 
     fn cached_regex(&self, pattern: &str) -> Option<regex::Regex> {
         let shard = &self.regex_cache[Self::shard_index(pattern, REGEX_CACHE_SHARDS)];
-        let mut cache = shard.lock().unwrap();
-        if let Some(re) = cache.get(pattern) {
-            return re.clone();
+        if let Some(hit) = shard.lock().unwrap().get(pattern) {
+            return hit.clone();
         }
         let built = regex::Regex::new(pattern).ok();
-        cache.insert(pattern.to_string(), built.clone());
+        shard
+            .lock()
+            .unwrap()
+            .insert(pattern.to_string(), built.clone());
         built
     }
 
     fn cached_regex_ci(&self, pattern: &str) -> Option<regex::Regex> {
         let shard = &self.ci_regex_cache[Self::shard_index(pattern, REGEX_CACHE_SHARDS)];
-        let mut cache = shard.lock().unwrap();
-        if let Some(re) = cache.get(pattern) {
-            return re.clone();
+        if let Some(hit) = shard.lock().unwrap().get(pattern) {
+            return hit.clone();
         }
         let built = regex::RegexBuilder::new(pattern)
             .case_insensitive(true)
             .build()
             .ok();
-        cache.insert(pattern.to_string(), built.clone());
+        shard
+            .lock()
+            .unwrap()
+            .insert(pattern.to_string(), built.clone());
         built
     }
 

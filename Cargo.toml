@@ -50,3 +50,6 @@ uuid = { version = "1", features = ["v4"] }
 tower = "0.5"
 http = "1"
 http-body-util = "0.1"
+
+[profile.dev.package."*"]
+opt-level = 1
