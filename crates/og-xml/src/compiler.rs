@@ -105,13 +105,19 @@ impl XmlCompiler {
             .map(|rule| self.compile_rule(rule))
             .collect();
 
+        let grouped: Vec<&XmlRule> = rule_file
+            .rule_groups
+            .iter()
+            .flat_map(|group| group.rules.iter())
+            .collect();
+        let grouped_compiled: Vec<CompiledRule> = grouped
+            .par_iter()
+            .map(|rule| self.compile_rule(rule))
+            .collect();
+        let mut grouped_iter = grouped_compiled.into_iter();
         for group in &rule_file.rule_groups {
-            let group_rules: Vec<CompiledRule> = group
-                .rules
-                .par_iter()
-                .map(|rule| self.compile_rule(rule))
-                .collect();
-            for (i, mut compiled_rule) in group_rules.into_iter().enumerate() {
+            for (i, mut compiled_rule) in grouped_iter.by_ref().take(group.rules.len()).enumerate()
+            {
                 if compiled_rule.id.is_empty()
                     && let Some(ref group_id) = group.id
                 {

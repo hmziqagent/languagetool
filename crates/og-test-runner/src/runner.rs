@@ -100,77 +100,92 @@ impl TestRunner {
         let resource_dir = lt_modules.join(format!(
             "{code}/src/main/resources/org/languagetool/resource/{code}"
         ));
-        let tagger = if code == "de" && resource_dir.exists() {
-            og_tagger::GermanTagger::from_resource_dir(&resource_dir)
-                .map(AnyTagger::German)
-                .unwrap_or_else(|| AnyTagger::English(EnglishTagger::new()))
-        } else if resource_dir.exists() {
-            AnyTagger::English(EnglishTagger::from_resource_dir(&resource_dir))
-        } else {
-            AnyTagger::English(EnglishTagger::new())
-        };
+        let core_resource_dir = Path::new(
+            "/home/agent/opengrammar-rs/languagetool/languagetool-core/src/main/resources/org/languagetool/resource",
+        );
 
-        let disambiguator: Option<Arc<dyn Disambiguator>> = {
-            let disambig_path = resource_dir.join("disambiguation.xml");
-            match std::fs::read_to_string(&disambig_path) {
-                Ok(xml) => match XmlDisambiguator::from_xml(&xml) {
-                    Ok(d) => {
-                        eprintln!("Loaded {} disambiguation rules", d.rule_count());
-                        let stages: Vec<Arc<dyn Disambiguator>> = if code == "en" {
-                            vec![Arc::new(d), Arc::new(ContextualDisambiguator)]
-                        } else {
-                            vec![Arc::new(d)]
-                        };
-                        Some(Arc::new(ChainedDisambiguator::new(stages)))
-                    }
-                    Err(e) => {
-                        eprintln!("Warning: failed to load disambiguation: {}", e);
-                        None
-                    }
-                },
-                Err(_) if code == "en" => Some(Arc::new(ContextualDisambiguator)),
-                Err(_) => None,
-            }
-        };
-
-        let pattern_engine = {
-            let core_resource_dir = Path::new(
-                "/home/agent/opengrammar-rs/languagetool/languagetool-core/src/main/resources/org/languagetool/resource",
-            );
-            let support = if code == "en" && resource_dir.exists() && core_resource_dir.exists() {
-                og_rules::spelling_support::SpellingSupport::from_dirs(
-                    &lt_modules.join("en/src/main/resources/org/languagetool/resource/en"),
-                    core_resource_dir,
-                )
-            } else if code == "de" && resource_dir.exists() && core_resource_dir.exists() {
-                let dictionary = og_tagger::morfologik::MorfologikDictionary::load(
-                    &resource_dir.join("german.dict"),
-                    &resource_dir.join("german.info"),
-                )
-                .map(|dict| {
-                    let mut d = og_spell::Dictionary::new();
-                    for word in dict.word_list() {
-                        d.add_word(&word);
-                    }
-                    d
-                });
-                dictionary.map(|dictionary| {
-                    og_rules::spelling_support::SpellingSupport::new_with(
-                        dictionary,
-                        core_resource_dir,
-                        &resource_dir,
-                    )
-                })
-            } else {
-                None
-            };
-            match support {
-                Some(support) => {
-                    PatternRuleEngine::new().with_spelling_support(std::sync::Arc::new(support))
+        let (tagger, disambiguator, pattern_engine) = std::thread::scope(|scope| {
+            let tagger_h = scope.spawn(|| {
+                if code == "de" && resource_dir.exists() {
+                    og_tagger::GermanTagger::from_resource_dir(&resource_dir)
+                        .map(AnyTagger::German)
+                        .unwrap_or_else(|| AnyTagger::English(EnglishTagger::new()))
+                } else if resource_dir.exists() {
+                    AnyTagger::English(EnglishTagger::from_resource_dir(&resource_dir))
+                } else {
+                    AnyTagger::English(EnglishTagger::new())
                 }
-                None => PatternRuleEngine::new(),
-            }
-        };
+            });
+
+            let disambiguator_h = scope.spawn(|| {
+                let disambig_path = resource_dir.join("disambiguation.xml");
+                match std::fs::read_to_string(&disambig_path) {
+                    Ok(xml) => match XmlDisambiguator::from_xml(&xml) {
+                        Ok(d) => {
+                            eprintln!("Loaded {} disambiguation rules", d.rule_count());
+                            let stages: Vec<Arc<dyn Disambiguator>> = if code == "en" {
+                                vec![Arc::new(d), Arc::new(ContextualDisambiguator)]
+                            } else {
+                                vec![Arc::new(d)]
+                            };
+                            Some(Arc::new(ChainedDisambiguator::new(stages))
+                                as Arc<dyn Disambiguator>)
+                        }
+                        Err(e) => {
+                            eprintln!("Warning: failed to load disambiguation: {}", e);
+                            None
+                        }
+                    },
+                    Err(_) if code == "en" => {
+                        Some(Arc::new(ContextualDisambiguator) as Arc<dyn Disambiguator>)
+                    }
+                    Err(_) => None,
+                }
+            });
+
+            let engine_h = scope.spawn(|| {
+                let support = if code == "en" && resource_dir.exists() && core_resource_dir.exists()
+                {
+                    og_rules::spelling_support::SpellingSupport::from_dirs(
+                        &lt_modules.join("en/src/main/resources/org/languagetool/resource/en"),
+                        core_resource_dir,
+                    )
+                } else if code == "de" && resource_dir.exists() && core_resource_dir.exists() {
+                    let dictionary = og_tagger::morfologik::MorfologikDictionary::load(
+                        &resource_dir.join("german.dict"),
+                        &resource_dir.join("german.info"),
+                    )
+                    .map(|dict| {
+                        let mut d = og_spell::Dictionary::new();
+                        for word in dict.word_list() {
+                            d.add_word(&word);
+                        }
+                        d
+                    });
+                    dictionary.map(|dictionary| {
+                        og_rules::spelling_support::SpellingSupport::new_with(
+                            dictionary,
+                            core_resource_dir,
+                            &resource_dir,
+                        )
+                    })
+                } else {
+                    None
+                };
+                match support {
+                    Some(support) => {
+                        PatternRuleEngine::new().with_spelling_support(std::sync::Arc::new(support))
+                    }
+                    None => PatternRuleEngine::new(),
+                }
+            });
+
+            (
+                tagger_h.join().unwrap(),
+                disambiguator_h.join().unwrap(),
+                engine_h.join().unwrap(),
+            )
+        });
 
         Self {
             language: code.to_string(),
@@ -841,8 +856,10 @@ mod tests {
             return;
         }
 
+        let rules_handle = std::thread::spawn(test_support::german_grammar_rules);
         let runner = test_support::german_runner();
-        let summary = runner.run_rule_set_example_tests(test_support::german_grammar_rules());
+        let rules = rules_handle.join().expect("grammar compile thread");
+        let summary = runner.run_rule_set_example_tests(rules);
 
         eprintln!("Total German examples tested: {}", summary.total);
         eprintln!("Passed: {}", summary.passed);
@@ -894,8 +911,10 @@ mod tests {
             return;
         }
 
+        let rules_handle = std::thread::spawn(test_support::shared_grammar_rules);
         let runner = test_support::shared_runner();
-        let summary = runner.run_rule_set_example_tests(test_support::shared_grammar_rules());
+        let rules = rules_handle.join().expect("grammar compile thread");
+        let summary = runner.run_rule_set_example_tests(rules);
 
         eprintln!("Total examples tested: {}", summary.total);
         eprintln!("Passed: {}", summary.passed);
