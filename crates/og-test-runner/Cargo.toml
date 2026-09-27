@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+rayon = { workspace = true }
 og-core = { workspace = true }
 og-xml = { workspace = true }
 og-rules = { workspace = true }

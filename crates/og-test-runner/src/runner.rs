@@ -305,101 +305,23 @@ impl TestRunner {
     }
 
     pub fn run_rule_set_example_tests(&self, rule_set: &CompiledRuleSet) -> TestRunSummary {
-        let mut results = Vec::new();
+        use rayon::prelude::*;
 
-        for rule in &rule_set.rules {
-            for example in &rule.examples {
+        let pairs: Vec<(&og_xml::compiler::CompiledRule, &og_xml::types::XmlExample)> = rule_set
+            .rules
+            .iter()
+            .flat_map(|rule| rule.examples.iter().map(move |e| (rule, e)))
+            .collect();
+
+        let results: Vec<ExampleTestResult> = pairs
+            .par_iter()
+            .map(|(rule, example)| {
                 let (clean_text, marker_range) = Self::extract_marker(&example.text);
-
                 let sentence = self.tokenize_sentence(&clean_text);
                 let matches = self.pattern_engine.match_rule(rule, &sentence);
-
-                match example.example_type {
-                    og_xml::types::XmlExampleType::Incorrect => {
-                        if matches.is_empty() {
-                            results.push(ExampleTestResult {
-                                rule_id: rule.id.clone(),
-                                passed: false,
-                                message: format!(
-                                    "Expected match on incorrect example but got none: '{}'",
-                                    clean_text
-                                ),
-                                example_text: clean_text,
-                                expected_type: "incorrect".to_string(),
-                            });
-                        } else if let Some((m_start, m_end)) = marker_range {
-                            let first_match = &matches[0];
-                            let match_start = first_match.offset();
-                            let match_end = match_start + first_match.length();
-                            let marker_in_match = match_start <= m_start && match_end >= m_end;
-                            if marker_in_match {
-                                results.push(ExampleTestResult {
-                                    rule_id: rule.id.clone(),
-                                    passed: true,
-                                    message: format!(
-                                        "Match {}..{} contains marker {}..{}",
-                                        match_start, match_end, m_start, m_end
-                                    ),
-                                    example_text: clean_text,
-                                    expected_type: "incorrect".to_string(),
-                                });
-                            } else {
-                                results.push(ExampleTestResult {
-                                    rule_id: rule.id.clone(),
-                                    passed: false,
-                                    message: format!(
-                                        "Match {}..{} does not contain marker {}..{}",
-                                        match_start, match_end, m_start, m_end
-                                    ),
-                                    example_text: clean_text,
-                                    expected_type: "incorrect".to_string(),
-                                });
-                            }
-                        } else {
-                            results.push(ExampleTestResult {
-                                rule_id: rule.id.clone(),
-                                passed: true,
-                                message: format!("Matched correctly: '{}'", clean_text),
-                                example_text: clean_text,
-                                expected_type: "incorrect".to_string(),
-                            });
-                        }
-                    }
-                    og_xml::types::XmlExampleType::Correct => {
-                        if !matches.is_empty() {
-                            results.push(ExampleTestResult {
-                                rule_id: rule.id.clone(),
-                                passed: false,
-                                message: format!(
-                                    "Expected no match on correct example but got {}: '{}'",
-                                    matches.len(),
-                                    clean_text
-                                ),
-                                example_text: clean_text,
-                                expected_type: "correct".to_string(),
-                            });
-                        } else {
-                            results.push(ExampleTestResult {
-                                rule_id: rule.id.clone(),
-                                passed: true,
-                                message: format!("No match on correct example: '{}'", clean_text),
-                                example_text: clean_text,
-                                expected_type: "correct".to_string(),
-                            });
-                        }
-                    }
-                    og_xml::types::XmlExampleType::TriggersError => {
-                        results.push(ExampleTestResult {
-                            rule_id: rule.id.clone(),
-                            passed: true,
-                            message: format!("Triggers error (known FP): '{}'", clean_text),
-                            example_text: clean_text,
-                            expected_type: "triggers_error".to_string(),
-                        });
-                    }
-                }
-            }
-        }
+                Self::evaluate_example(rule, example, &clean_text, marker_range, &matches)
+            })
+            .collect();
 
         let passed = results.iter().filter(|r| r.passed).count();
         let failed = results.len() - passed;
@@ -408,6 +330,97 @@ impl TestRunner {
             passed,
             failed,
             results,
+        }
+    }
+
+    fn evaluate_example(
+        rule: &og_xml::compiler::CompiledRule,
+        example: &og_xml::types::XmlExample,
+        clean_text: &str,
+        marker_range: Option<(usize, usize)>,
+        matches: &[og_core::RuleMatch],
+    ) -> ExampleTestResult {
+        match example.example_type {
+            og_xml::types::XmlExampleType::Incorrect => {
+                if matches.is_empty() {
+                    ExampleTestResult {
+                        rule_id: rule.id.clone(),
+                        passed: false,
+                        message: format!(
+                            "Expected match on incorrect example but got none: '{}'",
+                            clean_text
+                        ),
+                        example_text: clean_text.to_string(),
+                        expected_type: "incorrect".to_string(),
+                    }
+                } else if let Some((m_start, m_end)) = marker_range {
+                    let first_match = &matches[0];
+                    let match_start = first_match.offset();
+                    let match_end = match_start + first_match.length();
+                    let marker_in_match = match_start <= m_start && match_end >= m_end;
+                    if marker_in_match {
+                        ExampleTestResult {
+                            rule_id: rule.id.clone(),
+                            passed: true,
+                            message: format!(
+                                "Match {}..{} contains marker {}..{}",
+                                match_start, match_end, m_start, m_end
+                            ),
+                            example_text: clean_text.to_string(),
+                            expected_type: "incorrect".to_string(),
+                        }
+                    } else {
+                        ExampleTestResult {
+                            rule_id: rule.id.clone(),
+                            passed: false,
+                            message: format!(
+                                "Match {}..{} does not contain marker {}..{}",
+                                match_start, match_end, m_start, m_end
+                            ),
+                            example_text: clean_text.to_string(),
+                            expected_type: "incorrect".to_string(),
+                        }
+                    }
+                } else {
+                    ExampleTestResult {
+                        rule_id: rule.id.clone(),
+                        passed: true,
+                        message: format!("Matched correctly: '{}'", clean_text),
+                        example_text: clean_text.to_string(),
+                        expected_type: "incorrect".to_string(),
+                    }
+                }
+            }
+            og_xml::types::XmlExampleType::Correct => {
+                if !matches.is_empty() {
+                    ExampleTestResult {
+                        rule_id: rule.id.clone(),
+                        passed: false,
+                        message: format!(
+                            "Expected no match on correct example but got {}: '{}'",
+                            matches.len(),
+                            clean_text
+                        ),
+                        example_text: clean_text.to_string(),
+                        expected_type: "correct".to_string(),
+                    }
+                } else {
+                    ExampleTestResult {
+                        rule_id: rule.id.clone(),
+                        passed: true,
+                        message: format!("No match on correct example: '{}'", clean_text),
+                        example_text: clean_text.to_string(),
+                        expected_type: "correct".to_string(),
+                    }
+                }
+            }
+            og_xml::types::XmlExampleType::TriggersError => ExampleTestResult {
+                rule_id: rule.id.clone(),
+                passed: true,
+                message: format!("Triggers error (known FP): '{}'", clean_text),
+                example_text: clean_text.to_string(),
+                expected_type: "triggers_error".to_string(),
+            },
         }
     }
 

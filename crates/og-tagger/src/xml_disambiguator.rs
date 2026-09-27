@@ -20,6 +20,12 @@ pub struct XmlDisambiguator {
     gates: Vec<FirstTokenGate>,
     prepared: Vec<Option<CompiledPattern>>,
     first_literal: Vec<Option<FirstLiteralFilter>>,
+    first_regex: Vec<Option<FirstRegexFilter>>,
+}
+
+struct FirstRegexFilter {
+    re: regex::Regex,
+    inflected: bool,
 }
 
 struct FirstLiteralFilter {
@@ -138,6 +144,34 @@ impl XmlDisambiguator {
                 .collect()
         };
 
+        let first_regex: Vec<Option<FirstRegexFilter>> = {
+            let rules = &compiled_rules;
+            let prepared = &prepared;
+            (0..rules.len())
+                .map(|i| {
+                    let eff = prepared[i].as_ref().unwrap_or(&rules[i].pattern);
+                    let first = eff.tokens.first()?;
+                    if eff.has_structured_elements
+                        || first.negate
+                        || first.min == Some(0)
+                        || first.text.is_some()
+                    {
+                        return None;
+                    }
+                    let re = first.compiled_regexp.as_ref()?;
+                    let re_to_use = if !first.case_sensitive {
+                        first.compiled_regexp_ci.as_ref().unwrap_or(re)
+                    } else {
+                        re
+                    };
+                    Some(FirstRegexFilter {
+                        re: re_to_use.clone(),
+                        inflected: first.inflected,
+                    })
+                })
+                .collect()
+        };
+
         Ok(Self {
             rules: compiled_rules,
             unifications,
@@ -145,6 +179,7 @@ impl XmlDisambiguator {
             gates,
             prepared,
             first_literal,
+            first_regex,
         })
     }
 
@@ -325,6 +360,7 @@ impl Disambiguator for XmlDisambiguator {
                         continue;
                     }
                 }
+                let mut first_preverified = false;
                 if let Some(f) = self.first_literal[rule_idx].as_ref() {
                     let t = tokens[start_idx];
                     let surface = if f.case_sensitive {
@@ -350,8 +386,33 @@ impl Disambiguator for XmlDisambiguator {
                         continue;
                     }
                 }
+                if let Some(f) = self.first_regex[rule_idx].as_ref() {
+                    let tok = tokens[start_idx];
+                    let surface = f.re.is_match(tok.token().token());
+                    let matched = if f.inflected {
+                        surface
+                            || tok
+                                .readings()
+                                .iter()
+                                .any(|r| r.lemma().is_some_and(|lemma| f.re.is_match(lemma)))
+                    } else {
+                        surface
+                    };
+                    if !matched {
+                        continue;
+                    }
+                    first_preverified = true;
+                }
                 let effective_pattern = self.prepared[rule_idx].as_ref().unwrap_or(&rule.pattern);
-                if let Some(match_result) = match_pattern(effective_pattern, &tokens, start_idx) {
+                let mp_result = if first_preverified
+                    && !effective_pattern.case_sensitive
+                    && !effective_pattern.has_structured_elements
+                {
+                    match_tokens_preverified(&effective_pattern.tokens, &tokens, start_idx)
+                } else {
+                    match_pattern(effective_pattern, &tokens, start_idx)
+                };
+                if let Some(match_result) = mp_result {
                     let mut blocked = false;
                     for ap in &rule.antipatterns {
                         if antipattern_matches(ap, &tokens, start_idx) {
@@ -581,7 +642,15 @@ fn match_tokens(
     tokens: &[&AnalyzedTokenReadings],
     start_idx: usize,
 ) -> Option<MatchResult> {
-    match_tokens_recursive(pattern_tokens, tokens, start_idx, 0)
+    match_tokens_recursive(pattern_tokens, tokens, start_idx, 0, false)
+}
+
+fn match_tokens_preverified(
+    pattern_tokens: &[CompiledPatternToken],
+    tokens: &[&AnalyzedTokenReadings],
+    start_idx: usize,
+) -> Option<MatchResult> {
+    match_tokens_recursive(pattern_tokens, tokens, start_idx, 0, true)
 }
 
 fn match_tokens_recursive(
@@ -589,6 +658,7 @@ fn match_tokens_recursive(
     tokens: &[&AnalyzedTokenReadings],
     token_idx: usize,
     pattern_idx: usize,
+    first_text_verified: bool,
 ) -> Option<MatchResult> {
     if pattern_idx >= pattern_tokens.len() {
         return Some(MatchResult {
@@ -610,12 +680,18 @@ fn match_tokens_recursive(
     let pt = &pattern_tokens[pattern_idx];
     let is_optional = pt.min.unwrap_or(1) == 0;
 
-    if token_matches(pt, tokens, token_idx, token_idx > 0) {
+    let first_matched = if pattern_idx == 0 && first_text_verified {
+        token_matches_text_verified(pt, tokens, token_idx, token_idx > 0)
+    } else {
+        token_matches(pt, tokens, token_idx, token_idx > 0)
+    };
+
+    if first_matched {
         let skip = if pt.skip > 0 { pt.skip as usize } else { 0 };
         let next_token = token_idx + 1 + skip;
 
         if let Some(mut result) =
-            match_tokens_recursive(pattern_tokens, tokens, next_token, pattern_idx + 1)
+            match_tokens_recursive(pattern_tokens, tokens, next_token, pattern_idx + 1, false)
         {
             result.matched_positions.insert(0, token_idx);
             return Some(result);
@@ -623,10 +699,134 @@ fn match_tokens_recursive(
     }
 
     if is_optional {
-        return match_tokens_recursive(pattern_tokens, tokens, token_idx, pattern_idx + 1);
+        return match_tokens_recursive(
+            pattern_tokens,
+            tokens,
+            token_idx,
+            pattern_idx + 1,
+            first_text_verified && pattern_idx == 0,
+        );
     }
 
     None
+}
+
+fn token_matches_text_verified(
+    pt: &CompiledPatternToken,
+    tokens: &[&AnalyzedTokenReadings],
+    token_idx: usize,
+    has_previous: bool,
+) -> bool {
+    if token_idx >= tokens.len() {
+        return false;
+    }
+    let token = tokens[token_idx];
+
+    if pt.space_before.as_deref() == Some("no") && has_previous && token_idx > 0 {
+        let prev = tokens[token_idx - 1];
+        if token.token().start() != prev.token().end() {
+            return false;
+        }
+    }
+
+    token_matches_tail(pt, token, token.token().token())
+}
+
+fn token_matches_tail(
+    pt: &CompiledPatternToken,
+    token: &AnalyzedTokenReadings,
+    text: &str,
+) -> bool {
+    let pos_matches = if let Some(ref postag) = pt.postag {
+        if let Some(ref re) = pt.compiled_postag_regexp {
+            let has_matching = token
+                .readings()
+                .iter()
+                .any(|r| r.pos_tags().iter().any(|t| re.is_match(t)));
+            if pt.negate_pos {
+                !has_matching
+            } else {
+                has_matching
+            }
+        } else {
+            let has_matching = token
+                .readings()
+                .iter()
+                .any(|r| r.pos_tags().iter().any(|t| t == postag));
+            if pt.negate_pos {
+                !has_matching
+            } else {
+                has_matching
+            }
+        }
+    } else {
+        true
+    };
+    if !pos_matches {
+        return false;
+    }
+
+    if let Some(ref chunk) = pt.chunk
+        && !token.has_chunk(chunk)
+    {
+        return false;
+    }
+    if let Some(ref chunk_re) = pt.chunk_re
+        && !token.has_chunk_matching(chunk_re)
+    {
+        return false;
+    }
+
+    for exc in &pt.exceptions {
+        let text_exc = if let Some(ref exc_text) = exc.text {
+            if let Some(ref re) = exc.compiled_regexp {
+                re.is_match(text)
+            } else {
+                text.eq_ignore_ascii_case(exc_text)
+            }
+        } else {
+            false
+        };
+        let pos_exc = if let Some(ref postag) = exc.postag {
+            if let Some(ref re) = exc.compiled_postag_regexp {
+                token
+                    .readings()
+                    .iter()
+                    .any(|r| r.pos_tags().iter().any(|t| re.is_match(t)))
+            } else {
+                token
+                    .readings()
+                    .iter()
+                    .any(|r| r.pos_tags().iter().any(|t| t == postag))
+            }
+        } else {
+            false
+        };
+
+        let has_text_constraint = exc.text.is_some();
+        let has_pos_constraint = exc.postag.is_some();
+        let pos_ok = if exc.negate_pos { !pos_exc } else { pos_exc };
+        let exc_matches = if has_text_constraint && has_pos_constraint {
+            text_exc && pos_ok
+        } else if has_text_constraint {
+            text_exc
+        } else if has_pos_constraint {
+            pos_ok
+        } else {
+            false
+        };
+
+        let exc_active = if exc.negate {
+            !exc_matches
+        } else {
+            exc_matches
+        };
+        if exc_active {
+            return false;
+        }
+    }
+
+    true
 }
 
 fn match_elements(
@@ -768,97 +968,7 @@ fn token_matches(
         return false;
     }
 
-    let pos_matches = if let Some(ref postag) = pt.postag {
-        if let Some(ref re) = pt.compiled_postag_regexp {
-            let has_matching = token
-                .readings()
-                .iter()
-                .any(|r| r.pos_tags().iter().any(|t| re.is_match(t)));
-            if pt.negate_pos {
-                !has_matching
-            } else {
-                has_matching
-            }
-        } else {
-            let has_matching = token
-                .readings()
-                .iter()
-                .any(|r| r.pos_tags().iter().any(|t| t == postag));
-            if pt.negate_pos {
-                !has_matching
-            } else {
-                has_matching
-            }
-        }
-    } else {
-        true
-    };
-
-    if !pos_matches {
-        return false;
-    }
-
-    if let Some(ref chunk) = pt.chunk
-        && !token.has_chunk(chunk)
-    {
-        return false;
-    }
-    if let Some(ref chunk_re) = pt.chunk_re
-        && !token.has_chunk_matching(chunk_re)
-    {
-        return false;
-    }
-
-    for exc in &pt.exceptions {
-        let text_exc = if let Some(ref exc_text) = exc.text {
-            if let Some(ref re) = exc.compiled_regexp {
-                re.is_match(text)
-            } else {
-                text.eq_ignore_ascii_case(exc_text)
-            }
-        } else {
-            false
-        };
-        let pos_exc = if let Some(ref postag) = exc.postag {
-            if let Some(ref re) = exc.compiled_postag_regexp {
-                token
-                    .readings()
-                    .iter()
-                    .any(|r| r.pos_tags().iter().any(|t| re.is_match(t)))
-            } else {
-                token
-                    .readings()
-                    .iter()
-                    .any(|r| r.pos_tags().iter().any(|t| t == postag))
-            }
-        } else {
-            false
-        };
-
-        let has_text_constraint = exc.text.is_some();
-        let has_pos_constraint = exc.postag.is_some();
-        let pos_ok = if exc.negate_pos { !pos_exc } else { pos_exc };
-        let exc_matches = if has_text_constraint && has_pos_constraint {
-            text_exc && pos_ok
-        } else if has_text_constraint {
-            text_exc
-        } else if has_pos_constraint {
-            pos_ok
-        } else {
-            false
-        };
-
-        let exc_active = if exc.negate {
-            !exc_matches
-        } else {
-            exc_matches
-        };
-        if exc_active {
-            return false;
-        }
-    }
-
-    true
+    token_matches_tail(pt, token, text)
 }
 
 fn antipattern_matches(

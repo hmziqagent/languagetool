@@ -291,6 +291,10 @@ fn beam_search(
 ) -> Vec<usize> {
     let mut arena = String::with_capacity(4096);
     let mut contexts: Vec<(usize, usize)> = Vec::with_capacity(64);
+    // Memoize eval by (position, previous two outcomes): contexts depend only
+    // on those, so repeated beam prefixes share the same probability vector.
+    let mut memo: std::collections::HashMap<u64, Vec<f64>, FxBuild> =
+        std::collections::HashMap::with_hasher(FxBuild::default());
     let mut prev: JavaPriorityQueue = JavaPriorityQueue::new();
     prev.add(BeamSequence {
         score: 0.0,
@@ -304,10 +308,24 @@ fn beam_search(
         let mut next: JavaPriorityQueue = JavaPriorityQueue::new();
         for _ in 0..sz {
             let top = prev.poll().unwrap();
-            arena.clear();
-            contexts.clear();
-            contexts_for(i, &top.outcomes, &mut arena, &mut contexts);
-            model.eval(&contexts, &arena, &mut probs);
+            let k0 = *top
+                .outcomes
+                .len()
+                .checked_sub(2)
+                .and_then(|k| top.outcomes.get(k))
+                .unwrap_or(&usize::MAX);
+            let k1 = *top.outcomes.last().unwrap_or(&usize::MAX);
+            let enc = |v: usize| -> u64 { if v == usize::MAX { 0 } else { v as u64 + 1 } };
+            let memo_key: u64 = ((i as u64) << 44) | (enc(k0) << 22) | enc(k1);
+            if let Some(cached) = memo.get(&memo_key) {
+                probs.copy_from_slice(cached);
+            } else {
+                arena.clear();
+                contexts.clear();
+                contexts_for(i, &top.outcomes, &mut arena, &mut contexts);
+                model.eval(&contexts, &arena, &mut probs);
+                memo.insert(memo_key, probs.to_vec());
+            }
             let kth = probs.len().saturating_sub(beam_size).min(probs.len() - 1);
             let mut sorted = probs.clone();
             sorted.select_nth_unstable_by(kth, |a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
