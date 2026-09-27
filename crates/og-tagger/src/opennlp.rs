@@ -2,9 +2,32 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::path::Path;
 
+#[derive(Default)]
+struct FxHasher {
+    hash: u64,
+}
+
+const FX_SEED: u64 = 0x51_7c_c1_b7_27_22_0a_95;
+
+impl std::hash::Hasher for FxHasher {
+    fn write(&mut self, bytes: &[u8]) {
+        for b in bytes {
+            self.hash = (self.hash.rotate_left(5) ^ (*b as u64)).wrapping_mul(FX_SEED);
+        }
+    }
+    fn finish(&self) -> u64 {
+        self.hash
+    }
+}
+
+type FxBuild = std::hash::BuildHasherDefault<FxHasher>;
+type PredsMap = HashMap<Box<str>, Box<[(u32, f64)]>, FxBuild>;
+type ContextRanges = Vec<(usize, usize)>;
+type ContextFn<'a> = &'a mut dyn FnMut(usize, &[usize], &mut String, &mut ContextRanges);
+
 pub struct GisModel {
     outcomes: Vec<Box<str>>,
-    preds: HashMap<Box<str>, Box<[(u32, f64)]>>,
+    preds: PredsMap,
     prior: f64,
 }
 
@@ -87,8 +110,8 @@ impl GisModel {
             }
         }
 
-        let mut preds: HashMap<Box<str>, Box<[(u32, f64)]>> =
-            HashMap::with_capacity(pred_names.len());
+        let mut preds: PredsMap =
+            HashMap::with_capacity_and_hasher(pred_names.len(), FxBuild::default());
         for (name, entry) in pred_names.into_iter().zip(entries) {
             preds.insert(name.into_boxed_str(), entry.into_boxed_slice());
         }
@@ -116,10 +139,10 @@ impl GisModel {
         &self.outcomes[index]
     }
 
-    fn eval(&self, context: &[String], probs: &mut [f64]) {
+    fn eval(&self, context: &[(usize, usize)], arena: &str, probs: &mut [f64]) {
         probs.fill(self.prior);
-        for feature in context {
-            if let Some(params) = self.preds.get(feature.as_str()) {
+        for (fs, fe) in context {
+            if let Some(params) = self.preds.get(&arena[*fs..*fe]) {
                 for (oid, weight) in params.iter() {
                     probs[*oid as usize] += weight;
                 }
@@ -263,9 +286,11 @@ fn beam_search(
     model: &GisModel,
     sequence_len: usize,
     beam_size: usize,
-    contexts_for: &mut dyn FnMut(usize, &[usize]) -> Vec<String>,
+    contexts_for: ContextFn,
     valid: &dyn Fn(usize, &[usize], usize) -> bool,
 ) -> Vec<usize> {
+    let mut arena = String::with_capacity(4096);
+    let mut contexts: Vec<(usize, usize)> = Vec::with_capacity(64);
     let mut prev: JavaPriorityQueue = JavaPriorityQueue::new();
     prev.add(BeamSequence {
         score: 0.0,
@@ -279,11 +304,14 @@ fn beam_search(
         let mut next: JavaPriorityQueue = JavaPriorityQueue::new();
         for _ in 0..sz {
             let top = prev.poll().unwrap();
-            let contexts = contexts_for(i, &top.outcomes);
-            model.eval(&contexts, &mut probs);
+            arena.clear();
+            contexts.clear();
+            contexts_for(i, &top.outcomes, &mut arena, &mut contexts);
+            model.eval(&contexts, &arena, &mut probs);
+            let kth = probs.len().saturating_sub(beam_size).min(probs.len() - 1);
             let mut sorted = probs.clone();
-            sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
-            let min = sorted[probs.len().saturating_sub(beam_size).min(probs.len() - 1)];
+            sorted.select_nth_unstable_by(kth, |a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
+            let min = sorted[kth];
 
             let advance = |next: &mut JavaPriorityQueue, threshold: f64| {
                 for (p, probability) in probs.iter().enumerate() {
@@ -334,8 +362,10 @@ impl OpenNlpTokenizer {
                     continue;
                 }
                 let position = text[span_start..j].chars().count();
-                let contexts = tokenizer_contexts(tok, position);
-                self.model.eval(&contexts, &mut probs);
+                let mut arena = String::new();
+                let mut contexts: Vec<(usize, usize)> = Vec::new();
+                tokenizer_contexts(tok, position, &mut arena, &mut contexts);
+                self.model.eval(&contexts, &arena, &mut probs);
                 if self.model.outcome(self.model.best_outcome(&probs)) == "T" {
                     result.push((part_start, j));
                     part_start = j;
@@ -373,56 +403,93 @@ fn is_alphanumeric(tok: &str) -> bool {
     !tok.is_empty() && tok.bytes().all(|b| b.is_ascii_alphanumeric())
 }
 
-fn add_char_preds(key: &str, c: char, preds: &mut Vec<String>) {
-    preds.push(format!("{key}={c}"));
+fn push_feat(arena: &mut String, out: &mut Vec<(usize, usize)>, parts: &[&str]) {
+    let start = arena.len();
+    for part in parts {
+        arena.push_str(part);
+    }
+    out.push((start, arena.len()));
+}
+
+fn push_char_preds(arena: &mut String, out: &mut Vec<(usize, usize)>, key: &str, c: char) {
+    push_feat(arena, out, &[key, "=", &c.to_string()]);
     if c.is_alphabetic() {
-        preds.push(format!("{key}_alpha"));
+        push_feat(arena, out, &[key, "_alpha"]);
         if c.is_uppercase() {
-            preds.push(format!("{key}_caps"));
+            push_feat(arena, out, &[key, "_caps"]);
         }
     } else if c.is_numeric() {
-        preds.push(format!("{key}_num"));
+        push_feat(arena, out, &[key, "_num"]);
     } else if is_java_whitespace(c) {
-        preds.push(format!("{key}_ws"));
+        push_feat(arena, out, &[key, "_ws"]);
     } else if c == '.' || c == '?' || c == '!' {
-        preds.push(format!("{key}_eos"));
+        push_feat(arena, out, &[key, "_eos"]);
     } else if c == '`' || c == '"' || c == '\'' {
-        preds.push(format!("{key}_quote"));
+        push_feat(arena, out, &[key, "_quote"]);
     } else if c == '[' || c == '{' || c == '(' {
-        preds.push(format!("{key}_lp"));
+        push_feat(arena, out, &[key, "_lp"]);
     } else if c == ']' || c == '}' || c == ')' {
-        preds.push(format!("{key}_rp"));
+        push_feat(arena, out, &[key, "_rp"]);
     }
 }
 
-fn tokenizer_contexts(token: &str, index: usize) -> Vec<String> {
+fn tokenizer_contexts(
+    token: &str,
+    index: usize,
+    arena: &mut String,
+    preds: &mut Vec<(usize, usize)>,
+) {
     let chars: Vec<char> = token.chars().collect();
-    let mut preds = Vec::with_capacity(16);
-    preds.push(format!("p={}", chars[..index].iter().collect::<String>()));
-    preds.push(format!("s={}", chars[index..].iter().collect::<String>()));
+    let prev: String = chars[..index].iter().collect();
+    let suffix: String = chars[index..].iter().collect();
+    push_feat(arena, preds, &["p=", &prev]);
+    push_feat(arena, preds, &["s=", &suffix]);
     if index > 0 {
-        add_char_preds("p1", chars[index - 1], &mut preds);
+        push_char_preds(arena, preds, "p1", chars[index - 1]);
         if index > 1 {
-            add_char_preds("p2", chars[index - 2], &mut preds);
-            preds.push(format!("p21={}{}", chars[index - 2], chars[index - 1]));
+            push_char_preds(arena, preds, "p2", chars[index - 2]);
+            push_feat(
+                arena,
+                preds,
+                &[
+                    "p21=",
+                    &chars[index - 2].to_string(),
+                    &chars[index - 1].to_string(),
+                ],
+            );
         } else {
-            preds.push("p2=bok".to_string());
+            push_feat(arena, preds, &["p2=bok"]);
         }
-        preds.push(format!("p1f1={}{}", chars[index - 1], chars[index]));
+        push_feat(
+            arena,
+            preds,
+            &[
+                "p1f1=",
+                &chars[index - 1].to_string(),
+                &chars[index].to_string(),
+            ],
+        );
     } else {
-        preds.push("p1=bok".to_string());
+        push_feat(arena, preds, &["p1=bok"]);
     }
-    add_char_preds("f1", chars[index], &mut preds);
+    push_char_preds(arena, preds, "f1", chars[index]);
     if index + 1 < chars.len() {
-        add_char_preds("f2", chars[index + 1], &mut preds);
-        preds.push(format!("f12={}{}", chars[index], chars[index + 1]));
+        push_char_preds(arena, preds, "f2", chars[index + 1]);
+        push_feat(
+            arena,
+            preds,
+            &[
+                "f12=",
+                &chars[index].to_string(),
+                &chars[index + 1].to_string(),
+            ],
+        );
     } else {
-        preds.push("f2=bok".to_string());
+        push_feat(arena, preds, &["f2=bok"]);
     }
     if chars[0] == '&' && chars[chars.len() - 1] == ';' {
-        preds.push("cc".to_string());
+        push_feat(arena, preds, &["cc"]);
     }
-    preds
 }
 
 pub struct OpenNlpPosTagger {
@@ -445,7 +512,9 @@ impl OpenNlpPosTagger {
             model,
             tokens.len(),
             3,
-            &mut |index, outcomes| pos_contexts(index, tokens, outcomes, model),
+            &mut |index, outcomes, arena, contexts| {
+                pos_contexts(index, tokens, outcomes, model, arena, contexts)
+            },
             &|index, _outcomes, outcome| {
                 dict.get(tokens[index])
                     .map(|tags| tags.contains(&outcome))
@@ -460,7 +529,9 @@ fn pos_contexts(
     tokens: &[&str],
     outcomes: &[usize],
     model: &GisModel,
-) -> Vec<String> {
+    arena: &mut String,
+    e: &mut Vec<(usize, usize)>,
+) {
     let se = "*SE*";
     let sb = "*SB*";
     let lex = tokens[index];
@@ -477,51 +548,54 @@ fn pos_contexts(
         None
     };
 
-    let mut e = Vec::with_capacity(24);
-    e.push("default".to_string());
-    e.push(format!("w={lex}"));
+    push_feat(arena, e, &["default"]);
+    push_feat(arena, e, &["w=", lex]);
     let char_count = lex.chars().count();
     for li in 0..4 {
         let skip = char_count.saturating_sub(li + 1);
         let start = char_index(lex, skip);
-        e.push(format!("suf={}", &lex[start..]));
+        push_feat(arena, e, &["suf=", &lex[start..]]);
     }
     for li in 0..4 {
         let end = char_index(lex, (li + 1).min(char_count));
-        e.push(format!("pre={}", &lex[..end]));
+        push_feat(arena, e, &["pre=", &lex[..end]]);
     }
     if lex.contains('-') {
-        e.push("h".to_string());
+        push_feat(arena, e, &["h"]);
     }
     if lex.chars().any(|c| c.is_ascii_uppercase()) {
-        e.push("c".to_string());
+        push_feat(arena, e, &["c"]);
     }
     if lex.chars().any(|c| c.is_ascii_digit()) {
-        e.push("d".to_string());
+        push_feat(arena, e, &["d"]);
     }
 
     if index >= 1 {
         let prev = tokens[index - 1];
-        e.push(format!("p={prev}"));
-        e.push(format!("t={}", model.outcome(outcomes[index - 1])));
+        push_feat(arena, e, &["p=", prev]);
+        push_feat(arena, e, &["t=", model.outcome(outcomes[index - 1])]);
         if index >= 2 {
             let prevprev = tokens[index - 2];
-            e.push(format!("pp={prevprev}"));
-            e.push(format!(
-                "t2={},{}",
-                model.outcome(outcomes[index - 2]),
-                model.outcome(outcomes[index - 1])
-            ));
+            push_feat(arena, e, &["pp=", prevprev]);
+            push_feat(
+                arena,
+                e,
+                &[
+                    "t2=",
+                    model.outcome(outcomes[index - 2]),
+                    ",",
+                    model.outcome(outcomes[index - 1]),
+                ],
+            );
         }
     } else {
-        e.push(format!("p={sb}"));
+        push_feat(arena, e, &["p=", sb]);
     }
 
-    e.push(format!("n={next}"));
+    push_feat(arena, e, &["n=", next]);
     if let Some(nn) = nextnext {
-        e.push(format!("nn={nn}"));
+        push_feat(arena, e, &["nn=", nn]);
     }
-    e
 }
 
 fn char_index(s: &str, char_position: usize) -> usize {
@@ -546,7 +620,9 @@ impl OpenNlpChunker {
             model,
             tokens.len(),
             10,
-            &mut |index, outcomes| chunker_contexts(index, tokens, tags, outcomes, model),
+            &mut |index, outcomes, arena, contexts| {
+                chunker_contexts(index, tokens, tags, outcomes, model, arena, contexts)
+            },
             &|_index, outcomes, outcome| {
                 let name = model.outcome(outcome);
                 let prev_name = outcomes.last().map(|o| model.outcome(*o));
@@ -571,97 +647,131 @@ fn chunker_contexts(
     tags: &[&str],
     preds: &[usize],
     model: &GisModel,
-) -> Vec<String> {
+    arena: &mut String,
+    out: &mut Vec<(usize, usize)>,
+) {
     let n = tokens.len();
     let (w_2, t_2, p_2) = if index < 2 {
-        (
-            "w_2=bos".to_string(),
-            "t_2=bos".to_string(),
-            "p_2=bos".to_string(),
-        )
+        (vec!["w_2=bos"], vec!["t_2=bos"], vec!["p_2=bos"])
     } else {
         (
-            format!("w_2={}", tokens[index - 2]),
-            format!("t_2={}", tags[index - 2]),
-            format!("p_2={}", model.outcome(preds[index - 2])),
+            vec!["w_2=", tokens[index - 2]],
+            vec!["t_2=", tags[index - 2]],
+            vec!["p_2=", model.outcome(preds[index - 2])],
         )
     };
     let (w_1, t_1, p_1) = if index < 1 {
-        (
-            "w_1=bos".to_string(),
-            "t_1=bos".to_string(),
-            "p_1=bos".to_string(),
-        )
+        (vec!["w_1=bos"], vec!["t_1=bos"], vec!["p_1=bos"])
     } else {
         (
-            format!("w_1={}", tokens[index - 1]),
-            format!("t_1={}", tags[index - 1]),
-            format!("p_1={}", model.outcome(preds[index - 1])),
+            vec!["w_1=", tokens[index - 1]],
+            vec!["t_1=", tags[index - 1]],
+            vec!["p_1=", model.outcome(preds[index - 1])],
         )
     };
-    let w0 = format!("w0={}", tokens[index]);
-    let t0 = format!("t0={}", tags[index]);
+    let w0 = vec!["w0=", tokens[index]];
+    let t0 = vec!["t0=", tags[index]];
     let (w1, t1) = if index + 1 >= n {
-        ("w1=eos".to_string(), "t1=eos".to_string())
+        (vec!["w1=eos"], vec!["t1=eos"])
     } else {
-        (
-            format!("w1={}", tokens[index + 1]),
-            format!("t1={}", tags[index + 1]),
-        )
+        (vec!["w1=", tokens[index + 1]], vec!["t1=", tags[index + 1]])
     };
     let (w2, t2) = if index + 2 >= n {
-        ("w2=eos".to_string(), "t2=eos".to_string())
+        (vec!["w2=eos"], vec!["t2=eos"])
     } else {
-        (
-            format!("w2={}", tokens[index + 2]),
-            format!("t2={}", tags[index + 2]),
-        )
+        (vec!["w2=", tokens[index + 2]], vec!["t2=", tags[index + 2]])
     };
 
-    vec![
-        w_2.clone(),
-        w_1.clone(),
-        w0.clone(),
-        w1.clone(),
-        w2.clone(),
-        format!("{w_1}{w0}"),
-        format!("{w0}{w1}"),
-        t_2.clone(),
-        t_1.clone(),
-        t0.clone(),
-        t1.clone(),
-        t2.clone(),
-        format!("{t_2}{t_1}"),
-        format!("{t_1}{t0}"),
-        format!("{t0}{t1}"),
-        format!("{t1}{t2}"),
-        format!("{t_2}{t_1}{t0}"),
-        format!("{t_1}{t0}{t1}"),
-        format!("{t0}{t1}{t2}"),
-        p_2,
-        p_1.clone(),
-        format!("{p_1}{t_2}"),
-        format!("{p_1}{t_1}"),
-        format!("{p_1}{t0}"),
-        format!("{p_1}{t1}"),
-        format!("{p_1}{t2}"),
-        format!("{p_1}{t_2}{t_1}"),
-        format!("{p_1}{t_1}{t0}"),
-        format!("{p_1}{t0}{t1}"),
-        format!("{p_1}{t1}{t2}"),
-        format!("{p_1}{t_2}{t_1}{t0}"),
-        format!("{p_1}{t_1}{t0}{t1}"),
-        format!("{p_1}{t0}{t1}{t2}"),
-        format!("{p_1}{w_2}"),
-        format!("{p_1}{w_1}"),
-        format!("{p_1}{w0}"),
-        format!("{p_1}{w1}"),
-        format!("{p_1}{w2}"),
-        format!("{p_1}{w_1}{w0}"),
-        format!("{p_1}{w0}{w1}"),
-    ]
-}
+    macro_rules! push2 {
+        ($a:expr, $b:expr) => {
+            push_feat(
+                arena,
+                out,
+                &[
+                    $a[0],
+                    *$a.get(1).unwrap_or(&""),
+                    $b[0],
+                    *$b.get(1).unwrap_or(&""),
+                ],
+            );
+        };
+    }
+    macro_rules! push3 {
+        ($a:expr, $b:expr, $c:expr) => {
+            push_feat(
+                arena,
+                out,
+                &[
+                    $a[0],
+                    *$a.get(1).unwrap_or(&""),
+                    $b[0],
+                    *$b.get(1).unwrap_or(&""),
+                    $c[0],
+                    *$c.get(1).unwrap_or(&""),
+                ],
+            );
+        };
+    }
+    macro_rules! push4 {
+        ($a:expr, $b:expr, $c:expr, $d:expr) => {
+            push_feat(
+                arena,
+                out,
+                &[
+                    $a[0],
+                    *$a.get(1).unwrap_or(&""),
+                    $b[0],
+                    *$b.get(1).unwrap_or(&""),
+                    $c[0],
+                    *$c.get(1).unwrap_or(&""),
+                    $d[0],
+                    *$d.get(1).unwrap_or(&""),
+                ],
+            );
+        };
+    }
 
+    push_feat(arena, out, &w_2);
+    push_feat(arena, out, &w_1);
+    push_feat(arena, out, &w0);
+    push_feat(arena, out, &w1);
+    push_feat(arena, out, &w2);
+    push2!(w_1, w0);
+    push2!(w0, w1);
+    push_feat(arena, out, &t_2);
+    push_feat(arena, out, &t_1);
+    push_feat(arena, out, &t0);
+    push_feat(arena, out, &t1);
+    push_feat(arena, out, &t2);
+    push2!(t_2, t_1);
+    push2!(t_1, t0);
+    push2!(t0, t1);
+    push2!(t1, t2);
+    push3!(t_2, t_1, t0);
+    push3!(t_1, t0, t1);
+    push3!(t0, t1, t2);
+    push_feat(arena, out, &p_2);
+    push_feat(arena, out, &p_1);
+    push2!(p_1, t_2);
+    push2!(p_1, t_1);
+    push2!(p_1, t0);
+    push2!(p_1, t1);
+    push2!(p_1, t2);
+    push3!(p_1, t_2, t_1);
+    push3!(p_1, t_1, t0);
+    push3!(p_1, t0, t1);
+    push3!(p_1, t1, t2);
+    push4!(p_1, t_2, t_1, t0);
+    push4!(p_1, t_1, t0, t1);
+    push4!(p_1, t0, t1, t2);
+    push2!(p_1, w_2);
+    push2!(p_1, w_1);
+    push2!(p_1, w0);
+    push2!(p_1, w1);
+    push2!(p_1, w2);
+    push3!(p_1, w_1, w0);
+    push3!(p_1, w0, w1);
+}
 pub struct OpenNlpEnglishChunker {
     pub tokenizer: OpenNlpTokenizer,
     pos: OpenNlpPosTagger,

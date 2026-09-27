@@ -18,6 +18,14 @@ pub struct XmlDisambiguator {
     unifications: Vec<(String, Vec<(String, regex::Regex)>)>,
     action_regexes: Vec<DisambigActionRegex>,
     gates: Vec<FirstTokenGate>,
+    prepared: Vec<Option<CompiledPattern>>,
+    first_literal: Vec<Option<FirstLiteralFilter>>,
+}
+
+struct FirstLiteralFilter {
+    text: String,
+    case_sensitive: bool,
+    inflected: bool,
 }
 
 enum DisambigActionRegex {
@@ -95,11 +103,48 @@ impl XmlDisambiguator {
 
         let gates = compiled_rules.iter().map(build_first_token_gate).collect();
 
+        let prepared: Vec<Option<CompiledPattern>> = compiled_rules
+            .iter()
+            .map(|rule| {
+                rule.pattern.case_sensitive.then(|| {
+                    let mut p = clone_with_case_sensitivity(&rule.pattern, true);
+                    p.case_sensitive = false;
+                    p
+                })
+            })
+            .collect();
+
+        let first_literal = {
+            let rules = &compiled_rules;
+            let prepared = &prepared;
+            (0..rules.len())
+                .map(|i| {
+                    let eff = prepared[i].as_ref().unwrap_or(&rules[i].pattern);
+                    let first = eff.tokens.first()?;
+                    if eff.has_structured_elements
+                        || first.negate
+                        || first.min == Some(0)
+                        || first.compiled_regexp.is_some()
+                    {
+                        return None;
+                    }
+                    let text = first.text.as_ref()?;
+                    Some(FirstLiteralFilter {
+                        text: text.clone(),
+                        case_sensitive: first.case_sensitive,
+                        inflected: first.inflected,
+                    })
+                })
+                .collect()
+        };
+
         Ok(Self {
             rules: compiled_rules,
             unifications,
             action_regexes,
             gates,
+            prepared,
+            first_literal,
         })
     }
 
@@ -280,7 +325,33 @@ impl Disambiguator for XmlDisambiguator {
                         continue;
                     }
                 }
-                if let Some(match_result) = match_pattern(&rule.pattern, &tokens, start_idx) {
+                if let Some(f) = self.first_literal[rule_idx].as_ref() {
+                    let t = tokens[start_idx];
+                    let surface = if f.case_sensitive {
+                        t.token().token() == f.text
+                    } else {
+                        t.token().token().eq_ignore_ascii_case(&f.text)
+                    };
+                    let ok = if f.inflected {
+                        surface
+                            || t.readings().iter().any(|r| {
+                                r.lemma().is_some_and(|lemma| {
+                                    if f.case_sensitive {
+                                        lemma == f.text
+                                    } else {
+                                        lemma.eq_ignore_ascii_case(&f.text)
+                                    }
+                                })
+                            })
+                    } else {
+                        surface
+                    };
+                    if !ok {
+                        continue;
+                    }
+                }
+                let effective_pattern = self.prepared[rule_idx].as_ref().unwrap_or(&rule.pattern);
+                if let Some(match_result) = match_pattern(effective_pattern, &tokens, start_idx) {
                     let mut blocked = false;
                     for ap in &rule.antipatterns {
                         if antipattern_matches(ap, &tokens, start_idx) {
