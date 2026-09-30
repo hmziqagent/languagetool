@@ -922,8 +922,11 @@ impl PatternRuleEngine {
             let max_count = pattern_token.max.map(|m| m as usize).unwrap_or(1);
             let mut repeat_count = 1;
             let mut last_token_idx = token_idx;
+            let remaining_elems = pattern_tokens.len() - pattern_idx - 1;
 
-            while repeat_count < max_count && last_token_idx + 1 < tokens.len() {
+            while repeat_count < max_count
+                && last_token_idx + 1 < tokens.len().saturating_sub(remaining_elems)
+            {
                 let next_matches = if let Some(br) = self.backreference_matches(
                     pattern_token,
                     tokens[last_token_idx + 1],
@@ -5739,6 +5742,91 @@ mod tests {
             repl.contains(&"philosophical question"),
             "Expected 'philosophical question', got {:?}",
             repl
+        );
+    }
+}
+
+#[cfg(test)]
+mod gap_semantics_tests {
+    use super::*;
+    use og_core::{AnalyzedSentence, AnalyzedToken, AnalyzedTokenReadings};
+    use og_xml::compiler::XmlCompiler;
+
+    fn sentence(words: &[&str]) -> AnalyzedSentence {
+        let text = words.join(" ");
+        let mut tokens = vec![AnalyzedTokenReadings::new(
+            AnalyzedToken::new("<S>", 0, 0).with_pos_tags(vec!["SENT_START".to_string()]),
+        )];
+        let mut offset = 0;
+        for w in words {
+            let reading = AnalyzedToken::new(*w, offset, offset + w.len())
+                .with_lemma((*w).to_string())
+                .with_pos_tags(vec!["NN".to_string()]);
+            let primary = AnalyzedToken::new(*w, offset, offset + w.len())
+                .with_pos_tags(vec!["NN".to_string()]);
+            tokens.push(AnalyzedTokenReadings::new(primary).with_readings(vec![reading]));
+            offset += w.len() + 1;
+        }
+        let mut s = AnalyzedSentence::new(&text, 0, text.len());
+        s.set_tokens(tokens);
+        s
+    }
+
+    fn count_matches(pattern: &str, words: &[&str]) -> usize {
+        let xml = format!(
+            r#"<rules lang="de"><rule id="GAP" name="gap"><pattern>{pattern}</pattern><message>m</message></rule></rules>"#
+        );
+        let rules = XmlCompiler::new().compile_file(&xml).expect("compile");
+        PatternRuleEngine::new()
+            .match_rule(&rules.rules[0], &sentence(words))
+            .len()
+    }
+
+    #[test]
+    fn greedy_gap_leaves_tokens_for_remaining_elements() {
+        let pattern = r#"<token>start</token><token min="0" max="6"/><token>end</token>"#;
+        assert_eq!(count_matches(pattern, &["start", "x", "y", "z", "end"]), 1);
+    }
+
+    #[test]
+    fn greedy_gap_may_swallow_required_token() {
+        let pattern = r#"<token>start</token><token min="0" max="6"/><token>end</token>"#;
+        assert_eq!(
+            count_matches(pattern, &["start", "x", "end", "y"]),
+            0,
+            "gap greedily consumes up to the tail bound, no backtracking"
+        );
+    }
+
+    #[test]
+    fn greedy_gap_then_optional_element_skips_in_place() {
+        let pattern = r#"<token>start</token><token min="0" max="6"/><token min="0">nicht</token><token>end</token>"#;
+        assert_eq!(
+            count_matches(pattern, &["start", "x", "nicht", "end"]),
+            1,
+            "optional element consumed when present"
+        );
+        assert_eq!(
+            count_matches(pattern, &["start", "x", "end"]),
+            1,
+            "optional element skipped when the next element matches in its place"
+        );
+        assert_eq!(
+            count_matches(pattern, &["start", "x", "y", "z", "end"]),
+            0,
+            "optional-element skip does not slide forward past the tail bound"
+        );
+    }
+
+    #[test]
+    fn german_auf_dem_punkt_shape_matches() {
+        let pattern = r#"<token>start</token><token min="0" max="6"/><token min="0">nicht</token><token>auf</token><token>dem</token><token>end</token>"#;
+        assert_eq!(
+            count_matches(
+                pattern,
+                &["start", "x", "y", "z", "w", "auf", "dem", "end", "!"]
+            ),
+            1
         );
     }
 }
