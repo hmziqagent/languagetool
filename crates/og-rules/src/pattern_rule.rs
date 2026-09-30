@@ -834,10 +834,24 @@ impl PatternRuleEngine {
             for t in tokens.iter().take(token_idx + count).skip(token_idx) {
                 new_mt.push(t.token().token().to_string());
             }
+            let next_scope_exceptions: Vec<&og_xml::compiler::CompiledException> = pattern_token
+                .exceptions
+                .iter()
+                .filter(|exc| exc.scope.as_deref() == Some("next"))
+                .collect();
             for gap in 0..=max_skip {
                 let after = token_idx + count + gap;
                 if after > tokens.len() {
                     break;
+                }
+                if !next_scope_exceptions.is_empty()
+                    && ((token_idx + count)..=after.min(tokens.len() - 1)).any(|q| {
+                        next_scope_exceptions.iter().any(|exc| {
+                            self.exception_matches(exc, tokens[q], has_space_before(tokens, q))
+                        })
+                    })
+                {
+                    continue;
                 }
                 if !self.next_element_commits_at(elements, tokens, after, element_idx + 1, &new_mt)
                 {
@@ -867,10 +881,24 @@ impl PatternRuleEngine {
         if token_ok(token_idx, matched_texts) {
             let mut new_mt = matched_texts.to_vec();
             new_mt.push(tokens[token_idx].token().token().to_string());
+            let next_scope_exceptions: Vec<&og_xml::compiler::CompiledException> = pattern_token
+                .exceptions
+                .iter()
+                .filter(|exc| exc.scope.as_deref() == Some("next"))
+                .collect();
             for gap in 0..=max_skip {
                 let after = token_idx + 1 + gap;
                 if after > tokens.len() {
                     break;
+                }
+                if !next_scope_exceptions.is_empty()
+                    && ((token_idx + 1)..=after.min(tokens.len() - 1)).any(|q| {
+                        next_scope_exceptions.iter().any(|exc| {
+                            self.exception_matches(exc, tokens[q], has_space_before(tokens, q))
+                        })
+                    })
+                {
+                    continue;
                 }
                 if !self.next_element_commits_at(elements, tokens, after, element_idx + 1, &new_mt)
                 {
