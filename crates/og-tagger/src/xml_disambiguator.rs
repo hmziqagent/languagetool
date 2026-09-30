@@ -975,26 +975,6 @@ fn token_matches_text_verified(
     )
 }
 
-fn readings_match_postag_regex(
-    plain: Option<&regex::Regex>,
-    fancy: Option<&fancy_regex::Regex>,
-    token: &AnalyzedTokenReadings,
-) -> bool {
-    if let Some(re) = plain {
-        return token
-            .readings()
-            .iter()
-            .any(|r| r.pos_tags().iter().any(|t| re.is_match(t)));
-    }
-    if let Some(re) = fancy {
-        return token
-            .readings()
-            .iter()
-            .any(|r| r.pos_tags().iter().any(|t| re.is_match(t).unwrap_or(false)));
-    }
-    false
-}
-
 fn token_matches_tail(
     pt: &CompiledPatternToken,
     token: &AnalyzedTokenReadings,
@@ -1002,27 +982,25 @@ fn token_matches_tail(
     token_space_before: bool,
 ) -> bool {
     let pos_matches = if let Some(ref postag) = pt.postag {
-        if pt.compiled_postag_regexp.is_some() || pt.compiled_postag_regexp_fancy.is_some() {
-            let has_matching = readings_match_postag_regex(
-                pt.compiled_postag_regexp.as_ref(),
-                pt.compiled_postag_regexp_fancy.as_ref(),
-                token,
-            );
-            if pt.negate_pos {
-                !has_matching
+        let reading_matches = |r: &og_core::AnalyzedToken| {
+            if pt.compiled_postag_regexp.is_some() || pt.compiled_postag_regexp_fancy.is_some() {
+                let plain = pt
+                    .compiled_postag_regexp
+                    .as_ref()
+                    .is_some_and(|re| r.pos_tags().iter().any(|t| re.is_match(t)));
+                let fancy = pt
+                    .compiled_postag_regexp_fancy
+                    .as_ref()
+                    .is_some_and(|re| r.pos_tags().iter().any(|t| re.is_match(t).unwrap_or(false)));
+                plain || fancy
             } else {
-                has_matching
+                r.pos_tags().iter().any(|t| t == postag)
             }
+        };
+        if pt.negate_pos {
+            token.readings().iter().any(|r| !reading_matches(r))
         } else {
-            let has_matching = token
-                .readings()
-                .iter()
-                .any(|r| r.pos_tags().iter().any(|t| t == postag));
-            if pt.negate_pos {
-                !has_matching
-            } else {
-                has_matching
-            }
+            token.readings().iter().any(reading_matches)
         }
     } else {
         true
