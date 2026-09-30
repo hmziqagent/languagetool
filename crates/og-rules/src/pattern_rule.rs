@@ -1537,18 +1537,20 @@ fn element_matches_readings(
         || pattern.compiled_regexp.is_some()
         || pattern.compiled_regexp_fancy.is_some();
     let untagged = has_no_tag_reading(token);
+    let any_pos_ok = |readings: &[og_core::AnalyzedToken]| {
+        if readings.is_empty() {
+            pattern.postag.is_none()
+        } else {
+            readings
+                .iter()
+                .any(|r| reading_pos_ok(pattern, r, untagged))
+        }
+    };
     if !has_string {
         if pattern.match_no.is_some() {
-            return token
-                .readings()
-                .iter()
-                .any(|r| reading_pos_ok(pattern, r, untagged));
+            return any_pos_ok(token.readings());
         }
-        return !pattern.negate
-            && token
-                .readings()
-                .iter()
-                .any(|r| reading_pos_ok(pattern, r, untagged));
+        return !pattern.negate && any_pos_ok(token.readings());
     }
     if pattern.inflected {
         let surface = surface_text(token);
@@ -1562,16 +1564,9 @@ fn element_matches_readings(
         // Java leaves unsplittable compounds as lemma-less no-info readings, so its
         // inflected test falls back to the surface; our splitter gives them lemmas.
         return element_surface_text_matches(pattern, token) != pattern.negate
-            && token
-                .readings()
-                .iter()
-                .any(|r| reading_pos_ok(pattern, r, untagged));
+            && any_pos_ok(token.readings());
     }
-    element_surface_text_matches(pattern, token) != pattern.negate
-        && token
-            .readings()
-            .iter()
-            .any(|r| reading_pos_ok(pattern, r, untagged))
+    element_surface_text_matches(pattern, token) != pattern.negate && any_pos_ok(token.readings())
 }
 
 fn has_space_before(tokens: &[&AnalyzedTokenReadings], token_idx: usize) -> bool {
@@ -5753,18 +5748,27 @@ mod gap_semantics_tests {
     use og_xml::compiler::XmlCompiler;
 
     fn sentence(words: &[&str]) -> AnalyzedSentence {
+        sentence_with_untagged(words, &[])
+    }
+
+    fn sentence_with_untagged(words: &[&str], untagged: &[usize]) -> AnalyzedSentence {
         let text = words.join(" ");
         let mut tokens = vec![AnalyzedTokenReadings::new(
             AnalyzedToken::new("<S>", 0, 0).with_pos_tags(vec!["SENT_START".to_string()]),
         )];
         let mut offset = 0;
-        for w in words {
-            let reading = AnalyzedToken::new(*w, offset, offset + w.len())
-                .with_lemma((*w).to_string())
-                .with_pos_tags(vec!["NN".to_string()]);
-            let primary = AnalyzedToken::new(*w, offset, offset + w.len())
-                .with_pos_tags(vec!["NN".to_string()]);
-            tokens.push(AnalyzedTokenReadings::new(primary).with_readings(vec![reading]));
+        for (i, w) in words.iter().enumerate() {
+            let atr = if untagged.contains(&i) {
+                AnalyzedTokenReadings::new(AnalyzedToken::new(*w, offset, offset + w.len()))
+            } else {
+                let reading = AnalyzedToken::new(*w, offset, offset + w.len())
+                    .with_lemma((*w).to_string())
+                    .with_pos_tags(vec!["NN".to_string()]);
+                let primary = AnalyzedToken::new(*w, offset, offset + w.len())
+                    .with_pos_tags(vec!["NN".to_string()]);
+                AnalyzedTokenReadings::new(primary).with_readings(vec![reading])
+            };
+            tokens.push(atr);
             offset += w.len() + 1;
         }
         let mut s = AnalyzedSentence::new(&text, 0, text.len());
@@ -5780,6 +5784,31 @@ mod gap_semantics_tests {
         PatternRuleEngine::new()
             .match_rule(&rules.rules[0], &sentence(words))
             .len()
+    }
+
+    fn count_matches_untagged(pattern: &str, words: &[&str], untagged: &[usize]) -> usize {
+        let xml = format!(
+            r#"<rules lang="de"><rule id="GAP" name="gap"><pattern>{pattern}</pattern><message>m</message></rule></rules>"#
+        );
+        let rules = XmlCompiler::new().compile_file(&xml).expect("compile");
+        PatternRuleEngine::new()
+            .match_rule(&rules.rules[0], &sentence_with_untagged(words, untagged))
+            .len()
+    }
+
+    #[test]
+    fn untagged_token_matches_pos_free_elements_but_not_postag_elements() {
+        let words = ["Ich", "geb", "'", "mir"];
+        let string_pattern = r#"<token>geb</token><token>'</token><token>mir</token>"#;
+        assert_eq!(
+            count_matches_untagged(string_pattern, &words, &[2]),
+            1,
+            "Java tokens always carry a no-info reading, so POS-free string elements match"
+        );
+        let postag_pattern = r#"<token>geb</token><token postag="PKT"/><token>mir</token>"#;
+        assert_eq!(count_matches_untagged(postag_pattern, &words, &[2]), 0);
+        let wildcard = r#"<token>geb</token><token/><token>mir</token>"#;
+        assert_eq!(count_matches_untagged(wildcard, &words, &[2]), 1);
     }
 
     #[test]
@@ -6135,8 +6164,8 @@ mod unify_tests {
                     ("d", &["NN:sg:m"])
                 ]
             ),
-            1,
-            "a disagreeing middle token empties the branch so the negated group passes"
+            2,
+            "a disagreeing middle token empties the branch so the negated group passes; the tail bound leaves room for the last element, so both start positions match"
         );
         assert_eq!(
             run(
