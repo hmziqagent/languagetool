@@ -13,6 +13,14 @@ pub fn normalize_apostrophes(text: &str) -> std::borrow::Cow<'_, str> {
     }
 }
 
+pub fn eq_ignore_case(a: &str, b: &str) -> bool {
+    if a.is_ascii() && b.is_ascii() {
+        a.eq_ignore_ascii_case(b)
+    } else {
+        a.to_lowercase() == b.to_lowercase()
+    }
+}
+
 pub fn surface_text(token: &og_core::AnalyzedTokenReadings) -> &str {
     if token.token().token() == "<S>" && token.is_sentence_start() {
         ""
@@ -91,7 +99,7 @@ pub fn reading_matches_element(
         if pattern.case_sensitive {
             *t == *norm
         } else {
-            t.eq_ignore_ascii_case(norm.as_ref())
+            eq_ignore_case(t.as_ref(), norm.as_ref())
         }
     } else if let Some(re) = pattern.compiled_regexp_fancy.as_ref() {
         re.is_match(test).unwrap_or(false)

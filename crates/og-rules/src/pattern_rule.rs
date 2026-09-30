@@ -171,7 +171,7 @@ impl PatternRuleEngine {
                         let surface_matches = if first_token.case_sensitive {
                             t.token().token() == text
                         } else {
-                            t.token().token().eq_ignore_ascii_case(text)
+                            eq_ignore_case(t.token().token(), text)
                         };
                         if surface_matches {
                             true
@@ -181,7 +181,7 @@ impl PatternRuleEngine {
                                     if first_token.case_sensitive {
                                         lemma == text
                                     } else {
-                                        lemma.eq_ignore_ascii_case(text)
+                                        eq_ignore_case(lemma, text)
                                     }
                                 } else {
                                     false
@@ -607,7 +607,7 @@ impl PatternRuleEngine {
         let matches = if pattern_token.case_sensitive {
             token_text == ref_text
         } else {
-            token_text.eq_ignore_ascii_case(&ref_text)
+            eq_ignore_case(&token_text, &ref_text)
         };
         if pattern_token.negate {
             Some(!matches)
@@ -1123,7 +1123,7 @@ impl PatternRuleEngine {
                     let hit = if *cs {
                         text == lit.as_str()
                     } else {
-                        text.eq_ignore_ascii_case(lit)
+                        eq_ignore_case(&text, lit)
                     };
                     if !hit {
                         continue;
@@ -1162,7 +1162,7 @@ impl PatternRuleEngine {
                 let hit = if *cs {
                     text == lit.as_str()
                 } else {
-                    text.eq_ignore_ascii_case(lit)
+                    eq_ignore_case(&text, lit)
                 };
                 if !hit {
                     continue;
@@ -1461,7 +1461,7 @@ fn exception_text_matches(exc: &og_xml::compiler::CompiledException, test: &str)
         if exc.case_sensitive {
             t == norm_text
         } else {
-            t.eq_ignore_ascii_case(norm_text.as_ref())
+            eq_ignore_case(t.as_ref(), norm_text.as_ref())
         }
     } else {
         true
@@ -1512,7 +1512,7 @@ fn element_surface_text_matches(
         if pattern.case_sensitive {
             token_text == norm_text
         } else {
-            token_text.eq_ignore_ascii_case(&norm_text)
+            eq_ignore_case(&token_text, &norm_text)
         }
     } else if let Some(ref re) = pattern.compiled_regexp_fancy {
         re.is_match(&token_text).unwrap_or(false)
@@ -1719,7 +1719,7 @@ fn antipattern_unify_satisfied(
 }
 
 use og_xml::unifier::{
-    Unifier, UnifyElemPlan, UnifyReading, eval_unify_plans, has_no_tag_reading,
+    Unifier, UnifyElemPlan, UnifyReading, eq_ignore_case, eval_unify_plans, has_no_tag_reading,
     normalize_apostrophes, reading_matches_element, reading_pos_matches, surface_text,
 };
 

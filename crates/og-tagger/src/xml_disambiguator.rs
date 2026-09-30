@@ -418,7 +418,7 @@ impl Disambiguator for XmlDisambiguator {
                         let surface = if f.case_sensitive {
                             t.token().token() == f.text
                         } else {
-                            t.token().token().eq_ignore_ascii_case(&f.text)
+                            og_xml::unifier::eq_ignore_case(t.token().token(), &f.text)
                         };
                         let ok = if f.inflected {
                             surface
@@ -427,7 +427,7 @@ impl Disambiguator for XmlDisambiguator {
                                         if f.case_sensitive {
                                             lemma == f.text
                                         } else {
-                                            lemma.eq_ignore_ascii_case(&f.text)
+                                            og_xml::unifier::eq_ignore_case(lemma, &f.text)
                                         }
                                     })
                                 })
@@ -1064,7 +1064,7 @@ fn token_matches_tail(
             if let Some(ref re) = exc.compiled_regexp {
                 re.is_match(text)
             } else {
-                text.eq_ignore_ascii_case(exc_text)
+                og_xml::unifier::eq_ignore_case(text, exc_text)
             }
         } else {
             false
@@ -1245,7 +1245,7 @@ fn token_matches(
         let surface_matches = if pt.case_sensitive {
             text == pattern_text
         } else {
-            text.eq_ignore_ascii_case(pattern_text)
+            og_xml::unifier::eq_ignore_case(text, pattern_text)
         };
 
         if pt.inflected {
@@ -1255,7 +1255,7 @@ fn token_matches(
                         if pt.case_sensitive {
                             lemma == pattern_text
                         } else {
-                            lemma.eq_ignore_ascii_case(pattern_text)
+                            og_xml::unifier::eq_ignore_case(lemma, pattern_text)
                         }
                     } else {
                         false
