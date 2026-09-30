@@ -644,6 +644,12 @@ impl PatternRuleEngine {
                     matched_texts,
                 ),
             og_xml::compiler::CompiledPatternElement::OrGroup(alternatives) => {
+                let group_skip = alternatives.iter().map(|a| a.skip).max().unwrap_or(0);
+                let max_group_skip = if group_skip < 0 {
+                    tokens.len()
+                } else {
+                    group_skip as usize
+                };
                 for alt in alternatives {
                     let matches = if let Some(br) =
                         self.backreference_matches(alt, tokens[token_idx], matched_texts)
@@ -655,28 +661,42 @@ impl PatternRuleEngine {
                     if matches {
                         let mut new_mt = matched_texts.to_vec();
                         new_mt.push(tokens[token_idx].token().token().to_string());
-                        let mut result = self.match_elements_recursive(
-                            elements,
-                            tokens,
-                            token_idx + 1,
-                            element_idx + 1,
-                            &new_mt,
-                        )?;
-                        result.push_front(
-                            token_idx,
-                            element_idx,
-                            tokens[token_idx].token().token().to_string(),
-                        );
-                        result.extend_span(
-                            tokens[token_idx].token().start(),
-                            tokens[token_idx].token().end(),
-                        );
-                        return Some(result);
+                        for gap in 0..=max_group_skip {
+                            let after = token_idx + 1 + gap;
+                            if after > tokens.len() {
+                                break;
+                            }
+                            if let Some(mut result) = self.match_elements_recursive(
+                                elements,
+                                tokens,
+                                after,
+                                element_idx + 1,
+                                &new_mt,
+                            ) {
+                                result.push_front(
+                                    token_idx,
+                                    element_idx,
+                                    tokens[token_idx].token().token().to_string(),
+                                );
+                                result.extend_span(
+                                    tokens[token_idx].token().start(),
+                                    tokens[token_idx].token().end(),
+                                );
+                                return Some(result);
+                            }
+                        }
+                        return None;
                     }
                 }
                 None
             }
             og_xml::compiler::CompiledPatternElement::AndGroup(constraints) => {
+                let group_skip = constraints.iter().map(|c| c.skip).max().unwrap_or(0);
+                let max_group_skip = if group_skip < 0 {
+                    tokens.len()
+                } else {
+                    group_skip as usize
+                };
                 let all_match = constraints.iter().all(|c| {
                     if let Some(br) =
                         self.backreference_matches(c, tokens[token_idx], matched_texts)
@@ -689,26 +709,32 @@ impl PatternRuleEngine {
                 if all_match {
                     let mut new_mt = matched_texts.to_vec();
                     new_mt.push(tokens[token_idx].token().token().to_string());
-                    let mut result = self.match_elements_recursive(
-                        elements,
-                        tokens,
-                        token_idx + 1,
-                        element_idx + 1,
-                        &new_mt,
-                    )?;
-                    result.push_front(
-                        token_idx,
-                        element_idx,
-                        tokens[token_idx].token().token().to_string(),
-                    );
-                    result.extend_span(
-                        tokens[token_idx].token().start(),
-                        tokens[token_idx].token().end(),
-                    );
-                    Some(result)
-                } else {
-                    None
+                    for gap in 0..=max_group_skip {
+                        let after = token_idx + 1 + gap;
+                        if after > tokens.len() {
+                            break;
+                        }
+                        if let Some(mut result) = self.match_elements_recursive(
+                            elements,
+                            tokens,
+                            after,
+                            element_idx + 1,
+                            &new_mt,
+                        ) {
+                            result.push_front(
+                                token_idx,
+                                element_idx,
+                                tokens[token_idx].token().token().to_string(),
+                            );
+                            result.extend_span(
+                                tokens[token_idx].token().start(),
+                                tokens[token_idx].token().end(),
+                            );
+                            return Some(result);
+                        }
+                    }
                 }
+                None
             }
         }
     }
@@ -725,6 +751,11 @@ impl PatternRuleEngine {
         let skip = pattern_token.skip;
         let min = pattern_token.min;
         let max = pattern_token.max;
+        let max_skip = if skip < 0 {
+            tokens.len()
+        } else {
+            skip as usize
+        };
 
         let token_ok = |pos: usize, mt: &[String]| -> bool {
             if let Some(br) = self.backreference_matches(pattern_token, tokens[pos], mt) {
@@ -733,62 +764,6 @@ impl PatternRuleEngine {
                 self.token_matches(pattern_token, tokens[pos], pos, tokens)
             }
         };
-
-        if skip != 0 {
-            let max_skip = if skip < 0 {
-                tokens.len()
-            } else {
-                skip as usize
-            };
-            for s in 0..=max_skip {
-                let next_token = token_idx + s;
-                if next_token >= tokens.len() {
-                    break;
-                }
-                if min == Some(0)
-                    && self.later_element_matches_at(
-                        elements,
-                        tokens,
-                        next_token,
-                        element_idx,
-                        matched_texts,
-                    )
-                {
-                    let mut result = self.match_elements_recursive(
-                        elements,
-                        tokens,
-                        next_token,
-                        element_idx + 1,
-                        matched_texts,
-                    )?;
-                    result.push_front(next_token, element_idx, String::new());
-                    return Some(result);
-                }
-                if token_ok(next_token, matched_texts) {
-                    let mut new_mt = matched_texts.to_vec();
-                    new_mt.push(tokens[next_token].token().token().to_string());
-                    if let Some(mut result) = self.match_elements_recursive(
-                        elements,
-                        tokens,
-                        next_token + 1,
-                        element_idx + 1,
-                        &new_mt,
-                    ) {
-                        result.push_front(
-                            next_token,
-                            element_idx,
-                            tokens[next_token].token().token().to_string(),
-                        );
-                        result.extend_span(
-                            tokens[next_token].token().start(),
-                            tokens[next_token].token().end(),
-                        );
-                        return Some(result);
-                    }
-                }
-            }
-            return None;
-        }
 
         if min == Some(0)
             && self.later_element_matches_at(
@@ -811,6 +786,9 @@ impl PatternRuleEngine {
         }
 
         if min.is_some() || max.is_some() {
+            if !token_ok(token_idx, matched_texts) {
+                return None;
+            }
             let min_count = min.unwrap_or(1) as usize;
             let max_count =
                 max.map(|m| m as usize)
@@ -831,25 +809,31 @@ impl PatternRuleEngine {
                 for t in tokens.iter().take(token_idx + count).skip(token_idx) {
                     new_mt.push(t.token().token().to_string());
                 }
-                if let Some(mut result) = self.match_elements_recursive(
-                    elements,
-                    tokens,
-                    token_idx + count,
-                    element_idx + 1,
-                    &new_mt,
-                ) {
-                    for i in (0..count).rev() {
-                        result.push_front(
-                            token_idx + i,
-                            element_idx,
-                            tokens[token_idx + i].token().token().to_string(),
-                        );
+                for gap in 0..=max_skip {
+                    let after = token_idx + count + gap;
+                    if after > tokens.len() {
+                        break;
                     }
-                    result.extend_span(
-                        tokens[token_idx].token().start(),
-                        tokens[token_idx + count - 1].token().end(),
-                    );
-                    return Some(result);
+                    if let Some(mut result) = self.match_elements_recursive(
+                        elements,
+                        tokens,
+                        after,
+                        element_idx + 1,
+                        &new_mt,
+                    ) {
+                        for i in (0..count).rev() {
+                            result.push_front(
+                                token_idx + i,
+                                element_idx,
+                                tokens[token_idx + i].token().token().to_string(),
+                            );
+                        }
+                        result.extend_span(
+                            tokens[token_idx].token().start(),
+                            tokens[token_idx + count - 1].token().end(),
+                        );
+                        return Some(result);
+                    }
                 }
             }
             return None;
@@ -858,26 +842,28 @@ impl PatternRuleEngine {
         if token_ok(token_idx, matched_texts) {
             let mut new_mt = matched_texts.to_vec();
             new_mt.push(tokens[token_idx].token().token().to_string());
-            let mut result = self.match_elements_recursive(
-                elements,
-                tokens,
-                token_idx + 1,
-                element_idx + 1,
-                &new_mt,
-            )?;
-            result.push_front(
-                token_idx,
-                element_idx,
-                tokens[token_idx].token().token().to_string(),
-            );
-            result.extend_span(
-                tokens[token_idx].token().start(),
-                tokens[token_idx].token().end(),
-            );
-            Some(result)
-        } else {
-            None
+            for gap in 0..=max_skip {
+                let after = token_idx + 1 + gap;
+                if after > tokens.len() {
+                    break;
+                }
+                if let Some(mut result) =
+                    self.match_elements_recursive(elements, tokens, after, element_idx + 1, &new_mt)
+                {
+                    result.push_front(
+                        token_idx,
+                        element_idx,
+                        tokens[token_idx].token().token().to_string(),
+                    );
+                    result.extend_span(
+                        tokens[token_idx].token().start(),
+                        tokens[token_idx].token().end(),
+                    );
+                    return Some(result);
+                }
+            }
         }
+        None
     }
 
     fn match_pattern_recursive(
@@ -6201,6 +6187,59 @@ mod unify_tests {
             ),
             0,
             "a disagreeing head reading must break the unification"
+        );
+    }
+
+    #[test]
+    fn skip_creates_gap_after_element_in_structured_patterns() {
+        fn wrap(pattern: &str) -> String {
+            format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?><rules lang="de"><rule id="SKIPDBG" name="s">{pattern}<message>x</message></rule></rules>"#
+            )
+        }
+        let tokens: &[(&str, &[&str])] = &[
+            ("Momentan", &["ADJ:PRD:GRU"]),
+            ("Besitze", &["SUB:AKK:PLU:MAS", "VER:1:SIN:PRÄ:NON"]),
+            ("ich", &["PRO:PER:NOM:SIN:ALG"]),
+        ];
+        let x = wrap(
+            r#"<pattern case_sensitive="yes"><token postag="SENT_START" skip="-1"/><marker><and><token postag="VER:1.*" postag_regexp="yes"/><token postag="SUB.*" postag_regexp="yes"/></and></marker></pattern>"#,
+        );
+        assert_eq!(
+            run(&x, tokens),
+            1,
+            "the skip gap must open after the element carrying it, not widen its own search"
+        );
+        let x2 = wrap(
+            r#"<pattern case_sensitive="yes"><token>Momentan</token><marker><and><token postag="VER:1.*" postag_regexp="yes"/><token postag="SUB.*" postag_regexp="yes"/></and></marker></pattern>"#,
+        );
+        assert_eq!(
+            run(&x2, tokens),
+            1,
+            "adjacent structured patterns keep matching"
+        );
+        let x3 = wrap(
+            r#"<pattern case_sensitive="yes"><token postag="VER:1.*" postag_regexp="yes"/><token skip="1">ich</token></pattern>"#,
+        );
+        assert_eq!(
+            run(&x3, tokens),
+            1,
+            "one token may intervene between the skip carrier and the next element"
+        );
+        let x4 = wrap(
+            r#"<pattern case_sensitive="yes"><token>Momentan</token><token postag="VER:1.*" postag_regexp="yes"/></pattern>"#,
+        );
+        assert_eq!(
+            run(
+                &x4,
+                &[
+                    ("Momentan", &["ADJ:PRD:GRU"]),
+                    ("keine", &["PRO:IND:AKK:PLU:FEM:BEG"]),
+                    ("Besitze", &["SUB:AKK:PLU:MAS", "VER:1:SIN:PRÄ:NON"]),
+                ],
+            ),
+            0,
+            "a token between elements without skip must not match"
         );
     }
 
