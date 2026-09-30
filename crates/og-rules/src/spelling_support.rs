@@ -44,15 +44,20 @@ impl SpellingSupport {
     }
 
     pub fn new_for_language(
-        dictionary: Dictionary,
+        dictionary: std::sync::Arc<Dictionary>,
         core_resource_dir: &Path,
         resource_dir: &Path,
         code: &str,
     ) -> Self {
-        let mut dictionary = dictionary;
+        let mut dictionary: std::sync::Arc<Dictionary> = dictionary;
         if code == "de" {
-            for word in german_hunspell_words(resource_dir) {
-                dictionary.add_word(&word);
+            let extra = german_hunspell_words(resource_dir);
+            if !extra.is_empty() {
+                let mut owned = (*dictionary).clone();
+                for word in extra {
+                    owned.add_word(&word);
+                }
+                dictionary = std::sync::Arc::new(owned);
             }
         }
         let (variant, extra_file) = match code {
@@ -88,7 +93,7 @@ impl SpellingSupport {
 }
 
 pub struct SpellingSupport {
-    dictionary: Dictionary,
+    dictionary: std::sync::Arc<Dictionary>,
     suggestion_engine: SuggestionEngine,
     multitoken: MultitokenSpeller,
     tagger: Option<Arc<dyn og_tagger::Tagger>>,
@@ -100,10 +105,11 @@ impl SpellingSupport {
     }
 
     pub fn new_with_variant(
-        dictionary: Dictionary,
+        dictionary: impl Into<std::sync::Arc<Dictionary>>,
         multitoken_data: &str,
         variant: SpellerVariant,
     ) -> Self {
+        let dictionary = dictionary.into();
         let suggestion_engine = SuggestionEngine::new(&dictionary);
         Self {
             dictionary,

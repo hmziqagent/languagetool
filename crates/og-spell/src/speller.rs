@@ -35,10 +35,23 @@ impl SpellingCheckRule {
         id: impl Into<String>,
         extra_words: HashSet<String>,
     ) -> Self {
-        let mut rule = Self::new((*dictionary).clone());
+        let mut rule = Self::with_shared_dictionary(dictionary);
         rule.id = id.into();
         rule.extra_words = extra_words;
         rule
+    }
+
+    pub fn with_shared_dictionary(dictionary: std::sync::Arc<Dictionary>) -> Self {
+        let suggestion_engine = SuggestionEngine::new(&dictionary);
+        Self {
+            id: "SPELLING_RULE".to_string(),
+            dictionary,
+            extra_words: HashSet::new(),
+            ignore_words: HashSet::new(),
+            category: Category::new("TYPOS", "Possible Typo")
+                .with_description("Possible spelling mistake"),
+            suggestion_engine,
+        }
     }
 
     pub fn shared_dictionary(&self) -> std::sync::Arc<Dictionary> {

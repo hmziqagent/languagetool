@@ -207,7 +207,7 @@ impl TestRunner {
                     )
                     .map(|dict| {
                         og_rules::spelling_support::SpellingSupport::new_for_language(
-                            dict,
+                            std::sync::Arc::new(dict),
                             core_resource_dir,
                             &lt_modules.join("en/src/main/resources/org/languagetool/resource/en"),
                             "en",
@@ -235,7 +235,7 @@ impl TestRunner {
                     }
                     Some(
                         og_rules::spelling_support::SpellingSupport::new_for_language(
-                            dict,
+                            std::sync::Arc::new(dict),
                             core_resource_dir,
                             &resource_dir,
                             code,
@@ -267,7 +267,7 @@ impl TestRunner {
                     });
                     dictionary.map(|dictionary| {
                         og_rules::spelling_support::SpellingSupport::new_for_language(
-                            dictionary,
+                            std::sync::Arc::new(dictionary),
                             core_resource_dir,
                             &resource_dir,
                             "de",

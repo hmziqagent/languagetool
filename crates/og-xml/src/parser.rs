@@ -58,6 +58,7 @@ impl XmlRuleParser {
         let mut suggestion_parts: Vec<SuggestionPart> = Vec::new();
         let mut message_text = String::new();
         let mut in_example = false;
+        let mut rulegroup_antipattern_examples: Vec<String> = Vec::new();
         let mut example_type = XmlExampleType::Correct;
         let mut example_text = String::new();
         let mut current_text = String::new();
@@ -686,6 +687,7 @@ impl XmlRuleParser {
                             }
                         }
                         "rulegroup" => {
+                            rulegroup_antipattern_examples.clear();
                             if let Some(mut group) = current_group.take() {
                                 let group_antipatterns = group.antipatterns.clone();
                                 for rule in &mut group.rules {
@@ -703,6 +705,13 @@ impl XmlRuleParser {
                                     rule.rule_regexp = Some(rule_regexp);
                                 }
                                 rule_regexp_text.clear();
+                                for text in &rulegroup_antipattern_examples {
+                                    rule.examples.push(XmlExample {
+                                        example_type: XmlExampleType::Correct,
+                                        text: text.clone(),
+                                        corrections: Vec::new(),
+                                    });
+                                }
                                 if let Some(group) = &mut current_group {
                                     group.rules.push(rule);
                                 } else {
@@ -757,14 +766,7 @@ impl XmlRuleParser {
                                 if !trimmed.is_empty() {
                                     token.text = Some(trimmed.to_string());
                                 }
-                                if current_unification.is_some() && current_pattern.is_none() {
-                                    if let Some(uni) = current_unification.as_mut()
-                                        && let Some(eq) = uni.equivalences.last_mut()
-                                    {
-                                        eq.postag = token.postag.clone().unwrap_or_default();
-                                        eq.exact = token.postag_regexp.as_deref() != Some("yes");
-                                    }
-                                } else if in_or_group {
+                                if in_or_group {
                                     if let Some(ref mut or_group) = current_or_group {
                                         if in_unify_ignore {
                                             token.unify_neutral = true;
@@ -832,21 +834,20 @@ impl XmlRuleParser {
                         }
                         "example" => {
                             in_example = false;
-                            if !in_antipattern {
-                                let final_type = example_type.clone();
-                                if let Some(rule) = &mut current_rule {
-                                    let corrections = example_correction
-                                        .as_ref()
-                                        .map(|c| {
-                                            c.split('|').map(|s| s.trim().to_string()).collect()
-                                        })
-                                        .unwrap_or_default();
-                                    rule.examples.push(XmlExample {
-                                        example_type: final_type,
-                                        text: example_text.trim().to_string(),
-                                        corrections,
-                                    });
-                                }
+                            let final_type = example_type.clone();
+                            if let Some(rule) = &mut current_rule {
+                                let corrections = example_correction
+                                    .as_ref()
+                                    .map(|c| c.split('|').map(|s| s.trim().to_string()).collect())
+                                    .unwrap_or_default();
+                                rule.examples.push(XmlExample {
+                                    example_type: final_type,
+                                    text: example_text.trim().to_string(),
+                                    corrections,
+                                });
+                            } else if in_antipattern {
+                                rulegroup_antipattern_examples
+                                    .push(example_text.trim().to_string());
                             }
                             example_correction = None;
                         }

@@ -417,19 +417,19 @@ pub fn shared_dictionary(
     dict_stem: &str,
 ) -> Option<Arc<MorfologikDictionary>> {
     static CACHE: std::sync::OnceLock<
-        std::sync::Mutex<HashMap<PathBuf, Arc<MorfologikDictionary>>>,
+        std::sync::Mutex<HashMap<PathBuf, std::sync::Weak<MorfologikDictionary>>>,
     > = std::sync::OnceLock::new();
     let cache = CACHE.get_or_init(Default::default);
     let key = resource_dir.join(format!("{dict_stem}.dict"));
     let mut guard = cache.lock().unwrap();
-    if let Some(dict) = guard.get(&key) {
-        return Some(dict.clone());
+    if let Some(dict) = guard.get(&key).and_then(std::sync::Weak::upgrade) {
+        return Some(dict);
     }
     let dictionary = Arc::new(MorfologikDictionary::load(
         &key,
         &resource_dir.join(format!("{dict_stem}.info")),
     )?);
-    guard.insert(key, dictionary.clone());
+    guard.insert(key, std::sync::Arc::downgrade(&dictionary));
     Some(dictionary)
 }
 

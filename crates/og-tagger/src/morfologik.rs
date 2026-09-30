@@ -529,6 +529,10 @@ impl MorfologikDictionary {
         self.entries.keys().map(|k| k.to_string()).collect()
     }
 
+    pub fn keys(&self) -> impl Iterator<Item = &str> {
+        self.entries.keys().map(|k| &**k)
+    }
+
     pub fn forms_by_lemma(
         &self,
     ) -> &std::collections::HashMap<&'static str, Vec<(&'static str, &'static str)>> {

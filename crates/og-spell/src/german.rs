@@ -359,13 +359,18 @@ fn load_set_file(path: &Path, set: &mut HashSet<String>) {
 }
 
 fn shared_german_data(resource_dir: &Path, data: GermanSharedData) -> Arc<GermanSharedData> {
-    static CACHE: LazyLock<Mutex<HashMap<std::path::PathBuf, Arc<GermanSharedData>>>> =
+    static CACHE: LazyLock<Mutex<HashMap<std::path::PathBuf, std::sync::Weak<GermanSharedData>>>> =
         LazyLock::new(Default::default);
     let mut cache = CACHE.lock().unwrap();
-    cache
-        .entry(resource_dir.to_path_buf())
-        .or_insert_with(|| Arc::new(data))
-        .clone()
+    if let Some(existing) = cache.get(resource_dir).and_then(std::sync::Weak::upgrade) {
+        return existing;
+    }
+    let shared = Arc::new(data);
+    cache.insert(
+        resource_dir.to_path_buf(),
+        std::sync::Arc::downgrade(&shared),
+    );
+    shared
 }
 
 pub struct GermanSpeller {

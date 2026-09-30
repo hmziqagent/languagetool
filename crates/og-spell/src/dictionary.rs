@@ -15,6 +15,7 @@ pub enum DictionaryError {
 pub struct Dictionary {
     words: HashSet<String>,
     lowercased: HashSet<String>,
+    shared: Option<std::sync::Arc<crate::morfologik_view::MorfologikView>>,
 }
 
 impl Dictionary {
@@ -22,6 +23,17 @@ impl Dictionary {
         Self {
             words: HashSet::new(),
             lowercased: HashSet::new(),
+            shared: None,
+        }
+    }
+
+    pub fn from_shared_words(
+        shared: std::sync::Arc<crate::morfologik_view::MorfologikView>,
+    ) -> Self {
+        Self {
+            words: HashSet::new(),
+            lowercased: HashSet::new(),
+            shared: Some(shared),
         }
     }
 
@@ -62,31 +74,42 @@ impl Dictionary {
     pub fn from_words(words: &[&str]) -> Self {
         let mut dict = Self::new();
         for word in words {
-            dict.words.insert(word.to_string());
-            dict.lowercased.insert(word.to_lowercase());
+            dict.add_word(word);
         }
         dict
     }
 
     pub fn add_word(&mut self, word: &str) {
         self.words.insert(word.to_string());
-        self.lowercased.insert(word.to_lowercase());
+        let lowered = word.to_lowercase();
+        if lowered != word {
+            self.lowercased.insert(lowered);
+        }
     }
 
     pub fn contains(&self, word: &str) -> bool {
-        self.words.contains(word) || self.lowercased.contains(&word.to_lowercase())
+        if self.words.contains(word) {
+            return true;
+        }
+        let lowered = word.to_lowercase();
+        if lowered != word && self.lowercased.contains(&lowered) {
+            return true;
+        }
+        self.shared
+            .as_ref()
+            .is_some_and(|view| view.contains(word) || (lowered != word && view.contains(&lowered)))
     }
 
     pub fn contains_exact(&self, word: &str) -> bool {
-        self.words.contains(word)
+        self.words.contains(word) || self.shared.as_ref().is_some_and(|view| view.contains(word))
     }
 
     pub fn len(&self) -> usize {
-        self.words.len()
+        self.shared.as_ref().map_or(0, |view| view.len()) + self.words.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.words.is_empty()
+        self.words.is_empty() && self.shared.as_ref().is_none_or(|view| view.len() == 0)
     }
 
     pub fn word_list(&self) -> Vec<String> {
