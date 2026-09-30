@@ -100,6 +100,22 @@ fn cases() -> Vec<GoldenCase> {
             "fp-guard-include-skipped-suggestion",
             "Please note that we will revert the change.",
         ),
+        GoldenCase::new(
+            "fp-guard-possessive-apostrophe-grant-relief",
+            "If the indicators are revised upward, as most expect, that would grant some customers relief from the rate hike but could necessitate future ones to generate enough revenue for power purchases.",
+        ),
+        GoldenCase::new(
+            "fp-guard-possessive-apostrophe-clearance",
+            "Military officials must sometimes grant the passengers clearance to come ashore.",
+        ),
+        GoldenCase::new(
+            "fp-guard-possessive-apostrophe-depicting",
+            "The following is a graph depicting the effects ocean acidification has had on marine wildlife.",
+        ),
+        GoldenCase::new(
+            "fp-guard-prp-have-vb-space-before-colon",
+            "He has uses a space before the colon: like this.",
+        ),
     ]
 }
 
