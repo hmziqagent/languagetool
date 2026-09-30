@@ -8,7 +8,7 @@ fn exception_from_attrs(e: &BytesStart<'_>) -> XmlException {
     let mut exc = XmlException::default();
     for attr in e.attributes().flatten() {
         let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
-        let val = String::from_utf8_lossy(&attr.value).to_string();
+        let val = crate::decode_attr_value(&attr.value);
         match key.as_str() {
             "regexp" => exc.regexp = Some(val),
             "postag" => exc.postag = Some(val.trim().to_string()),
@@ -138,7 +138,7 @@ impl DisambigXmlParser {
                             let mut rule = DisambigRule::default();
                             for attr in e.attributes().flatten() {
                                 let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
-                                let val = String::from_utf8_lossy(&attr.value).to_string();
+                                let val = crate::decode_attr_value(&attr.value);
                                 match key.as_str() {
                                     "id" => rule.id = Some(val),
                                     "name" => rule.name = Some(val),
@@ -160,7 +160,7 @@ impl DisambigXmlParser {
                             current_group_name = None;
                             for attr in e.attributes().flatten() {
                                 let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
-                                let val = String::from_utf8_lossy(&attr.value).to_string();
+                                let val = crate::decode_attr_value(&attr.value);
                                 match key.as_str() {
                                     "id" => current_group_id = Some(val),
                                     "name" => current_group_name = Some(val),
@@ -171,7 +171,7 @@ impl DisambigXmlParser {
                         "filter" => {
                             for attr in e.attributes().flatten() {
                                 let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
-                                let val = String::from_utf8_lossy(&attr.value).to_string();
+                                let val = crate::decode_attr_value(&attr.value);
                                 match key.as_str() {
                                     "class" => pending_filter_class = Some(val),
                                     "args" => pending_filter_args = Some(val),
@@ -183,7 +183,7 @@ impl DisambigXmlParser {
                             let mut feature = String::new();
                             for attr in e.attributes().flatten() {
                                 let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
-                                let val = String::from_utf8_lossy(&attr.value).to_string();
+                                let val = crate::decode_attr_value(&attr.value);
                                 if key == "feature" {
                                     feature = val;
                                 }
@@ -199,7 +199,7 @@ impl DisambigXmlParser {
                             let mut exact = false;
                             for attr in e.attributes().flatten() {
                                 let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
-                                let val = String::from_utf8_lossy(&attr.value).to_string();
+                                let val = crate::decode_attr_value(&attr.value);
                                 match key.as_str() {
                                     "type" => eq_type = val,
                                     "postag" => postag = val.trim().to_string(),
@@ -225,7 +225,7 @@ impl DisambigXmlParser {
                             unify_negate = false;
                             for attr in e.attributes().flatten() {
                                 let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
-                                let val = String::from_utf8_lossy(&attr.value).to_string();
+                                let val = crate::decode_attr_value(&attr.value);
                                 if key == "negate" {
                                     unify_negate = val == "yes";
                                 }
@@ -237,7 +237,7 @@ impl DisambigXmlParser {
                         "feature" if current_pattern.is_some() => {
                             for attr in e.attributes().flatten() {
                                 let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
-                                let val = String::from_utf8_lossy(&attr.value).to_string();
+                                let val = crate::decode_attr_value(&attr.value);
                                 if key == "id" {
                                     unify_feature = Some(val.clone());
                                     if !unify_features.contains(&val) {
@@ -250,7 +250,7 @@ impl DisambigXmlParser {
                             let mut pattern = XmlPattern::default();
                             for attr in e.attributes().flatten() {
                                 let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
-                                let val = String::from_utf8_lossy(&attr.value).to_string();
+                                let val = crate::decode_attr_value(&attr.value);
                                 if key == "case_sensitive" {
                                     pattern.case_sensitive = val == "yes";
                                 }
@@ -278,7 +278,7 @@ impl DisambigXmlParser {
                             let mut token = XmlPatternToken::default();
                             for attr in e.attributes().flatten() {
                                 let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
-                                let val = String::from_utf8_lossy(&attr.value).to_string();
+                                let val = crate::decode_attr_value(&attr.value);
                                 match key.as_str() {
                                     "regexp" => token.regexp = Some(val),
                                     "postag" => token.postag = Some(val.trim().to_string()),
@@ -318,7 +318,7 @@ impl DisambigXmlParser {
                             let mut postag: Option<String> = None;
                             for attr in e.attributes().flatten() {
                                 let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
-                                let val = String::from_utf8_lossy(&attr.value).to_string();
+                                let val = crate::decode_attr_value(&attr.value);
                                 match key.as_str() {
                                     "action" => action = Some(val),
                                     "postag" => postag = Some(val),
@@ -355,7 +355,7 @@ impl DisambigXmlParser {
                             current_wd = DisambigWord::default();
                             for attr in e.attributes().flatten() {
                                 let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
-                                let val = String::from_utf8_lossy(&attr.value).to_string();
+                                let val = crate::decode_attr_value(&attr.value);
                                 match key.as_str() {
                                     "pos" => current_wd.pos = Some(val),
                                     "lemma" => current_wd.lemma = Some(val),
@@ -387,7 +387,7 @@ impl DisambigXmlParser {
                         "feature" => {
                             for attr in e.attributes().flatten() {
                                 let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
-                                let val = String::from_utf8_lossy(&attr.value).to_string();
+                                let val = crate::decode_attr_value(&attr.value);
                                 if key == "id" {
                                     unify_feature = Some(val.clone());
                                     if !unify_features.contains(&val) {
@@ -400,7 +400,7 @@ impl DisambigXmlParser {
                             let mut postag = String::new();
                             for attr in e.attributes().flatten() {
                                 let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
-                                let val = String::from_utf8_lossy(&attr.value).to_string();
+                                let val = crate::decode_attr_value(&attr.value);
                                 if key == "postag" {
                                     postag = val;
                                 }
@@ -415,7 +415,7 @@ impl DisambigXmlParser {
                             let mut token = XmlPatternToken::default();
                             for attr in e.attributes().flatten() {
                                 let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
-                                let val = String::from_utf8_lossy(&attr.value).to_string();
+                                let val = crate::decode_attr_value(&attr.value);
                                 match key.as_str() {
                                     "regexp" => token.regexp = Some(val),
                                     "postag" => token.postag = Some(val.trim().to_string()),
@@ -460,7 +460,7 @@ impl DisambigXmlParser {
                             let mut wd = DisambigWord::default();
                             for attr in e.attributes().flatten() {
                                 let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
-                                let val = String::from_utf8_lossy(&attr.value).to_string();
+                                let val = crate::decode_attr_value(&attr.value);
                                 match key.as_str() {
                                     "pos" => wd.pos = Some(val),
                                     "lemma" => wd.lemma = Some(val),
@@ -474,7 +474,7 @@ impl DisambigXmlParser {
                             let mut postag: Option<String> = None;
                             for attr in e.attributes().flatten() {
                                 let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
-                                let val = String::from_utf8_lossy(&attr.value).to_string();
+                                let val = crate::decode_attr_value(&attr.value);
                                 match key.as_str() {
                                     "action" => action = Some(val),
                                     "postag" => postag = Some(val),

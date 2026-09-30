@@ -10,3 +10,11 @@ pub use disambig_parser::*;
 pub use disambig_types::*;
 pub use parser::*;
 pub use types::*;
+
+pub(crate) fn decode_attr_value(value: &[u8]) -> String {
+    let raw = String::from_utf8_lossy(value);
+    match quick_xml::escape::unescape(raw.as_ref()) {
+        Ok(decoded) => decoded.into_owned(),
+        Err(_) => raw.into_owned(),
+    }
+}

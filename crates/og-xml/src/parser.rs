@@ -102,7 +102,7 @@ impl XmlRuleParser {
                             let mut cat = XmlCategory::default();
                             for attr in e.attributes().flatten() {
                                 let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
-                                let val = String::from_utf8_lossy(&attr.value).to_string();
+                                let val = crate::decode_attr_value(&attr.value);
                                 match key.as_str() {
                                     "id" => cat.id = val,
                                     "name" => cat.name = val,
@@ -118,7 +118,7 @@ impl XmlRuleParser {
                             let mut group = XmlRuleGroup::default();
                             for attr in e.attributes().flatten() {
                                 let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
-                                let val = String::from_utf8_lossy(&attr.value).to_string();
+                                let val = crate::decode_attr_value(&attr.value);
                                 match key.as_str() {
                                     "id" => group.id = Some(val),
                                     "name" => group.name = Some(val),
@@ -136,7 +136,7 @@ impl XmlRuleParser {
                             };
                             for attr in e.attributes().flatten() {
                                 let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
-                                let val = String::from_utf8_lossy(&attr.value).to_string();
+                                let val = crate::decode_attr_value(&attr.value);
                                 match key.as_str() {
                                     "id" => rule.id = val,
                                     "name" => rule.name = val,
@@ -157,7 +157,7 @@ impl XmlRuleParser {
                             let mut pattern = XmlPattern::default();
                             for attr in e.attributes().flatten() {
                                 let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
-                                let val = String::from_utf8_lossy(&attr.value).to_string();
+                                let val = crate::decode_attr_value(&attr.value);
                                 if key.as_str() == "case_sensitive" {
                                     pattern.case_sensitive = val == "yes"
                                 }
@@ -174,7 +174,7 @@ impl XmlRuleParser {
                             let mut rule_regexp = XmlRuleRegexp::default();
                             for attr in e.attributes().flatten() {
                                 let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
-                                let val = String::from_utf8_lossy(&attr.value).to_string();
+                                let val = crate::decode_attr_value(&attr.value);
                                 match key.as_str() {
                                     "case_sensitive" => rule_regexp.case_sensitive = val == "yes",
                                     "type" => rule_regexp.exact = val == "exact",
@@ -190,7 +190,7 @@ impl XmlRuleParser {
                             let mut ap = XmlPattern::default();
                             for attr in e.attributes().flatten() {
                                 let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
-                                let val = String::from_utf8_lossy(&attr.value).to_string();
+                                let val = crate::decode_attr_value(&attr.value);
                                 if key == "case_sensitive" {
                                     ap.case_sensitive = val == "yes";
                                 }
@@ -203,7 +203,7 @@ impl XmlRuleParser {
                             let mut exc = XmlException::default();
                             for attr in e.attributes().flatten() {
                                 let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
-                                let val = String::from_utf8_lossy(&attr.value).to_string();
+                                let val = crate::decode_attr_value(&attr.value);
                                 match key.as_str() {
                                     "regexp" => exc.regexp = Some(val),
                                     "postag" => exc.postag = Some(val),
@@ -232,7 +232,7 @@ impl XmlRuleParser {
                             let mut token = XmlPatternToken::default();
                             for attr in e.attributes().flatten() {
                                 let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
-                                let val = String::from_utf8_lossy(&attr.value).to_string();
+                                let val = crate::decode_attr_value(&attr.value);
                                 match key.as_str() {
                                     "postag" => token.postag = Some(val),
                                     "postag_regexp" => token.postag_regexp = Some(val),
@@ -249,7 +249,7 @@ impl XmlRuleParser {
                             let mut token = XmlPatternToken::default();
                             for attr in e.attributes().flatten() {
                                 let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
-                                let val = String::from_utf8_lossy(&attr.value).to_string();
+                                let val = crate::decode_attr_value(&attr.value);
                                 match key.as_str() {
                                     "regexp" => token.regexp = Some(val),
                                     "postag" => token.postag = Some(val),
@@ -295,7 +295,7 @@ impl XmlRuleParser {
                             let mut m = XmlMatch::default();
                             for attr in e.attributes().flatten() {
                                 let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
-                                let val = String::from_utf8_lossy(&attr.value).to_string();
+                                let val = crate::decode_attr_value(&attr.value);
                                 match key.as_str() {
                                     "no" => m.no = val.parse().unwrap_or(1),
                                     "case_conversion" => m.case_conversion = Some(val),
@@ -312,7 +312,7 @@ impl XmlRuleParser {
                             // <match no="1"> inside a <token> - backreference in pattern
                             for attr in e.attributes().flatten() {
                                 let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
-                                let val = String::from_utf8_lossy(&attr.value).to_string();
+                                let val = crate::decode_attr_value(&attr.value);
                                 if key == "no"
                                     && let Some(ref mut token) = current_token
                                 {
@@ -325,7 +325,7 @@ impl XmlRuleParser {
                             example_correction = None;
                             for attr in e.attributes().flatten() {
                                 let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
-                                let val = String::from_utf8_lossy(&attr.value).to_string();
+                                let val = crate::decode_attr_value(&attr.value);
                                 match key.as_str() {
                                     "type" => ex_type_str = Some(val),
                                     "correction" => example_correction = Some(val),
@@ -358,7 +358,7 @@ impl XmlRuleParser {
                             let mut feature = crate::disambig_types::UnificationFeature::default();
                             for attr in e.attributes().flatten() {
                                 let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
-                                let val = String::from_utf8_lossy(&attr.value).to_string();
+                                let val = crate::decode_attr_value(&attr.value);
                                 if key == "feature" {
                                     feature.feature = val;
                                 }
@@ -369,7 +369,7 @@ impl XmlRuleParser {
                             let mut eq = crate::disambig_types::UnificationEquivalence::default();
                             for attr in e.attributes().flatten() {
                                 let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
-                                let val = String::from_utf8_lossy(&attr.value).to_string();
+                                let val = crate::decode_attr_value(&attr.value);
                                 match key.as_str() {
                                     "type" => eq.eq_type = val,
                                     "postag" => eq.postag = val,
@@ -391,7 +391,7 @@ impl XmlRuleParser {
                             unify_features.clear();
                             for attr in e.attributes().flatten() {
                                 let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
-                                let val = String::from_utf8_lossy(&attr.value).to_string();
+                                let val = crate::decode_attr_value(&attr.value);
                                 if key == "negate" {
                                     unify_negate = val == "yes";
                                 }
@@ -405,7 +405,7 @@ impl XmlRuleParser {
                             unify_feature_types.clear();
                             for attr in e.attributes().flatten() {
                                 let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
-                                let val = String::from_utf8_lossy(&attr.value).to_string();
+                                let val = crate::decode_attr_value(&attr.value);
                                 if key == "id" {
                                     unify_feature_name = val;
                                 }
@@ -414,7 +414,7 @@ impl XmlRuleParser {
                         "type" if unify_start.is_some() => {
                             for attr in e.attributes().flatten() {
                                 let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
-                                let val = String::from_utf8_lossy(&attr.value).to_string();
+                                let val = crate::decode_attr_value(&attr.value);
                                 if key == "id" {
                                     unify_feature_types.push(val);
                                 }
@@ -438,7 +438,7 @@ impl XmlRuleParser {
                             let mut id = String::new();
                             for attr in e.attributes().flatten() {
                                 if attr.key.as_ref() == b"id" {
-                                    id = String::from_utf8_lossy(&attr.value).to_string();
+                                    id = crate::decode_attr_value(&attr.value);
                                 }
                             }
                             if !id.is_empty() {
@@ -448,8 +448,7 @@ impl XmlRuleParser {
                         "type" if unify_start.is_some() => {
                             for attr in e.attributes().flatten() {
                                 if attr.key.as_ref() == b"id" {
-                                    unify_feature_types
-                                        .push(String::from_utf8_lossy(&attr.value).to_string());
+                                    unify_feature_types.push(crate::decode_attr_value(&attr.value));
                                 }
                             }
                         }
@@ -457,7 +456,7 @@ impl XmlRuleParser {
                             let mut token = XmlPatternToken::default();
                             for attr in e.attributes().flatten() {
                                 let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
-                                let val = String::from_utf8_lossy(&attr.value).to_string();
+                                let val = crate::decode_attr_value(&attr.value);
                                 match key.as_str() {
                                     "postag" => token.postag = Some(val),
                                     "postag_regexp" => token.postag_regexp = Some(val),
@@ -474,7 +473,7 @@ impl XmlRuleParser {
                             let mut token = XmlPatternToken::default();
                             for attr in e.attributes().flatten() {
                                 let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
-                                let val = String::from_utf8_lossy(&attr.value).to_string();
+                                let val = crate::decode_attr_value(&attr.value);
                                 match key.as_str() {
                                     "regexp" => token.regexp = Some(val),
                                     "negate" => token.negate = val == "yes",
@@ -542,7 +541,7 @@ impl XmlRuleParser {
                             let mut exc = XmlException::default();
                             for attr in e.attributes().flatten() {
                                 let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
-                                let val = String::from_utf8_lossy(&attr.value).to_string();
+                                let val = crate::decode_attr_value(&attr.value);
                                 match key.as_str() {
                                     "regexp" => exc.regexp = Some(val),
                                     "postag" => exc.postag = Some(val),
@@ -578,7 +577,7 @@ impl XmlRuleParser {
                             let mut m = XmlMatch::default();
                             for attr in e.attributes().flatten() {
                                 let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
-                                let val = String::from_utf8_lossy(&attr.value).to_string();
+                                let val = crate::decode_attr_value(&attr.value);
                                 match key.as_str() {
                                     "no" => m.no = val.parse().unwrap_or(1),
                                     "case_conversion" => m.case_conversion = Some(val),
@@ -595,7 +594,7 @@ impl XmlRuleParser {
                             // <match no="1" /> inside a <token> - backreference in pattern
                             for attr in e.attributes().flatten() {
                                 let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
-                                let val = String::from_utf8_lossy(&attr.value).to_string();
+                                let val = crate::decode_attr_value(&attr.value);
                                 if key == "no"
                                     && let Some(ref mut token) = current_token
                                 {
@@ -619,7 +618,7 @@ impl XmlRuleParser {
                             let mut rule_regexp = XmlRuleRegexp::default();
                             for attr in e.attributes().flatten() {
                                 let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
-                                let val = String::from_utf8_lossy(&attr.value).to_string();
+                                let val = crate::decode_attr_value(&attr.value);
                                 match key.as_str() {
                                     "case_sensitive" => rule_regexp.case_sensitive = val == "yes",
                                     "type" => rule_regexp.exact = val == "exact",
@@ -634,7 +633,7 @@ impl XmlRuleParser {
                             let mut filter = XmlFilter::default();
                             for attr in e.attributes().flatten() {
                                 let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
-                                let val = String::from_utf8_lossy(&attr.value).to_string();
+                                let val = crate::decode_attr_value(&attr.value);
                                 match key.as_str() {
                                     "class" => filter.class = val,
                                     "args" => filter.args = val,
