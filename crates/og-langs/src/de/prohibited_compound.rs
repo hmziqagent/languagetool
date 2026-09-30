@@ -10,7 +10,6 @@ use og_core::{
     RuleMatchRule, SuggestedReplacement,
 };
 use og_languagemodel::LanguageModel;
-use og_rules::spelling_support::SpellingSupport;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -608,31 +607,22 @@ fn remove_hyphens_and_adapt_case(word: &str) -> Option<String> {
 
 pub struct ProhibitedCompoundRule {
     model: Arc<dyn LanguageModel>,
-    spelling: Option<Arc<SpellingSupport>>,
+    speller: Option<Arc<og_spell::GermanSpeller>>,
 }
 
 impl ProhibitedCompoundRule {
-    pub fn new(model: Arc<dyn LanguageModel>, spelling: Option<Arc<SpellingSupport>>) -> Self {
-        Self { model, spelling }
+    pub fn new(
+        model: Arc<dyn LanguageModel>,
+        speller: Option<Arc<og_spell::GermanSpeller>>,
+    ) -> Self {
+        Self { model, speller }
     }
 
     fn is_misspelled(&self, word: &str) -> bool {
-        let Some(support) = &self.spelling else {
+        let Some(speller) = &self.speller else {
             return false;
         };
-        if !support.is_misspelled(word) {
-            return false;
-        }
-        let parts = og_tagger::jwordsplitter::tokenize(word);
-        if parts.len() < 2 {
-            return true;
-        }
-        !parts.iter().all(|part| {
-            let cap = uppercase_first_char(part);
-            !support.is_misspelled(part.as_str())
-                || !support.is_misspelled(&part.to_lowercase())
-                || (cap != *part && !support.is_misspelled(&cap))
-        })
+        speller.is_misspelled_strict(word)
     }
 
     fn candidate_pairs(&self, word_part: &str) -> Vec<u32> {

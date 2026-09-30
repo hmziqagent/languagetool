@@ -88,6 +88,7 @@ pub struct LanguageEngine {
     disambiguator: Option<Arc<dyn og_core::checker::Disambiguator>>,
     post_chunker: Option<Arc<dyn og_core::checker::Chunker>>,
     spelling_support: Option<Arc<og_rules::spelling_support::SpellingSupport>>,
+    german_speller: Option<Arc<og_spell::GermanSpeller>>,
     synthesizer: Option<Arc<og_rules::postponed_adjective::LangSynthesizer>>,
     checker: Checker,
     language_filter: Arc<dyn og_core::match_filters::LanguageMatchFilter>,
@@ -114,6 +115,7 @@ impl LanguageEngine {
             disambiguator: None,
             post_chunker: None,
             spelling_support: None,
+            german_speller: None,
             synthesizer: None,
             checker,
             language_filter,
@@ -165,6 +167,7 @@ impl LanguageEngine {
             disambiguator: None,
             post_chunker: None,
             spelling_support: None,
+            german_speller: None,
             synthesizer: None,
             checker: Checker::new()
                 .with_sentence_tokenizer(Arc::new(SentenceSplitterBridge("en".to_string())))
@@ -378,6 +381,7 @@ impl LanguageEngine {
         let mut shared_dict: Option<Arc<og_spell::Dictionary>> = None;
         let mut german_resource_dir: Option<PathBuf> = None;
         let mut german_tagger: Option<Arc<og_tagger::GermanTagger>> = None;
+        let mut german_speller: Option<Arc<og_spell::GermanSpeller>> = None;
         if let Some(lt_root) = find_lt_resource_dir() {
             let resource_dir = lt_root.join("de/src/main/resources/org/languagetool/resource/de");
             german_resource_dir = Some(resource_dir.clone());
@@ -427,10 +431,18 @@ impl LanguageEngine {
                 }
                 let dict_arc = Arc::new(dict);
                 shared_dict = Some(dict_arc.clone());
-                engine.add_rule(Arc::new(og_spell::SpellingCheckRule::new_shared(
+                let speller = Arc::new(og_spell::GermanSpeller::new(
                     dict_arc.clone(),
+                    &resource_dir,
+                    find_lt_core_resource_dir().as_deref(),
+                    engine.tagger.clone(),
+                    "de-DE",
+                ));
+                german_speller = Some(speller.clone());
+                engine.german_speller = Some(speller.clone());
+                engine.add_rule(Arc::new(og_spell::GermanSpellerRule::new(
+                    speller,
                     "MORFOLOGIK_RULE_DE_DE",
-                    HashSet::new(),
                 )));
                 engine.add_rule(Arc::new(crate::de::CompoundInfinitivRule::new(Some(
                     dict_arc,
@@ -580,7 +592,7 @@ impl LanguageEngine {
             ));
             engine.add_rule(Arc::new(crate::de::ProhibitedCompoundRule::new(
                 model,
-                engine.spelling_support.clone(),
+                german_speller.clone(),
             )));
         }
 
@@ -651,11 +663,21 @@ impl LanguageEngine {
         if !dict.is_empty() {
             let id = format!("MORFOLOGIK_RULE_DE_{country}");
             rules.retain(|r| r.id() != "MORFOLOGIK_RULE_DE_DE");
-            rules.push(Arc::new(og_spell::SpellingCheckRule::new_shared(
-                Arc::new(dict),
-                id,
-                HashSet::new(),
-            )));
+            let variant_code = format!("de-{country}");
+            if let Some(speller) = &self.german_speller {
+                let variant_speller =
+                    Arc::new(speller.with_shared_data(Arc::new(dict), &variant_code));
+                rules.push(Arc::new(og_spell::GermanSpellerRule::new(
+                    variant_speller,
+                    id,
+                )));
+            } else {
+                rules.push(Arc::new(og_spell::SpellingCheckRule::new_shared(
+                    Arc::new(dict),
+                    id,
+                    HashSet::new(),
+                )));
+            }
         }
         let mut engine = Self::new(Language::from_code(code).unwrap_or(Language::German));
         engine.rules = rules;
@@ -663,6 +685,7 @@ impl LanguageEngine {
         engine.tagger = self.tagger.clone();
         engine.disambiguator = self.disambiguator.clone();
         engine.spelling_support = self.spelling_support.clone();
+        engine.german_speller = self.german_speller.clone();
         engine.synthesizer = self.synthesizer.clone();
         engine.post_chunker = self.post_chunker.clone();
         engine.rebuild_checker();

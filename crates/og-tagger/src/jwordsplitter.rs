@@ -328,7 +328,7 @@ fn ends_with_interfix(lc_word: &str) -> bool {
     INTERFIXES.iter().any(|i| lc_word.ends_with(i))
 }
 
-fn split(word: &str, allow_interfix_removal: bool) -> Option<Vec<String>> {
+fn split(word: &str, allow_interfix_removal: bool, strict: bool) -> Option<Vec<String>> {
     if let Some(parts) = exception_split(word) {
         return Some(parts);
     }
@@ -348,7 +348,7 @@ fn split(word: &str, allow_interfix_removal: bool) -> Option<Vec<String>> {
             removable_interfix.expect("checked").to_string(),
         ])
     } else {
-        let mut parts = split_from_right(word);
+        let mut parts = split_from_right(word, strict);
         if parts.is_none() && is_simple_word(word) {
             parts = Some(vec![word.to_string()]);
         } else if let Some(ref mut p) = parts {
@@ -357,7 +357,7 @@ fn split(word: &str, allow_interfix_removal: bool) -> Option<Vec<String>> {
             }
         }
         if parts.is_none() && ends_with_interfix(&lc_word) {
-            if let Some(mut inner) = split_from_right(word_without_interfix) {
+            if let Some(mut inner) = split_from_right(word_without_interfix, strict) {
                 if let Some(interfix) = removable_interfix {
                     inner.push(interfix.to_string());
                 }
@@ -368,18 +368,38 @@ fn split(word: &str, allow_interfix_removal: bool) -> Option<Vec<String>> {
     }
 }
 
-fn split_from_right(word: &str) -> Option<Vec<String>> {
+fn combined_exception_split(left_part: &str, right_part: &str) -> Option<Vec<String>> {
+    if let Some(right_parts) = exceptions().get(&right_part.to_lowercase()) {
+        let mut parts = vec![left_part.to_string()];
+        parts.extend(right_parts.iter().cloned());
+        return Some(parts);
+    }
+    let left_parts = exceptions().get(&left_part.to_lowercase())?;
+    let mut parts = left_parts.clone();
+    parts.push(right_part.to_string());
+    Some(parts)
+}
+
+fn split_from_right(word: &str, strict: bool) -> Option<Vec<String>> {
     let chars: Vec<char> = word.chars().collect();
     let mut parts: Option<Vec<String>> = None;
     let mut i = chars.len().saturating_sub(MIN_WORD_LEN);
     while i >= MIN_WORD_LEN {
         let left_part: String = chars[..i].iter().collect();
         let right_part: String = chars[i..].iter().collect();
-        if is_simple_word(&right_part)
-            && let Some(mut left_parts) = split(&left_part, true)
-        {
-            left_parts.push(right_part);
-            parts = Some(left_parts);
+        if is_simple_word(&right_part) {
+            if let Some(mut left_parts) = split(&left_part, true, strict) {
+                left_parts.push(right_part);
+                parts = Some(left_parts);
+            } else if !strict {
+                parts = Some(vec![left_part, right_part]);
+            }
+        } else if !strict {
+            if let Some(exception_parts) = combined_exception_split(&left_part, &right_part) {
+                parts = Some(exception_parts);
+            } else if is_simple_word(&left_part) {
+                parts = Some(vec![left_part, right_part]);
+            }
         }
         i -= 1;
     }
@@ -422,6 +442,10 @@ fn disambiguate(parts: Vec<String>) -> Vec<String> {
 }
 
 pub fn tokenize(word: &str) -> Vec<String> {
+    tokenize_with_mode(word, true)
+}
+
+pub fn tokenize_with_mode(word: &str, strict: bool) -> Vec<String> {
     if word.chars().count() > MAX_WORD_LEN {
         return vec![word.to_string()];
     }
@@ -429,7 +453,7 @@ pub fn tokenize(word: &str) -> Vec<String> {
     if let Some(exc) = exception_split(trimmed) {
         return exc;
     }
-    let Some(parts) = split(trimmed, false) else {
+    let Some(parts) = split(trimmed, false, strict) else {
         return vec![trimmed.to_string()];
     };
     let mut parts = disambiguate(parts);
@@ -472,5 +496,15 @@ mod tests {
     fn exception_split_wins() {
         assert_eq!(tokenize("Pilotsendung"), vec!["Pilot", "sendung"]);
         assert_eq!(tokenize("Buchhaltungstrick"), vec!["Buchhaltungs", "trick"]);
+    }
+
+    #[test]
+    fn non_strict_mode_falls_back_to_partial_splits() {
+        assert_eq!(tokenize_with_mode("xyzhaus", false), vec!["xyz", "haus"]);
+        assert_eq!(tokenize_with_mode("xyzhaus", true), vec!["xyzhaus"]);
+        assert_eq!(
+            tokenize_with_mode("Buchhaltungstrick", false),
+            vec!["Buchhaltungs", "trick"]
+        );
     }
 }
