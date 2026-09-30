@@ -58,7 +58,6 @@ impl XmlRuleParser {
         let mut suggestion_parts: Vec<SuggestionPart> = Vec::new();
         let mut message_text = String::new();
         let mut in_example = false;
-        let mut rulegroup_antipattern_examples: Vec<String> = Vec::new();
         let mut example_type = XmlExampleType::Correct;
         let mut example_text = String::new();
         let mut current_text = String::new();
@@ -687,7 +686,6 @@ impl XmlRuleParser {
                             }
                         }
                         "rulegroup" => {
-                            rulegroup_antipattern_examples.clear();
                             if let Some(mut group) = current_group.take() {
                                 let group_antipatterns = group.antipatterns.clone();
                                 for rule in &mut group.rules {
@@ -705,13 +703,6 @@ impl XmlRuleParser {
                                     rule.rule_regexp = Some(rule_regexp);
                                 }
                                 rule_regexp_text.clear();
-                                for text in &rulegroup_antipattern_examples {
-                                    rule.examples.push(XmlExample {
-                                        example_type: XmlExampleType::Correct,
-                                        text: text.clone(),
-                                        corrections: Vec::new(),
-                                    });
-                                }
                                 if let Some(group) = &mut current_group {
                                     group.rules.push(rule);
                                 } else {
@@ -834,20 +825,21 @@ impl XmlRuleParser {
                         }
                         "example" => {
                             in_example = false;
-                            let final_type = example_type.clone();
-                            if let Some(rule) = &mut current_rule {
-                                let corrections = example_correction
-                                    .as_ref()
-                                    .map(|c| c.split('|').map(|s| s.trim().to_string()).collect())
-                                    .unwrap_or_default();
-                                rule.examples.push(XmlExample {
-                                    example_type: final_type,
-                                    text: example_text.trim().to_string(),
-                                    corrections,
-                                });
-                            } else if in_antipattern {
-                                rulegroup_antipattern_examples
-                                    .push(example_text.trim().to_string());
+                            if !in_antipattern {
+                                let final_type = example_type.clone();
+                                if let Some(rule) = &mut current_rule {
+                                    let corrections = example_correction
+                                        .as_ref()
+                                        .map(|c| {
+                                            c.split('|').map(|s| s.trim().to_string()).collect()
+                                        })
+                                        .unwrap_or_default();
+                                    rule.examples.push(XmlExample {
+                                        example_type: final_type,
+                                        text: example_text.trim().to_string(),
+                                        corrections,
+                                    });
+                                }
                             }
                             example_correction = None;
                         }
