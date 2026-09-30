@@ -754,6 +754,17 @@ impl Disambiguator for XmlDisambiguator {
             }
 
             for (non_ws_idx, action, matcher) in pending_actions {
+                if std::env::var("OG_TRACE_DISAMBIG").is_ok() {
+                    let token = sentence.non_whitespace_tokens()
+                        [non_ws_idx.min(sentence.non_whitespace_tokens().len().saturating_sub(1))];
+                    eprintln!(
+                        "DISAMBIG[{}] {:?} on '{}' -> {:?}",
+                        rule_idx,
+                        rule.id,
+                        token.token().token(),
+                        action
+                    );
+                }
                 apply_disambiguation(sentence.tokens_mut(), non_ws_idx, action, matcher);
             }
 
@@ -908,13 +919,21 @@ fn match_tokens_recursive(
             }
         } else {
             let skip = pt.skip as usize;
-            let next_token = token_idx + 1 + skip;
-
-            if let Some(mut result) =
-                match_tokens_recursive(pattern_tokens, tokens, next_token, pattern_idx + 1, false)
-            {
-                result.matched_positions.insert(0, token_idx);
-                return Some(result);
+            for dist in 0..=skip {
+                let next_token = token_idx + 1 + dist;
+                if next_token > tokens.len() {
+                    break;
+                }
+                if let Some(mut result) = match_tokens_recursive(
+                    pattern_tokens,
+                    tokens,
+                    next_token,
+                    pattern_idx + 1,
+                    false,
+                ) {
+                    result.matched_positions.insert(0, token_idx);
+                    return Some(result);
+                }
             }
         }
     }
@@ -2100,6 +2119,57 @@ mod tests {
             Err(e) => panic!("Failed to load disambiguation.xml: {}", e),
         }
     }
+    #[test]
+    fn skip_means_up_to_n_tokens_not_exactly_n() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<rules lang="de">
+    <rule id="SKIP_ANTI" name="antipattern with skip">
+        <antipattern>
+            <token skip="2">ich</token>
+            <token>geb</token>
+        </antipattern>
+        <pattern>
+            <marker>
+                <token>geb</token>
+            </marker>
+        </pattern>
+        <disambig action="remove" postag="VER:.+"/>
+    </rule>
+</rules>"#;
+
+        let disambiguator = XmlDisambiguator::from_xml(xml).unwrap();
+        let mut sentence = make_sentence(vec![("Ich", vec!["PRO"]), ("geb", vec!["VER:1", "SUB"])]);
+
+        let geb = sentence.tokens_mut()[1].token().clone();
+        sentence.tokens_mut()[1] = AnalyzedTokenReadings::new(geb).with_readings(vec![
+            AnalyzedToken::new("geb", 4, 7).with_pos_tags(vec!["VER:1".to_string()]),
+            AnalyzedToken::new("geb", 4, 7).with_pos_tags(vec!["SUB".to_string()]),
+        ]);
+        disambiguator.disambiguate(&mut sentence);
+        assert!(
+            sentence.tokens()[1].has_pos_tag("VER:1"),
+            "skip=2 antipattern must match at distance 1 and block the removal"
+        );
+
+        let mut far = make_sentence(vec![
+            ("Ich", vec!["PRO"]),
+            ("x", vec!["ADV"]),
+            ("y", vec!["ADV"]),
+            ("z", vec!["ADV"]),
+            ("geb", vec!["VER:1", "SUB"]),
+        ]);
+        let geb = far.tokens_mut()[4].token().clone();
+        far.tokens_mut()[4] = AnalyzedTokenReadings::new(geb).with_readings(vec![
+            AnalyzedToken::new("geb", 8, 11).with_pos_tags(vec!["VER:1".to_string()]),
+            AnalyzedToken::new("geb", 8, 11).with_pos_tags(vec!["SUB".to_string()]),
+        ]);
+        disambiguator.disambiguate(&mut far);
+        assert!(
+            !far.tokens()[3].has_pos_tag("VER:1"),
+            "beyond the skip range the antipattern must not block the removal"
+        );
+    }
+
     #[test]
     fn test_remove_postag_strips_matching_readings() {
         let xml = r#"<?xml version="1.0" encoding="utf-8"?>
