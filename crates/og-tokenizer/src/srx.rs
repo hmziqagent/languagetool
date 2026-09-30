@@ -245,13 +245,13 @@ impl SrxDocument {
         let mut break_rules: Vec<(CompiledRule, usize)> = Vec::new();
         let mut exception_rules: Vec<CompiledRule> = Vec::new();
         for rule in ordered_rules {
-            let Some(before) = compile(&rule.before) else {
-                continue;
-            };
-            let Some(after_anchored) = compile_anchored(&rule.after) else {
-                continue;
-            };
             if rule.breaks {
+                let Some(before) = compile(&rule.before) else {
+                    continue;
+                };
+                let Some(after_anchored) = compile_anchored(&rule.after) else {
+                    continue;
+                };
                 break_rules.push((
                     CompiledRule {
                         before,
@@ -262,6 +262,9 @@ impl SrxDocument {
             } else {
                 let Some(finitized_before) = fancy_regex::Regex::new(&finitize(&rule.before)).ok()
                 else {
+                    continue;
+                };
+                let Some(after_anchored) = compile_anchored(&rule.after) else {
                     continue;
                 };
                 exception_rules.push(CompiledRule {
@@ -290,10 +293,6 @@ fn pattern_matches(pattern: &str, language_code: &str) -> bool {
         .unwrap_or(false)
 }
 
-struct RuleMatches {
-    positions: Vec<usize>,
-}
-
 fn rule_match_positions(rule: &CompiledRule, text: &str) -> Vec<usize> {
     let mut positions = Vec::new();
     for m in rule.before.find_iter(text).flatten() {
@@ -303,6 +302,29 @@ fn rule_match_positions(rule: &CompiledRule, text: &str) -> Vec<usize> {
             positions.push(end);
         }
     }
+    positions
+}
+
+fn exception_match_positions(rule: &CompiledRule, text: &str, limit: usize) -> Vec<usize> {
+    let mut positions = Vec::new();
+    let mut search_from = 0usize;
+    while let Ok(Some(m)) = rule.before.find_from_pos(text, search_from) {
+        if m.start() > limit {
+            break;
+        }
+        let end = m.end();
+        if text.is_char_boundary(end) && rule.after_anchored.is_match(&text[end..]).unwrap_or(false)
+        {
+            positions.push(end);
+        }
+        let mut next = m.start() + 1;
+        while next < text.len() && !text.is_char_boundary(next) {
+            next += 1;
+        }
+        search_from = next;
+    }
+    positions.sort_unstable();
+    positions.dedup();
     positions
 }
 
@@ -328,32 +350,36 @@ impl SrxSentenceSplitter {
 
     pub fn segment_offsets(&self, text: &str) -> Vec<usize> {
         let prepared = self.document.prepared_for(&self.language_code);
-        let exception_matches: Vec<RuleMatches> = prepared
-            .exception_rules
-            .iter()
-            .map(|rule| RuleMatches {
-                positions: rule_match_positions(rule, text),
-            })
-            .collect();
 
-        let mut candidates: Vec<(usize, usize, usize)> = Vec::new();
-        for (index, (rule, exception_count)) in prepared.break_rules.iter().enumerate() {
-            for position in rule_match_positions(rule, text) {
-                candidates.push((position, index, *exception_count));
-            }
+        let mut candidates: Vec<(usize, usize)> = Vec::new();
+        for (index, (rule, _)) in prepared.break_rules.iter().enumerate() {
+            candidates.extend(
+                rule_match_positions(rule, text)
+                    .into_iter()
+                    .map(|position| (position, index)),
+            );
         }
         candidates.sort_unstable();
+        let limit = candidates.last().map_or(0, |&(position, _)| position);
 
+        let mut exception_positions: Vec<Option<Vec<usize>>> =
+            vec![None; prepared.exception_rules.len()];
         let mut breaks: Vec<usize> = Vec::new();
         let mut start = 0usize;
-        for (position, _rule_index, exception_count) in candidates {
-            if position <= start {
+        let mut examined: Option<usize> = None;
+        for &(position, rule_index) in &candidates {
+            if position <= start || examined == Some(position) {
                 continue;
             }
-            let blocked = exception_matches
-                .iter()
-                .take(exception_count)
-                .any(|m| m.positions.binary_search(&position).is_ok());
+            examined = Some(position);
+            let exception_count = prepared.break_rules[rule_index].1;
+            let blocked = (0..exception_count).any(|i| {
+                let cache = &mut exception_positions[i];
+                let positions = cache.get_or_insert_with(|| {
+                    exception_match_positions(&prepared.exception_rules[i], text, limit)
+                });
+                positions.binary_search(&position).is_ok()
+            });
             if !blocked {
                 breaks.push(position);
                 start = position;
