@@ -524,10 +524,10 @@ impl LanguageEngine {
             crate::de::WordCondition::UnnecessaryPhrases,
         )));
 
+        engine.add_rule(Arc::new(crate::de::german_double_punctuation_rule()));
         engine.add_rule(Arc::new(
-            og_rules::native_rules::DoublePunctuationRule::new(),
+            og_rules::native_rules::CommaWhitespaceRule::new().with_domain_after_dot_exception(),
         ));
-        engine.add_rule(Arc::new(og_rules::native_rules::CommaWhitespaceRule::new()));
         engine.add_text_level_rule(Arc::new(
             og_rules::text_level_rules::MultipleWhitespaceRule::new(),
         ));

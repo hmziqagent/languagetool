@@ -91,15 +91,51 @@ impl Rule for WordRepeatRule {
 
 pub struct DoublePunctuationRule {
     id: String,
+    description: String,
     category: Category,
+    dot_message: String,
+    dot_short_message: String,
+    comma_message: String,
+    comma_short_message: String,
+    comma_character: char,
 }
 
 impl DoublePunctuationRule {
     pub fn new() -> Self {
         Self {
             id: "DOUBLE_PUNCTUATION".to_string(),
+            description: "Double punctuation".to_string(),
             category: Category::new("PUNCTUATION", "Punctuation"),
+            dot_message: "Two consecutive dots".to_string(),
+            dot_short_message: "Two consecutive dots".to_string(),
+            comma_message: "Two consecutive commas".to_string(),
+            comma_short_message: "Two consecutive commas".to_string(),
+            comma_character: ',',
         }
+    }
+
+    pub fn with_id(mut self, id: impl Into<String>) -> Self {
+        self.id = id.into();
+        self
+    }
+
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = description.into();
+        self
+    }
+
+    pub fn with_messages(
+        mut self,
+        dot: impl Into<String>,
+        dot_short: impl Into<String>,
+        comma: impl Into<String>,
+        comma_short: impl Into<String>,
+    ) -> Self {
+        self.dot_message = dot.into();
+        self.dot_short_message = dot_short.into();
+        self.comma_message = comma.into();
+        self.comma_short_message = comma_short.into();
+        self
     }
 }
 
@@ -115,7 +151,7 @@ impl Rule for DoublePunctuationRule {
     }
 
     fn description(&self) -> &str {
-        "Double punctuation"
+        &self.description
     }
 
     fn category(&self) -> Category {
@@ -123,52 +159,114 @@ impl Rule for DoublePunctuationRule {
     }
 
     fn issue_type(&self) -> IssueType {
-        IssueType::Punctuation
+        IssueType::Typographical
     }
 
     fn match_sentence(&self, sentence: &AnalyzedSentence) -> Vec<RuleMatch> {
         let mut matches = Vec::new();
         let tokens = sentence.non_whitespace_tokens();
+        let comma = self.comma_character.to_string();
 
-        let punct_chars = ['.', '!', ',', ';', ':', '?'];
-
+        let mut start_pos = 0usize;
+        let mut dot_count = 0u32;
+        let mut comma_count = 0u32;
         for i in 1..tokens.len() {
-            let prev = tokens[i - 1];
-            let curr = tokens[i];
+            let token = tokens[i].token().token();
+            let next_token = tokens.get(i + 1).map(|t| t.token().token());
+            let prev_prev_token = if i > 1 {
+                tokens.get(i - 2).map(|t| t.token().token())
+            } else {
+                None
+            };
+            if token == "." {
+                dot_count += 1;
+                comma_count = 0;
+                start_pos = tokens[i].token().start();
+            } else if token == comma {
+                comma_count += 1;
+                dot_count = 0;
+                start_pos = tokens[i].token().start();
+            }
 
-            let prev_text = prev.token().token();
-            let curr_text = curr.token().token();
+            if dot_count == 2
+                && next_token != Some(".")
+                && next_token != Some("\u{2026}")
+                && token != "/"
+                && next_token != Some("/")
+                && token != "\\"
+                && next_token != Some("\\")
+                && prev_prev_token != Some("?")
+                && prev_prev_token != Some("!")
+                && prev_prev_token != Some("\u{2026}")
+                && prev_prev_token != Some(".")
+            {
+                let from_pos = start_pos.saturating_sub(1);
+                let to_pos = start_pos + 1;
+                let context_start = from_pos.saturating_sub(20);
+                let context_end = std::cmp::min(to_pos + 20, sentence.text().len());
+                let context_text = sentence
+                    .text()
+                    .get(context_start..context_end)
+                    .unwrap_or("")
+                    .to_string();
+                let rule = RuleMatchRule::new(&self.id, self.description())
+                    .with_category(self.category.clone())
+                    .with_issue_type(IssueType::Typographical.as_str());
+                matches.push(
+                    RuleMatch::new(
+                        self.dot_message.clone(),
+                        from_pos,
+                        to_pos - from_pos,
+                        rule,
+                        RuleMatchContext::new(
+                            context_text,
+                            context_start,
+                            context_end - context_start,
+                        ),
+                    )
+                    .with_short_message(self.dot_short_message.clone())
+                    .with_sentence(sentence.text().to_string())
+                    .with_replacements(vec![
+                        SuggestedReplacement::new("."),
+                        SuggestedReplacement::new("\u{2026}"),
+                    ]),
+                );
+                dot_count = 0;
+            } else if comma_count == 2 && next_token != Some(comma.as_str()) {
+                let from_pos = start_pos.saturating_sub(1);
+                let to_pos = start_pos + 1;
+                let context_start = from_pos.saturating_sub(20);
+                let context_end = std::cmp::min(to_pos + 20, sentence.text().len());
+                let context_text = sentence
+                    .text()
+                    .get(context_start..context_end)
+                    .unwrap_or("")
+                    .to_string();
+                let rule = RuleMatchRule::new(&self.id, self.description())
+                    .with_category(self.category.clone())
+                    .with_issue_type(IssueType::Typographical.as_str());
+                matches.push(
+                    RuleMatch::new(
+                        self.comma_message.clone(),
+                        from_pos,
+                        to_pos - from_pos,
+                        rule,
+                        RuleMatchContext::new(
+                            context_text,
+                            context_start,
+                            context_end - context_start,
+                        ),
+                    )
+                    .with_short_message(self.comma_short_message.clone())
+                    .with_sentence(sentence.text().to_string())
+                    .with_replacements(vec![SuggestedReplacement::new(comma.as_str())]),
+                );
+                comma_count = 0;
+            }
 
-            if prev_text.len() == 1 && curr_text.len() == 1 {
-                let prev_char = prev_text.chars().next().unwrap();
-                let curr_char = curr_text.chars().next().unwrap();
-
-                if punct_chars.contains(&prev_char) && prev_char == curr_char {
-                    let start = curr.token().start();
-                    let end = curr.token().end();
-                    let context_start = start.saturating_sub(20);
-                    let context_end = std::cmp::min(end + 20, sentence.text().len());
-                    let context_text = sentence.text()[context_start..context_end].to_string();
-
-                    let rule = RuleMatchRule::new(&self.id, self.description())
-                        .with_category(self.category.clone())
-                        .with_issue_type(IssueType::Punctuation.as_str());
-
-                    matches.push(
-                        RuleMatch::new(
-                            format!("Double punctuation: '{}'", curr_text),
-                            start,
-                            end - start,
-                            rule,
-                            RuleMatchContext::new(
-                                context_text,
-                                context_start,
-                                context_end - context_start,
-                            ),
-                        )
-                        .with_sentence(sentence.text().to_string()),
-                    );
-                }
+            if token != "." && token != comma {
+                dot_count = 0;
+                comma_count = 0;
             }
         }
 
@@ -264,6 +362,7 @@ impl Rule for UppercaseSentenceStartRule {
 pub struct CommaWhitespaceRule {
     id: String,
     category: Category,
+    domain_after_dot_exception: bool,
 }
 
 impl CommaWhitespaceRule {
@@ -271,7 +370,26 @@ impl CommaWhitespaceRule {
         Self {
             id: "COMMA_PARENTHESIS_WHITESPACE".to_string(),
             category: Category::new("TYPOGRAPHY", "Typography"),
+            domain_after_dot_exception: false,
         }
+    }
+
+    pub fn with_domain_after_dot_exception(mut self) -> Self {
+        self.domain_after_dot_exception = true;
+        self
+    }
+
+    fn is_exception(&self, tokens: &[og_core::AnalyzedTokenReadings], i: usize) -> bool {
+        if !self.domain_after_dot_exception {
+            return false;
+        }
+        static DOMAINS: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+            regex::Regex::new("^[a-z]{2,10}-Domains?$").expect("valid DOMAINS pattern")
+        });
+        tokens[i].token().token() == "."
+            && tokens
+                .get(i + 1)
+                .is_some_and(|t| DOMAINS.is_match(t.token().token()))
     }
 }
 
@@ -360,7 +478,10 @@ impl Rule for CommaWhitespaceRule {
                 }
             }
 
-            if let Some(m) = msg {
+            if let Some(m) = msg
+                && !self.is_exception(tokens, i)
+                && !token_reading.is_immunized()
+            {
                 let from_pos = if i >= 1 {
                     tokens[i - 1].token().start()
                 } else {
@@ -573,7 +694,10 @@ mod tests {
         let rule = DoublePunctuationRule::new();
         let sentence = make_punct_sentence("Hello!!");
         let matches = rule.match_sentence(&sentence);
-        assert_eq!(matches.len(), 1);
+        assert!(
+            matches.is_empty(),
+            "Java flags only dots and commas, not '!!'"
+        );
     }
 
     #[test]
@@ -581,10 +705,7 @@ mod tests {
         let rule = DoublePunctuationRule::new();
         let sentence = make_punct_sentence("Hello...");
         let matches = rule.match_sentence(&sentence);
-        assert!(
-            !matches.is_empty(),
-            "Triple period triggers at least one match"
-        );
+        assert!(matches.is_empty(), "Java flags '..' but never '...'");
     }
 
     #[test]
