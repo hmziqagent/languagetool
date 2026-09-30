@@ -576,8 +576,12 @@ impl LanguageEngine {
                 crate::upper_case_ngram::GermanUpperCaseNgramRule::new(model.clone()),
             ));
             engine.add_rule(Arc::new(
-                crate::confusion_probability::ConfusionRule::new_german(model),
+                crate::confusion_probability::ConfusionRule::new_german(model.clone()),
             ));
+            engine.add_rule(Arc::new(crate::de::ProhibitedCompoundRule::new(
+                model,
+                engine.spelling_support.clone(),
+            )));
         }
 
         engine.rebuild_checker();

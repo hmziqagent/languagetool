@@ -264,9 +264,10 @@ impl DiskLanguageModel {
             return hit.clone();
         }
         let loaded = find_ngram_dir().and_then(|root| {
-            let dir = root.join(lang_code);
-            Self::from_dir(&dir)
-                .or_else(|| Self::from_dir(&root))
+            let candidates = [root.join("extracted").join(lang_code), root.join(lang_code)];
+            candidates
+                .iter()
+                .find_map(|dir| Self::from_dir(dir))
                 .map(Arc::new)
         });
         guard.insert(lang_code.to_string(), loaded.clone());
@@ -365,6 +366,21 @@ mod tests {
         assert_eq!(model.get_total_token_count(), 2057002144632);
         let prob = model.get_probability(&["der", "Haus"]);
         assert!(prob.prob > 0.0 && prob.prob < 1.0);
+    }
+
+    #[test]
+    fn shared_model_resolves_extracted_dirs_per_language() {
+        for lang in ["en", "de"] {
+            let dir = PathBuf::from("/home/agent/opengrammar-rs/ngram-data/extracted").join(lang);
+            if !dir.join("1grams.tsv").exists() {
+                eprintln!("Skipping {lang}: extracted ngram data not present");
+                continue;
+            }
+            let model = DiskLanguageModel::shared_for_language(lang).unwrap_or_else(|| {
+                panic!("shared model for {lang} must resolve the extracted dir")
+            });
+            assert!(model.get_total_token_count() > 0);
+        }
     }
 
     #[test]

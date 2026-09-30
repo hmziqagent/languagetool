@@ -262,6 +262,32 @@ fn confusion_data(short_code: &str, files: &[&str]) -> String {
     data
 }
 
+pub(crate) fn confusion_term_pairs(
+    short_code: &str,
+    files: &[&str],
+) -> Vec<(String, Option<String>, String, Option<String>)> {
+    let map = load_confusion_pairs(&confusion_data(short_code, files));
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for pairs in map.values() {
+        for pair in pairs {
+            if pair.terms.len() != 2 {
+                continue;
+            }
+            let key = (pair.terms[0].string.clone(), pair.terms[1].string.clone());
+            if seen.insert(key) {
+                out.push((
+                    pair.terms[0].string.clone(),
+                    pair.terms[0].description.clone(),
+                    pair.terms[1].string.clone(),
+                    pair.terms[1].description.clone(),
+                ));
+            }
+        }
+    }
+    out
+}
+
 impl Rule for ConfusionRule {
     fn id(&self) -> &str {
         &self.id_prefix
