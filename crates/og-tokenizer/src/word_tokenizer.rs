@@ -1,35 +1,62 @@
 use crate::WordTokenizer;
 use og_core::Token;
 
+enum HyphenMode {
+    InRuns,
+    InnerOnly,
+    Delimiter,
+}
+
 pub struct DefaultWordTokenizer {
     english_contractions: bool,
-    glue_hyphens: bool,
+    hyphens: HyphenMode,
 }
 
 impl DefaultWordTokenizer {
     pub fn new() -> Self {
         Self {
             english_contractions: true,
-            glue_hyphens: true,
+            hyphens: HyphenMode::InnerOnly,
         }
     }
 
     pub fn new_generic() -> Self {
         Self {
             english_contractions: false,
-            glue_hyphens: true,
+            hyphens: HyphenMode::InRuns,
         }
     }
 
     pub fn new_splitting_hyphen() -> Self {
         Self {
             english_contractions: false,
-            glue_hyphens: false,
+            hyphens: HyphenMode::Delimiter,
         }
     }
 
     fn is_word_char(&self, c: char) -> bool {
         c.is_alphanumeric() || c == '_' || c == '\'' || c == '\u{2019}'
+    }
+
+    fn starts_run(&self, c: char) -> bool {
+        self.is_word_char(c) || (matches!(self.hyphens, HyphenMode::InRuns) && c == '-')
+    }
+
+    fn continues_run(&self, chars: &[char], i: usize, started: bool) -> bool {
+        let c = chars[i];
+        if self.is_word_char(c) {
+            return true;
+        }
+        if c != '-' {
+            return false;
+        }
+        match self.hyphens {
+            HyphenMode::InRuns => true,
+            HyphenMode::InnerOnly => {
+                started && i + 1 < chars.len() && self.is_word_char(chars[i + 1])
+            }
+            HyphenMode::Delimiter => false,
+        }
     }
 
     fn try_consume_url_or_email(
@@ -311,17 +338,10 @@ impl WordTokenizer for DefaultWordTokenizer {
                     i += 1;
                 }
                 byte_offset = url_end;
-            } else if self.is_word_char(c) {
+            } else if self.starts_run(c) {
                 let start_byte = byte_offset;
                 let mut end_byte = byte_offset;
-                while i < chars.len()
-                    && (self.is_word_char(chars[i])
-                        || (self.glue_hyphens
-                            && chars[i] == '-'
-                            && end_byte > start_byte
-                            && i + 1 < chars.len()
-                            && self.is_word_char(chars[i + 1])))
-                {
+                while i < chars.len() && self.continues_run(&chars, i, end_byte > start_byte) {
                     end_byte += chars[i].len_utf8();
                     i += 1;
                 }
@@ -1233,5 +1253,26 @@ mod tests {
             vec!["25", "-", "03", "-", "2022"]
         );
         assert_eq!(token_texts(&tz, "قال،أحمد؟"), vec!["قال", "،", "أحمد", "؟"]);
+    }
+
+    #[test]
+    fn test_hyphen_attaches_to_word_runs_at_boundaries() {
+        let tz = DefaultWordTokenizer::new_generic();
+        assert_eq!(token_texts(&tz, "Кое -кто"), vec!["Кое", " ", "-кто"]);
+        assert_eq!(token_texts(&tz, "Кое- кто"), vec!["Кое-", " ", "кто"]);
+        assert_eq!(token_texts(&tz, "well- known"), vec!["well-", " ", "known"]);
+        assert_eq!(token_texts(&tz, " - "), vec![" ", "-", " "]);
+        assert_eq!(token_texts(&tz, "a--b"), vec!["a--b"]);
+    }
+
+    #[test]
+    fn test_english_hyphens_split_off_at_boundaries_like_words_to_add() {
+        let tz = DefaultWordTokenizer::new();
+        assert_eq!(token_texts(&tz, "break- up"), vec!["break", "-", " ", "up"]);
+        assert_eq!(
+            token_texts(&tz, "This is great -- ok"),
+            vec!["This", " ", "is", " ", "great", " ", "-", "-", " ", "ok"]
+        );
+        assert_eq!(token_texts(&tz, "well-known"), vec!["well-known"]);
     }
 }
