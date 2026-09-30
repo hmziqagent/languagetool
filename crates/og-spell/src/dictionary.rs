@@ -88,16 +88,16 @@ impl Dictionary {
     }
 
     pub fn contains(&self, word: &str) -> bool {
-        if self.words.contains(word) {
+        let lowered = word.to_lowercase();
+        if self.words.contains(word) || self.words.contains(&lowered) {
             return true;
         }
-        let lowered = word.to_lowercase();
-        if lowered != word && self.lowercased.contains(&lowered) {
+        if self.lowercased.contains(&lowered) {
             return true;
         }
         self.shared
             .as_ref()
-            .is_some_and(|view| view.contains(word) || (lowered != word && view.contains(&lowered)))
+            .is_some_and(|view| view.contains(word) || view.contains(&lowered))
     }
 
     pub fn contains_exact(&self, word: &str) -> bool {
