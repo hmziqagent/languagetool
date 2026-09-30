@@ -126,6 +126,8 @@ pub struct XmlPatternToken {
     #[serde(default)]
     pub case_sensitive: bool,
     #[serde(default)]
+    pub case_sensitive_set: bool,
+    #[serde(default)]
     pub inflected: bool,
     #[serde(default)]
     pub min: Option<i32>,
@@ -157,6 +159,8 @@ pub struct XmlException {
     pub negate_pos: bool,
     pub inflected: bool,
     pub case_sensitive: bool,
+    #[serde(default)]
+    pub case_sensitive_set: bool,
     pub scope: Option<String>,
     #[serde(default)]
     pub space_before: Option<bool>,

@@ -1739,3 +1739,125 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 }
+
+#[cfg(test)]
+mod de_failure_debug {
+    use super::*;
+
+    fn dump(text: &str) {
+        let engine = LanguageEngine::shared_for_code("de").expect("german engine");
+        let wt = WordTokenizerBridge::for_code("de");
+        let mut sentence = AnalyzedSentence::new(text, 0, text.len());
+        let mut tokens = wt.tokenize(text, 0);
+        let start_token = AnalyzedTokenReadings::new(
+            AnalyzedToken::new("<S>", 0, 0).with_pos_tags(vec!["SENT_START".to_string()]),
+        );
+        tokens.insert(0, start_token);
+        sentence.set_tokens(tokens);
+        if let Some(tagger) = &engine.tagger {
+            tagger.tag(&mut sentence.tokens_mut());
+        }
+        {
+            let tokens = sentence.tokens_mut();
+            for i in (0..tokens.len()).rev() {
+                if !tokens[i].is_whitespace() && !tokens[i].has_pos_tag("SENT_START") {
+                    tokens[i].add_sent_end();
+                    break;
+                }
+            }
+        }
+        if let Some(dis) = &engine.disambiguator {
+            dis.disambiguate(&mut sentence);
+        }
+        if let Some(chunker) = &engine.post_chunker {
+            chunker.add_chunk_tags(&mut sentence);
+        }
+        println!("=== {text}");
+        for atr in sentence.tokens() {
+            if atr.is_whitespace() {
+                continue;
+            }
+            let tags: Vec<String> = atr
+                .readings()
+                .iter()
+                .map(|r| {
+                    format!(
+                        "{}:{}",
+                        r.lemma().unwrap_or("?"),
+                        r.pos_tags().join("|")
+                    )
+                })
+                .collect();
+            println!("  {:?} => {}", atr.token().token(), tags.join(" ; "));
+        }
+    }
+
+    fn matches_for(rule_id: &str, text: &str) -> usize {
+        let engine = LanguageEngine::shared_for_code("de").expect("german engine");
+        let mut request = og_core::CheckRequest::new(text, og_core::Language::German);
+        request.enabled_rules = vec![rule_id.to_string()];
+        engine.check_with_request(&request).matches.len()
+    }
+
+    fn synthetic_matches(xml: &str, text: &str) -> usize {
+        let compiler = XmlCompiler::new();
+        let rule_set = compiler.compile_file(xml).expect("compile");
+        let engine = PatternRuleEngine::new();
+        let wt = WordTokenizerBridge::for_code("de");
+        let de = LanguageEngine::shared_for_code("de").expect("de");
+        let mut sentence = AnalyzedSentence::new(text, 0, text.len());
+        let mut tokens = wt.tokenize(text, 0);
+        tokens.insert(
+            0,
+            AnalyzedTokenReadings::new(
+                AnalyzedToken::new("<S>", 0, 0).with_pos_tags(vec!["SENT_START".to_string()]),
+            ),
+        );
+        sentence.set_tokens(tokens);
+        if let Some(tagger) = &de.tagger {
+            tagger.tag(&mut sentence.tokens_mut());
+        }
+        {
+            let toks = sentence.tokens_mut();
+            for i in (0..toks.len()).rev() {
+                if !toks[i].is_whitespace() && !toks[i].has_pos_tag("SENT_START") {
+                    toks[i].add_sent_end();
+                    break;
+                }
+            }
+        }
+        if let Some(dis) = &de.disambiguator {
+            dis.disambiguate(&mut sentence);
+        }
+        rule_set
+            .rules
+            .iter()
+            .map(|c| engine.match_rule(c, &sentence).len())
+            .sum()
+    }
+
+    #[test]
+    fn print_rule_match_counts() {
+        for (rule, text) in [
+            ("PRAEP_GEN", "Trotz dem Wort image beinhalten sie nur Musik und/oder Textpassagen"),
+            ("PRAEP_GEN", "Bezüglich deinen beiden Bestellungen habe ich noch keine News."),
+            ("PRAEP_GEN", "Bezüglich deinen getätigten Bestellungen habe ich noch keine News."),
+        ] {
+            println!("{rule} on '{text}' => {}", matches_for(rule, text));
+        }
+    }
+
+    #[test]
+    fn print_failure_readings() {
+        for text in [
+            "Trotz dem Wort image beinhalten sie nur Musik und/oder Textpassagen",
+            "Bezüglich deinen beiden Bestellungen habe ich noch keine News.",
+            "Kannst du ihn bitte rüber lassen?",
+            "Er hat ihr hinterher spioniert.",
+            "Zum angriff!",
+            "Nichts großes geschah.",
+        ] {
+            dump(text);
+        }
+    }
+}

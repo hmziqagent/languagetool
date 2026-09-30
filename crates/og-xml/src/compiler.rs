@@ -65,28 +65,6 @@ impl XmlCompiler {
         (h % shards as u64) as usize
     }
 
-    fn make_token_case_sensitive(ct: &mut CompiledPatternToken) {
-        ct.case_sensitive = true;
-        for exc in ct.exceptions.iter_mut() {
-            if let Some(re) = exc.compiled_regexp.as_ref() {
-                let raw = re.as_str();
-                if let Some(stripped) = raw.strip_prefix("(?i)") {
-                    if let Ok(cs_re) = regex::Regex::new(stripped) {
-                        exc.compiled_regexp = Some(cs_re);
-                    }
-                }
-            }
-            if let Some(re) = exc.compiled_regexp_fancy.as_ref() {
-                let raw = re.as_str();
-                if let Some(stripped) = raw.strip_prefix("(?i)") {
-                    if let Ok(f) = fancy_regex::Regex::new(stripped) {
-                        exc.compiled_regexp_fancy = Some(f);
-                    }
-                }
-            }
-        }
-    }
-
     fn anchor_regex(pattern: &str) -> String {
         let trimmed = pattern.trim();
         if trimmed.starts_with('^') && trimmed.ends_with('$') {
@@ -194,47 +172,25 @@ impl XmlCompiler {
                         tokens: ap
                             .tokens
                             .iter()
-                            .map(|t| {
-                                let mut ct = self.compile_token(t);
-                                if pat_cs {
-                                    Self::make_token_case_sensitive(&mut ct);
-                                }
-                                ct
-                            })
+                            .map(|t| self.compile_token_with_default(t, pat_cs))
                             .collect(),
                         elements: ap
                             .elements
                             .iter()
                             .map(|e| match e {
-                                XmlPatternElement::Token(t) => {
-                                    let mut ct = self.compile_token(t);
-                                    if pat_cs {
-                                        Self::make_token_case_sensitive(&mut ct);
-                                    }
-                                    CompiledPatternElement::Token(Box::new(ct))
-                                }
+                                XmlPatternElement::Token(t) => CompiledPatternElement::Token(
+                                    Box::new(self.compile_token_with_default(t, pat_cs)),
+                                ),
                                 XmlPatternElement::OrGroup(g) => CompiledPatternElement::OrGroup(
                                     g.alternatives
                                         .iter()
-                                        .map(|t| {
-                                            let mut ct = self.compile_token(t);
-                                            if pat_cs {
-                                                Self::make_token_case_sensitive(&mut ct);
-                                            }
-                                            ct
-                                        })
+                                        .map(|t| self.compile_token_with_default(t, pat_cs))
                                         .collect(),
                                 ),
                                 XmlPatternElement::AndGroup(g) => CompiledPatternElement::AndGroup(
                                     g.constraints
                                         .iter()
-                                        .map(|t| {
-                                            let mut ct = self.compile_token(t);
-                                            if pat_cs {
-                                                Self::make_token_case_sensitive(&mut ct);
-                                            }
-                                            ct
-                                        })
+                                        .map(|t| self.compile_token_with_default(t, pat_cs))
                                         .collect(),
                                 ),
                             })
@@ -261,48 +217,26 @@ impl XmlCompiler {
                         .pattern
                         .tokens
                         .iter()
-                        .map(|t| {
-                            let mut ct = self.compile_token(t);
-                            if pat_cs {
-                                Self::make_token_case_sensitive(&mut ct);
-                            }
-                            ct
-                        })
+                        .map(|t| self.compile_token_with_default(t, pat_cs))
                         .collect(),
                     elements: rule
                         .pattern
                         .elements
                         .iter()
                         .map(|e| match e {
-                            XmlPatternElement::Token(t) => {
-                                let mut ct = self.compile_token(t);
-                                if pat_cs {
-                                    Self::make_token_case_sensitive(&mut ct);
-                                }
-                                CompiledPatternElement::Token(Box::new(ct))
-                            }
+                            XmlPatternElement::Token(t) => CompiledPatternElement::Token(Box::new(
+                                self.compile_token_with_default(t, pat_cs),
+                            )),
                             XmlPatternElement::OrGroup(g) => CompiledPatternElement::OrGroup(
                                 g.alternatives
                                     .iter()
-                                    .map(|t| {
-                                        let mut ct = self.compile_token(t);
-                                        if pat_cs {
-                                            Self::make_token_case_sensitive(&mut ct);
-                                        }
-                                        ct
-                                    })
+                                    .map(|t| self.compile_token_with_default(t, pat_cs))
                                     .collect(),
                             ),
                             XmlPatternElement::AndGroup(g) => CompiledPatternElement::AndGroup(
                                 g.constraints
                                     .iter()
-                                    .map(|t| {
-                                        let mut ct = self.compile_token(t);
-                                        if pat_cs {
-                                            Self::make_token_case_sensitive(&mut ct);
-                                        }
-                                        ct
-                                    })
+                                    .map(|t| self.compile_token_with_default(t, pat_cs))
                                     .collect(),
                             ),
                         })
@@ -374,6 +308,25 @@ impl XmlCompiler {
     }
 
     pub fn compile_token(&self, token: &XmlPatternToken) -> CompiledPatternToken {
+        self.compile_token_with_default(token, false)
+    }
+
+    fn compile_token_with_default(
+        &self,
+        token: &XmlPatternToken,
+        pattern_case_sensitive: bool,
+    ) -> CompiledPatternToken {
+        let effective_case_sensitive = if token.case_sensitive_set {
+            token.case_sensitive
+        } else {
+            pattern_case_sensitive
+        };
+        let resolved: XmlPatternToken = {
+            let mut t = token.clone();
+            t.case_sensitive = effective_case_sensitive;
+            t
+        };
+        let token = &resolved;
         // Java's String.matches() requires full-string match, so anchor with ^(?:...)$
         let raw_pattern = if token.regexp.as_deref() == Some("yes") {
             token.text.clone()
@@ -434,7 +387,7 @@ impl XmlCompiler {
             exceptions: token
                 .exceptions
                 .iter()
-                .map(|e| self.compile_exception(e))
+                .map(|e| self.compile_exception_with_inherited(e, effective_case_sensitive))
                 .collect(),
             space_before: token.space_before.clone(),
             chunk: token.chunk.clone(),
@@ -466,7 +419,16 @@ impl XmlCompiler {
         }
     }
 
-    fn compile_exception(&self, exc: &XmlException) -> CompiledException {
+    fn compile_exception_with_inherited(
+        &self,
+        exc: &XmlException,
+        inherited_case_sensitive: bool,
+    ) -> CompiledException {
+        let effective_case_sensitive = if exc.case_sensitive_set {
+            exc.case_sensitive
+        } else {
+            inherited_case_sensitive
+        };
         let exception_regex_source = if exc.regexp.as_deref() == Some("yes") {
             exc.text.as_deref()
         } else {
@@ -474,7 +436,7 @@ impl XmlCompiler {
         };
         let compiled_re = exception_regex_source.and_then(|t| {
             let anchored = Self::anchor_regex(t);
-            let final_pattern = if exc.case_sensitive || is_property_sequence(t) {
+            let final_pattern = if effective_case_sensitive || is_property_sequence(t) {
                 anchored
             } else {
                 format!("(?i){anchored}")
@@ -506,7 +468,7 @@ impl XmlCompiler {
             negate: exc.negate,
             negate_pos: exc.negate_pos,
             inflected: exc.inflected,
-            case_sensitive: exc.case_sensitive,
+            case_sensitive: effective_case_sensitive,
             scope: exc.scope.clone(),
             space_before: exc.space_before,
         }

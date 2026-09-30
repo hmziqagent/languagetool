@@ -212,7 +212,10 @@ impl XmlRuleParser {
                                     "negate" => exc.negate = val == "yes",
                                     "negate_pos" => exc.negate_pos = val == "yes",
                                     "inflected" => exc.inflected = val == "yes",
-                                    "case_sensitive" => exc.case_sensitive = val == "yes",
+                                    "case_sensitive" => {
+                                        exc.case_sensitive = val == "yes";
+                                        exc.case_sensitive_set = true;
+                                    }
                                     "scope" => exc.scope = Some(val),
                                     "spacebefore" => {
                                         if val != "ignore" {
@@ -254,7 +257,10 @@ impl XmlRuleParser {
                                     "postag_regexp" => token.postag_regexp = Some(val),
                                     "negate" => token.negate = val == "yes",
                                     "negate_pos" => token.negate_pos = val == "yes",
-                                    "case_sensitive" => token.case_sensitive = val == "yes",
+                                    "case_sensitive" => {
+                                        token.case_sensitive = val == "yes";
+                                        token.case_sensitive_set = true;
+                                    }
                                     "inflected" => token.inflected = val == "yes",
                                     "min" => token.min = val.parse().ok(),
                                     "max" => token.max = val.parse().ok(),
@@ -474,7 +480,10 @@ impl XmlRuleParser {
                                     "regexp" => token.regexp = Some(val),
                                     "negate" => token.negate = val == "yes",
                                     "negate_pos" => token.negate_pos = val == "yes",
-                                    "case_sensitive" => token.case_sensitive = val == "yes",
+                                    "case_sensitive" => {
+                                        token.case_sensitive = val == "yes";
+                                        token.case_sensitive_set = true;
+                                    }
                                     "inflected" => token.inflected = val == "yes",
                                     "postag" => token.postag = Some(val),
                                     "postag_regexp" => token.postag_regexp = Some(val),
@@ -542,7 +551,10 @@ impl XmlRuleParser {
                                     "negate" => exc.negate = val == "yes",
                                     "negate_pos" => exc.negate_pos = val == "yes",
                                     "inflected" => exc.inflected = val == "yes",
-                                    "case_sensitive" => exc.case_sensitive = val == "yes",
+                                    "case_sensitive" => {
+                                        exc.case_sensitive = val == "yes";
+                                        exc.case_sensitive_set = true;
+                                    }
                                     "scope" => exc.scope = Some(val),
                                     "spacebefore" => {
                                         if val != "ignore" {
