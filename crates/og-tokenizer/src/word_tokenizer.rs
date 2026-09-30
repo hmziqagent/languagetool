@@ -3,18 +3,28 @@ use og_core::Token;
 
 pub struct DefaultWordTokenizer {
     english_contractions: bool,
+    glue_hyphens: bool,
 }
 
 impl DefaultWordTokenizer {
     pub fn new() -> Self {
         Self {
             english_contractions: true,
+            glue_hyphens: true,
         }
     }
 
     pub fn new_generic() -> Self {
         Self {
             english_contractions: false,
+            glue_hyphens: true,
+        }
+    }
+
+    pub fn new_splitting_hyphen() -> Self {
+        Self {
+            english_contractions: false,
+            glue_hyphens: false,
         }
     }
 
@@ -306,7 +316,8 @@ impl WordTokenizer for DefaultWordTokenizer {
                 let mut end_byte = byte_offset;
                 while i < chars.len()
                     && (self.is_word_char(chars[i])
-                        || (chars[i] == '-'
+                        || (self.glue_hyphens
+                            && chars[i] == '-'
                             && end_byte > start_byte
                             && i + 1 < chars.len()
                             && self.is_word_char(chars[i + 1])))
@@ -1212,5 +1223,15 @@ mod tests {
         let tz = DefaultWordTokenizer::new();
         let tokens = tz.tokenize("I like cats and dogs");
         assert!(tokens.iter().all(|t| !t.text().contains('@')));
+    }
+
+    #[test]
+    fn test_splitting_hyphen_cuts_joined_numbers_and_arabic_punctuation() {
+        let tz = DefaultWordTokenizer::new_splitting_hyphen();
+        assert_eq!(
+            token_texts(&tz, "25-03-2022"),
+            vec!["25", "-", "03", "-", "2022"]
+        );
+        assert_eq!(token_texts(&tz, "قال،أحمد؟"), vec!["قال", "،", "أحمد", "؟"]);
     }
 }

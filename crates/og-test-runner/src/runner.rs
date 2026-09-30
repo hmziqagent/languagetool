@@ -33,6 +33,7 @@ enum TestWordTokenizer {
     Default(bool),
     German,
     French(Arc<og_tokenizer::FrenchWordTokenizer>),
+    Arabic,
 }
 
 impl WordTokenizer for TestWordTokenizer {
@@ -48,6 +49,9 @@ impl WordTokenizer for TestWordTokenizer {
             }
             TestWordTokenizer::German => og_tokenizer::GermanWordTokenizer::new().tokenize(text),
             TestWordTokenizer::French(fr) => fr.tokenize(text),
+            TestWordTokenizer::Arabic => {
+                og_tokenizer::DefaultWordTokenizer::new_splitting_hyphen().tokenize(text)
+            }
         };
         tokens
             .into_iter()
@@ -103,6 +107,7 @@ pub struct TestRunner {
     tagger: AnyTagger,
     disambiguator: Option<Arc<dyn Disambiguator>>,
     french_tokenizer: Option<Arc<og_tokenizer::FrenchWordTokenizer>>,
+    sentence_splitter: Option<og_tokenizer::srx::SrxSentenceSplitter>,
 }
 
 impl TestRunner {
@@ -326,12 +331,19 @@ impl TestRunner {
             )))
         });
 
+        let sentence_splitter = if matches!(code, "gl" | "eo" | "br" | "ca" | "zh") {
+            None
+        } else {
+            og_tokenizer::srx::srx_splitter(code)
+        };
+
         Self {
             language: code.to_string(),
             pattern_engine,
             tagger,
             disambiguator,
             french_tokenizer,
+            sentence_splitter,
         }
     }
 
@@ -339,6 +351,7 @@ impl TestRunner {
         let tokenizer = match &self.french_tokenizer {
             Some(fr) => TestWordTokenizer::French(fr.clone()),
             None if self.language == "de" => TestWordTokenizer::German,
+            None if self.language == "ar" => TestWordTokenizer::Arabic,
             None => TestWordTokenizer::Default(self.language == "en"),
         };
         let mut sentence = AnalyzedSentence::new(text, 0, text.len());
@@ -424,6 +437,33 @@ impl TestRunner {
         og_tagger::chunker::apply_chunk_tags(sentence);
     }
 
+    fn analyze_text(&self, text: &str) -> Vec<(AnalyzedSentence, usize)> {
+        use og_tokenizer::SentenceTokenizer as _;
+        match &self.sentence_splitter {
+            Some(splitter) => splitter
+                .split(text)
+                .into_iter()
+                .map(|s| (self.tokenize_sentence(s.text()), s.start()))
+                .collect(),
+            None => Vec::from([(self.tokenize_sentence(text), 0)]),
+        }
+    }
+
+    fn match_rule_across_text(
+        &self,
+        rule: &og_xml::compiler::CompiledRule,
+        clean_text: &str,
+    ) -> Vec<og_core::RuleMatch> {
+        let mut matches = Vec::new();
+        for (sentence, sentence_start) in self.analyze_text(clean_text) {
+            for mut m in self.pattern_engine.match_rule(rule, &sentence) {
+                m.set_offset_length(m.offset() + sentence_start, m.length());
+                matches.push(m);
+            }
+        }
+        matches
+    }
+
     fn extract_marker(text: &str) -> (String, Option<(usize, usize)>) {
         let start_marker = "<marker>";
         let end_marker = "</marker>";
@@ -478,8 +518,7 @@ impl TestRunner {
         text: &str,
     ) -> (String, Option<(usize, usize)>, Vec<og_core::RuleMatch>) {
         let (clean_text, marker_range) = Self::extract_marker(text);
-        let sentence = self.tokenize_sentence(&clean_text);
-        let matches = self.pattern_engine.match_rule(rule, &sentence);
+        let matches = self.match_rule_across_text(rule, &clean_text);
         (clean_text, marker_range, matches)
     }
 
@@ -499,8 +538,7 @@ impl TestRunner {
             .par_iter()
             .map(|(rule, example)| {
                 let (clean_text, marker_range) = Self::extract_marker(&example.text);
-                let sentence = self.tokenize_sentence(&clean_text);
-                let matches = self.pattern_engine.match_rule(rule, &sentence);
+                let matches = self.match_rule_across_text(rule, &clean_text);
                 Self::evaluate_example(rule, example, &clean_text, marker_range, &matches)
             })
             .collect();
