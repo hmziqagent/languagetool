@@ -644,7 +644,7 @@ impl PatternRuleEngine {
                     matched_texts,
                 ),
             og_xml::compiler::CompiledPatternElement::OrGroup(alternatives) => {
-                let group_skip = alternatives.iter().map(|a| a.skip).max().unwrap_or(0);
+                let group_skip = alternatives.first().map(|a| a.skip).unwrap_or(0);
                 let max_group_skip = if group_skip < 0 {
                     tokens.len()
                 } else {
@@ -701,7 +701,7 @@ impl PatternRuleEngine {
                 None
             }
             og_xml::compiler::CompiledPatternElement::AndGroup(constraints) => {
-                let group_skip = constraints.iter().map(|c| c.skip).max().unwrap_or(0);
+                let group_skip = constraints.first().map(|c| c.skip).unwrap_or(0);
                 let max_group_skip = if group_skip < 0 {
                     tokens.len()
                 } else {
