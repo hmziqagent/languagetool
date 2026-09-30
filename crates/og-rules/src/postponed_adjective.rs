@@ -28,14 +28,8 @@ fn mr(text: &str, re: &Regex) -> bool {
     re.is_match(text)
 }
 
-fn matching_reading<'a>(
-    token: &'a AnalyzedTokenReadings,
-    re: &Regex,
-) -> Option<&'a AnalyzedToken> {
-    token
-        .readings()
-        .iter()
-        .find(|r| reading_matches(r, re))
+fn matching_reading<'a>(token: &'a AnalyzedTokenReadings, re: &Regex) -> Option<&'a AnalyzedToken> {
+    token.readings().iter().find(|r| reading_matches(r, re))
 }
 
 #[derive(Default)]
@@ -234,18 +228,10 @@ fn fr_tags() -> &'static FrTagSet {
             det_fs: full_match("(P\\+)?D f s"),
             det_mp: full_match("(P\\+)?D m p"),
             det_fp: full_match("(P\\+)?D f p"),
-            gn_ms: full_match(
-                "[NZ] [me] (s|sp)|J [me] (s|sp)|V ppa m s|(P\\+)?D m (s|sp)",
-            ),
-            gn_fs: full_match(
-                "[NZ] [fe] (s|sp)|J [fe] (s|sp)|V ppa f s|(P\\+)?D f (s|sp)",
-            ),
-            gn_mp: full_match(
-                "[NZ] [me] (p|sp)|J [me] (p|sp)|V ppa m p|(P\\+)?D m (p|sp)",
-            ),
-            gn_fp: full_match(
-                "[NZ] [fe] (p|sp)|J [fe] (p|sp)|V ppa f p|(P\\+)?D f (p|sp)",
-            ),
+            gn_ms: full_match("[NZ] [me] (s|sp)|J [me] (s|sp)|V ppa m s|(P\\+)?D m (s|sp)"),
+            gn_fs: full_match("[NZ] [fe] (s|sp)|J [fe] (s|sp)|V ppa f s|(P\\+)?D f (s|sp)"),
+            gn_mp: full_match("[NZ] [me] (p|sp)|J [me] (p|sp)|V ppa m p|(P\\+)?D m (p|sp)"),
+            gn_fp: full_match("[NZ] [fe] (p|sp)|J [fe] (p|sp)|V ppa f p|(P\\+)?D f (p|sp)"),
             gn_cp: full_match("[NZ] [fme] (p|sp)|J [fme] (p|sp)|(P\\+)?D [fme] (p|sp)"),
             gn_cs: full_match("[NZ] [fme] (s|sp)|J [fme] (s|sp)|(P\\+)?D [fme] (s|sp)"),
             adjectiu: full_match("J .*|V ppa .*|PX.*"),
@@ -396,9 +382,7 @@ fn parse_manual(text: &str) -> Vec<(Box<str>, Box<str>, Box<str>)> {
         }
         let line = line.split('#').next().unwrap_or("").trim();
         let mut parts = line.splitn(3, separator);
-        if let (Some(form), Some(lemma), Some(tag)) =
-            (parts.next(), parts.next(), parts.next())
-        {
+        if let (Some(form), Some(lemma), Some(tag)) = (parts.next(), parts.next(), parts.next()) {
             entries.push((lemma.into(), tag.trim().into(), form.into()));
         }
     }
@@ -445,10 +429,7 @@ pub(crate) fn accept_es(
     let mut level = 0usize;
     let mut j = 1usize;
 
-    while i > j
-        && keep_counting_es(token_at(i - j), &apparitions, t)
-        && level < MAX_LEVELS
-    {
+    while i > j && keep_counting_es(token_at(i - j), &apparitions, t) && level < MAX_LEVELS {
         let cur = i - j;
         let current = token_at(cur);
         if !is_prev_noun {
@@ -541,7 +522,9 @@ pub(crate) fn accept_es(
             let text = current.map(|c| c.token().token()).unwrap_or_default();
             if mr(text, &t.prepo_nivell)
                 && !mr(
-                    token_at(cur - 1).map(|c| c.token().token()).unwrap_or_default(),
+                    token_at(cur - 1)
+                        .map(|c| c.token().token())
+                        .unwrap_or_default(),
                     &t.coord_ioni,
                 )
                 && !mp(token_at(cur + 1), &t.adverbi)
@@ -588,14 +571,24 @@ pub(crate) fn accept_es(
     let mut c_ntotal = 0u32;
     let mut c_dtotal = 0u32;
     for jj in 0..level {
-        c_n[jj] = lv.nms[jj] + lv.nfs[jj] + lv.nmp[jj] + lv.nfp[jj] + lv.ncs[jj] + lv.ncp[jj]
+        c_n[jj] = lv.nms[jj]
+            + lv.nfs[jj]
+            + lv.nmp[jj]
+            + lv.nfp[jj]
+            + lv.ncs[jj]
+            + lv.ncp[jj]
             + lv.nmn[jj];
         c_d[jj] = lv.dms[jj] + lv.dfs[jj] + lv.dmp[jj] + lv.dfp[jj];
         c_ntotal += c_n[jj];
         c_dtotal += c_d[jj];
         if mp(adjective, &t.adjectiu_mp)
             && (c_n[jj] > 1 || c_d[jj] > 1)
-            && (lv.nms[jj] + lv.nmn[jj] + lv.nmp[jj] + lv.ncs[jj] + lv.ncp[jj] + lv.dms[jj]
+            && (lv.nms[jj]
+                + lv.nmn[jj]
+                + lv.nmp[jj]
+                + lv.ncs[jj]
+                + lv.ncp[jj]
+                + lv.dms[jj]
                 + lv.dmp[jj])
                 > 0
             && lv.nfs[jj] + lv.nfp[jj] <= lv.nt[jj]
@@ -673,10 +666,7 @@ pub(crate) fn accept_es(
     if !(is_plural && mp(adjective, &t.adjectiu_s)) {
         let mut j = 1usize;
         apparitions = Apparitions::default();
-        while i > j
-            && keep_counting_es(token_at(i - j), &apparitions, t)
-            && (level > 1 || j < 4)
-        {
+        while i > j && keep_counting_es(token_at(i - j), &apparitions, t) && (level > 1 || j < 4) {
             let cur = i - j;
             let current = token_at(cur);
             if !mp(current, &t.gn_any) && mp(current, &t.nom_det) && mp(current, subst) {
@@ -777,18 +767,12 @@ fn keep_counting_es(
     {
         return false;
     }
-    (mp(Some(a), &t.keep_count)
-        || mr(text, &t.keep_count2)
-        || mp(Some(a), &t.adverbis_acceptats))
+    (mp(Some(a), &t.keep_count) || mr(text, &t.keep_count2) || mp(Some(a), &t.adverbis_acceptats))
         && !mr(text, &t.stop_count)
         && (!mp(Some(a), &t.gv) || mp(Some(a), &t.gn_any))
 }
 
-fn update_apparitions_es(
-    token: &AnalyzedTokenReadings,
-    apparitions: &mut Apparitions,
-    t: &TagSet,
-) {
+fn update_apparitions_es(token: &AnalyzedTokenReadings, apparitions: &mut Apparitions, t: &TagSet) {
     if mp(Some(token), &t.nom) || mp(Some(token), &t.adjectiu) {
         *apparitions = Apparitions::default();
         return;
@@ -928,7 +912,9 @@ pub(crate) fn accept_fr(
                 && mp(current, &b.preposicions)
                 && !mp(current, &b.conjuncio)
                 && !mr(
-                    token_at(cur - 1).map(|c| c.token().token()).unwrap_or_default(),
+                    token_at(cur - 1)
+                        .map(|c| c.token().token())
+                        .unwrap_or_default(),
                     &b.coord_ioni,
                 )
                 && !mp(token_at(cur + 1), &b.adverbi)
@@ -958,14 +944,24 @@ pub(crate) fn accept_fr(
     let mut c_ntotal = 0u32;
     let mut c_dtotal = 0u32;
     for jj in 0..level {
-        c_n[jj] = lv.nms[jj] + lv.nfs[jj] + lv.nmp[jj] + lv.nfp[jj] + lv.ncs[jj] + lv.ncp[jj]
+        c_n[jj] = lv.nms[jj]
+            + lv.nfs[jj]
+            + lv.nmp[jj]
+            + lv.nfp[jj]
+            + lv.ncs[jj]
+            + lv.ncp[jj]
             + lv.nmn[jj];
         c_d[jj] = lv.dms[jj] + lv.dfs[jj] + lv.dmp[jj] + lv.dfp[jj];
         c_ntotal += c_n[jj];
         c_dtotal += c_d[jj];
         if mp(adjective, &b.adjectiu_mp)
             && (c_n[jj] > 1 || c_d[jj] > 1)
-            && (lv.nms[jj] + lv.nmn[jj] + lv.nmp[jj] + lv.ncs[jj] + lv.ncp[jj] + lv.dms[jj]
+            && (lv.nms[jj]
+                + lv.nmn[jj]
+                + lv.nmp[jj]
+                + lv.ncs[jj]
+                + lv.ncp[jj]
+                + lv.dms[jj]
                 + lv.dmp[jj])
                 > 0
             && lv.nfs[jj] + lv.nfp[jj] <= lv.nt[jj]
@@ -1047,10 +1043,7 @@ pub(crate) fn accept_fr(
     if !(is_plural && mp(adjective, &b.adjectiu_s)) {
         let mut j = 1usize;
         apparitions = Apparitions::default();
-        while i > j
-            && keep_counting_fr(token_at(i - j), &apparitions, t)
-            && (level > 1 || j < 4)
-        {
+        while i > j && keep_counting_fr(token_at(i - j), &apparitions, t) && (level > 1 || j < 4) {
             let cur = i - j;
             let current = token_at(cur);
             if !mp(current, &b.gn_any) && mp(current, &b.nom_det) && mp(current, subst) {
@@ -1125,12 +1118,7 @@ pub(crate) fn accept_fr(
     Some(rm)
 }
 
-fn update_j_value_fr(
-    tokens: &[&AnalyzedTokenReadings],
-    i: usize,
-    j: usize,
-    t: &FrTagSet,
-) -> usize {
+fn update_j_value_fr(tokens: &[&AnalyzedTokenReadings], i: usize, j: usize, t: &FrTagSet) -> usize {
     let cur = i - j;
     let Some(current) = tokens.get(cur).copied() else {
         return j;
@@ -1171,9 +1159,7 @@ fn keep_counting_fr(
     {
         return false;
     }
-    (mp(Some(a), &b.keep_count)
-        || mr(text, &b.keep_count2)
-        || mp(Some(a), &b.adverbis_acceptats))
+    (mp(Some(a), &b.keep_count) || mr(text, &b.keep_count2) || mp(Some(a), &b.adverbis_acceptats))
         && !mr(text, &b.stop_count)
         && (!mp(Some(a), &b.gv) || mp(Some(a), &b.gn_any))
 }
@@ -1206,13 +1192,10 @@ mod tests {
             vec![AnalyzedToken::new(text, 0, text.len())]
         } else {
             tags.iter()
-                .map(|t| {
-                    AnalyzedToken::new(text, 0, text.len()).with_pos_tags(vec![t.to_string()])
-                })
+                .map(|t| AnalyzedToken::new(text, 0, text.len()).with_pos_tags(vec![t.to_string()]))
                 .collect()
         };
-        AnalyzedTokenReadings::new(AnalyzedToken::new(text, 0, text.len()))
-            .with_readings(readings)
+        AnalyzedTokenReadings::new(AnalyzedToken::new(text, 0, text.len())).with_readings(readings)
     }
 
     #[test]

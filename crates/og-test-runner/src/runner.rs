@@ -282,7 +282,8 @@ impl TestRunner {
                             .with_spelling_support(std::sync::Arc::new(support));
                         if let Some(synth) =
                             og_rules::postponed_adjective::LangSynthesizer::for_language(
-                                &resource_dir, code,
+                                &resource_dir,
+                                code,
                             )
                         {
                             engine = engine.with_synthesizer(std::sync::Arc::new(synth));
@@ -290,10 +291,12 @@ impl TestRunner {
                         engine
                     }
                     None => match og_rules::postponed_adjective::LangSynthesizer::for_language(
-                        &resource_dir, code,
+                        &resource_dir,
+                        code,
                     ) {
-                        Some(synth) => PatternRuleEngine::new()
-                            .with_synthesizer(std::sync::Arc::new(synth)),
+                        Some(synth) => {
+                            PatternRuleEngine::new().with_synthesizer(std::sync::Arc::new(synth))
+                        }
                         None => PatternRuleEngine::new(),
                     },
                 }

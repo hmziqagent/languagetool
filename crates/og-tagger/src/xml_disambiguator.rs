@@ -1083,26 +1083,35 @@ fn token_matches_tail(
         } else {
             false
         };
-        let pos_exc = if let Some(ref postag) = exc.postag {
-            if exc.compiled_postag_regexp.is_some() || exc.compiled_postag_regexp_fancy.is_some() {
-                readings_match_postag_regex(
-                    exc.compiled_postag_regexp.as_ref(),
-                    exc.compiled_postag_regexp_fancy.as_ref(),
-                    token,
-                )
+        let reading_matches = |r: &og_core::AnalyzedToken| {
+            if let Some(ref postag) = exc.postag {
+                if exc.compiled_postag_regexp.is_some()
+                    || exc.compiled_postag_regexp_fancy.is_some()
+                {
+                    let plain = exc
+                        .compiled_postag_regexp
+                        .as_ref()
+                        .is_some_and(|re| r.pos_tags().iter().any(|t| re.is_match(t)));
+                    let fancy = exc.compiled_postag_regexp_fancy.as_ref().is_some_and(|re| {
+                        r.pos_tags().iter().any(|t| re.is_match(t).unwrap_or(false))
+                    });
+                    plain || fancy
+                } else {
+                    r.pos_tags().iter().any(|t| t == postag)
+                }
             } else {
-                token
-                    .readings()
-                    .iter()
-                    .any(|r| r.pos_tags().iter().any(|t| t == postag))
+                false
             }
-        } else {
-            false
         };
+        let pos_exc = token.readings().iter().any(|r| reading_matches(r));
 
         let has_text_constraint = exc.text.is_some();
         let has_pos_constraint = exc.postag.is_some();
-        let pos_ok = if exc.negate_pos { !pos_exc } else { pos_exc };
+        let pos_ok = if exc.negate_pos {
+            token.readings().iter().any(|r| !reading_matches(r))
+        } else {
+            pos_exc
+        };
         let exc_matches = if has_text_constraint && has_pos_constraint {
             text_exc && pos_ok
         } else if has_text_constraint {
@@ -1767,6 +1776,46 @@ mod tests {
         let mut sentence = AnalyzedSentence::new("test", 0, total_len);
         sentence.set_tokens(analyzed);
         sentence
+    }
+
+    #[test]
+    fn negate_pos_exception_fires_on_any_non_matching_reading() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<rules lang="de">
+    <rule id="PRP_NOM" name="Remove NOM after pure preposition">
+        <pattern>
+            <token postag_regexp="yes" postag="PRP.+">
+                <exception postag="PRP.+" postag_regexp="yes" negate_pos="yes"/>
+            </token>
+            <marker>
+                <and>
+                    <token postag_regexp="yes" postag=".+NOM:.+"/>
+                    <token postag_regexp="yes" postag=".+(AKK|DAT|GEN):.+"/>
+                </and>
+            </marker>
+        </pattern>
+        <disambig action="remove" postag=".+:NOM:.+"/>
+    </rule>
+</rules>"#;
+        let disambig = XmlDisambiguator::from_xml(xml).unwrap();
+        let mut mixed = make_sentence(vec![
+            ("mit", vec!["PRP:TMP+MOD+CAU:DAT", "ZUS"]),
+            ("Wasser", vec!["SUB:NOM:SIN:NEU", "SUB:AKK:SIN:NEU"]),
+        ]);
+        disambig.disambiguate(&mut mixed);
+        assert!(
+            mixed.tokens()[1].has_pos_tag("SUB:NOM:SIN:NEU"),
+            "a preposition with a non-PRP reading must be excluded by the negate_pos exception"
+        );
+        let mut pure = make_sentence(vec![
+            ("für", vec!["PRP:AKK"]),
+            ("Wasser", vec!["SUB:NOM:SIN:NEU", "SUB:AKK:SIN:NEU"]),
+        ]);
+        disambig.disambiguate(&mut pure);
+        assert!(
+            !pure.tokens()[1].has_pos_tag("SUB:NOM:SIN:NEU"),
+            "a pure preposition still triggers the NOM removal"
+        );
     }
 
     #[test]
