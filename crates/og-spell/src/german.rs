@@ -358,6 +358,16 @@ fn load_set_file(path: &Path, set: &mut HashSet<String>) {
     }
 }
 
+fn shared_german_data(resource_dir: &Path, data: GermanSharedData) -> Arc<GermanSharedData> {
+    static CACHE: LazyLock<Mutex<HashMap<std::path::PathBuf, Arc<GermanSharedData>>>> =
+        LazyLock::new(Default::default);
+    let mut cache = CACHE.lock().unwrap();
+    cache
+        .entry(resource_dir.to_path_buf())
+        .or_insert_with(|| Arc::new(data))
+        .clone()
+}
+
 pub struct GermanSpeller {
     dictionary: Arc<Dictionary>,
     suggestion_engine: SuggestionEngine,
@@ -454,20 +464,23 @@ impl GermanSpeller {
         Self {
             dictionary,
             suggestion_engine,
-            shared: Arc::new(GermanSharedData {
-                tagger,
-                ignore_words,
-                ignore_words_ch,
-                words_to_be_ignored_in_compounds: ignored_in_compounds,
-                word_starts_to_be_prohibited: prohibit_starts,
-                word_endings_to_be_prohibited: prohibit_ends,
-                words_to_be_prohibited: prohibit_exact,
-                words_needing_infix_s,
-                verb_stems,
-                verb_prefixes,
-                other_prefixes,
-                old_spelling,
-            }),
+            shared: shared_german_data(
+                resource_dir,
+                GermanSharedData {
+                    tagger,
+                    ignore_words,
+                    ignore_words_ch,
+                    words_to_be_ignored_in_compounds: ignored_in_compounds,
+                    word_starts_to_be_prohibited: prohibit_starts,
+                    word_endings_to_be_prohibited: prohibit_ends,
+                    words_to_be_prohibited: prohibit_exact,
+                    words_needing_infix_s,
+                    verb_stems,
+                    verb_prefixes,
+                    other_prefixes,
+                    old_spelling,
+                },
+            ),
             swiss: variant == SWISS,
             cache: Mutex::new(HashMap::new()),
         }
