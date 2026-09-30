@@ -666,6 +666,15 @@ impl PatternRuleEngine {
                             if after > tokens.len() {
                                 break;
                             }
+                            if !self.next_element_commits_at(
+                                elements,
+                                tokens,
+                                after,
+                                element_idx + 1,
+                                &new_mt,
+                            ) {
+                                continue;
+                            }
                             if let Some(mut result) = self.match_elements_recursive(
                                 elements,
                                 tokens,
@@ -684,6 +693,7 @@ impl PatternRuleEngine {
                                 );
                                 return Some(result);
                             }
+                            return None;
                         }
                         return None;
                     }
@@ -714,6 +724,15 @@ impl PatternRuleEngine {
                         if after > tokens.len() {
                             break;
                         }
+                        if !self.next_element_commits_at(
+                            elements,
+                            tokens,
+                            after,
+                            element_idx + 1,
+                            &new_mt,
+                        ) {
+                            continue;
+                        }
                         if let Some(mut result) = self.match_elements_recursive(
                             elements,
                             tokens,
@@ -732,6 +751,7 @@ impl PatternRuleEngine {
                             );
                             return Some(result);
                         }
+                        return None;
                     }
                 }
                 None
@@ -795,7 +815,8 @@ impl PatternRuleEngine {
                     .unwrap_or(if min_count > 0 { min_count } else { 1 });
             let mut matched_count = 0;
             let mut cur = token_idx;
-            while matched_count < max_count && cur < tokens.len() {
+            let remaining_elems = elements.len() - element_idx - 1;
+            while matched_count < max_count && cur < tokens.len().saturating_sub(remaining_elems) {
                 if token_ok(cur, matched_texts) {
                     matched_count += 1;
                     cur += 1;
@@ -804,37 +825,40 @@ impl PatternRuleEngine {
                 }
             }
             let count_start = if min_count == 0 { 1 } else { min_count };
-            for count in (count_start..=matched_count).rev() {
-                let mut new_mt = matched_texts.to_vec();
-                for t in tokens.iter().take(token_idx + count).skip(token_idx) {
-                    new_mt.push(t.token().token().to_string());
+            if matched_count < count_start {
+                return None;
+            }
+            let count = matched_count;
+            let mut new_mt = matched_texts.to_vec();
+            for t in tokens.iter().take(token_idx + count).skip(token_idx) {
+                new_mt.push(t.token().token().to_string());
+            }
+            for gap in 0..=max_skip {
+                let after = token_idx + count + gap;
+                if after > tokens.len() {
+                    break;
                 }
-                for gap in 0..=max_skip {
-                    let after = token_idx + count + gap;
-                    if after > tokens.len() {
-                        break;
-                    }
-                    if let Some(mut result) = self.match_elements_recursive(
-                        elements,
-                        tokens,
-                        after,
-                        element_idx + 1,
-                        &new_mt,
-                    ) {
-                        for i in (0..count).rev() {
-                            result.push_front(
-                                token_idx + i,
-                                element_idx,
-                                tokens[token_idx + i].token().token().to_string(),
-                            );
-                        }
-                        result.extend_span(
-                            tokens[token_idx].token().start(),
-                            tokens[token_idx + count - 1].token().end(),
+                if !self.next_element_commits_at(elements, tokens, after, element_idx + 1, &new_mt)
+                {
+                    continue;
+                }
+                if let Some(mut result) =
+                    self.match_elements_recursive(elements, tokens, after, element_idx + 1, &new_mt)
+                {
+                    for i in (0..count).rev() {
+                        result.push_front(
+                            token_idx + i,
+                            element_idx,
+                            tokens[token_idx + i].token().token().to_string(),
                         );
-                        return Some(result);
                     }
+                    result.extend_span(
+                        tokens[token_idx].token().start(),
+                        tokens[token_idx + count - 1].token().end(),
+                    );
+                    return Some(result);
                 }
+                return None;
             }
             return None;
         }
@@ -846,6 +870,10 @@ impl PatternRuleEngine {
                 let after = token_idx + 1 + gap;
                 if after > tokens.len() {
                     break;
+                }
+                if !self.next_element_commits_at(elements, tokens, after, element_idx + 1, &new_mt)
+                {
+                    continue;
                 }
                 if let Some(mut result) =
                     self.match_elements_recursive(elements, tokens, after, element_idx + 1, &new_mt)
@@ -861,6 +889,7 @@ impl PatternRuleEngine {
                     );
                     return Some(result);
                 }
+                return None;
             }
         }
         None
@@ -999,6 +1028,15 @@ impl PatternRuleEngine {
                 {
                     continue;
                 }
+                if !self.next_token_commits_at(
+                    pattern_tokens,
+                    tokens,
+                    next_token_idx,
+                    pattern_idx + 1,
+                    &new_mt,
+                ) {
+                    continue;
+                }
                 if let Some(mut rest) = self.match_pattern_recursive(
                     pattern_tokens,
                     tokens,
@@ -1043,6 +1081,9 @@ impl PatternRuleEngine {
                     });
                     return Some(rest);
                 }
+                // Java matchFrom commits to the first position where the next element
+                // matches and aborts the whole start when the remaining elements fail.
+                return None;
             }
 
             if pattern_idx + 1 >= pattern_tokens.len() {
@@ -1245,6 +1286,84 @@ impl PatternRuleEngine {
         }
     }
 
+    fn next_token_commits_at(
+        &self,
+        pattern_tokens: &[og_xml::compiler::CompiledPatternToken],
+        tokens: &[&AnalyzedTokenReadings],
+        token_idx: usize,
+        pattern_idx: usize,
+        matched_texts: &[String],
+    ) -> bool {
+        let Some(pattern_token) = pattern_tokens.get(pattern_idx) else {
+            return true;
+        };
+        let Some(token) = tokens.get(token_idx) else {
+            return false;
+        };
+        if pattern_token.min == Some(0)
+            && self.later_token_matches_at(
+                pattern_tokens,
+                tokens,
+                token_idx,
+                pattern_idx,
+                matched_texts,
+            )
+        {
+            return true;
+        }
+        self.pattern_token_matches_at(pattern_token, token, token_idx, tokens, matched_texts)
+    }
+
+    fn next_element_commits_at(
+        &self,
+        elements: &[og_xml::compiler::CompiledPatternElement],
+        tokens: &[&AnalyzedTokenReadings],
+        token_idx: usize,
+        element_idx: usize,
+        matched_texts: &[String],
+    ) -> bool {
+        let Some(element) = elements.get(element_idx) else {
+            return true;
+        };
+        let Some(token) = tokens.get(token_idx) else {
+            return false;
+        };
+        if let og_xml::compiler::CompiledPatternElement::Token(t) = element
+            && t.min == Some(0)
+            && self.later_element_matches_at(
+                elements,
+                tokens,
+                token_idx,
+                element_idx,
+                matched_texts,
+            )
+        {
+            return true;
+        }
+        self.element_matches_at(element, token, token_idx, tokens, matched_texts)
+    }
+
+    fn element_matches_at(
+        &self,
+        element: &og_xml::compiler::CompiledPatternElement,
+        token: &AnalyzedTokenReadings,
+        token_idx: usize,
+        tokens: &[&AnalyzedTokenReadings],
+        matched_texts: &[String],
+    ) -> bool {
+        match element {
+            og_xml::compiler::CompiledPatternElement::Token(t) => {
+                self.pattern_token_matches_at(t, token, token_idx, tokens, matched_texts)
+            }
+            og_xml::compiler::CompiledPatternElement::OrGroup(alts) => alts
+                .iter()
+                .any(|a| self.pattern_token_matches_at(a, token, token_idx, tokens, matched_texts)),
+            og_xml::compiler::CompiledPatternElement::AndGroup(constraints) => constraints
+                .iter()
+                .all(|c| self.pattern_token_matches_at(c, token, token_idx, tokens, matched_texts)),
+        }
+    }
+
     fn later_token_matches_at(
         &self,
         pattern_tokens: &[og_xml::compiler::CompiledPatternToken],
@@ -1281,36 +1400,13 @@ impl PatternRuleEngine {
     ) -> bool {
         for k2 in element_idx + 1..elements.len() {
             let element = &elements[k2];
-            let matched = match element {
-                og_xml::compiler::CompiledPatternElement::Token(t) => self
-                    .pattern_token_matches_at(
-                        t,
-                        tokens[token_idx],
-                        token_idx,
-                        tokens,
-                        matched_texts,
-                    ),
-                og_xml::compiler::CompiledPatternElement::OrGroup(alts) => alts.iter().any(|a| {
-                    self.pattern_token_matches_at(
-                        a,
-                        tokens[token_idx],
-                        token_idx,
-                        tokens,
-                        matched_texts,
-                    )
-                }),
-                og_xml::compiler::CompiledPatternElement::AndGroup(constraints) => {
-                    constraints.iter().all(|c| {
-                        self.pattern_token_matches_at(
-                            c,
-                            tokens[token_idx],
-                            token_idx,
-                            tokens,
-                            matched_texts,
-                        )
-                    })
-                }
-            };
+            let matched = self.element_matches_at(
+                element,
+                tokens[token_idx],
+                token_idx,
+                tokens,
+                matched_texts,
+            );
             if matched {
                 return true;
             }
