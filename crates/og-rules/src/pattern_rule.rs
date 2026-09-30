@@ -1,9 +1,10 @@
 use og_core::{
-    AnalyzedSentence, AnalyzedTokenReadings, RuleMatch, RuleMatchContext, RuleMatchRule,
-    SuggestedReplacement,
+    AnalyzedSentence, AnalyzedToken, AnalyzedTokenReadings, RuleMatch, RuleMatchContext,
+    RuleMatchRule, SuggestedReplacement,
 };
 use og_xml::compiler::CompiledRule;
 use std::collections::HashMap;
+use std::sync::{Arc, OnceLock};
 
 /// Java LT normalizes these, so "it\u{2019}s" should match pattern token "'s".
 fn apply_case_conversion(text: &str, conversion: &str) -> String {
@@ -2111,6 +2112,14 @@ impl PatternRuleEngine {
                     None => None,
                 }
             }
+            "org.languagetool.rules.ru.RussianPartialPosTagFilter" => {
+                let parsed = self.resolve_java_filter_args(&filter.args, matched_texts);
+                if russian_partial_tag_satisfies(&parsed, matched_texts) {
+                    Some(rm)
+                } else {
+                    None
+                }
+            }
             "org.languagetool.rules.it.DateCheckFilter"
             | "org.languagetool.rules.pl.DateCheckFilter"
             | "org.languagetool.rules.ru.DateCheckFilter"
@@ -3813,6 +3822,144 @@ fn day_zero_rolls_back(year: u32, month: u32, day: u32) -> (u32, u32, u32) {
     } else {
         (year, month - 1, days_in_month(year, month - 1))
     }
+}
+
+fn russian_resource_dir() -> Option<std::path::PathBuf> {
+    [
+        std::path::PathBuf::from(
+            "languagetool/languagetool-language-modules/ru/src/main/resources/org/languagetool/resource/ru",
+        ),
+        std::path::PathBuf::from(
+            "../languagetool/languagetool-language-modules/ru/src/main/resources/org/languagetool/resource/ru",
+        ),
+        std::path::PathBuf::from(
+            "/home/agent/opengrammar-rs/languagetool/languagetool-language-modules/ru/src/main/resources/org/languagetool/resource/ru",
+        ),
+    ]
+    .into_iter()
+    .find(|p| p.join("russian.dict").exists())
+}
+
+struct RussianTagCache {
+    tagger: Option<og_tagger::GenericTagger>,
+    disambiguator: Option<og_tagger::XmlDisambiguator>,
+    cache: std::sync::Mutex<HashMap<String, Arc<Vec<AnalyzedTokenReadings>>>>,
+}
+
+fn shared_russian_tag_cache() -> &'static RussianTagCache {
+    static SHARED: OnceLock<RussianTagCache> = OnceLock::new();
+    SHARED.get_or_init(|| {
+        let dir = russian_resource_dir();
+        let tagger = dir
+            .as_ref()
+            .map(|dir| og_tagger::GenericTagger::russian(dir));
+        let disambiguator = dir.and_then(|dir| {
+            std::fs::read_to_string(dir.join("disambiguation.xml"))
+                .ok()
+                .and_then(|xml| og_tagger::XmlDisambiguator::from_xml(&xml).ok())
+        });
+        RussianTagCache {
+            tagger,
+            disambiguator,
+            cache: std::sync::Mutex::new(HashMap::new()),
+        }
+    })
+}
+
+fn russian_tag_word(word: &str) -> Arc<Vec<AnalyzedTokenReadings>> {
+    let shared = shared_russian_tag_cache();
+    if let Some(hit) = shared.cache.lock().unwrap().get(word) {
+        return Arc::clone(hit);
+    }
+    let tagged = shared
+        .tagger
+        .as_ref()
+        .map(|tagger| {
+            use og_tagger::Tagger as _;
+            let readings = tagger.tag(&[word]);
+            if let Some(disambiguator) = shared.disambiguator.as_ref() {
+                let mut atr = AnalyzedTokenReadings::new(AnalyzedToken::new(word, 0, word.len()));
+                if let Some(first) = readings.first() {
+                    atr = first.clone();
+                }
+                let mut sentence = AnalyzedSentence::new(word, 0, word.len());
+                sentence.set_tokens(vec![atr]);
+                use og_core::checker::Disambiguator as _;
+                disambiguator.disambiguate(&mut sentence);
+                sentence.tokens().to_vec()
+            } else {
+                readings
+            }
+        })
+        .unwrap_or_default();
+    let arc = Arc::new(tagged);
+    shared
+        .cache
+        .lock()
+        .unwrap()
+        .insert(word.to_string(), Arc::clone(&arc));
+    arc
+}
+
+fn russian_partial_tag_satisfies(parsed: &HashMap<&str, String>, matched_texts: &[String]) -> bool {
+    let Ok(token_pos) = parsed
+        .get("no")
+        .map(String::as_str)
+        .unwrap_or_default()
+        .parse::<usize>()
+    else {
+        return false;
+    };
+    let Some(regexp) = parsed.get("regexp") else {
+        return false;
+    };
+    let Some(required) = parsed.get("postag_regexp") else {
+        return false;
+    };
+    let negate_pos = parsed.contains_key("negate_pos");
+    let two_groups = parsed.contains_key("two_groups_regexp");
+    let prefix = parsed.get("prefix").map(String::as_str).unwrap_or("");
+    let suffix = parsed.get("suffix").map(String::as_str).unwrap_or("");
+    let Some(surface) = matched_texts.get(token_pos.wrapping_sub(1)) else {
+        return false;
+    };
+    let token = format!("{prefix}{surface}{suffix}");
+    let Ok(re) = regex::Regex::new(&format!("\\A(?:{regexp})\\z")) else {
+        return false;
+    };
+    let Some(caps) = re.captures(&token) else {
+        return false;
+    };
+    let mut partial = caps
+        .get(1)
+        .map(|m| m.as_str().to_string())
+        .unwrap_or_default();
+    if two_groups && let Some(second) = caps.get(2) {
+        partial.push_str(second.as_str());
+    }
+    let Ok(required_re) = regex::Regex::new(required) else {
+        return false;
+    };
+    let tags = russian_tag_word(&partial);
+    let mut postag_count = 0usize;
+    for tag in tags.iter() {
+        for reading in tag.readings() {
+            for pos in reading.pos_tags() {
+                if pos.is_empty() {
+                    continue;
+                }
+                if negate_pos {
+                    postag_count += 1;
+                    if required_re.is_match(pos) {
+                        return false;
+                    }
+                } else if required_re.is_match(pos) {
+                    return true;
+                }
+            }
+        }
+    }
+    if postag_count == 0 { false } else { negate_pos }
 }
 
 fn inn_is_valid(inn: &str) -> bool {
