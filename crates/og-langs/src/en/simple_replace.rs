@@ -16,6 +16,9 @@ pub struct SimpleReplaceRule {
     category_id: String,
     category_name: String,
     issue_type: String,
+    picky: bool,
+    message_template: Option<String>,
+    suggestions_separator: String,
     entries: HashMap<String, ReplaceEntry>,
 }
 
@@ -29,8 +32,22 @@ impl SimpleReplaceRule {
             issue_type: IssueType::Other("typographical".to_string())
                 .as_str()
                 .to_string(),
+            picky: false,
+            message_template: None,
+            suggestions_separator: " or ".to_string(),
             entries: HashMap::new(),
         }
+    }
+
+    pub fn with_picky(mut self, picky: bool) -> Self {
+        self.picky = picky;
+        self
+    }
+
+    pub fn with_message_template(mut self, template: &str, suggestions_separator: &str) -> Self {
+        self.message_template = Some(template.to_string());
+        self.suggestions_separator = suggestions_separator.to_string();
+        self
     }
 
     fn with_issue_type(mut self, issue_type: IssueType) -> Self {
@@ -125,7 +142,7 @@ impl SimpleReplaceRule {
             "../../../../languagetool/languagetool-language-modules/en/src/main/resources/org/languagetool/rules/en/replace_profanity.txt"
         );
         rule.load_data(data);
-        rule.with_issue_type(IssueType::Style)
+        rule.with_picky(true).with_issue_type(IssueType::Style)
     }
 
     pub fn american_replace() -> Self {
@@ -175,6 +192,9 @@ impl SimpleReplaceRule {
 }
 
 impl Rule for SimpleReplaceRule {
+    fn is_picky(&self) -> bool {
+        self.picky
+    }
     fn id(&self) -> &str {
         &self.id
     }
@@ -200,6 +220,9 @@ impl Rule for SimpleReplaceRule {
         let mut matches = Vec::new();
 
         for i in 0..tokens.len() {
+            if tokens[i].is_ignored_by_speller() || tokens[i].is_immunized() {
+                continue;
+            }
             for len in 1..=3 {
                 if i + len > tokens.len() {
                     break;
@@ -217,18 +240,39 @@ impl Rule for SimpleReplaceRule {
                     let match_end = tokens[last_idx].token().end();
                     let match_length = match_end - match_start;
 
-                    let default_msg = format!(
-                        "Did you mean {}?",
-                        entry
-                            .suggestions
-                            .iter()
-                            .map(|s| format!("\"{}\"", s))
-                            .collect::<Vec<_>>()
-                            .join(" or ")
-                    );
+                    let default_msg = match &self.message_template {
+                        Some(template) => {
+                            let mut msg_suggestions = String::new();
+                            let last = entry.suggestions.len().saturating_sub(1);
+                            for (k, sugg) in entry.suggestions.iter().enumerate() {
+                                if k > 0 {
+                                    msg_suggestions.push_str(if k == last {
+                                        &self.suggestions_separator
+                                    } else {
+                                        ", "
+                                    });
+                                }
+                                msg_suggestions
+                                    .push_str(&format!("<suggestion>{sugg}</suggestion>"));
+                            }
+                            template
+                                .replace("$match", &phrase)
+                                .replace("$suggestions", &msg_suggestions)
+                        }
+                        None => format!(
+                            "Did you mean {}?",
+                            entry
+                                .suggestions
+                                .iter()
+                                .map(|s| format!("\"{s}\""))
+                                .collect::<Vec<_>>()
+                                .join(&self.suggestions_separator)
+                        ),
+                    };
                     let message = entry.message.as_deref().unwrap_or(&default_msg);
 
                     let rm_rule = RuleMatchRule::new(&self.id, &self.name)
+                        .with_picky(self.picky)
                         .with_category(Category::new(&self.category_id, &self.category_name))
                         .with_issue_type(self.issue_type.as_str());
 

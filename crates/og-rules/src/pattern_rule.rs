@@ -6,14 +6,6 @@ use og_xml::compiler::CompiledRule;
 use std::collections::HashMap;
 
 /// Java LT normalizes these, so "it\u{2019}s" should match pattern token "'s".
-fn normalize_apostrophes(text: &str) -> std::borrow::Cow<'_, str> {
-    if text.contains('\u{2019}') || text.contains('\u{2018}') || text.contains('\u{201B}') {
-        std::borrow::Cow::Owned(text.replace(['\u{2019}', '\u{2018}', '\u{201B}'], "'"))
-    } else {
-        std::borrow::Cow::Borrowed(text)
-    }
-}
-
 fn apply_case_conversion(text: &str, conversion: &str) -> String {
     match conversion {
         "startlower" => {
@@ -40,6 +32,7 @@ pub struct PatternRuleEngine {
     word_index: HashMap<String, Vec<usize>>,
     catch_all_rule_indices: Vec<usize>,
     spelling: Option<std::sync::Arc<crate::spelling_support::SpellingSupport>>,
+    synthesizer: Option<std::sync::Arc<crate::postponed_adjective::LangSynthesizer>>,
 }
 
 impl PatternRuleEngine {
@@ -48,6 +41,7 @@ impl PatternRuleEngine {
             word_index: HashMap::new(),
             catch_all_rule_indices: Vec::new(),
             spelling: None,
+            synthesizer: None,
         }
     }
 
@@ -56,6 +50,14 @@ impl PatternRuleEngine {
         spelling: std::sync::Arc<crate::spelling_support::SpellingSupport>,
     ) -> Self {
         self.spelling = Some(spelling);
+        self
+    }
+
+    pub fn with_synthesizer(
+        mut self,
+        synthesizer: std::sync::Arc<crate::postponed_adjective::LangSynthesizer>,
+    ) -> Self {
+        self.synthesizer = Some(synthesizer);
         self
     }
 
@@ -127,6 +129,9 @@ impl PatternRuleEngine {
 
 impl PatternRuleEngine {
     pub fn match_rule(&self, rule: &CompiledRule, sentence: &AnalyzedSentence) -> Vec<RuleMatch> {
+        if let Some(ref regexp) = rule.regexp {
+            return self.match_regexp_rule(rule, regexp, sentence);
+        }
         let tokens = sentence.non_whitespace_tokens();
         let mut matches = Vec::new();
 
@@ -155,7 +160,10 @@ impl PatternRuleEngine {
         let first_token = &rule.pattern.tokens[0];
 
         let start_positions: Vec<usize> = if let Some(ref text) = first_token.text {
-            if !first_token.negate && first_token.compiled_regexp.is_none() {
+            if !first_token.negate
+                && first_token.compiled_regexp.is_none()
+                && first_token.min != Some(0)
+            {
                 tokens
                     .iter()
                     .enumerate()
@@ -211,6 +219,165 @@ impl PatternRuleEngine {
         engine.match_indexed_rules(rules, sentence)
     }
 
+    fn match_regexp_rule(
+        &self,
+        rule: &CompiledRule,
+        regexp: &og_xml::compiler::CompiledRuleRegexp,
+        sentence: &AnalyzedSentence,
+    ) -> Vec<RuleMatch> {
+        const MAX_SENT_LENGTH: usize = 2000;
+        let text = sentence.text();
+        let base = sentence.start();
+        let mut matches = Vec::new();
+        if text.len() > MAX_SENT_LENGTH {
+            return matches;
+        }
+
+        let captured: Vec<Vec<Option<(usize, usize)>>> = if let Some(ref re) = regexp.regex {
+            re.captures_iter(text)
+                .map(|caps| {
+                    (0..caps.len())
+                        .map(|i| caps.get(i).map(|m| (m.start(), m.end())))
+                        .collect()
+                })
+                .collect()
+        } else if let Some(ref re) = regexp.fancy_regex {
+            re.captures_iter(text)
+                .flatten()
+                .map(|caps| {
+                    (0..caps.len())
+                        .map(|i| caps.get(i).map(|m| (m.start(), m.end())))
+                        .collect()
+                })
+                .collect()
+        } else {
+            return matches;
+        };
+
+        for groups in captured {
+            let Some((match_start, match_end)) = groups
+                .get(regexp.mark)
+                .and_then(|g| *g)
+                .or_else(|| groups.first().and_then(|g| *g))
+            else {
+                continue;
+            };
+            if match_end < match_start {
+                continue;
+            }
+
+            if let Some(ref filter) = rule.filter
+                && filter.class.ends_with("RegexAntiPatternFilter")
+                && !regex_antipattern_allows(filter.args.as_str(), text, match_start, match_end)
+            {
+                continue;
+            }
+
+            let group_texts: Vec<&str> = groups
+                .iter()
+                .map(|g| g.map(|(s, e)| &text[s..e]).unwrap_or(""))
+                .collect();
+
+            let message = resolve_regexp_message(&rule.message, &group_texts);
+
+            let replacements: Vec<SuggestedReplacement> = rule
+                .suggestions
+                .iter()
+                .map(|s| {
+                    if !s.parts.is_empty() {
+                        let mut resolved = String::new();
+                        for part in &s.parts {
+                            match part {
+                                og_xml::types::SuggestionPart::Text(t) => {
+                                    resolved.push_str(&resolve_regexp_message(t, &group_texts));
+                                }
+                                og_xml::types::SuggestionPart::Match(m) => {
+                                    let idx = m.no.unsigned_abs() as usize;
+                                    let mut value =
+                                        group_texts.get(idx).copied().unwrap_or("").to_string();
+                                    if let Some(ref cc) = m.case_conversion {
+                                        value = apply_case_conversion(&value, cc);
+                                    }
+                                    if let Some(ref rm) = m.regexp_match
+                                        && let Ok(re) = regex::Regex::new(rm)
+                                    {
+                                        let replace = m.regexp_replace.as_deref().unwrap_or("");
+                                        value = re.replace_all(&value, replace).into_owned();
+                                    }
+                                    resolved.push_str(&value);
+                                }
+                            }
+                        }
+                        SuggestedReplacement::new(&resolved)
+                    } else {
+                        SuggestedReplacement::new(&resolve_regexp_message(&s.text, &group_texts))
+                    }
+                })
+                .collect();
+
+            let match_length = match_end - match_start;
+            let context_start = {
+                let mut pos = match_start.saturating_sub(40);
+                while !text.is_char_boundary(pos) && pos < text.len() {
+                    pos += 1;
+                }
+                pos
+            };
+            let context_end = {
+                let mut pos = std::cmp::min(match_end + 40, text.len());
+                while !text.is_char_boundary(pos) && pos > 0 {
+                    pos -= 1;
+                }
+                pos
+            };
+            let context_text = text[context_start..context_end].to_string();
+
+            let rm_rule = RuleMatchRule::new(&rule.id, &rule.name)
+                .with_category(og_core::Category::new(
+                    &rule.category.id,
+                    &rule.category.name,
+                ))
+                .with_issue_type(&rule.issue_type);
+            let rm_rule = if let Some(ref sub_id) = rule.sub_id {
+                rm_rule.with_sub_id(sub_id)
+            } else {
+                rm_rule
+            };
+            let rm_rule = if let Some(ref url) = rule.url {
+                rm_rule.with_urls(vec![url.clone()])
+            } else {
+                rm_rule
+            };
+            let rm_rule = if let Some(ref source_file) = rule.source_file {
+                rm_rule.with_source_file(source_file)
+            } else {
+                rm_rule
+            };
+            let match_kind = rm_rule.pattern_match_kind();
+
+            let mut rm = RuleMatch::new(
+                &message,
+                base + match_start,
+                match_length,
+                rm_rule,
+                RuleMatchContext::new(
+                    context_text,
+                    base + context_start,
+                    context_end - context_start,
+                ),
+            )
+            .with_replacements(replacements)
+            .with_match_type(match_kind)
+            .with_sentence(sentence.text().to_string());
+            if let Some(ref short) = rule.short_message {
+                rm = rm.with_short_message(short);
+            }
+            matches.push(rm);
+        }
+
+        matches
+    }
+
     fn try_match_at(
         &self,
         rule: &CompiledRule,
@@ -247,41 +414,36 @@ impl PatternRuleEngine {
         }
 
         let text = sentence.text();
+        let base = sentence.start();
         let marker_indices = if rule.pattern.has_structured_elements {
             (rule.pattern.marker_elem_start, rule.pattern.marker_elem_end)
         } else {
             (rule.pattern.marker_start, rule.pattern.marker_end)
         };
         let (match_start, match_end) = if let (Some(ms), Some(me)) = marker_indices {
-            let ms_tok_idx = *match_result.matched_positions.get(ms)?;
-            let me_idx = if me > 0 { me - 1 } else { 0 };
-            let me_tok_idx = *match_result.matched_positions.get(me_idx)?;
+            let ms_tok_idx = match_result.position_for_pattern(ms)?;
+            let me_pat = if me > 0 { me - 1 } else { 0 };
+            let me_tok_idx = match_result.last_position_for_pattern(me_pat)?;
             let start_tok = tokens.get(ms_tok_idx)?;
             let end_tok = tokens.get(me_tok_idx)?;
-            let mut start = start_tok.token().start();
-            while start > 0
-                && text
-                    .as_bytes()
-                    .get(start - 1)
-                    .map(|&b| b.is_ascii_whitespace())
-                    .unwrap_or(false)
-            {
-                start -= 1;
+            let mut start = start_tok.token().start() - base;
+            if ms_tok_idx >= 1 && comma_leading_suggestion(rule, &match_result.matched_texts) {
+                let prev = tokens[ms_tok_idx - 1];
+                start = prev.token().start() + prev.token().token().len() - base;
             }
-            let end = end_tok.token().end();
+            let end = end_tok.token().end() - base;
             (start, end)
         } else {
-            let mut start = match_result.first_start?;
-            let end = match_result.last_end?;
-            while start > 0
-                && text
-                    .as_bytes()
-                    .get(start - 1)
-                    .map(|&b| b.is_ascii_whitespace())
-                    .unwrap_or(false)
-            {
-                start -= 1;
+            let first_start = match_result.first_start?;
+            let mut start = first_start - base;
+            let first_idx = tokens
+                .iter()
+                .position(|t| t.token().start() == first_start)?;
+            if first_idx >= 1 && comma_leading_suggestion(rule, &match_result.matched_texts) {
+                let prev = tokens[first_idx - 1];
+                start = prev.token().start() + prev.token().token().len() - base;
             }
+            let end = match_result.last_end? - base;
             (start, end)
         };
 
@@ -322,7 +484,7 @@ impl PatternRuleEngine {
                             }
                             og_xml::types::SuggestionPart::Match(m) => {
                                 let token_idx = (m.no as usize).saturating_sub(1);
-                                if let Some(&pos) = match_result.matched_positions.get(token_idx)
+                                if let Some(pos) = match_result.position_for_pattern(token_idx)
                                     && let Some(token) = tokens.get(pos)
                                 {
                                     let mut text = token.token().token().to_string();
@@ -334,6 +496,16 @@ impl PatternRuleEngine {
                                     {
                                         let replace = m.regexp_replace.as_deref().unwrap_or("");
                                         text = re.replace_all(&text, replace).to_string();
+                                    }
+                                    if let Some(ref mode) = m.include_skipped
+                                        && mode != "none"
+                                    {
+                                        text.push_str(&skipped_suffix(
+                                            tokens,
+                                            &match_result.matched_positions,
+                                            token_idx,
+                                            mode == "following",
+                                        ));
                                     }
                                     resolved.push_str(&text);
                                 }
@@ -374,10 +546,14 @@ impl PatternRuleEngine {
 
         let mut rm = RuleMatch::new(
             &rule.message,
-            match_start,
+            base + match_start,
             match_length,
             rm_rule,
-            RuleMatchContext::new(context_text, context_start, context_end - context_start),
+            RuleMatchContext::new(
+                context_text,
+                base + context_start,
+                context_end - context_start,
+            ),
         )
         .with_replacements(replacements)
         .with_match_type(match_kind)
@@ -427,7 +603,7 @@ impl PatternRuleEngine {
         let match_no = pattern_token.match_no?;
         let ref_idx = match_no as usize;
         let ref_text = normalize_apostrophes(matched_texts.get(ref_idx)?);
-        let token_text = normalize_apostrophes(token.token().token());
+        let token_text = normalize_apostrophes(surface_text(token));
         let matches = if pattern_token.case_sensitive {
             token_text == ref_text
         } else {
@@ -449,27 +625,10 @@ impl PatternRuleEngine {
         matched_texts: &[String],
     ) -> Option<PatternMatchResult> {
         if element_idx >= elements.len() {
-            return Some(PatternMatchResult {
-                first_start: None,
-                last_end: None,
-                matched_positions: Vec::new(),
-                matched_texts: Vec::new(),
-            });
+            return Some(PatternMatchResult::new());
         }
 
         if token_idx >= tokens.len() {
-            let remaining_ok: bool = (element_idx..elements.len()).all(|i| match &elements[i] {
-                og_xml::compiler::CompiledPatternElement::Token(t) => t.min == Some(0),
-                _ => false,
-            });
-            if remaining_ok {
-                return Some(PatternMatchResult {
-                    first_start: None,
-                    last_end: None,
-                    matched_positions: Vec::new(),
-                    matched_texts: Vec::new(),
-                });
-            }
             return None;
         }
 
@@ -503,14 +662,15 @@ impl PatternRuleEngine {
                             element_idx + 1,
                             &new_mt,
                         )?;
-                        result.matched_positions.insert(0, token_idx);
-                        result
-                            .matched_texts
-                            .insert(0, tokens[token_idx].token().token().to_string());
-                        if result.first_start.is_none() {
-                            result.first_start = Some(tokens[token_idx].token().start());
-                        }
-                        result.last_end = Some(tokens[token_idx].token().end());
+                        result.push_front(
+                            token_idx,
+                            element_idx,
+                            tokens[token_idx].token().token().to_string(),
+                        );
+                        result.extend_span(
+                            tokens[token_idx].token().start(),
+                            tokens[token_idx].token().end(),
+                        );
                         return Some(result);
                     }
                 }
@@ -536,14 +696,15 @@ impl PatternRuleEngine {
                         element_idx + 1,
                         &new_mt,
                     )?;
-                    result.matched_positions.insert(0, token_idx);
-                    result
-                        .matched_texts
-                        .insert(0, tokens[token_idx].token().token().to_string());
-                    if result.first_start.is_none() {
-                        result.first_start = Some(tokens[token_idx].token().start());
-                    }
-                    result.last_end = Some(tokens[token_idx].token().end());
+                    result.push_front(
+                        token_idx,
+                        element_idx,
+                        tokens[token_idx].token().token().to_string(),
+                    );
+                    result.extend_span(
+                        tokens[token_idx].token().start(),
+                        tokens[token_idx].token().end(),
+                    );
                     Some(result)
                 } else {
                     None
@@ -573,20 +734,6 @@ impl PatternRuleEngine {
             }
         };
 
-        if min == Some(0)
-            && let Some(mut result) = self.match_elements_recursive(
-                elements,
-                tokens,
-                token_idx,
-                element_idx + 1,
-                matched_texts,
-            )
-        {
-            result.matched_positions.insert(0, token_idx);
-            result.matched_texts.insert(0, String::new());
-            return Some(result);
-        }
-
         if skip != 0 {
             let max_skip = if skip < 0 {
                 tokens.len()
@@ -595,7 +742,29 @@ impl PatternRuleEngine {
             };
             for s in 0..=max_skip {
                 let next_token = token_idx + s;
-                if next_token < tokens.len() && token_ok(next_token, matched_texts) {
+                if next_token >= tokens.len() {
+                    break;
+                }
+                if min == Some(0)
+                    && self.later_element_matches_at(
+                        elements,
+                        tokens,
+                        next_token,
+                        element_idx,
+                        matched_texts,
+                    )
+                {
+                    let mut result = self.match_elements_recursive(
+                        elements,
+                        tokens,
+                        next_token,
+                        element_idx + 1,
+                        matched_texts,
+                    )?;
+                    result.push_front(next_token, element_idx, String::new());
+                    return Some(result);
+                }
+                if token_ok(next_token, matched_texts) {
                     let mut new_mt = matched_texts.to_vec();
                     new_mt.push(tokens[next_token].token().token().to_string());
                     if let Some(mut result) = self.match_elements_recursive(
@@ -605,19 +774,40 @@ impl PatternRuleEngine {
                         element_idx + 1,
                         &new_mt,
                     ) {
-                        result.matched_positions.insert(0, next_token);
-                        result
-                            .matched_texts
-                            .insert(0, tokens[next_token].token().token().to_string());
-                        if result.first_start.is_none() {
-                            result.first_start = Some(tokens[next_token].token().start());
-                        }
-                        result.last_end = Some(tokens[next_token].token().end());
+                        result.push_front(
+                            next_token,
+                            element_idx,
+                            tokens[next_token].token().token().to_string(),
+                        );
+                        result.extend_span(
+                            tokens[next_token].token().start(),
+                            tokens[next_token].token().end(),
+                        );
                         return Some(result);
                     }
                 }
             }
             return None;
+        }
+
+        if min == Some(0)
+            && self.later_element_matches_at(
+                elements,
+                tokens,
+                token_idx,
+                element_idx,
+                matched_texts,
+            )
+        {
+            let mut result = self.match_elements_recursive(
+                elements,
+                tokens,
+                token_idx,
+                element_idx + 1,
+                matched_texts,
+            )?;
+            result.push_front(token_idx, element_idx, String::new());
+            return Some(result);
         }
 
         if min.is_some() || max.is_some() {
@@ -635,7 +825,8 @@ impl PatternRuleEngine {
                     break;
                 }
             }
-            for count in (min_count..=matched_count).rev() {
+            let count_start = if min_count == 0 { 1 } else { min_count };
+            for count in (count_start..=matched_count).rev() {
                 let mut new_mt = matched_texts.to_vec();
                 for t in tokens.iter().take(token_idx + count).skip(token_idx) {
                     new_mt.push(t.token().token().to_string());
@@ -648,15 +839,16 @@ impl PatternRuleEngine {
                     &new_mt,
                 ) {
                     for i in (0..count).rev() {
-                        result.matched_positions.insert(0, token_idx + i);
-                        result
-                            .matched_texts
-                            .insert(0, tokens[token_idx + i].token().token().to_string());
+                        result.push_front(
+                            token_idx + i,
+                            element_idx,
+                            tokens[token_idx + i].token().token().to_string(),
+                        );
                     }
-                    if result.first_start.is_none() {
-                        result.first_start = Some(tokens[token_idx].token().start());
-                    }
-                    result.last_end = Some(tokens[token_idx + count - 1].token().end());
+                    result.extend_span(
+                        tokens[token_idx].token().start(),
+                        tokens[token_idx + count - 1].token().end(),
+                    );
                     return Some(result);
                 }
             }
@@ -673,14 +865,15 @@ impl PatternRuleEngine {
                 element_idx + 1,
                 &new_mt,
             )?;
-            result.matched_positions.insert(0, token_idx);
-            result
-                .matched_texts
-                .insert(0, tokens[token_idx].token().token().to_string());
-            if result.first_start.is_none() {
-                result.first_start = Some(tokens[token_idx].token().start());
-            }
-            result.last_end = Some(tokens[token_idx].token().end());
+            result.push_front(
+                token_idx,
+                element_idx,
+                tokens[token_idx].token().token().to_string(),
+            );
+            result.extend_span(
+                tokens[token_idx].token().start(),
+                tokens[token_idx].token().end(),
+            );
             Some(result)
         } else {
             None
@@ -696,30 +889,35 @@ impl PatternRuleEngine {
         matched_texts: &[String],
     ) -> Option<PatternMatchResult> {
         if pattern_idx >= pattern_tokens.len() {
-            return Some(PatternMatchResult {
-                first_start: None,
-                last_end: None,
-                matched_positions: Vec::new(),
-                matched_texts: Vec::new(),
-            });
+            return Some(PatternMatchResult::new());
         }
 
         if token_idx >= tokens.len() {
-            let remaining_ok: bool =
-                (pattern_idx..pattern_tokens.len()).all(|i| pattern_tokens[i].min == Some(0));
-            if remaining_ok {
-                return Some(PatternMatchResult {
-                    first_start: None,
-                    last_end: None,
-                    matched_positions: Vec::new(),
-                    matched_texts: Vec::new(),
-                });
-            }
             return None;
         }
 
         let pattern_token = &pattern_tokens[pattern_idx];
         let text_token = tokens[token_idx];
+
+        if pattern_token.min == Some(0)
+            && self.later_token_matches_at(
+                pattern_tokens,
+                tokens,
+                token_idx,
+                pattern_idx,
+                matched_texts,
+            )
+        {
+            let mut result = self.match_pattern_recursive(
+                pattern_tokens,
+                tokens,
+                token_idx,
+                pattern_idx + 1,
+                matched_texts,
+            )?;
+            result.push_front(token_idx, pattern_idx, String::new());
+            return Some(result);
+        }
 
         let matches = if let Some(br) =
             self.backreference_matches(pattern_token, text_token, matched_texts)
@@ -771,20 +969,6 @@ impl PatternRuleEngine {
                 return None;
             }
 
-            if min_count == 0
-                && let Some(mut result) = self.match_pattern_recursive(
-                    pattern_tokens,
-                    tokens,
-                    token_idx,
-                    pattern_idx + 1,
-                    matched_texts,
-                )
-            {
-                result.matched_positions.insert(0, token_idx);
-                result.matched_texts.insert(0, String::new());
-                return Some(result);
-            }
-
             let skip = pattern_token.skip;
             let max_skip = if skip < 0 {
                 tokens.len()
@@ -818,10 +1002,10 @@ impl PatternRuleEngine {
                     break;
                 }
                 if !next_scope_exceptions.is_empty()
-                    && ((token_idx + 1)..next_token_idx.min(tokens.len() + 1)).any(|q| {
-                        next_scope_exceptions
-                            .iter()
-                            .any(|exc| exc.negate ^ self.exception_matches(exc, tokens[q]))
+                    && ((token_idx + 1)..=next_token_idx.min(tokens.len() - 1)).any(|q| {
+                        next_scope_exceptions.iter().any(|exc| {
+                            self.exception_matches(exc, tokens[q], has_space_before(tokens, q))
+                        })
                     })
                 {
                     continue;
@@ -840,6 +1024,7 @@ impl PatternRuleEngine {
                     };
 
                     let mut positions = Vec::new();
+                    let mut pat_indices = Vec::new();
                     let mut texts = Vec::new();
                     for (i, t) in tokens
                         .iter()
@@ -848,6 +1033,7 @@ impl PatternRuleEngine {
                         .skip(token_idx)
                     {
                         positions.push(i);
+                        pat_indices.push(pattern_idx);
                         if i == token_idx {
                             texts.push(token_text.clone());
                         } else {
@@ -856,6 +1042,7 @@ impl PatternRuleEngine {
                     }
 
                     rest.matched_positions.splice(0..0, positions);
+                    rest.pattern_indices.splice(0..0, pat_indices);
                     rest.matched_texts.splice(0..0, texts);
                     rest.first_start = Some(match rest.first_start {
                         Some(s) => std::cmp::min(s, token_start),
@@ -876,6 +1063,7 @@ impl PatternRuleEngine {
                     token_end
                 };
                 let mut positions = Vec::new();
+                let mut pat_indices = Vec::new();
                 let mut texts = Vec::new();
                 for (i, t) in tokens
                     .iter()
@@ -884,6 +1072,7 @@ impl PatternRuleEngine {
                     .skip(token_idx)
                 {
                     positions.push(i);
+                    pat_indices.push(pattern_idx);
                     if i == token_idx {
                         texts.push(token_text.clone());
                     } else {
@@ -894,22 +1083,12 @@ impl PatternRuleEngine {
                     first_start: Some(token_start),
                     last_end: Some(last_end),
                     matched_positions: positions,
+                    pattern_indices: pat_indices,
                     matched_texts: texts,
                 });
             }
 
             None
-        } else if pattern_token.min == Some(0) {
-            let mut result = self.match_pattern_recursive(
-                pattern_tokens,
-                tokens,
-                token_idx,
-                pattern_idx + 1,
-                matched_texts,
-            )?;
-            result.matched_positions.insert(0, token_idx);
-            result.matched_texts.insert(0, String::new());
-            Some(result)
         } else {
             None
         }
@@ -971,6 +1150,8 @@ impl PatternRuleEngine {
                         unifications,
                         antipattern,
                         &anti_result.matched_positions,
+                        &anti_result.pattern_indices,
+                        &anti_result.matched_texts,
                         tokens,
                     )
                 {
@@ -1008,6 +1189,8 @@ impl PatternRuleEngine {
                     unifications,
                     antipattern,
                     &anti_result.matched_positions,
+                    &anti_result.pattern_indices,
+                    &anti_result.matched_texts,
                     tokens,
                 ) {
                     continue;
@@ -1058,6 +1241,98 @@ impl PatternRuleEngine {
         result
     }
 
+    fn pattern_token_matches_at(
+        &self,
+        pattern_token: &og_xml::compiler::CompiledPatternToken,
+        token: &AnalyzedTokenReadings,
+        token_idx: usize,
+        tokens: &[&AnalyzedTokenReadings],
+        matched_texts: &[String],
+    ) -> bool {
+        if let Some(br) = self.backreference_matches(pattern_token, token, matched_texts) {
+            br && self.token_matches(pattern_token, token, token_idx, tokens)
+        } else {
+            self.token_matches(pattern_token, token, token_idx, tokens)
+        }
+    }
+
+    fn later_token_matches_at(
+        &self,
+        pattern_tokens: &[og_xml::compiler::CompiledPatternToken],
+        tokens: &[&AnalyzedTokenReadings],
+        token_idx: usize,
+        pattern_idx: usize,
+        matched_texts: &[String],
+    ) -> bool {
+        for k2 in pattern_idx + 1..pattern_tokens.len() {
+            let tok = &pattern_tokens[k2];
+            if self.pattern_token_matches_at(
+                tok,
+                tokens[token_idx],
+                token_idx,
+                tokens,
+                matched_texts,
+            ) {
+                return true;
+            }
+            if tok.min.unwrap_or(1) > 0 {
+                return false;
+            }
+        }
+        false
+    }
+
+    fn later_element_matches_at(
+        &self,
+        elements: &[og_xml::compiler::CompiledPatternElement],
+        tokens: &[&AnalyzedTokenReadings],
+        token_idx: usize,
+        element_idx: usize,
+        matched_texts: &[String],
+    ) -> bool {
+        for k2 in element_idx + 1..elements.len() {
+            let element = &elements[k2];
+            let matched = match element {
+                og_xml::compiler::CompiledPatternElement::Token(t) => self
+                    .pattern_token_matches_at(
+                        t,
+                        tokens[token_idx],
+                        token_idx,
+                        tokens,
+                        matched_texts,
+                    ),
+                og_xml::compiler::CompiledPatternElement::OrGroup(alts) => alts.iter().any(|a| {
+                    self.pattern_token_matches_at(
+                        a,
+                        tokens[token_idx],
+                        token_idx,
+                        tokens,
+                        matched_texts,
+                    )
+                }),
+                og_xml::compiler::CompiledPatternElement::AndGroup(constraints) => {
+                    constraints.iter().all(|c| {
+                        self.pattern_token_matches_at(
+                            c,
+                            tokens[token_idx],
+                            token_idx,
+                            tokens,
+                            matched_texts,
+                        )
+                    })
+                }
+            };
+            if matched {
+                return true;
+            }
+            let optional = matches!(element, og_xml::compiler::CompiledPatternElement::Token(t) if t.min.unwrap_or(1) == 0);
+            if !optional {
+                return false;
+            }
+        }
+        false
+    }
+
     fn token_matches(
         &self,
         pattern: &og_xml::compiler::CompiledPatternToken,
@@ -1065,113 +1340,11 @@ impl PatternRuleEngine {
         token_idx: usize,
         tokens: &[&AnalyzedTokenReadings],
     ) -> bool {
-        let text_matches = if let Some(ref text) = pattern.text {
-            let token_text = normalize_apostrophes(token.token().token());
-            let norm_text = normalize_apostrophes(text);
-            let surface_matches = if pattern.case_sensitive {
-                token_text == norm_text
-            } else {
-                token_text.eq_ignore_ascii_case(&norm_text)
-            };
-
-            if pattern.inflected {
-                let lemma_matches = if surface_matches {
-                    true
-                } else {
-                    token.readings().iter().any(|r| {
-                        if let Some(lemma) = r.lemma() {
-                            if pattern.case_sensitive {
-                                lemma == text
-                            } else {
-                                lemma.eq_ignore_ascii_case(text)
-                            }
-                        } else {
-                            false
-                        }
-                    })
-                };
-                if pattern.negate {
-                    !lemma_matches
-                } else {
-                    lemma_matches
-                }
-            } else {
-                if pattern.negate {
-                    !surface_matches
-                } else {
-                    surface_matches
-                }
-            }
-        } else if let Some(ref re) = pattern.compiled_regexp_fancy {
-            let token_text = normalize_apostrophes(token.token().token());
-            re.is_match(&token_text).unwrap_or_default()
-        } else if let Some(ref re) = pattern.compiled_regexp {
-            let token_text = normalize_apostrophes(token.token().token());
-            let surface_matches = if pattern.case_sensitive {
-                re.is_match(&token_text)
-            } else if let Some(ref ci_re) = pattern.compiled_regexp_ci {
-                ci_re.is_match(&token_text)
-            } else {
-                re.is_match(&token_text)
-            };
-
-            let matches = if pattern.inflected && !surface_matches {
-                token.readings().iter().any(|r| {
-                    if let Some(lemma) = r.lemma() {
-                        if pattern.case_sensitive {
-                            re.is_match(lemma)
-                        } else if let Some(ref ci_re) = pattern.compiled_regexp_ci {
-                            ci_re.is_match(lemma)
-                        } else {
-                            re.is_match(lemma)
-                        }
-                    } else {
-                        false
-                    }
-                })
-            } else {
-                surface_matches
-            };
-            if pattern.negate { !matches } else { matches }
-        } else {
-            true
-        };
-
-        if !text_matches {
+        if token.is_immunized() {
             return false;
         }
-
-        if let Some(ref postag) = pattern.postag {
-            if let Some(ref postag_re) = pattern.compiled_postag_regexp {
-                let pos_matches = token.has_pos_tag_matching_regex(postag_re)
-                    || (postag == "UNKNOWN"
-                        && postag_re.is_match("UNKNOWN")
-                        && token.all_pos_tags().is_empty());
-                if pattern.negate_pos {
-                    if pos_matches {
-                        return false;
-                    }
-                } else {
-                    if !pos_matches {
-                        return false;
-                    }
-                }
-            } else {
-                let pos_matches = if postag == "UNKNOWN" {
-                    token.all_pos_tags().is_empty()
-                } else {
-                    token.has_pos_tag(postag)
-                };
-                if pattern.negate_pos {
-                    if pos_matches {
-                        return false;
-                    }
-                } else {
-                    if !pos_matches {
-                        return false;
-                    }
-                }
-            }
+        if !element_matches_readings(pattern, token) {
+            return false;
         }
 
         if let Some(ref chunk) = pattern.chunk
@@ -1203,7 +1376,11 @@ impl PatternRuleEngine {
             let exc_matches = match exc.scope.as_deref() {
                 Some("next") if pattern.skip == 0 => {
                     if token_idx + 1 < tokens.len() {
-                        self.exception_matches(exc, tokens[token_idx + 1])
+                        self.exception_matches(
+                            exc,
+                            tokens[token_idx + 1],
+                            has_space_before(tokens, token_idx + 1),
+                        )
                     } else {
                         false
                     }
@@ -1211,18 +1388,19 @@ impl PatternRuleEngine {
                 Some("next") => false,
                 Some("previous") => {
                     if token_idx > 0 {
-                        self.exception_matches(exc, tokens[token_idx - 1])
+                        self.exception_matches(
+                            exc,
+                            tokens[token_idx - 1],
+                            has_space_before(tokens, token_idx - 1),
+                        )
                     } else {
                         false
                     }
                 }
-                _ => self.exception_matches(exc, token),
+                _ => self.exception_matches(exc, token, has_space_before(tokens, token_idx)),
             };
 
-            if exc_matches && !exc.negate {
-                return false;
-            }
-            if !exc_matches && exc.negate {
+            if exc_matches {
                 return false;
             }
         }
@@ -1234,72 +1412,281 @@ impl PatternRuleEngine {
         &self,
         exc: &og_xml::compiler::CompiledException,
         token: &AnalyzedTokenReadings,
+        token_space_before: bool,
     ) -> bool {
-        let token_text = normalize_apostrophes(token.token().token());
-        let mut matched = true;
-        let mut has_constraint = false;
-
-        if exc.compiled_regexp.is_some()
-            || exc.compiled_regexp_fancy.is_some()
-            || exc.text.is_some()
+        if exc
+            .space_before
+            .is_some_and(|required| required != token_space_before)
         {
-            has_constraint = true;
-            matched &= match (&exc.compiled_regexp, &exc.compiled_regexp_fancy) {
-                (Some(re), _) => re.is_match(&token_text),
-                (None, Some(re)) => re.is_match(&token_text).unwrap_or(false),
-                (None, None) => {
-                    let text = exc.text.as_ref().expect("checked above");
-                    let norm_text = normalize_apostrophes(text);
-                    let surface_matches = if exc.case_sensitive {
-                        token_text == norm_text
-                    } else {
-                        token_text.eq_ignore_ascii_case(norm_text.as_ref())
-                    };
-                    if exc.inflected {
-                        surface_matches
-                            || token.readings().iter().any(|r| {
-                                if let Some(lemma) = r.lemma() {
-                                    if exc.case_sensitive {
-                                        lemma == text
-                                    } else {
-                                        lemma.eq_ignore_ascii_case(text)
-                                    }
-                                } else {
-                                    false
-                                }
-                            })
-                    } else {
-                        surface_matches
-                    }
-                }
-            };
+            return false;
         }
-
-        if let Some(postag) = exc.postag.as_deref() {
-            has_constraint = true;
-            let pos_matches = if postag == "UNKNOWN" && exc.compiled_postag_regexp.is_none() {
-                token.all_pos_tags().is_empty()
-            } else if let Some(ref postag_re) = exc.compiled_postag_regexp {
-                token.has_pos_tag_matching_regex(postag_re)
-            } else {
-                token.has_pos_tag(postag)
-            };
-            matched &= if exc.negate_pos {
-                !pos_matches
-            } else {
-                pos_matches
-            };
+        let has_string = exc.compiled_regexp.is_some()
+            || exc.compiled_regexp_fancy.is_some()
+            || exc.text.is_some();
+        if !has_string && exc.postag.is_none() {
+            return false;
         }
-
-        has_constraint && matched
+        let untagged = has_no_tag_reading(token);
+        if !has_string {
+            return !exc.negate
+                && token
+                    .readings()
+                    .iter()
+                    .any(|r| exception_reading_pos_ok(exc, r, untagged));
+        }
+        let surface = surface_text(token);
+        token
+            .readings()
+            .iter()
+            .any(|r| reading_matches_exception(exc, surface, r, untagged))
     }
+}
+
+fn exception_reading_pos_ok(
+    exc: &og_xml::compiler::CompiledException,
+    reading: &og_core::AnalyzedToken,
+    token_untagged: bool,
+) -> bool {
+    match exc.postag.as_deref() {
+        Some(postag) => {
+            reading_pos_matches(
+                postag,
+                exc.compiled_postag_regexp.as_ref(),
+                exc.compiled_postag_regexp_fancy.as_ref(),
+                reading.pos_tags(),
+                token_untagged,
+            ) != exc.negate_pos
+        }
+        None => true,
+    }
+}
+
+fn exception_text_matches(exc: &og_xml::compiler::CompiledException, test: &str) -> bool {
+    let t = normalize_apostrophes(test);
+    if let Some(re) = exc.compiled_regexp.as_ref() {
+        re.is_match(t.as_ref())
+    } else if let Some(re) = exc.compiled_regexp_fancy.as_ref() {
+        re.is_match(t.as_ref()).unwrap_or(false)
+    } else if let Some(text) = exc.text.as_deref() {
+        let norm_text = normalize_apostrophes(text);
+        if exc.case_sensitive {
+            t == norm_text
+        } else {
+            t.eq_ignore_ascii_case(norm_text.as_ref())
+        }
+    } else {
+        true
+    }
+}
+
+fn reading_matches_exception(
+    exc: &og_xml::compiler::CompiledException,
+    surface: &str,
+    reading: &og_core::AnalyzedToken,
+    token_untagged: bool,
+) -> bool {
+    let test = if exc.inflected {
+        reading.lemma().unwrap_or(surface)
+    } else {
+        surface
+    };
+    let text_ok = exception_text_matches(exc, test);
+    (text_ok != exc.negate) && exception_reading_pos_ok(exc, reading, token_untagged)
+}
+
+fn reading_pos_ok(
+    pattern: &og_xml::compiler::CompiledPatternToken,
+    reading: &og_core::AnalyzedToken,
+    token_untagged: bool,
+) -> bool {
+    match pattern.postag.as_deref() {
+        Some(postag) => {
+            reading_pos_matches(
+                postag,
+                pattern.compiled_postag_regexp.as_ref(),
+                pattern.compiled_postag_regexp_fancy.as_ref(),
+                reading.pos_tags(),
+                token_untagged,
+            ) != pattern.negate_pos
+        }
+        None => true,
+    }
+}
+
+fn element_surface_text_matches(
+    pattern: &og_xml::compiler::CompiledPatternToken,
+    token: &AnalyzedTokenReadings,
+) -> bool {
+    let token_text = normalize_apostrophes(surface_text(token));
+    if let Some(ref text) = pattern.text {
+        let norm_text = normalize_apostrophes(text);
+        if pattern.case_sensitive {
+            token_text == norm_text
+        } else {
+            token_text.eq_ignore_ascii_case(&norm_text)
+        }
+    } else if let Some(ref re) = pattern.compiled_regexp_fancy {
+        re.is_match(&token_text).unwrap_or(false)
+    } else if let Some(ref re) = pattern.compiled_regexp {
+        if pattern.case_sensitive {
+            re.is_match(&token_text)
+        } else if let Some(ref ci_re) = pattern.compiled_regexp_ci {
+            ci_re.is_match(&token_text)
+        } else {
+            re.is_match(&token_text)
+        }
+    } else {
+        true
+    }
+}
+
+fn element_matches_readings(
+    pattern: &og_xml::compiler::CompiledPatternToken,
+    token: &AnalyzedTokenReadings,
+) -> bool {
+    let has_string = pattern.text.is_some()
+        || pattern.compiled_regexp.is_some()
+        || pattern.compiled_regexp_fancy.is_some();
+    let untagged = has_no_tag_reading(token);
+    if !has_string {
+        if pattern.match_no.is_some() {
+            return token
+                .readings()
+                .iter()
+                .any(|r| reading_pos_ok(pattern, r, untagged));
+        }
+        return !pattern.negate
+            && token
+                .readings()
+                .iter()
+                .any(|r| reading_pos_ok(pattern, r, untagged));
+    }
+    if pattern.inflected {
+        let surface = surface_text(token);
+        if token
+            .readings()
+            .iter()
+            .any(|r| reading_matches_element(pattern, surface, r, untagged))
+        {
+            return true;
+        }
+        // Java leaves unsplittable compounds as lemma-less no-info readings, so its
+        // inflected test falls back to the surface; our splitter gives them lemmas.
+        return element_surface_text_matches(pattern, token) != pattern.negate
+            && token
+                .readings()
+                .iter()
+                .any(|r| reading_pos_ok(pattern, r, untagged));
+    }
+    element_surface_text_matches(pattern, token) != pattern.negate
+        && token
+            .readings()
+            .iter()
+            .any(|r| reading_pos_ok(pattern, r, untagged))
+}
+
+fn has_space_before(tokens: &[&AnalyzedTokenReadings], token_idx: usize) -> bool {
+    token_idx > 0 && tokens[token_idx].token().start() != tokens[token_idx - 1].token().end()
 }
 
 struct PatternMatchResult {
     first_start: Option<usize>,
     last_end: Option<usize>,
     matched_positions: Vec<usize>,
+    pattern_indices: Vec<usize>,
     matched_texts: Vec<String>,
+}
+
+impl PatternMatchResult {
+    fn new() -> Self {
+        Self {
+            first_start: None,
+            last_end: None,
+            matched_positions: Vec::new(),
+            pattern_indices: Vec::new(),
+            matched_texts: Vec::new(),
+        }
+    }
+
+    fn push_front(&mut self, pos: usize, pattern_idx: usize, text: String) {
+        self.matched_positions.insert(0, pos);
+        self.pattern_indices.insert(0, pattern_idx);
+        self.matched_texts.insert(0, text);
+    }
+
+    fn extend_span(&mut self, start: usize, end: usize) {
+        self.first_start = Some(match self.first_start {
+            Some(s) => std::cmp::min(s, start),
+            None => start,
+        });
+        self.last_end = Some(match self.last_end {
+            Some(e) => std::cmp::max(e, end),
+            None => end,
+        });
+    }
+
+    fn position_for_pattern(&self, pattern_idx: usize) -> Option<usize> {
+        self.pattern_indices
+            .iter()
+            .position(|&p| p == pattern_idx)
+            .and_then(|i| self.matched_positions.get(i).copied())
+    }
+
+    fn last_position_for_pattern(&self, pattern_idx: usize) -> Option<usize> {
+        self.pattern_indices
+            .iter()
+            .rposition(|&p| p == pattern_idx)
+            .and_then(|i| self.matched_positions.get(i).copied())
+    }
+}
+
+fn comma_leading_suggestion(rule: &CompiledRule, matched_texts: &[String]) -> bool {
+    if rule.message.contains("<suggestion>,") {
+        return true;
+    }
+    rule.suggestions.iter().any(|s| {
+        let mut leading = String::new();
+        for part in &s.parts {
+            match part {
+                og_xml::types::SuggestionPart::Text(t) => leading.push_str(t),
+                og_xml::types::SuggestionPart::Match(m) => {
+                    leading.push_str(m.regexp_replace.as_deref().unwrap_or("x"));
+                }
+            }
+            if !leading.is_empty() {
+                break;
+            }
+        }
+        let resolved = resolve_leading_backrefs(&leading, matched_texts);
+        resolved.starts_with(',')
+    })
+}
+
+fn resolve_leading_backrefs(text: &str, matched_texts: &[String]) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut result = String::new();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '\\' && i + 1 < chars.len() && chars[i + 1].is_ascii_digit() {
+            let mut num = String::new();
+            let mut j = i + 1;
+            while j < chars.len() && chars[j].is_ascii_digit() {
+                num.push(chars[j]);
+                j += 1;
+            }
+            if let Ok(idx) = num.parse::<usize>()
+                && idx > 0
+                && idx <= matched_texts.len()
+            {
+                result.push_str(&matched_texts[idx - 1]);
+            }
+            i = j;
+            continue;
+        }
+        result.push(chars[i]);
+        i += 1;
+    }
+    result
 }
 
 fn unify_groups_satisfied(
@@ -1308,14 +1695,15 @@ fn unify_groups_satisfied(
     tokens: &[&AnalyzedTokenReadings],
 ) -> bool {
     for group in &rule.pattern.unify_groups {
-        let matched = unify_group_matches(
+        if !unify_group_matches(
             &rule.unifications,
             &rule.pattern,
             group,
             &match_result.matched_positions,
+            &match_result.pattern_indices,
+            &match_result.matched_texts,
             tokens,
-        );
-        if matched == group.negate {
+        ) {
             return false;
         }
     }
@@ -1326,176 +1714,116 @@ fn antipattern_unify_satisfied(
     unifications: &[og_xml::compiler::CompiledUnification],
     antipattern: &og_xml::compiler::CompiledPattern,
     matched_positions: &[usize],
+    pattern_indices: &[usize],
+    matched_texts: &[String],
     tokens: &[&AnalyzedTokenReadings],
 ) -> bool {
     for group in &antipattern.unify_groups {
-        let matched =
-            unify_group_matches(unifications, antipattern, group, matched_positions, tokens);
-        if matched == group.negate {
+        if !unify_group_matches(
+            unifications,
+            antipattern,
+            group,
+            matched_positions,
+            pattern_indices,
+            matched_texts,
+            tokens,
+        ) {
             return false;
         }
     }
     true
 }
+
+use og_xml::unifier::{
+    Unifier, UnifyElemPlan, UnifyReading, eval_unify_plans, has_no_tag_reading,
+    normalize_apostrophes, reading_matches_element, reading_pos_matches, surface_text,
+};
 
 fn unify_group_matches(
     unifications: &[og_xml::compiler::CompiledUnification],
     rule_pattern: &og_xml::compiler::CompiledPattern,
     group: &og_xml::types::XmlUnifyGroup,
     matched_positions: &[usize],
+    pattern_indices: &[usize],
+    matched_texts: &[String],
     tokens: &[&AnalyzedTokenReadings],
 ) -> bool {
-    let mut common: Option<std::collections::HashMap<String, std::collections::HashSet<String>>> =
-        None;
-    let mut group_len = 0usize;
-    for pattern_token in group.token_start..group.token_end {
-        group_len += 1;
-        let Some(pattern) = rule_pattern.tokens.get(pattern_token) else {
-            return false;
+    if group.elem_end <= group.elem_start {
+        return group.negate;
+    }
+    let last_elem = group.elem_end - 1;
+    let mut plans: Vec<UnifyElemPlan<'_>> = Vec::with_capacity(group.elem_end - group.elem_start);
+    for elem_idx in group.elem_start..group.elem_end {
+        let Some(element) = rule_pattern.elements.get(elem_idx) else {
+            continue;
         };
-        let Some(&sentence_token) = matched_positions.get(pattern_token) else {
-            return false;
+        let criteria: Vec<&og_xml::compiler::CompiledPatternToken> = match element {
+            og_xml::compiler::CompiledPatternElement::Token(t) => vec![t.as_ref()],
+            og_xml::compiler::CompiledPatternElement::AndGroup(c) => match c.first() {
+                Some(head) => vec![head],
+                None => continue,
+            },
+            og_xml::compiler::CompiledPatternElement::OrGroup(alts) => alts.iter().collect(),
         };
-        let Some(token) = tokens.get(sentence_token) else {
-            return false;
-        };
-        if pattern.unify_neutral {
+        let optional = matches!(
+            element,
+            og_xml::compiler::CompiledPatternElement::Token(t) if t.min == Some(0)
+        );
+        let entries: Vec<usize> = pattern_indices
+            .iter()
+            .enumerate()
+            .filter(|&(_, &p)| p == elem_idx)
+            .filter(|&(i, _)| !(optional && matched_texts.get(i).is_some_and(|t| t.is_empty())))
+            .filter_map(|(i, _)| matched_positions.get(i).copied())
+            .collect();
+        if criteria.first().is_some_and(|c| c.unify_neutral) {
+            plans.push(UnifyElemPlan {
+                elem_idx,
+                neutral_readings: entries
+                    .iter()
+                    .filter_map(|&p| tokens.get(p).map(|t| t.readings().len()))
+                    .collect(),
+                reading_sets: Vec::new(),
+            });
             continue;
         }
-        let mut token_types: std::collections::HashMap<String, std::collections::HashSet<String>> =
-            std::collections::HashMap::new();
-        for reading in token.readings() {
-            let reading_tags: Vec<&str> = reading.pos_tags().iter().map(String::as_str).collect();
-            if !reading_matches_postag(pattern, &reading_tags) {
-                continue;
-            }
-            if !reading_satisfies_features(unifications, group, &reading_tags) {
-                continue;
-            }
-            for (feature, types) in reading_feature_types(unifications, group, &reading_tags) {
-                token_types
-                    .entry(feature)
-                    .or_default()
-                    .extend(types.iter().cloned());
-            }
-        }
-        if token_types.is_empty() {
-            return false;
-        }
-        common = Some(match common {
-            None => token_types,
-            Some(existing) => {
-                let mut merged = std::collections::HashMap::new();
-                for (feature, types) in existing {
-                    if let Some(other) = token_types.get(&feature) {
-                        let intersection: std::collections::HashSet<String> =
-                            types.intersection(other).cloned().collect();
-                        merged.insert(feature, intersection);
+        let mut all_variants: Vec<Vec<Vec<UnifyReading<'_>>>> = Vec::with_capacity(criteria.len());
+        for criterion in &criteria {
+            let mut reading_sets: Vec<Vec<UnifyReading<'_>>> = Vec::with_capacity(entries.len());
+            for &sentence_token in &entries {
+                let Some(token) = tokens.get(sentence_token) else {
+                    continue;
+                };
+                let surface = surface_text(token);
+                let untagged = has_no_tag_reading(token);
+                let mut reading_tags: Vec<UnifyReading<'_>> =
+                    Vec::with_capacity(token.readings().len());
+                for (ri, reading) in token.readings().iter().enumerate() {
+                    if reading_matches_element(criterion, surface, reading, untagged) {
+                        reading_tags.push(UnifyReading {
+                            tags: reading.pos_tags().iter().map(String::as_str).collect(),
+                            id: ri as u32,
+                        });
                     }
                 }
-                merged
+                if !reading_tags.is_empty() {
+                    reading_sets.push(reading_tags);
+                }
             }
+            all_variants.push(reading_sets);
+        }
+        all_variants.retain(|v| !v.is_empty());
+        if all_variants.is_empty() {
+            continue;
+        }
+        plans.push(UnifyElemPlan {
+            elem_idx,
+            neutral_readings: Vec::new(),
+            reading_sets: all_variants,
         });
-        if common
-            .as_ref()
-            .is_some_and(|c| c.values().any(|v| v.is_empty()))
-        {
-            return false;
-        }
     }
-    let _ = group_len;
-    common
-        .as_ref()
-        .is_some_and(|c| !c.is_empty() && c.values().all(|v| !v.is_empty()))
-}
-
-fn reading_matches_postag(pattern: &og_xml::compiler::CompiledPatternToken, tags: &[&str]) -> bool {
-    let Some(postag) = pattern.postag.as_deref() else {
-        return true;
-    };
-    let matches = match &pattern.compiled_postag_regexp {
-        Some(re) => tags.iter().any(|t| re.is_match(t)),
-        None => tags.contains(&postag),
-    };
-    if pattern.negate_pos {
-        !matches
-    } else {
-        matches
-    }
-}
-
-fn reading_feature_types(
-    unifications: &[og_xml::compiler::CompiledUnification],
-    group: &og_xml::types::XmlUnifyGroup,
-    tags: &[&str],
-) -> Vec<(String, Vec<String>)> {
-    let relevant: Vec<&og_xml::compiler::CompiledUnification> = if group.features.is_empty() {
-        unifications.iter().collect()
-    } else {
-        group
-            .features
-            .iter()
-            .filter_map(|(name, _)| unifications.iter().find(|u| &u.feature == name))
-            .collect()
-    };
-    relevant
-        .iter()
-        .map(|unification| {
-            let allowed: Option<&Vec<String>> = group
-                .features
-                .iter()
-                .find(|(name, _)| name == &unification.feature)
-                .map(|(_, types)| types);
-            let matched: Vec<String> = unification
-                .equivalences
-                .iter()
-                .filter(|(eq_type, re)| {
-                    allowed.is_none_or(|types| types.is_empty() || types.contains(eq_type))
-                        && tags.iter().any(|t| re.is_match(t))
-                })
-                .map(|(eq_type, _)| eq_type.clone())
-                .collect();
-            (unification.feature.clone(), matched)
-        })
-        .collect()
-}
-
-fn reading_satisfies_features(
-    unifications: &[og_xml::compiler::CompiledUnification],
-    group: &og_xml::types::XmlUnifyGroup,
-    tags: &[&str],
-) -> bool {
-    let relevant: Vec<&og_xml::compiler::CompiledUnification> = if group.features.is_empty() {
-        unifications.iter().collect()
-    } else {
-        group
-            .features
-            .iter()
-            .filter_map(|(name, _)| unifications.iter().find(|u| &u.feature == name))
-            .collect()
-    };
-    if relevant.is_empty() {
-        return false;
-    }
-    for unification in relevant {
-        let allowed: Option<&Vec<String>> = group
-            .features
-            .iter()
-            .find(|(name, _)| name == &unification.feature)
-            .map(|(_, types)| types);
-        let matched = unification
-            .equivalences
-            .iter()
-            .filter(|(eq_type, re)| {
-                allowed.is_none_or(|types| types.is_empty() || types.contains(eq_type))
-                    && tags.iter().any(|t| re.is_match(t))
-            })
-            .count();
-        if matched == 0 {
-            return false;
-        }
-    }
-    true
+    let mut uni = Unifier::from_unifications(unifications, group);
+    eval_unify_plans(&plans, 0, last_elem, group.negate, &mut uni)
 }
 
 fn uppercase_first_char(s: &str) -> String {
@@ -1506,6 +1834,121 @@ fn uppercase_first_char(s: &str) -> String {
         out.push_str(chars.as_str());
     }
     out
+}
+
+fn is_sagt(w: &str) -> bool {
+    matches!(w, "Sagt" | "sagt" | "Sag" | "sag")
+}
+
+fn is_denke_etc(w: &str) -> bool {
+    matches!(
+        w,
+        "denke" | "dachte" | "glaube" | "schätze" | "vermute" | "behaupte"
+    )
+}
+
+fn is_bei_fuer_mit(w: &str) -> bool {
+    matches!(w, "bei" | "für" | "mit")
+}
+
+fn is_dir_etc(w: &str) -> bool {
+    let lower: String = w.chars().flat_map(|c| c.to_lowercase()).collect();
+    matches!(lower.as_str(), "dir" | "dich" | "euer" | "euch")
+}
+
+fn is_der_etc(tokens: &[&AnalyzedTokenReadings]) -> bool {
+    tokens
+        .get(1)
+        .map(|t| {
+            matches!(
+                t.token().token(),
+                "der"
+                    | "die"
+                    | "das"
+                    | "seine"
+                    | "ihre"
+                    | "deine"
+                    | "unsere"
+                    | "meine"
+                    | "folgender"
+                    | "dieser"
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn skipped_suffix(
+    tokens: &[&AnalyzedTokenReadings],
+    matched_positions: &[usize],
+    pattern_idx: usize,
+    following: bool,
+) -> String {
+    let Some(&token_idx) = matched_positions.get(pattern_idx) else {
+        return String::new();
+    };
+    let end = matched_positions
+        .get(pattern_idx + 1)
+        .copied()
+        .unwrap_or(tokens.len());
+    let mut out = String::new();
+    for k in (token_idx + 1)..end {
+        let Some(token) = tokens.get(k) else {
+            break;
+        };
+        if out.is_empty() {
+            if following {
+                // Java skips the space only directly after the anchor token
+            } else {
+                out.push(' ');
+            }
+        } else if tokens
+            .get(k - 1)
+            .is_some_and(|t| t.token().end() < token.token().start())
+        {
+            out.push(' ');
+        }
+        out.push_str(token.token().token());
+    }
+    out
+}
+
+fn resolve_regexp_message(text: &str, groups: &[&str]) -> String {
+    let mut result = String::with_capacity(text.len());
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'\\' && i + 1 < bytes.len() && bytes[i + 1].is_ascii_digit() {
+            let idx = (bytes[i + 1] - b'0') as usize;
+            if let Some(value) = groups.get(idx) {
+                result.push_str(value);
+            }
+            i += 2;
+            continue;
+        }
+        let ch_len = text[i..].chars().next().map_or(1, char::len_utf8);
+        result.push_str(&text[i..i + ch_len]);
+        i += ch_len;
+    }
+    result
+}
+
+fn regex_antipattern_allows(args: &str, text: &str, from: usize, to: usize) -> bool {
+    let Some((_, patterns)) = args.split_once("antipatterns:") else {
+        return true;
+    };
+    for pattern in patterns.split('|') {
+        let Ok(re) = regex::Regex::new(pattern) else {
+            continue;
+        };
+        for mat in re.find_iter(text) {
+            let overlap = (mat.start() <= to && mat.end() >= to)
+                || (mat.start() <= from && mat.end() >= from);
+            if overlap {
+                return false;
+            }
+        }
+    }
+    true
 }
 
 fn equal_without_diacritics(a: &str, b: &str) -> bool {
@@ -1539,33 +1982,127 @@ impl PatternRuleEngine {
         &self,
         filter: &og_xml::types::XmlFilter,
         matched_texts: &[String],
-        _matched_positions: &[usize],
-        _tokens: &[&AnalyzedTokenReadings],
+        matched_positions: &[usize],
+        tokens: &[&AnalyzedTokenReadings],
         sentence: &AnalyzedSentence,
         rm: RuleMatch,
     ) -> Option<RuleMatch> {
         match filter.class.as_str() {
             "org.languagetool.rules.en.FutureDateFilter" => {
-                if self.apply_future_date_filter(&filter.args, matched_texts) {
+                if self.apply_future_date_filter(&filter.args, matched_texts, DateLang::En) {
                     Some(rm)
                 } else {
                     None
                 }
             }
-            "org.languagetool.rules.en.DateCheckFilter" => {
-                if self.apply_date_check_filter(&filter.args, matched_texts) {
+            "org.languagetool.rules.de.FutureDateFilter" => {
+                if self.apply_future_date_filter(&filter.args, matched_texts, DateLang::De) {
                     Some(rm)
                 } else {
                     None
                 }
+            }
+            "org.languagetool.rules.it.FutureDateFilter" => {
+                if self.apply_future_date_filter(&filter.args, matched_texts, DateLang::It) {
+                    Some(rm)
+                } else {
+                    None
+                }
+            }
+            "org.languagetool.rules.pt.FutureDateFilter" => {
+                if self.apply_future_date_filter(&filter.args, matched_texts, DateLang::Pt) {
+                    Some(rm)
+                } else {
+                    None
+                }
+            }
+            "org.languagetool.rules.ru.FutureDateFilter" => {
+                if self.apply_future_date_filter(&filter.args, matched_texts, DateLang::Ru) {
+                    Some(rm)
+                } else {
+                    None
+                }
+            }
+            "org.languagetool.rules.it.DateCheckFilter"
+            | "org.languagetool.rules.pl.DateCheckFilter"
+            | "org.languagetool.rules.ru.DateCheckFilter"
+            | "org.languagetool.rules.br.DateCheckFilter"
+            | "org.languagetool.rules.ar.filters.ArabicDateCheckFilter" => {
+                let lang = match filter.class.as_str() {
+                    c if c.contains(".it.") => DateLang::It,
+                    c if c.contains(".pl.") => DateLang::Pl,
+                    c if c.contains(".ru.") => DateLang::Ru,
+                    c if c.contains(".br.") => DateLang::Br,
+                    c if c.contains("Arabic") => DateLang::Ar,
+                    _ => DateLang::En,
+                };
+                self.apply_date_check_filter(&filter.args, matched_texts, lang, rm)
+            }
+            "org.languagetool.rules.en.DateCheckFilter"
+            | "org.languagetool.rules.de.DateCheckFilter"
+            | "org.languagetool.rules.fr.DateCheckFilter"
+            | "org.languagetool.rules.es.DateCheckFilter"
+            | "org.languagetool.rules.pt.DateCheckFilter"
+            | "org.languagetool.rules.nl.DateCheckFilter" => {
+                let lang = match filter.class.as_str() {
+                    c if c.contains(".de.") => DateLang::De,
+                    c if c.contains(".fr.") => DateLang::Fr,
+                    c if c.contains(".es.") => DateLang::Es,
+                    c if c.contains(".pt.") => DateLang::Pt,
+                    c if c.contains(".nl.") => DateLang::Nl,
+                    _ => DateLang::En,
+                };
+                self.apply_date_check_with_suggestions_filter(
+                    lang,
+                    &filter.args,
+                    matched_positions,
+                    tokens,
+                    sentence.start(),
+                    rm,
+                )
             }
             "org.languagetool.rules.en.NewYearDateFilter"
-            | "org.languagetool.rules.en.YMDNewYearDateFilter" => {
-                if self.apply_new_year_date_filter(&filter.args, matched_texts) {
+            | "org.languagetool.rules.de.NewYearDateFilter"
+            | "org.languagetool.rules.fr.NewYearDateFilter"
+            | "org.languagetool.rules.es.NewYearDateFilter"
+            | "org.languagetool.rules.pt.NewYearDateFilter" => {
+                let lang = match filter.class.as_str() {
+                    c if c.contains(".de.") => DateLang::De,
+                    c if c.contains(".fr.") => DateLang::Fr,
+                    c if c.contains(".es.") => DateLang::Es,
+                    c if c.contains(".pt.") => DateLang::Pt,
+                    _ => DateLang::En,
+                };
+                self.apply_new_year_date_filter(&filter.args, matched_texts, lang, rm)
+            }
+            "org.languagetool.rules.en.YMDNewYearDateFilter"
+            | "org.languagetool.rules.de.YMDNewYearDateFilter"
+            | "org.languagetool.rules.pt.YMDNewYearDateFilter" => {
+                let lang = match filter.class.as_str() {
+                    c if c.contains(".de.") => DateLang::De,
+                    c if c.contains(".pt.") => DateLang::Pt,
+                    _ => DateLang::En,
+                };
+                self.apply_ymd_new_year_date_filter(&filter.args, matched_texts, lang, rm)
+            }
+            "org.languagetool.rules.de.RecentYearFilter" => {
+                if self.apply_recent_year_filter(&filter.args, matched_texts) {
                     Some(rm)
                 } else {
                     None
                 }
+            }
+            "org.languagetool.rules.de.InsertCommaFilter" => {
+                Some(self.apply_insert_comma_filter(matched_texts, matched_positions, tokens, rm))
+            }
+            "org.languagetool.rules.de.RemoveUnknownCompoundsFilter" => {
+                self.apply_remove_unknown_compounds_filter(&filter.args, matched_texts, rm)
+            }
+            "org.languagetool.rules.de.PotentialCompoundFilter" => {
+                self.apply_potential_compound_filter(&filter.args, matched_texts, rm)
+            }
+            "org.languagetool.rules.de.ValidWordFilter" => {
+                self.apply_valid_word_filter(&filter.args, matched_texts, rm)
             }
             "org.languagetool.rules.en.EnglishSuppressMisspelledSuggestionsFilter" => {
                 if filter.args.contains("suppressMatch:true") {
@@ -1574,7 +2111,8 @@ impl PatternRuleEngine {
                     Some(rm)
                 }
             }
-            "org.languagetool.rules.en.EnglishNumberInWordFilter" => {
+            "org.languagetool.rules.en.EnglishNumberInWordFilter"
+            | "org.languagetool.rules.de.GermanNumberInWordFilter" => {
                 self.apply_number_in_word_filter(&filter.args, matched_texts, rm)
             }
             "org.languagetool.rules.en.FindSuggestionsFilter" => {
@@ -1588,7 +2126,7 @@ impl PatternRuleEngine {
                 self.apply_underline_spaces_filter(&filter.args, sentence, rm)
             }
             "org.languagetool.rules.spelling.multitoken.MultitokenSpellerFilter" => {
-                self.apply_multitoken_speller_filter(matched_texts, rm)
+                self.apply_multitoken_speller_filter(matched_positions, tokens, sentence, rm)
             }
             "org.languagetool.rules.DateRangeChecker" => {
                 if self.apply_date_range_filter(&filter.args, matched_texts) {
@@ -1610,6 +2148,24 @@ impl PatternRuleEngine {
                 } else {
                     None
                 }
+            }
+            "org.languagetool.rules.es.PostponedAdjectiveConcordanceFilter" => {
+                crate::postponed_adjective::accept_es(
+                    self.synthesizer.as_deref(),
+                    &filter.args,
+                    matched_positions,
+                    tokens,
+                    rm,
+                )
+            }
+            "org.languagetool.rules.fr.PostponedAdjectiveConcordanceFilter" => {
+                crate::postponed_adjective::accept_fr(
+                    self.synthesizer.as_deref(),
+                    &filter.args,
+                    matched_positions,
+                    tokens,
+                    rm,
+                )
             }
             _ => Some(rm),
         }
@@ -1644,66 +2200,588 @@ impl PatternRuleEngine {
         result
     }
 
-    fn apply_future_date_filter(&self, args: &str, matched_texts: &[String]) -> bool {
-        let parsed = self.parse_filter_args(args, matched_texts);
-        let year_str = parsed.get("year").map(|s| s.as_str()).unwrap_or("0");
-        let month_str = parsed.get("month").map(|s| s.as_str()).unwrap_or("1");
-        let day_str = parsed.get("day").map(|s| s.as_str()).unwrap_or("1");
-
-        let year = parse_date_number(year_str);
-        let month = parse_month(month_str);
-        let day = parse_date_number(day_str);
-
-        if year == 0 || month == 0 {
-            return false;
+    fn resolve_java_filter_args<'a>(
+        &self,
+        args: &'a str,
+        matched_texts: &[String],
+    ) -> HashMap<&'a str, String> {
+        let mut result = HashMap::new();
+        for part in args.split_whitespace() {
+            let Some((key, val)) = part.split_once(':') else {
+                continue;
+            };
+            let resolved = if let Some(rest) = val.strip_prefix('\\')
+                && let Ok(idx) = rest.parse::<usize>()
+                && idx > 0
+                && idx <= matched_texts.len()
+            {
+                matched_texts[idx - 1].clone()
+            } else {
+                val.to_string()
+            };
+            result.insert(key, resolved);
         }
-
-        let current_date = current_date();
-        (year, month, day) > current_date
+        result
     }
 
-    fn apply_date_check_filter(&self, args: &str, matched_texts: &[String]) -> bool {
-        let parsed = self.parse_filter_args(args, matched_texts);
-        let week_day_str = parsed.get("weekDay").map(|s| s.as_str()).unwrap_or("");
-
-        let (year, month, day) = if let Some(date_str) = parsed.get("date") {
-            let parts: Vec<&str> = date_str.split('-').collect();
-            if parts.len() == 3 {
-                (
-                    parse_date_number(parts[0]),
-                    parse_date_number(parts[1]),
-                    parse_date_number(parts[2]),
-                )
-            } else {
-                return false;
-            }
+    fn parse_filter_date(
+        &self,
+        parsed: &HashMap<&str, String>,
+        lang: DateLang,
+        require_year: bool,
+    ) -> Option<(u32, u32, u32)> {
+        let year = if let Some(y) = parsed.get("year") {
+            y.parse::<u32>().ok()?
+        } else if require_year {
+            return None;
         } else {
-            let day_str = parsed.get("day").map(|s| s.as_str()).unwrap_or("1");
-            let month_str = parsed.get("month").map(|s| s.as_str()).unwrap_or("1");
-            let y = parsed
-                .get("year")
-                .map(|s| parse_date_number(s))
-                .unwrap_or_else(|| current_date().0);
-            (y, parse_month(month_str), parse_date_number(day_str))
+            logic_current_year()
+        };
+        let month = if let Some(m) = parsed.get("month") {
+            if is_numeric_str(m) {
+                m.parse::<u32>().ok()?
+            } else {
+                parse_month_for(lang, &trim_special_chars(m))
+            }
+        } else if require_year {
+            return None;
+        } else {
+            0
+        };
+        let day = if let Some(d) = parsed.get("day") {
+            parse_day_of_month_for(lang, d)
+        } else if require_year {
+            return None;
+        } else {
+            1
+        };
+        if month == 0 || month > 12 || day > days_in_month(year, month) {
+            return None;
+        }
+        Some(day_zero_rolls_back(year, month, day))
+    }
+
+    fn apply_future_date_filter(
+        &self,
+        args: &str,
+        matched_texts: &[String],
+        lang: DateLang,
+    ) -> bool {
+        let parsed = self.resolve_java_filter_args(args, matched_texts);
+        let Some((year, month, day)) = self.parse_filter_date(&parsed, lang, true) else {
+            return false;
+        };
+        (year, month, day) > current_date()
+    }
+
+    fn apply_date_check_filter(
+        &self,
+        args: &str,
+        matched_texts: &[String],
+        lang: DateLang,
+        rm: RuleMatch,
+    ) -> Option<RuleMatch> {
+        let parsed = self.resolve_java_filter_args(args, matched_texts);
+        let week_day_str = parsed.get("weekDay")?.replace('\u{AD}', "");
+        let claimed = parse_weekday_for(lang, &week_day_str);
+        if claimed == 0 {
+            return None;
+        }
+        let Some((year, month, day)) = self.parse_filter_date(&parsed, lang, false) else {
+            return None;
+        };
+        let actual = compute_weekday(year, month, day);
+        if claimed == actual {
+            return None;
+        }
+        let real_name = localized_day_name(lang, actual);
+        let claimed_name = localized_day_name(lang, claimed);
+        let current_year = real_current_year().to_string();
+        let mut rm = rm;
+        let message = rm
+            .message()
+            .replace("{realDay}", real_name)
+            .replace("{day}", claimed_name)
+            .replace("{currentYear}", &current_year);
+        rm.set_message(message);
+        for replacement in rm.replacements_mut() {
+            let value = replacement.value().to_string();
+            replacement.set_value(
+                value
+                    .replace("{realDay}", real_name)
+                    .replace("{day}", claimed_name)
+                    .replace("{currentYear}", &current_year),
+            );
+        }
+        Some(rm)
+    }
+
+    fn apply_new_year_date_filter(
+        &self,
+        args: &str,
+        matched_texts: &[String],
+        lang: DateLang,
+        rm: RuleMatch,
+    ) -> Option<RuleMatch> {
+        let parsed = self.resolve_java_filter_args(args, matched_texts);
+        self.accept_new_year_date(&parsed, lang, rm)
+    }
+
+    fn accept_new_year_date(
+        &self,
+        parsed: &HashMap<&str, String>,
+        lang: DateLang,
+        rm: RuleMatch,
+    ) -> Option<RuleMatch> {
+        let Some((year, month, _day)) = self.parse_filter_date(parsed, lang, true) else {
+            return None;
+        };
+        if !logic_is_january() || month == 12 || year + 1 != logic_current_year() {
+            return None;
+        }
+        let real_year = logic_current_year().to_string();
+        let year_str = year.to_string();
+        let mut rm = rm;
+        let message = rm
+            .message()
+            .replace("{year}", &year_str)
+            .replace("{realYear}", &real_year);
+        rm.set_message(message);
+        for replacement in rm.replacements_mut() {
+            let value = replacement.value().to_string();
+            replacement.set_value(
+                value
+                    .replace("{year}", &year_str)
+                    .replace("{realYear}", &real_year),
+            );
+        }
+        Some(rm)
+    }
+
+    fn apply_ymd_new_year_date_filter(
+        &self,
+        args: &str,
+        matched_texts: &[String],
+        lang: DateLang,
+        rm: RuleMatch,
+    ) -> Option<RuleMatch> {
+        let mut parsed = self.resolve_java_filter_args(args, matched_texts);
+        let date = parsed.get("date")?.clone();
+        let parts: Vec<&str> = date.split('-').collect();
+        if parts.len() != 3 {
+            return None;
+        }
+        let year = parts[0].parse::<u32>().ok()?;
+        let real_date = format!("{}-{}-{}", year + 1, parts[1], parts[2]);
+        parsed.insert("year", parts[0].to_string());
+        parsed.insert("month", parts[1].to_string());
+        parsed.insert("day", parts[2].to_string());
+        let mut rm = rm;
+        let message = rm.message().replace("{realDate}", &real_date);
+        rm.set_message(message);
+        for replacement in rm.replacements_mut() {
+            let value = replacement.value().to_string();
+            replacement.set_value(value.replace("{realDate}", &real_date));
+        }
+        self.accept_new_year_date(&parsed, lang, rm)
+    }
+
+    fn apply_date_check_with_suggestions_filter(
+        &self,
+        lang: DateLang,
+        args: &str,
+        matched_positions: &[usize],
+        tokens: &[&AnalyzedTokenReadings],
+        base: usize,
+        rm: RuleMatch,
+    ) -> Option<RuleMatch> {
+        let raw: HashMap<&str, &str> = args
+            .split_whitespace()
+            .filter_map(|part| part.split_once(':'))
+            .collect();
+        let arg_pos = |key: &str| -> Option<usize> {
+            let value: usize = raw.get(key)?.parse().ok()?;
+            if value == 0 || value > matched_positions.len() {
+                return None;
+            }
+            Some(matched_positions[value - 1])
+        };
+        let week_day_pos = arg_pos("weekDay")?;
+        let mut is_full_date_token = false;
+        let (day_pos, _month_pos, year_pos, day_str, month_str, year_str): (
+            usize,
+            usize,
+            Option<usize>,
+            String,
+            String,
+            Option<String>,
+        ) = if let Some(full_pos) = arg_pos("date") {
+            let parts: Vec<&str> = tokens[full_pos].token().token().split('-').collect();
+            if parts.len() != 3 {
+                return None;
+            }
+            is_full_date_token = true;
+            (
+                full_pos,
+                full_pos,
+                Some(full_pos),
+                parts[2].to_string(),
+                parts[1].to_string(),
+                Some(parts[0].to_string()),
+            )
+        } else {
+            let d = arg_pos("day")?;
+            let m = arg_pos("month")?;
+            let y = arg_pos("year");
+            (
+                d,
+                m,
+                y,
+                tokens[d].token().token().to_string(),
+                tokens[m].token().token().to_string(),
+                y.map(|p| tokens[p].token().token().to_string()),
+            )
+        };
+        let week_day_str = tokens[week_day_pos].token().token().replace('\u{AD}', "");
+        let claimed = parse_weekday_for(lang, &week_day_str);
+        if claimed == 0 {
+            return None;
+        }
+        let day = parse_day_of_month_for(lang, &day_str);
+        let month = if is_numeric_str(&month_str) {
+            month_str.parse::<u32>().ok()?
+        } else {
+            parse_month_for(lang, &trim_special_chars(&month_str))
+        };
+        let year = match year_str {
+            Some(ref y) => y.parse::<u32>().ok()?,
+            None => logic_current_year(),
+        };
+        if month == 0 || month > 12 || day > days_in_month(year, month) {
+            return None;
+        }
+        let (year, month, day) = day_zero_rolls_back(year, month, day);
+        let actual = compute_weekday(year, month, day);
+        if claimed == actual {
+            return None;
+        }
+        let logic_year = logic_current_year();
+        if claimed == compute_weekday(logic_year, month, day) {
+            let year_pos = year_pos?;
+            let mut rm = rm;
+            let message =
+                wrong_year_message(lang).replace("{currentYear}", &logic_year.to_string());
+            rm.set_message(message);
+            let suggestion = if is_full_date_token {
+                format!("{logic_year}-{month_str}-{day_str}")
+            } else {
+                logic_year.to_string()
+            };
+            let start = base + tokens[year_pos].token().start();
+            let end = base + tokens[year_pos].token().end();
+            rm.set_offset_length(start, end - start);
+            rm.set_replacements(vec![SuggestedReplacement::new(suggestion)]);
+            return Some(rm);
+        }
+        let start_tok = week_day_pos.min(day_pos);
+        let end_tok = week_day_pos.max(day_pos);
+        let real_name = localized_day_name(lang, actual);
+        let claimed_name = localized_day_name(lang, claimed);
+        let current_year = real_current_year().to_string();
+        let mut rm = rm;
+        let message = rm
+            .message()
+            .replace("{realDay}", real_name)
+            .replace("{day}", claimed_name)
+            .replace("{currentYear}", &current_year);
+        rm.set_message(message);
+        let whitespace_before =
+            |j: usize| j > 0 && tokens[j].token().start() > tokens[j - 1].token().end();
+        let mut first_suggestion = String::new();
+        let mut first = true;
+        for j in start_tok..=end_tok {
+            if !first && whitespace_before(j) {
+                first_suggestion.push(' ');
+            }
+            first = false;
+            if j == week_day_pos {
+                first_suggestion.push_str(&preserve_case(real_name, &week_day_str));
+            } else {
+                first_suggestion.push_str(tokens[j].token().token());
+            }
+        }
+        let mut replacements = vec![SuggestedReplacement::new(&adjust_suggestion(
+            lang,
+            &first_suggestion,
+        ))];
+        let mut corrected_day: Option<u32> = None;
+        for difference in 1..7u32 {
+            if day > difference && compute_weekday(year, month, day - difference) == claimed {
+                corrected_day = Some(day - difference);
+                break;
+            }
+            if day + difference < 32 {
+                if day + difference > days_in_month(year, month) {
+                    return None;
+                }
+                if compute_weekday(year, month, day + difference) == claimed {
+                    corrected_day = Some(day + difference);
+                    break;
+                }
+            }
+        }
+        if let Some(corrected) = corrected_day {
+            let corrected_str = corrected.to_string();
+            let mut second_suggestion = String::new();
+            let mut first = true;
+            for j in start_tok..=end_tok {
+                if !first && whitespace_before(j) {
+                    second_suggestion.push(' ');
+                }
+                first = false;
+                if j == day_pos {
+                    if is_full_date_token {
+                        second_suggestion.push_str(&format!(
+                            "{}-{month_str}-{corrected_str}",
+                            year_str.as_deref().unwrap_or("")
+                        ));
+                    } else {
+                        second_suggestion.push_str(&day_str_like_original(
+                            lang,
+                            &corrected_str,
+                            &day_str,
+                        ));
+                    }
+                } else {
+                    second_suggestion.push_str(tokens[j].token().token());
+                }
+            }
+            if !second_suggestion.is_empty() {
+                replacements.push(SuggestedReplacement::new(&adjust_suggestion(
+                    lang,
+                    &second_suggestion,
+                )));
+            }
+        }
+        rm.set_replacements(replacements);
+        let start = base + tokens[start_tok].token().start();
+        let end = base + tokens[end_tok].token().end();
+        rm.set_offset_length(start, end - start);
+        Some(rm)
+    }
+
+    fn apply_recent_year_filter(&self, args: &str, matched_texts: &[String]) -> bool {
+        let parsed = self.parse_filter_args(args, matched_texts);
+        let this_year = current_date().0;
+        let max_year = this_year.saturating_sub(
+            parsed
+                .get("maxYearsBack")
+                .and_then(|v| v.parse::<u32>().ok())
+                .unwrap_or(0),
+        );
+        let year = parsed
+            .get("year")
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(0);
+        year < this_year && year >= max_year
+    }
+
+    fn apply_remove_unknown_compounds_filter(
+        &self,
+        args: &str,
+        matched_texts: &[String],
+        rm: RuleMatch,
+    ) -> Option<RuleMatch> {
+        let Some(spelling) = self.spelling.as_ref() else {
+            return Some(rm);
+        };
+        let parsed = self.parse_filter_args(args, matched_texts);
+        let part1 = parsed.get("part1").cloned().unwrap_or_default();
+        let part2 = parsed.get("part2").cloned().unwrap_or_default();
+        let compound = format!("{}{}", part1, part2.to_lowercase());
+        if spelling.is_misspelled(&compound) {
+            None
+        } else {
+            Some(rm)
+        }
+    }
+
+    fn apply_valid_word_filter(
+        &self,
+        args: &str,
+        matched_texts: &[String],
+        rm: RuleMatch,
+    ) -> Option<RuleMatch> {
+        let Some(spelling) = self.spelling.as_ref() else {
+            return Some(rm);
+        };
+        let parsed = self.parse_filter_args(args, matched_texts);
+        let word1 = parsed.get("word1").cloned().unwrap_or_default();
+        let word2 = parsed.get("word2").cloned().unwrap_or_default();
+        let joined = format!("{word1}{word2}");
+        let joined_lower = format!("{}{}", word1, word2.to_lowercase());
+        if !spelling.is_misspelled(&joined) || !spelling.is_misspelled(&joined_lower) {
+            None
+        } else {
+            Some(rm)
+        }
+    }
+
+    fn apply_insert_comma_filter(
+        &self,
+        _matched_texts: &[String],
+        matched_positions: &[usize],
+        tokens: &[&AnalyzedTokenReadings],
+        rm: RuleMatch,
+    ) -> RuleMatch {
+        let tagger = crate::de_comma_tagger::shared();
+        let mut suggestions: Vec<String> = Vec::new();
+        for replacement in rm.replacements().iter().map(|r| r.value().to_string()) {
+            let parts: Vec<&str> = replacement.split_whitespace().collect();
+            match parts.len() {
+                2 => suggestions.push(format!("{}, {}", parts[0], parts[1])),
+                3 => {
+                    let t1 = tagger.tags_of(parts[0]);
+                    let t2 = tagger.tags_of(parts[1]);
+                    let t3 = tagger.tags_of(parts[2]);
+                    let has =
+                        |tags: &[String], prefix: &str| tags.iter().any(|t| t.starts_with(prefix));
+                    if has(&t1, "VER:") && has(&t2, "PRO:PER:") {
+                        suggestions.push(format!("{}, {} {}", parts[0], parts[1], parts[2]));
+                    } else if is_sagt(parts[0]) && parts[1] == "mal" && has(&t3, "VER:") {
+                        suggestions.push(format!("{} {}, {}", parts[0], parts[1], parts[2]));
+                    } else if has(&t1, "VER:") && has(&t2, "ADV:") && has(&t3, "VER:") {
+                        suggestions.push(format!("{}, {} {}", parts[0], parts[1], parts[2]));
+                    }
+                }
+                4..=7 => {
+                    let pattern_token_pos = matched_positions.first().copied().unwrap_or(0);
+                    let t1 = tagger.tags_of(parts[0]);
+                    let t2 = tagger.tags_of(parts[1]);
+                    let t3 = tagger.tags_of(parts[2]);
+                    let t4 = tagger.tags_of(parts[3]);
+                    let rest1 = parts[1..].join(" ");
+                    let has =
+                        |tags: &[String], prefix: &str| tags.iter().any(|t| t.starts_with(prefix));
+                    let pos0_verbs = tokens
+                        .first()
+                        .map(|t| {
+                            t.readings()
+                                .iter()
+                                .any(|r| r.pos_tags().iter().any(|g| g.starts_with("VER:")))
+                        })
+                        .unwrap_or(false);
+                    let sent_start_adv = tokens
+                        .get(1)
+                        .map(|t| {
+                            t.readings()
+                                .iter()
+                                .any(|r| r.pos_tags().iter().any(|g| g.starts_with("ADV:")))
+                        })
+                        .unwrap_or(false);
+                    if pattern_token_pos <= 2 || (pattern_token_pos == 3 && sent_start_adv) {
+                        let rest2 = parts[2..].join(" ");
+                        if parts.len() == 5
+                            && has(&t1, "VER:")
+                            && has(&t2, "ART:")
+                            && has(&t3, "SUB:")
+                            && has(&tagger.tags_of(parts[3]), "SUB:")
+                            && has(&tagger.tags_of(parts[4]), "VER:")
+                        {
+                            suggestions.push(format!(
+                                "{} {} {} {},",
+                                parts[0], parts[1], parts[2], parts[3]
+                            ));
+                        } else if parts.len() == 4 && pos0_verbs && is_der_etc(&tokens) {
+                            suggestions.push(format!("{}, {}", parts[0], rest1));
+                        } else if has(&t1, "VER:") && has(&t2, "PRO:POS:") && has(&t3, "SUB:") {
+                            suggestions.push(format!("{}, {}", parts[0], rest1));
+                        } else if has(&t1, "VER:") && has(&t2, "PRO:PER:") && has(&t3, "ADV:INR") {
+                            suggestions.push(format!("{} {}, {}", parts[0], parts[1], rest2));
+                        } else if has(&t1, "VER:") && has(&t2, "PRO:POS:") && has(&t3, "ADJ:") {
+                            suggestions.push(format!("{}, {}", parts[0], rest1));
+                        } else if is_denke_etc(parts[0]) && has(&t2, "PRO:DEM:") && has(&t3, "SUB:")
+                        {
+                            suggestions.push(format!("{}, {}", parts[0], rest1));
+                        } else if pattern_token_pos == 1
+                            && is_bei_fuer_mit(parts[1])
+                            && is_dir_etc(parts[2])
+                            && has(&t4, "VER:")
+                        {
+                            suggestions.push(format!("{}, {}", parts[0], rest1));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        rm.with_replacements(
+            suggestions
+                .into_iter()
+                .map(og_core::SuggestedReplacement::new)
+                .collect(),
+        )
+    }
+
+    fn apply_potential_compound_filter(
+        &self,
+        args: &str,
+        matched_texts: &[String],
+        rm: RuleMatch,
+    ) -> Option<RuleMatch> {
+        let Some(spelling) = self.spelling.as_ref() else {
+            return Some(rm);
+        };
+        let parsed = self.parse_filter_args(args, matched_texts);
+        let part1 = parsed.get("part1").cloned().unwrap_or_default();
+        let part2 = parsed.get("part2").cloned().unwrap_or_default();
+
+        let is_mixed_case = |s: &str| {
+            s.chars().any(|c| c.is_uppercase())
+                && s.chars().any(|c| c.is_lowercase())
+                && !s.chars().all(|c| c.is_uppercase())
+        };
+        let is_all_upper = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_uppercase());
+
+        let part2lowercase = if !is_mixed_case(&part2) && !is_all_upper(&part2) {
+            part2.to_lowercase()
+        } else {
+            part2.clone()
+        };
+        let part2capitalized = if !is_mixed_case(&part2) && !is_all_upper(&part2) {
+            uppercase_first_char(&part2.to_lowercase())
+        } else {
+            part2.clone()
+        };
+        let part1capitalized = if !is_mixed_case(&part1) && !is_all_upper(&part1) {
+            uppercase_first_char(&part1.to_lowercase())
+        } else {
+            part1.clone()
         };
 
-        let claimed_weekday = parse_weekday(week_day_str);
+        let joined_word = format!("{part1capitalized}{part2lowercase}");
+        let hyphenated_word = format!("{part1capitalized}-{part2capitalized}");
 
-        if claimed_weekday == 0 || day == 0 || month == 0 {
-            return false;
+        let mut replacements: Vec<String> = Vec::new();
+        if !spelling.is_misspelled(&joined_word) {
+            if joined_word.chars().count() > 20 {
+                replacements.push(hyphenated_word);
+            }
+            replacements.push(joined_word);
+        } else {
+            replacements.push(hyphenated_word);
         }
-
-        let actual_weekday = compute_weekday(year, month, day);
-        claimed_weekday != actual_weekday
-    }
-
-    fn apply_new_year_date_filter(&self, args: &str, matched_texts: &[String]) -> bool {
-        let parsed = self.parse_filter_args(args, matched_texts);
-        let year_str = parsed.get("year").map(|s| s.as_str()).unwrap_or("0");
-        let year = parse_date_number(year_str);
-
-        let current_date = current_date();
-        year != current_date.0 && year > 0
+        if replacements.is_empty() {
+            return None;
+        }
+        Some(
+            rm.with_replacements(
+                replacements
+                    .into_iter()
+                    .map(SuggestedReplacement::new)
+                    .collect(),
+            ),
+        )
     }
 
     fn apply_date_range_filter(&self, args: &str, matched_texts: &[String]) -> bool {
@@ -1962,21 +3040,27 @@ impl PatternRuleEngine {
 
     fn apply_multitoken_speller_filter(
         &self,
-        matched_texts: &[String],
+        matched_positions: &[usize],
+        tokens: &[&AnalyzedTokenReadings],
+        sentence: &AnalyzedSentence,
         rm: RuleMatch,
     ) -> Option<RuleMatch> {
         let Some(spelling) = self.spelling.as_ref() else {
             return Some(rm);
         };
-        let underlined_error: String = matched_texts.concat();
+        let text = sentence.text();
+        let start = rm.offset();
+        let end = start + rm.length();
+        let underlined_error = text.get(start..end).unwrap_or_default();
         if underlined_error.is_empty() {
             return None;
         }
-        let are_tokens_accepted_by_speller = !underlined_error
-            .split_whitespace()
-            .any(|w| spelling.is_misspelled(w));
+        let are_tokens_accepted_by_speller = spelling.multitoken_checks_tokens_with_speller()
+            && !underlined_error
+                .split_whitespace()
+                .any(|w| spelling.is_misspelled(w));
         let replacements =
-            spelling.multitoken_suggestions(&underlined_error, are_tokens_accepted_by_speller);
+            spelling.multitoken_suggestions(underlined_error, are_tokens_accepted_by_speller);
         if replacements.is_empty() {
             return None;
         }
@@ -1996,7 +3080,35 @@ impl PatternRuleEngine {
             }
             deduped
         } else {
-            replacements
+            let pattern_token_pos = matched_positions.first().copied().unwrap_or(0);
+            let mut words_start_pos = 1;
+            while words_start_pos < tokens.len() {
+                let token_text = tokens[words_start_pos].token().token();
+                let is_punct_or_non_word = !token_text.chars().any(|c| c.is_alphanumeric());
+                if is_punct_or_non_word {
+                    words_start_pos += 1;
+                } else {
+                    break;
+                }
+            }
+            if pattern_token_pos == words_start_pos {
+                let mut capitalized: Vec<String> = Vec::with_capacity(replacements.len());
+                for r in replacements {
+                    let new_replacement = if r == r.to_lowercase() {
+                        uppercase_first_char(&r)
+                    } else {
+                        r
+                    };
+                    if !capitalized.contains(&new_replacement)
+                        && new_replacement != *underlined_error
+                    {
+                        capitalized.push(new_replacement);
+                    }
+                }
+                capitalized
+            } else {
+                replacements
+            }
         };
         if replacements.is_empty() {
             return None;
@@ -2099,11 +3211,6 @@ impl PatternRuleEngine {
         }
         Some(rm)
     }
-}
-
-fn parse_date_number(s: &str) -> u32 {
-    let trimmed = s.trim().trim_end_matches(|c: char| c.is_alphabetic());
-    trimmed.parse().unwrap_or(0)
 }
 
 fn adverb_to_adjective(adverb: &str) -> Option<&'static str> {
@@ -2406,7 +3513,20 @@ fn adverb_to_adjective(adverb: &str) -> Option<&'static str> {
     })
 }
 
+static TEST_DATE_HACK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_test_date_hack(on: bool) {
+    TEST_DATE_HACK.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn test_date_hack() -> bool {
+    TEST_DATE_HACK.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 fn current_date() -> (u32, u32, u32) {
+    if test_date_hack() {
+        return (2014, 1, 1);
+    }
     use std::time::{SystemTime, UNIX_EPOCH};
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -2457,6 +3577,37 @@ fn parse_month(s: &str) -> u32 {
     }
 }
 
+fn parse_month_german(s: &str) -> u32 {
+    let lower = s.to_lowercase();
+    match lower.as_str() {
+        "1" | "01" => 1,
+        "2" | "02" => 2,
+        "3" | "03" => 3,
+        "4" | "04" => 4,
+        "5" | "05" => 5,
+        "6" | "06" => 6,
+        "7" | "07" => 7,
+        "8" | "08" => 8,
+        "9" | "09" => 9,
+        "10" => 10,
+        "11" => 11,
+        "12" => 12,
+        n if n.starts_with("jän") || n.starts_with("jan") => 1,
+        n if n.starts_with("feb") => 2,
+        n if n.starts_with("mär") => 3,
+        n if n.starts_with("apr") => 4,
+        n if n.starts_with("mai") => 5,
+        n if n.starts_with("jun") => 6,
+        n if n.starts_with("jul") => 7,
+        n if n.starts_with("aug") => 8,
+        n if n.starts_with("sep") => 9,
+        n if n.starts_with("okt") => 10,
+        n if n.starts_with("nov") => 11,
+        n if n.starts_with("dez") => 12,
+        _ => 0,
+    }
+}
+
 fn parse_weekday(s: &str) -> u32 {
     let lower = s.to_lowercase();
     let prefix = if lower.len() >= 2 {
@@ -2476,6 +3627,106 @@ fn parse_weekday(s: &str) -> u32 {
     }
 }
 
+fn parse_weekday_german(s: &str) -> u32 {
+    let lower = s.to_lowercase();
+    if lower.starts_with("sonnabend") {
+        return 7;
+    }
+    let prefix = if lower.len() >= 2 {
+        &lower[..2]
+    } else {
+        &lower
+    };
+    match prefix {
+        "so" => 1,
+        "mo" => 2,
+        "di" => 3,
+        "mi" => 4,
+        "do" => 5,
+        "fr" => 6,
+        "sa" => 7,
+        _ => 0,
+    }
+}
+
+fn parse_month_italian(s: &str) -> u32 {
+    let lower = s.to_lowercase();
+    match lower.as_str() {
+        "1" | "01" => 1,
+        "2" | "02" => 2,
+        "3" | "03" => 3,
+        "4" | "04" => 4,
+        "5" | "05" => 5,
+        "6" | "06" => 6,
+        "7" | "07" => 7,
+        "8" | "08" => 8,
+        "9" | "09" => 9,
+        "10" => 10,
+        "11" => 11,
+        "12" => 12,
+        n if n.starts_with("gen") => 1,
+        n if n.starts_with("feb") => 2,
+        n if n.starts_with("mar") => 3,
+        n if n.starts_with("apr") => 4,
+        n if n.starts_with("mag") => 5,
+        n if n.starts_with("giu") => 6,
+        n if n.starts_with("lug") => 7,
+        n if n.starts_with("ago") => 8,
+        n if n.starts_with("set") => 9,
+        n if n.starts_with("ott") => 10,
+        n if n.starts_with("nov") => 11,
+        n if n.starts_with("dic") => 12,
+        _ => 0,
+    }
+}
+
+fn parse_weekday_italian(s: &str) -> u32 {
+    let lower = s.to_lowercase();
+    let prefix = if lower.len() >= 3 {
+        &lower[..3]
+    } else {
+        &lower
+    };
+    match prefix {
+        "dom" => 1,
+        "lun" => 2,
+        "mar" => 3,
+        "mer" => 4,
+        "gio" => 5,
+        "ven" => 6,
+        "sab" => 7,
+        _ => 0,
+    }
+}
+
+fn days_in_month(year: u32, month: u32) -> u32 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 => {
+            if (year % 4 == 0 && year % 100 != 0) || year % 400 == 0 {
+                29
+            } else {
+                28
+            }
+        }
+        _ => 0,
+    }
+}
+
+// Java's strict Calendar resolves DAY_OF_MONTH 0 (unparseable day arg) to the
+// last day of the previous month instead of throwing; day 32+ does throw.
+fn day_zero_rolls_back(year: u32, month: u32, day: u32) -> (u32, u32, u32) {
+    if day > 0 {
+        return (year, month, day);
+    }
+    if month == 1 {
+        (year.saturating_sub(1), 12, 31)
+    } else {
+        (year, month - 1, days_in_month(year, month - 1))
+    }
+}
+
 fn compute_weekday(year: u32, month: u32, day: u32) -> u32 {
     let (y, m) = if month < 3 {
         (year - 1, month + 12)
@@ -2488,6 +3739,677 @@ fn compute_weekday(year: u32, month: u32, day: u32) -> u32 {
         1 => 1,
         n => n,
     }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum DateLang {
+    En,
+    De,
+    It,
+    Fr,
+    Es,
+    Pt,
+    Nl,
+    Pl,
+    Ru,
+    Ar,
+    Br,
+}
+
+fn trim_special_chars(s: &str) -> String {
+    s.chars()
+        .filter(|c| c.is_alphanumeric() || c.is_whitespace() || c.is_ascii_punctuation())
+        .collect()
+}
+
+fn parse_month_for(lang: DateLang, s: &str) -> u32 {
+    match lang {
+        DateLang::En => parse_month(s),
+        DateLang::De => parse_month_german(s),
+        DateLang::It => parse_month_italian(s),
+        DateLang::Fr => parse_month_french(s),
+        DateLang::Es => parse_month_spanish(s),
+        DateLang::Pt => parse_month_portuguese(s),
+        DateLang::Nl => parse_month_dutch(s),
+        DateLang::Pl => parse_month_polish(s),
+        DateLang::Ru => parse_month_russian(s),
+        DateLang::Ar => parse_month_arabic(s),
+        DateLang::Br => parse_month_breton(s),
+    }
+}
+
+fn parse_month_french(s: &str) -> u32 {
+    let mon = s.to_lowercase();
+    let n = mon.as_str();
+    if n.starts_with("jan") {
+        1
+    } else if n.starts_with("fév") || n.starts_with("fev") {
+        2
+    } else if n.starts_with("mar") {
+        3
+    } else if n.starts_with("avr") {
+        4
+    } else if n.starts_with("mai") {
+        5
+    } else if n.starts_with("juin") {
+        6
+    } else if n.starts_with("juil") {
+        7
+    } else if n.starts_with("aou") || n.starts_with("aoû") {
+        8
+    } else if n.starts_with("sep") {
+        9
+    } else if n.starts_with("oct") {
+        10
+    } else if n.starts_with("nov") {
+        11
+    } else if n.starts_with("déc") || n.starts_with("dec") {
+        12
+    } else {
+        0
+    }
+}
+
+fn parse_month_spanish(s: &str) -> u32 {
+    let mon = s.to_lowercase();
+    let n = mon.as_str();
+    if n.starts_with("en") {
+        1
+    } else if n.starts_with("fe") {
+        2
+    } else if n.starts_with("mar") || n.starts_with("mzo") {
+        3
+    } else if n.starts_with("ab") {
+        4
+    } else if n.starts_with("may") || n.starts_with("my") {
+        5
+    } else if n.starts_with("jun") || n == "jn" {
+        6
+    } else if n.starts_with("jul") || n == "jl" {
+        7
+    } else if n.starts_with("ag") {
+        8
+    } else if n.starts_with("se") {
+        9
+    } else if n.starts_with("oc") {
+        10
+    } else if n.starts_with("no") {
+        11
+    } else if n.starts_with("di") {
+        12
+    } else {
+        0
+    }
+}
+
+fn parse_month_portuguese(s: &str) -> u32 {
+    let mon = trim_special_chars(s).to_lowercase();
+    let n = mon.as_str();
+    if n.starts_with("jan") {
+        1
+    } else if n.starts_with("fev") {
+        2
+    } else if n.starts_with("mar") {
+        3
+    } else if n.starts_with("abr") {
+        4
+    } else if n.starts_with("mai") {
+        5
+    } else if n.starts_with("jun") {
+        6
+    } else if n.starts_with("jul") {
+        7
+    } else if n.starts_with("ago") {
+        8
+    } else if n.starts_with("set") {
+        9
+    } else if n.starts_with("out") {
+        10
+    } else if n.starts_with("nov") {
+        11
+    } else if n.starts_with("dez") {
+        12
+    } else {
+        0
+    }
+}
+
+fn parse_month_dutch(s: &str) -> u32 {
+    let mon = s.to_lowercase();
+    let n = mon.as_str();
+    if n.starts_with("jan") {
+        1
+    } else if n.starts_with("feb") {
+        2
+    } else if n.starts_with("maa") || n.starts_with("mrt") || n.starts_with("mar") {
+        3
+    } else if n.starts_with("apr") {
+        4
+    } else if n.starts_with("mei") {
+        5
+    } else if n.starts_with("jun") {
+        6
+    } else if n.starts_with("jul") {
+        7
+    } else if n.starts_with("aug") {
+        8
+    } else if n.starts_with("sep") {
+        9
+    } else if n.starts_with("okt") || n.starts_with("oct") {
+        10
+    } else if n.starts_with("nov") {
+        11
+    } else if n.starts_with("dec") {
+        12
+    } else {
+        0
+    }
+}
+
+fn parse_month_polish(s: &str) -> u32 {
+    let mon = s.to_lowercase();
+    match (mon.as_str(), s) {
+        ("stycznia", _) | (_, "I") => 1,
+        ("lutego", _) | (_, "II") => 2,
+        ("marca", _) | (_, "III") => 3,
+        ("kwietnia", _) | (_, "IV") => 4,
+        ("maja", _) | (_, "V") => 5,
+        ("czerwca", _) | (_, "VI") => 6,
+        ("lipca", _) | (_, "VII") => 7,
+        ("sierpnia", _) | (_, "VIII") => 8,
+        ("września", _) | (_, "IX") => 9,
+        ("października", _) | (_, "X") => 10,
+        ("listopada", _) | (_, "XI") => 11,
+        ("grudnia", _) | (_, "XII") => 12,
+        _ => 0,
+    }
+}
+
+fn parse_month_russian(s: &str) -> u32 {
+    let mon = s.to_lowercase();
+    match (mon.as_str(), s) {
+        ("январь", _) | ("января", _) | ("янв", _) | (_, "I") => 1,
+        ("февраль", _) | ("февраля", _) | ("фев", _) | (_, "II") => 2,
+        ("март", _) | ("марта", _) | ("мар", _) | (_, "III") => 3,
+        ("апрель", _) | ("апреля", _) | ("апр", _) | (_, "IV") => 4,
+        ("май", _) | ("мая", _) | (_, "V") => 5,
+        ("июнь", _) | ("июня", _) | ("ин", _) | (_, "VI") => 6,
+        ("июль", _) | ("июля", _) | ("ил", _) | (_, "VII") => 7,
+        ("август", _) | ("августа", _) | ("авг", _) | (_, "VIII") => 8,
+        ("сентябрь", _) | ("сентября", _) | ("сен", _) | (_, "IX") => 9,
+        ("октябрь", _) | ("октября", _) | ("окт", _) | (_, "X") => 10,
+        ("ноябрь", _) | ("ноября", _) | ("ноя", _) | (_, "XI") => 11,
+        ("декабрь", _) | ("декабря", _) | ("дек", _) | (_, "XII") => 12,
+        _ => 0,
+    }
+}
+
+fn parse_month_arabic(s: &str) -> u32 {
+    let mon = trim_special_chars(s);
+    match mon.as_str() {
+        "كانون الثاني" | "كانون ثاني" | "يناير" | "جانفي" | "جانفييه" => {
+            1
+        }
+        "شباط" | "فبراير" | "فيفري" => 2,
+        "آذار" | "مارس" => 3,
+        "نيسان" | "أبريل" | "أفريل" => 4,
+        "أيار" | "مايو" | "ماي" => 5,
+        "حزيران" | "يونيو" | "جوان" => 6,
+        "تموز" | "يوليو" | "جويلية" => 7,
+        "آب" | "أغسطس" | "أوت" => 8,
+        "أيلول" | "سبتمبر" => 9,
+        "تشرين الأول" | "أكتوبر" => 10,
+        "تشرين الثاني" | "تشرين ثاني" | "نوفمبر" => 11,
+        "كانون الأول" | "كانون أول" | "ديسمبر" => 12,
+        _ => 0,
+    }
+}
+
+fn parse_month_breton(s: &str) -> u32 {
+    let mon = s.to_lowercase();
+    match mon.as_str() {
+        "genver" => 1,
+        "c’hwevrer" => 2,
+        "meurzh" => 3,
+        "ebrel" => 4,
+        "mae" => 5,
+        "mezheven" | "even" => 6,
+        "gouere" | "gouhere" => 7,
+        "eost" => 8,
+        "gwengolo" => 9,
+        "here" => 10,
+        "du" => 11,
+        "kerzu" => 12,
+        _ => 0,
+    }
+}
+
+fn parse_weekday_for(lang: DateLang, s: &str) -> u32 {
+    match lang {
+        DateLang::En => parse_weekday(s),
+        DateLang::De => parse_weekday_german(s),
+        DateLang::It => parse_weekday_italian(s),
+        DateLang::Fr => parse_weekday_french(s),
+        DateLang::Es => parse_weekday_spanish(s),
+        DateLang::Pt => parse_weekday_portuguese(s),
+        DateLang::Nl => parse_weekday_dutch(s),
+        DateLang::Pl => parse_weekday_polish(s),
+        DateLang::Ru => parse_weekday_russian(s),
+        DateLang::Ar => parse_weekday_arabic(s),
+        DateLang::Br => parse_weekday_breton(s),
+    }
+}
+
+fn parse_weekday_french(s: &str) -> u32 {
+    let day = s.to_lowercase();
+    let n = day.as_str();
+    if n.starts_with("dim") {
+        1
+    } else if n.starts_with("lun") {
+        2
+    } else if n.starts_with("mar") {
+        3
+    } else if n.starts_with("mer") {
+        4
+    } else if n.starts_with("jeu") {
+        5
+    } else if n.starts_with("ven") {
+        6
+    } else if n.starts_with("sam") {
+        7
+    } else {
+        0
+    }
+}
+
+fn parse_weekday_spanish(s: &str) -> u32 {
+    match s.to_lowercase().as_str() {
+        "do" | "domingo" => 1,
+        "lu" | "lunes" => 2,
+        "ma" | "martes" => 3,
+        "mi" | "miércoles" => 4,
+        "ju" | "jueves" => 5,
+        "vi" | "viernes" => 6,
+        "sa" | "sábado" => 7,
+        _ => 0,
+    }
+}
+
+fn parse_weekday_portuguese(s: &str) -> u32 {
+    let day = trim_special_chars(s).to_lowercase();
+    let n = day.as_str();
+    if n.starts_with("dom") {
+        1
+    } else if n.starts_with("seg") {
+        2
+    } else if n.starts_with("ter") {
+        3
+    } else if n.starts_with("qua") {
+        4
+    } else if n.starts_with("qui") {
+        5
+    } else if n.starts_with("sex") {
+        6
+    } else if n.starts_with("sáb") {
+        7
+    } else {
+        0
+    }
+}
+
+fn parse_weekday_dutch(s: &str) -> u32 {
+    match s.to_lowercase().as_str() {
+        "zo" | "zondag" => 1,
+        "ma" | "maandag" => 2,
+        "di" | "dinsdag" => 3,
+        "wo" | "woensdag" => 4,
+        "do" | "donderdag" => 5,
+        "vr" | "vrijdag" => 6,
+        "za" | "zaterdag" => 7,
+        _ => 0,
+    }
+}
+
+fn parse_weekday_polish(s: &str) -> u32 {
+    let day = s.to_lowercase();
+    let n = day.as_str();
+    if n.starts_with("pon") {
+        2
+    } else if n.starts_with("wt") {
+        3
+    } else if n.starts_with("śr") {
+        4
+    } else if n.starts_with("czw") {
+        5
+    } else if n == "pt" || n.starts_with("piątk") || n == "piątek" {
+        6
+    } else if n.starts_with("sob") {
+        7
+    } else if n.starts_with("niedz") {
+        1
+    } else {
+        0
+    }
+}
+
+fn parse_weekday_russian(s: &str) -> u32 {
+    let day = s.to_lowercase();
+    let n = day.as_str();
+    if n.starts_with("пн") || n == "понедельник" {
+        2
+    } else if n.starts_with("вт") {
+        3
+    } else if n.starts_with("ср") {
+        4
+    } else if n.starts_with("чт") || n == "четверг" {
+        5
+    } else if n == "пт" || n.starts_with("пятниц") {
+        6
+    } else if n.starts_with("сб") || n.starts_with("суббот") {
+        7
+    } else if n.starts_with("вс") || n == "воскресенье" {
+        1
+    } else {
+        0
+    }
+}
+
+fn parse_weekday_arabic(s: &str) -> u32 {
+    match s {
+        "الأحد" => 1,
+        "الإثنين" | "الاثنين" => 2,
+        "الثلاثاء" => 3,
+        "الأربعاء" => 4,
+        "الخميس" => 5,
+        "الجمعة" => 6,
+        "السبت" => 7,
+        _ => 0,
+    }
+}
+
+fn parse_weekday_breton(s: &str) -> u32 {
+    let day = s.to_lowercase();
+    let n = day.as_str();
+    if n.ends_with("sul") {
+        1
+    } else if n.ends_with("lun") {
+        2
+    } else if n.ends_with("meurzh") {
+        3
+    } else if n.ends_with("merc’her") {
+        4
+    } else if n == "yaou" || n == "diriaou" {
+        5
+    } else if n.ends_with("gwener") {
+        6
+    } else if n.ends_with("sadorn") {
+        7
+    } else {
+        0
+    }
+}
+
+fn localized_day_name(lang: DateLang, weekday: u32) -> &'static str {
+    let names = match lang {
+        DateLang::En => [
+            "",
+            "Sunday",
+            "Monday",
+            "Tuesday",
+            "Wednesday",
+            "Thursday",
+            "Friday",
+            "Saturday",
+        ],
+        DateLang::De => [
+            "",
+            "Sonntag",
+            "Montag",
+            "Dienstag",
+            "Mittwoch",
+            "Donnerstag",
+            "Freitag",
+            "Samstag",
+        ],
+        DateLang::It => [
+            "",
+            "domenica",
+            "lunedì",
+            "martedì",
+            "mercoledì",
+            "giovedì",
+            "venerdì",
+            "sabato",
+        ],
+        DateLang::Fr => [
+            "", "dimanche", "lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi",
+        ],
+        DateLang::Es => [
+            "",
+            "domingo",
+            "lunes",
+            "martes",
+            "miércoles",
+            "jueves",
+            "viernes",
+            "sábado",
+        ],
+        DateLang::Pt => [
+            "",
+            "domingo",
+            "segunda-feira",
+            "terça-feira",
+            "quarta-feira",
+            "quinta-feira",
+            "sexta-feira",
+            "sábado",
+        ],
+        DateLang::Nl => [
+            "",
+            "zondag",
+            "maandag",
+            "dinsdag",
+            "woensdag",
+            "donderdag",
+            "vrijdag",
+            "zaterdag",
+        ],
+        DateLang::Pl => [
+            "",
+            "niedziela",
+            "poniedziałek",
+            "wtorek",
+            "środa",
+            "czwartek",
+            "piątek",
+            "sobota",
+        ],
+        DateLang::Ru => [
+            "",
+            "воскресенье",
+            "понедельник",
+            "вторник",
+            "среда",
+            "четверг",
+            "пятница",
+            "суббота",
+        ],
+        DateLang::Ar => [
+            "",
+            "الأحد",
+            "الإثنين",
+            "الثلاثاء",
+            "الأربعاء",
+            "الخميس",
+            "الجمعة",
+            "السبت",
+        ],
+        DateLang::Br => [
+            "",
+            "Sul",
+            "Lun",
+            "Meurzh",
+            "Merc’her",
+            "Yaou",
+            "Gwener",
+            "Sadorn",
+        ],
+    };
+    names.get(weekday as usize).copied().unwrap_or("")
+}
+
+fn parse_day_of_month_for(lang: DateLang, s: &str) -> u32 {
+    let digits: String = s.chars().take_while(|c| c.is_ascii_digit()).collect();
+    if !digits.is_empty() {
+        return digits.parse().unwrap_or(0);
+    }
+    if lang == DateLang::Br {
+        return parse_day_of_month_breton(s);
+    }
+    0
+}
+
+fn parse_day_of_month_breton(s: &str) -> u32 {
+    let mut day = s.to_lowercase();
+    if day.starts_with('t') {
+        day.replace_range(0..1, "d");
+    }
+    if day.starts_with('p') {
+        day.replace_range(0..1, "b");
+    }
+    let day = day.strip_suffix("vet").unwrap_or(&day);
+    match day {
+        "c’hentañ" | "unan" => 1,
+        "daou" | "eil" => 2,
+        "dri" | "drede" | "deir" => 3,
+        "bevar" => 4,
+        "bemp" | "bem" => 5,
+        "c’hwerc’h" => 6,
+        "seizh" => 7,
+        "eizh" => 8,
+        "nav" | "na" => 9,
+        "dek" => 10,
+        "unnek" => 11,
+        "daouzek" => 12,
+        "drizek" => 13,
+        "bevarzek" => 14,
+        "bemzek" => 15,
+        "c’hwezek" => 16,
+        "seitek" => 17,
+        "driwec’h" => 18,
+        "naontek" => 19,
+        "ugent" => 20,
+        "dregont" => 30,
+        _ => 0,
+    }
+}
+
+fn wrong_year_message(lang: DateLang) -> &'static str {
+    match lang {
+        DateLang::En => "This date is wrong. Did you mean \"{currentYear}\"?",
+        DateLang::De => {
+            "Dieses Datum stimmt nicht mit dem Tag überein. Meinten Sie \"{currentYear}\"?"
+        }
+        DateLang::Fr => {
+            "Cette date est incorrecte. Faites-vous référence à l'année \"{currentYear}\" ?"
+        }
+        DateLang::Es => "Este fecha no es correcta. ¿Se refería al año \"{currentYear}\"?",
+        DateLang::Pt => {
+            "Esta data está incorreta. Você está se referindo ao ano \"{currentYear}\"?"
+        }
+        DateLang::Nl => "Deze datum is onjuist. Bedoelt u misschien \"{currentYear}\"?",
+        _ => "",
+    }
+}
+
+fn day_str_like_original(lang: DateLang, day: &str, original: &str) -> String {
+    if lang != DateLang::En || is_numeric_str(original) {
+        return day.to_string();
+    }
+    let Ok(number) = day.parse::<u32>() else {
+        return day.to_string();
+    };
+    if (11..=13).contains(&number) {
+        return format!("{number}th");
+    }
+    match number % 10 {
+        1 => format!("{number}st"),
+        2 => format!("{number}nd"),
+        3 => format!("{number}rd"),
+        _ => format!("{number}th"),
+    }
+}
+
+fn adjust_suggestion(lang: DateLang, sugg: &str) -> String {
+    if lang != DateLang::De {
+        return sugg.to_string();
+    }
+    let dot_comma_pos = sugg.find(".,");
+    if let Some(pos) = dot_comma_pos
+        && pos > 5
+        && pos < 12
+    {
+        return sugg.replace(".,", ",");
+    }
+    let comma_pos = sugg.find(',');
+    if dot_comma_pos.is_none()
+        && let Some(pos) = comma_pos
+        && pos > 0
+        && pos < 5
+    {
+        return sugg.replace(",", ".,");
+    }
+    sugg.to_string()
+}
+
+fn real_current_year() -> u32 {
+    current_date().0
+}
+
+fn logic_current_year() -> u32 {
+    if test_date_hack() {
+        2014
+    } else {
+        current_date().0
+    }
+}
+
+fn logic_is_january() -> bool {
+    if test_date_hack() {
+        return true;
+    }
+    current_date().1 == 1
+}
+
+fn preserve_case(input: &str, model: &str) -> String {
+    if model.is_empty() {
+        return input.to_string();
+    }
+    let is_capitalized = model
+        .chars()
+        .next()
+        .map(|c| c.is_uppercase())
+        .unwrap_or(false)
+        && model
+            .chars()
+            .skip(1)
+            .all(|c| !c.is_alphabetic() || c.is_lowercase());
+    if is_capitalized {
+        let lower: String = input.to_lowercase();
+        let mut chars = lower.chars();
+        match chars.next() {
+            Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+            None => String::new(),
+        }
+    } else if model.chars().all(|c| !c.is_lowercase()) {
+        input.to_uppercase()
+    } else {
+        input.to_string()
+    }
+}
+
+fn is_numeric_str(s: &str) -> bool {
+    !s.is_empty() && s.chars().all(|c| c.is_ascii_digit())
 }
 
 #[cfg(test)]
@@ -2506,6 +4428,241 @@ mod tests {
             matches.extend(engine.match_rule(rule, &sentence));
         }
         matches
+    }
+
+    #[test]
+    fn nl_date_check_filter_rejects_consistent_and_suggests_for_mismatch() {
+        set_test_date_hack(true);
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="nl">
+            <rule id="T_NL_DATE" name="datum">
+                <pattern>
+                    <token regexp="yes">maandag|dinsdag|woensdag|donderdag|vrijdag|zaterdag|zondag</token>
+                    <token regexp="yes">\d\d?</token>
+                    <token regexp="yes">oktober|september</token>
+                    <token regexp="yes">\d\d\d\d</token>
+                </pattern>
+                <filter class="org.languagetool.rules.nl.DateCheckFilter" args="year:4 month:3 day:2 weekDay:1"/>
+                <message>\2 \3 \4 is geen {day}, maar een {realDay}.</message>
+            </rule>
+        </rules>"#;
+        let matches = compile_and_match(xml, "Maandag 7 oktober 2014.");
+        assert_eq!(matches.len(), 1);
+        let m = &matches[0];
+        assert_eq!(
+            m.message(),
+            "\\2 \\3 \\4 is geen maandag, maar een dinsdag."
+        );
+        let reps: Vec<&str> = m.replacements().iter().map(|r| r.value()).collect();
+        assert_eq!(reps, vec!["Dinsdag 7", "Maandag 6"]);
+
+        assert_eq!(compile_and_match(xml, "Dinsdag 7 oktober 2014.").len(), 0);
+    }
+
+    #[test]
+    fn nl_date_check_filter_wrong_year_moves_match_to_year_token() {
+        set_test_date_hack(true);
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="nl">
+            <rule id="T_NL_YEAR" name="datum">
+                <pattern>
+                    <token regexp="yes">maandag|dinsdag|zondag</token>
+                    <token regexp="yes">\d\d?</token>
+                    <token>september</token>
+                    <token regexp="yes">\d\d\d\d</token>
+                </pattern>
+                <filter class="org.languagetool.rules.nl.DateCheckFilter" args="year:4 month:3 day:2 weekDay:1"/>
+                <message>\2 \3 \4 is geen {day}.</message>
+            </rule>
+        </rules>"#;
+        let text = "Zondag 28 september 2013.";
+        let matches = compile_and_match(xml, text);
+        assert_eq!(matches.len(), 1);
+        let m = &matches[0];
+        assert_eq!(&text[m.offset()..m.offset() + m.length()], "2013");
+        assert_eq!(
+            m.message(),
+            "Deze datum is onjuist. Bedoelt u misschien \"2014\"?"
+        );
+        let reps: Vec<&str> = m.replacements().iter().map(|r| r.value()).collect();
+        assert_eq!(reps, vec!["2014"]);
+    }
+
+    #[test]
+    fn es_new_year_date_filter_uses_spanish_months() {
+        set_test_date_hack(true);
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="es">
+            <rule id="T_ES_NEWYEAR" name="nuevo año">
+                <pattern>
+                    <token regexp="yes">\d\d?</token>
+                    <token>de</token>
+                    <token regexp="yes">octubre|oct|diciembre</token>
+                    <token>de</token>
+                    <marker><token regexp="yes">\d\d\d\d</token></marker>
+                </pattern>
+                <filter class="org.languagetool.rules.es.NewYearDateFilter" args="year:\5 month:\3 day:\1"/>
+                <message>Ha empezado un año nuevo. ¿Quería decir <suggestion>{realYear}</suggestion>?</message>
+            </rule>
+        </rules>"#;
+        assert_eq!(compile_and_match(xml, "7 de octubre de 2013").len(), 1);
+        assert_eq!(compile_and_match(xml, "7 de octubre de 2014").len(), 0);
+        assert_eq!(compile_and_match(xml, "7 de diciembre de 2013").len(), 0);
+        assert_eq!(compile_and_match(xml, "7 de oct de 2013").len(), 1);
+    }
+
+    #[test]
+    fn pl_date_check_filter_parses_polish_months_and_weekdays() {
+        set_test_date_hack(true);
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="pl">
+            <rule id="T_PL_DATE" name="data">
+                <pattern>
+                    <token regexp="yes">poniedziałek|wtorek|środa</token>
+                    <token regexp="yes">\d\d?</token>
+                    <token>października</token>
+                    <token regexp="yes">\d\d\d\d</token>
+                </pattern>
+                <filter class="org.languagetool.rules.pl.DateCheckFilter" args="year:\4 month:\3 day:\2 weekDay:\1"/>
+                <message>Dzień \2 \3 \4 to nie \1.</message>
+            </rule>
+        </rules>"#;
+        assert_eq!(
+            compile_and_match(xml, "poniedziałek 7 października 2014").len(),
+            1
+        );
+        assert_eq!(
+            compile_and_match(xml, "wtorek 7 października 2014").len(),
+            0
+        );
+    }
+
+    #[test]
+    fn ar_date_check_filter_parses_arabic_months_and_weekdays() {
+        set_test_date_hack(true);
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="ar">
+            <rule id="T_AR_DATE" name="تاريخ">
+                <pattern>
+                    <token regexp="yes">الخميس|الجمعة</token>
+                    <token regexp="yes">\d\d?</token>
+                    <token>مارس</token>
+                    <token regexp="yes">\d\d\d\d</token>
+                </pattern>
+                <filter class="org.languagetool.rules.ar.filters.ArabicDateCheckFilter" args="year:\4 month:\3 day:\2 weekDay:\1"/>
+                <message>لا يوافق يوم \1 بل هو يوم {realDay}.</message>
+            </rule>
+        </rules>"#;
+        let matches = compile_and_match(xml, "الخميس 25 مارس 2022");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].message(), "لا يوافق يوم \\1 بل هو يوم الجمعة.");
+        assert_eq!(compile_and_match(xml, "الجمعة 25 مارس 2022").len(), 0);
+    }
+
+    #[test]
+    fn pt_future_date_filter_treats_plain_month_as_literal_number() {
+        set_test_date_hack(true);
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="pt">
+            <rule id="T_PT_FUTURE" name="data futura">
+                <pattern>
+                    <token>de</token>
+                    <token regexp="yes">\d\d?</token>
+                    <token>dezembro</token>
+                    <token regexp="yes">\d\d\d\d</token>
+                </pattern>
+                <filter class="org.languagetool.rules.pt.FutureDateFilter" args="year:\4 month:2 day:\2"/>
+                <message>data futura</message>
+            </rule>
+        </rules>"#;
+        assert_eq!(compile_and_match(xml, "de 1 dezembro 2014").len(), 1);
+        assert_eq!(compile_and_match(xml, "de 1 dezembro 2013").len(), 0);
+    }
+
+    #[test]
+    fn ru_date_check_filter_parses_russian_months_and_weekdays() {
+        set_test_date_hack(true);
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="ru">
+            <rule id="T_RU_DATE" name="дата">
+                <pattern>
+                    <token regexp="yes">понедельник|вторник</token>
+                    <token min="0" max="1">,</token>
+                    <token regexp="yes">\d\d?</token>
+                    <token>октября</token>
+                    <token regexp="yes">\d\d\d\d</token>
+                </pattern>
+                <filter class="org.languagetool.rules.ru.DateCheckFilter" args="year:\5 month:\4 day:\3 weekDay:\1"/>
+                <message>Является {realDay}.</message>
+            </rule>
+        </rules>"#;
+        assert_eq!(
+            compile_and_match(xml, "понедельник, 7 октября 2014").len(),
+            1
+        );
+        assert_eq!(
+            compile_and_match(xml, "понедельник 7 октября 2014").len(),
+            1
+        );
+        assert_eq!(compile_and_match(xml, "вторник 7 октября 2014").len(), 0);
+    }
+
+    #[test]
+    fn br_date_check_filter_parses_breton_day_words() {
+        set_test_date_hack(true);
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="br">
+            <rule id="T_BR_DATE" name="deiziad">
+                <pattern>
+                    <token regexp="yes">Dilun|Dimerc’her</token>
+                    <token regexp="yes">\d\d?|eil</token>
+                    <token>a</token>
+                    <token>viz</token>
+                    <token>gwengolo</token>
+                    <token regexp="yes">\d\d\d\d</token>
+                </pattern>
+                <filter class="org.languagetool.rules.br.DateCheckFilter" args="year:\6 month:\5 day:\2 weekDay:\1"/>
+                <message>Deiz fall.</message>
+            </rule>
+        </rules>"#;
+        assert_eq!(
+            compile_and_match(xml, "Dilun 2 a viz gwengolo 2014").len(),
+            1
+        );
+        assert_eq!(
+            compile_and_match(xml, "Dilun eil a viz gwengolo 2014").len(),
+            1
+        );
+        assert_eq!(
+            compile_and_match(xml, "Dimeurzh 2 a viz gwengolo 2014").len(),
+            0
+        );
+    }
+
+    #[test]
+    fn fr_date_check_filter_suggests_weekday_and_day() {
+        set_test_date_hack(true);
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="fr">
+            <rule id="T_FR_DATE" name="date">
+                <pattern>
+                    <token regexp="yes">lundi|mardi|mercredi|jeudi|vendredi</token>
+                    <token regexp="yes">\d\d?</token>
+                    <token>août</token>
+                    <token regexp="yes">\d\d\d\d</token>
+                </pattern>
+                <filter class="org.languagetool.rules.fr.DateCheckFilter" args="year:4 month:3 day:2 weekDay:1"/>
+                <message>n’est pas un {day} mais un {realDay}.</message>
+            </rule>
+        </rules>"#;
+        let text = "Vendredi 28 août 2014.";
+        let matches = compile_and_match(xml, text);
+        assert_eq!(matches.len(), 1);
+        let m = &matches[0];
+        assert_eq!(&text[m.offset()..m.offset() + m.length()], "Vendredi 28");
+        assert_eq!(m.message(), "n’est pas un vendredi mais un jeudi.");
+        let reps: Vec<&str> = m.replacements().iter().map(|r| r.value()).collect();
+        assert_eq!(reps, vec!["Jeudi 28", "Vendredi 29"]);
     }
 
     fn make_analyzed_sentence(text: &str) -> og_core::AnalyzedSentence {
@@ -2559,6 +4716,113 @@ mod tests {
     }
 
     #[test]
+    fn immunized_tokens_are_invisible_to_pattern_rules() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="de">
+            <rule id="IMMUNIZED_HIT" name="immunized hit">
+                <pattern>
+                    <token>Angeles</token>
+                </pattern>
+                <message>hit</message>
+                <example correction=""><marker>Angeles</marker></example>
+            </rule>
+        </rules>"#;
+        let compiler = XmlCompiler::new();
+        let rule_set = compiler.compile_file(xml).unwrap();
+        let engine = PatternRuleEngine::new();
+
+        let mut sentence = make_analyzed_sentence("Los Angeles");
+        sentence.tokens_mut()[1].immunize();
+        let matches = rule_set
+            .rules
+            .iter()
+            .flat_map(|r| engine.match_rule(r, &sentence))
+            .count();
+        assert_eq!(matches, 0, "immunized token must not match");
+
+        let mut sentence = make_analyzed_sentence("Los Angeles");
+        sentence.tokens_mut()[0].immunize();
+        let matches = rule_set
+            .rules
+            .iter()
+            .flat_map(|r| engine.match_rule(r, &sentence))
+            .count();
+        assert_eq!(matches, 1, "only the immunized token is hidden");
+    }
+
+    #[test]
+    fn rule_level_regexp_matches_text_and_resolves_suggestion_backrefs() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="de">
+            <category id="TYPOGRAPHY" name="Typografie">
+                <rule id="REGEXP_RULE_TEST" name="Regexp rule">
+                    <regexp case_sensitive="yes">Prof\.Dr\.</regexp>
+                    <message>Die Abkürzung <suggestion>Prof. Dr.</suggestion> sollte durch ein Leerzeichen getrennt werden.</message>
+                </rule>
+            </category>
+        </rules>"#;
+        let matches = compile_and_match(xml, "Prof.Dr. med. Hans Müller");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].rule().id(), "REGEXP_RULE_TEST");
+        assert_eq!(&matches[0].sentence().unwrap()[..14], "Prof.Dr. med. ");
+        assert_eq!(matches[0].replacements()[0].value(), "Prof. Dr.");
+    }
+
+    #[test]
+    fn rule_level_regexp_mark_group_and_message_backrefs() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <category id="GRAMMAR" name="Grammar">
+                <rule id="CURRENCY_REGEXP_TEST" name="Currency">
+                    <regexp>(?&lt;![$€£])([\d,.]{1,10}\d)\s?([$€£])(?!\d)</regexp>
+                    <message>The currency mark is usually put at the beginning of the number.</message>
+                    <suggestion>\2\1</suggestion>
+                </rule>
+            </category>
+        </rules>"#;
+        let matches = compile_and_match(xml, "You owe me 7.25$ today.");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].replacements()[0].value(), "$7.25");
+        let from = matches[0].offset();
+        let to = from + matches[0].length();
+        assert_eq!(&"You owe me 7.25$ today."[from..to], "7.25$");
+    }
+
+    #[test]
+    fn rule_level_regexp_smart_mode_tolerates_whitespace() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="de">
+            <category id="STYLE" name="Stil">
+                <rule id="SMART_REGEXP_TEST" name="Smart">
+                    <regexp>sehr (sehr) gut</regexp>
+                    <message>Meinten Sie <suggestion><match no="1"/></suggestion>?</message>
+                </rule>
+            </category>
+        </rules>"#;
+        let matches = compile_and_match(xml, "Das ist ein sehr sehr  guter Text.");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].replacements()[0].value(), "sehr");
+    }
+
+    #[test]
+    fn rule_level_regexp_mark_attribute_selects_group_span() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="de">
+            <category id="STYLE" name="Stil">
+                <rule id="MARK_REGEXP_TEST" name="Mark">
+                    <regexp mark="1">\bZünglein an der (Wage)\b</regexp>
+                    <message>Meinten Sie <suggestion>Waage</suggestion>?</message>
+                </rule>
+            </category>
+        </rules>"#;
+        let matches = compile_and_match(xml, "Er ist das Zünglein an der Wage.");
+        assert_eq!(matches.len(), 1);
+        let from = matches[0].offset();
+        let to = from + matches[0].length();
+        assert_eq!(&"Er ist das Zünglein an der Wage."[from..to], "Wage");
+    }
+
+    #[test]
     fn test_simple_match() {
         let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
         <rules lang="en">
@@ -2572,7 +4836,6 @@ mod tests {
                 </rule>
             </category>
         </rules>"#;
-
         let matches = compile_and_match(xml, "hello world");
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].message(), "Use goodbye world");
@@ -2703,8 +4966,8 @@ mod tests {
 
         let matches = compile_and_match(xml, "the bad word");
         assert_eq!(matches.len(), 1);
-        assert_eq!(matches[0].offset(), 3);
-        assert_eq!(matches[0].length(), 4);
+        assert_eq!(matches[0].offset(), 4);
+        assert_eq!(matches[0].length(), 3);
     }
 
     #[test]
@@ -2780,6 +5043,100 @@ mod tests {
     }
 
     #[test]
+    fn test_optional_token_java_semantics() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <category id="GRAMMAR" name="Grammar">
+                <rule id="TEST" name="Test">
+                    <pattern>
+                        <token>a</token>
+                        <token min="0">b</token>
+                        <token>c</token>
+                    </pattern>
+                    <message>Test</message>
+                </rule>
+            </category>
+        </rules>"#;
+
+        assert_eq!(compile_and_match(xml, "a c").len(), 1);
+        assert_eq!(compile_and_match(xml, "a b c").len(), 1);
+        assert_eq!(compile_and_match(xml, "a X c").len(), 0);
+        assert_eq!(compile_and_match(xml, "a b b c").len(), 0);
+        assert_eq!(compile_and_match(xml, "a").len(), 0);
+        assert_eq!(compile_and_match(xml, "c a b").len(), 0);
+    }
+
+    #[test]
+    fn test_optional_token_not_skipped_when_rest_fails() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <category id="GRAMMAR" name="Grammar">
+                <rule id="TEST" name="Test">
+                    <pattern>
+                        <token>a</token>
+                        <token min="0">b</token>
+                        <token>c</token>
+                        <token>d</token>
+                        <token>e</token>
+                    </pattern>
+                    <message>Test</message>
+                </rule>
+            </category>
+        </rules>"#;
+
+        assert_eq!(compile_and_match(xml, "a b c d e").len(), 1);
+        assert_eq!(compile_and_match(xml, "a c d e").len(), 1);
+        assert_eq!(compile_and_match(xml, "a d").len(), 0);
+        assert_eq!(compile_and_match(xml, "a c b d").len(), 0);
+        assert_eq!(compile_and_match(xml, "a c b d e").len(), 0);
+    }
+
+    #[test]
+    fn test_optional_first_token_matches_when_skipped() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <category id="GRAMMAR" name="Grammar">
+                <rule id="TEST" name="Test">
+                    <pattern>
+                        <token min="0">please</token>
+                        <token>help</token>
+                    </pattern>
+                    <message>Test</message>
+                </rule>
+            </category>
+        </rules>"#;
+
+        assert_eq!(compile_and_match(xml, "help").len(), 1);
+        assert_eq!(compile_and_match(xml, "please help").len(), 2);
+        assert_eq!(compile_and_match(xml, "please").len(), 0);
+    }
+
+    #[test]
+    fn test_optional_token_in_structured_pattern() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <category id="GRAMMAR" name="Grammar">
+                <rule id="TEST" name="Test">
+                    <pattern>
+                        <or>
+                            <token>start</token>
+                            <token>begin</token>
+                        </or>
+                        <token min="0">maybe</token>
+                        <token>end</token>
+                    </pattern>
+                    <message>Test</message>
+                </rule>
+            </category>
+        </rules>"#;
+
+        assert_eq!(compile_and_match(xml, "start end").len(), 1);
+        assert_eq!(compile_and_match(xml, "start maybe end").len(), 1);
+        assert_eq!(compile_and_match(xml, "start X end").len(), 0);
+        assert_eq!(compile_and_match(xml, "begin end").len(), 1);
+    }
+
+    #[test]
     fn test_optional_token_min_zero() {
         let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
         <rules lang="en">
@@ -2824,7 +5181,246 @@ mod tests {
     }
 
     #[test]
-    fn test_negate_any_token() {
+    fn exception_spacebefore_no_only_kills_match_for_attached_token() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <category id="GRAMMAR" name="Grammar">
+                <rule id="TEST" name="Test">
+                    <pattern>
+                        <token regexp="yes">word|term<exception spacebefore="no">term</exception></token>
+                    </pattern>
+                    <message>Test</message>
+                </rule>
+            </category>
+        </rules>"#;
+
+        assert_eq!(
+            compile_and_match(xml, "word term").len(),
+            2,
+            "spaced 'term' must not trigger the spacebefore=no exception"
+        );
+        assert_eq!(
+            compile_and_match(xml, "word-term").len(),
+            1,
+            "attached 'term' must be excluded by the spacebefore=no exception"
+        );
+    }
+
+    #[test]
+    fn exception_spacebefore_no_with_scope_next_gates_on_next_token_whitespace() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <category id="GRAMMAR" name="Grammar">
+                <rule id="TEST" name="Test">
+                    <pattern>
+                        <token>-<exception scope="next" spacebefore="no">term</exception></token>
+                    </pattern>
+                    <message>Test</message>
+                </rule>
+            </category>
+        </rules>"#;
+
+        assert!(
+            compile_and_match(xml, "word-term").is_empty(),
+            "exception applies when the next token is attached"
+        );
+        assert_eq!(
+            compile_and_match(xml, "word - term").len(),
+            1,
+            "exception must stay inactive when the next token has whitespace before"
+        );
+    }
+
+    #[test]
+    fn exception_text_and_postag_must_hold_on_one_reading() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <category id="GRAMMAR" name="Grammar">
+                <rule id="TEST" name="Test">
+                    <pattern>
+                        <token>word<exception inflected="yes" regexp="yes" postag="NN">run[sd]?</exception></token>
+                    </pattern>
+                    <message>Test</message>
+                </rule>
+            </category>
+        </rules>"#;
+
+        let compiler = XmlCompiler::new();
+        let rule_set = compiler.compile_file(xml).unwrap();
+        let engine = PatternRuleEngine::new();
+
+        let mut sentence = make_analyzed_sentence("word");
+        let tokens = sentence.tokens_mut();
+        let atr = &mut tokens[0];
+        let token = atr.token().clone();
+        let run_reading = og_core::AnalyzedToken::new(token.token(), token.start(), token.end())
+            .with_lemma("runs".to_string())
+            .with_pos_tags(vec!["VB".to_string()]);
+        let noun_reading = og_core::AnalyzedToken::new(token.token(), token.start(), token.end())
+            .with_lemma("walk".to_string())
+            .with_pos_tags(vec!["NN".to_string()]);
+        *atr = og_core::AnalyzedTokenReadings::new(token)
+            .with_readings(vec![run_reading, noun_reading]);
+
+        let matches = rule_set
+            .rules
+            .iter()
+            .flat_map(|r| engine.match_rule(r, &sentence))
+            .count();
+        assert_eq!(matches, 1);
+    }
+
+    #[test]
+    fn exception_fires_when_one_reading_satisfies_text_and_postag() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <category id="GRAMMAR" name="Grammar">
+                <rule id="TEST" name="Test">
+                    <pattern>
+                        <token>word<exception inflected="yes" regexp="yes" postag="NN">run[sd]?</exception></token>
+                    </pattern>
+                    <message>Test</message>
+                </rule>
+            </category>
+        </rules>"#;
+
+        let compiler = XmlCompiler::new();
+        let rule_set = compiler.compile_file(xml).unwrap();
+        let engine = PatternRuleEngine::new();
+
+        let mut sentence = make_analyzed_sentence("word");
+        let tokens = sentence.tokens_mut();
+        let atr = &mut tokens[0];
+        let token = atr.token().clone();
+        let run_reading = og_core::AnalyzedToken::new(token.token(), token.start(), token.end())
+            .with_lemma("runs".to_string())
+            .with_pos_tags(vec!["NN".to_string()]);
+        let verb_reading = og_core::AnalyzedToken::new(token.token(), token.start(), token.end())
+            .with_lemma("walk".to_string())
+            .with_pos_tags(vec!["VB".to_string()]);
+        *atr = og_core::AnalyzedTokenReadings::new(token)
+            .with_readings(vec![run_reading, verb_reading]);
+
+        let matches = rule_set
+            .rules
+            .iter()
+            .flat_map(|r| engine.match_rule(r, &sentence))
+            .count();
+        assert_eq!(matches, 0);
+    }
+
+    #[test]
+    fn exception_negated_postag_must_hold_on_one_reading() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <category id="GRAMMAR" name="Grammar">
+                <rule id="TEST" name="Test">
+                    <pattern>
+                        <token>word<exception inflected="yes" regexp="yes" postag="NN" negate_pos="yes">run[sd]?</exception></token>
+                    </pattern>
+                    <message>Test</message>
+                </rule>
+            </category>
+        </rules>"#;
+
+        let compiler = XmlCompiler::new();
+        let rule_set = compiler.compile_file(xml).unwrap();
+        let engine = PatternRuleEngine::new();
+
+        let mut sentence = make_analyzed_sentence("word");
+        let tokens = sentence.tokens_mut();
+        let atr = &mut tokens[0];
+        let token = atr.token().clone();
+        let run_reading = og_core::AnalyzedToken::new(token.token(), token.start(), token.end())
+            .with_lemma("runs".to_string())
+            .with_pos_tags(vec!["NN".to_string()]);
+        let verb_reading = og_core::AnalyzedToken::new(token.token(), token.start(), token.end())
+            .with_lemma("walk".to_string())
+            .with_pos_tags(vec!["VB".to_string()]);
+        *atr = og_core::AnalyzedTokenReadings::new(token)
+            .with_readings(vec![run_reading, verb_reading]);
+
+        let matches = rule_set
+            .rules
+            .iter()
+            .flat_map(|r| engine.match_rule(r, &sentence))
+            .count();
+        assert_eq!(matches, 1);
+    }
+
+    #[test]
+    fn negated_inflected_exception_uses_lemma_not_surface() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <category id="GRAMMAR" name="Grammar">
+                <rule id="TEST" name="Test">
+                    <pattern>
+                        <token>unit</token>
+                        <token>i<exception scope="next" negate="yes" inflected="yes" postag="VB[DP]|MD" postag_regexp="yes">be</exception></token>
+                    </pattern>
+                    <message>Test</message>
+                </rule>
+            </category>
+        </rules>"#;
+
+        let compiler = XmlCompiler::new();
+        let rule_set = compiler.compile_file(xml).unwrap();
+        let engine = PatternRuleEngine::new();
+
+        let mut sentence = make_analyzed_sentence("unit i is");
+        let tokens = sentence.tokens_mut();
+        let atr = &mut tokens[2];
+        let token = atr.token().clone();
+        let reading = og_core::AnalyzedToken::new(token.token(), token.start(), token.end())
+            .with_lemma("be".to_string())
+            .with_pos_tags(vec!["VBZ".to_string()]);
+        *atr = og_core::AnalyzedTokenReadings::new(token).with_readings(vec![reading]);
+
+        let matches = rule_set
+            .rules
+            .iter()
+            .flat_map(|r| engine.match_rule(r, &sentence))
+            .count();
+        assert_eq!(matches, 1);
+    }
+
+    #[test]
+    fn inflected_falls_back_to_surface_for_composed_compound_lemma() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="de">
+            <category id="GRAMMAR" name="Grammar">
+                <rule id="TEST" name="Test">
+                    <pattern>
+                        <token regexp="yes">statische[snm]?</token>
+                        <token regexp="yes" inflected="yes">Bundesamt|Landesamt</token>
+                    </pattern>
+                    <message>Test</message>
+                </rule>
+            </category>
+        </rules>"#;
+
+        let mut sentence = make_analyzed_sentence("Statische Bundesamt");
+        let tokens = sentence.tokens_mut();
+        let atr = &mut tokens[1];
+        let token = atr.token().clone();
+        let reading = og_core::AnalyzedToken::new(token.token(), token.start(), token.end())
+            .with_lemma("Bundsamt".to_string())
+            .with_pos_tags(vec!["SUB:NOM:SIN:MAS".to_string()]);
+        *atr = og_core::AnalyzedTokenReadings::new(token).with_readings(vec![reading]);
+
+        let compiler = XmlCompiler::new();
+        let rule_set = compiler.compile_file(xml).unwrap();
+        let engine = PatternRuleEngine::new();
+        let matches = rule_set
+            .rules
+            .iter()
+            .flat_map(|r| engine.match_rule(r, &sentence))
+            .collect::<Vec<_>>();
+        assert_eq!(matches.len(), 1);
+    }
+
+    #[test]
+    fn test_negate_without_content_never_matches() {
         let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
         <rules lang="en">
             <category id="GRAMMAR" name="Grammar">
@@ -2840,7 +5436,29 @@ mod tests {
         </rules>"#;
 
         let matches = compile_and_match(xml, "start middle end");
+        assert_eq!(matches.len(), 0);
+    }
+
+    #[test]
+    fn test_negated_backreference_matches_other_token() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <category id="GRAMMAR" name="Grammar">
+                <rule id="TEST" name="Test">
+                    <pattern>
+                        <token>foo</token>
+                        <token negate="yes"><match no="0"/></token>
+                    </pattern>
+                    <message>Test</message>
+                </rule>
+            </category>
+        </rules>"#;
+
+        let matches = compile_and_match(xml, "foo bar");
         assert_eq!(matches.len(), 1);
+
+        let same = compile_and_match(xml, "foo foo");
+        assert_eq!(same.len(), 0);
     }
 
     #[test]
@@ -2896,8 +5514,8 @@ mod tests {
 
         let matches = compile_and_match(xml, "I wants a drink");
         assert_eq!(matches.len(), 1);
-        assert_eq!(matches[0].offset(), 1);
-        assert_eq!(matches[0].length(), 8);
+        assert_eq!(matches[0].offset(), 2);
+        assert_eq!(matches[0].length(), 7);
     }
 
     #[test]
@@ -3102,8 +5720,8 @@ mod tests {
         assert!(!matches.is_empty());
         assert_eq!(
             matches[0].length(),
-            7,
-            "Expected length 7 (including trailing space)"
+            6,
+            "Expected length 6 (including trailing space)"
         );
     }
 
@@ -3218,6 +5836,20 @@ mod unify_tests {
     }
 
     #[test]
+    fn self_closing_feature_limits_unification_to_that_feature() {
+        let body = r#"<unify negate="yes"><feature id="number"/><token postag="VB.*" postag_regexp="yes"/><token postag="NN.*:pl.*" postag_regexp="yes"/></unify>"#;
+        let x = xml(body);
+        assert_eq!(
+            run(&x, &[("widz", &["VB:pl:1:f"]), ("psy", &["NN:pl:m1"])]),
+            0
+        );
+        assert_eq!(
+            run(&x, &[("widzi", &["VB:sg:1:f"]), ("psy", &["NN:pl:f1"])]),
+            1
+        );
+    }
+
+    #[test]
     fn unify_uses_any_reading_of_a_token() {
         let body = r#"<unify><token postag="VB.*" postag_regexp="yes"/><token postag="NN.*:pl.*" postag_regexp="yes"/></unify>"#;
         let x = xml(body);
@@ -3305,6 +5937,315 @@ mod unify_tests {
         assert_eq!(
             run(&x, &[("widz", &["VB:pl:1"]), ("psy", &["NN:pl:n1"])]),
             0
+        );
+    }
+
+    #[test]
+    fn feature_pairs_must_come_from_one_reading_per_token() {
+        let body = r#"<unify><token postag="NN.*" postag_regexp="yes"/><token postag="NN.*" postag_regexp="yes"/></unify>"#;
+        let x = xml(body);
+        assert_eq!(
+            run(
+                &x,
+                &[("dom", &["NN:sg:m", "NN:pl:f"]), ("lamperia", &["NN:sg:f"])]
+            ),
+            0,
+            "sg from one reading and f from the other must not combine"
+        );
+    }
+
+    #[test]
+    fn branch_narrowing_survives_only_common_types() {
+        let body = r#"<unify><token postag="NN.*" postag_regexp="yes"/><token postag="NN.*" postag_regexp="yes"/><token postag="NN.*" postag_regexp="yes"/></unify>"#;
+        let x = xml(body);
+        assert_eq!(
+            run(
+                &x,
+                &[
+                    ("dom", &["NN:sg:m", "NN:pl:f"]),
+                    ("lamperia", &["NN:pl:f"]),
+                    ("kot", &["NN:sg:m"])
+                ]
+            ),
+            0,
+            "the middle token narrows both branches away"
+        );
+        assert_eq!(
+            run(
+                &x,
+                &[
+                    ("dom", &["NN:sg:m", "NN:pl:f"]),
+                    ("lamperia", &["NN:pl:f"]),
+                    ("lamperie", &["NN:pl:f"])
+                ]
+            ),
+            1
+        );
+    }
+
+    #[test]
+    fn negated_single_token_group_never_matches() {
+        let body = r#"<unify negate="yes"><token postag="NN.*" postag_regexp="yes"/></unify>"#;
+        let x = xml(body);
+        assert_eq!(run(&x, &[("dom", &["NN:sg:m"])]), 0);
+    }
+
+    #[test]
+    fn antipattern_unify_ignore_tokens_are_neutral() {
+        let x = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<rules lang="pl">{DEFS}
+    <category id="GRAMMAR" name="Grammar">
+        <rule id="UNIFY_AP" name="unify antipattern">
+            <antipattern>
+                <unify>
+                    <token postag="NN.*" postag_regexp="yes"/>
+                    <unify-ignore><token regexp="yes">[^&lt;]+</token></unify-ignore>
+                    <token postag="NN.*" postag_regexp="yes"/>
+                </unify>
+            </antipattern>
+            <pattern>
+                <token postag="NN.*" postag_regexp="yes"/>
+                <token postag="NN.*" postag_regexp="yes"/>
+                <token postag="NN.*" postag_regexp="yes"/>
+            </pattern>
+            <message>Unification.</message>
+        </rule>
+    </category>
+</rules>"#
+        );
+        let rules = compile(&x);
+        assert!(
+            rules[0].antipatterns[0]
+                .tokens
+                .iter()
+                .any(|t| t.unify_neutral),
+            "unify-ignore tokens inside antipatterns must be flagged neutral"
+        );
+        assert_eq!(
+            run(
+                &x,
+                &[
+                    ("dom", &["NN:sg:m"]),
+                    ("iks", &["NN:pl:f"]),
+                    ("domem", &["NN:sg:m"])
+                ]
+            ),
+            0,
+            "agreeing outer nouns must let the antipattern block the rule"
+        );
+        assert_eq!(
+            run(
+                &x,
+                &[
+                    ("dom", &["NN:sg:m"]),
+                    ("iks", &["NN:pl:f"]),
+                    ("psy", &["NN:pl:f"])
+                ]
+            ),
+            1
+        );
+    }
+
+    #[test]
+    fn repeat_elements_feed_each_matched_token() {
+        let body = r#"<unify negate="yes"><feature id="gender"/><token postag="NN.*" postag_regexp="yes" min="2" max="3"/><token postag="NN.*" postag_regexp="yes"/></unify>"#;
+        let x = xml(body);
+        assert_eq!(
+            run(
+                &x,
+                &[
+                    ("a", &["NN:sg:m"]),
+                    ("b", &["NN:sg:f"]),
+                    ("c", &["NN:sg:m"]),
+                    ("d", &["NN:sg:m"])
+                ]
+            ),
+            1,
+            "a disagreeing middle token empties the branch so the negated group passes"
+        );
+        assert_eq!(
+            run(
+                &x,
+                &[
+                    ("a", &["NN:sg:m"]),
+                    ("b", &["NN:sg:m"]),
+                    ("c", &["NN:sg:m"]),
+                    ("d", &["NN:sg:m"])
+                ]
+            ),
+            0
+        );
+    }
+
+    #[test]
+    fn multi_match_elements_do_not_shift_unify_positions() {
+        let x = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<rules lang="pl">{DEFS}
+    <category id="GRAMMAR" name="Grammar">
+        <rule id="UNIFY_SHIFT" name="unify shift">
+            <pattern>
+                <token postag="DT.*" postag_regexp="yes" min="1" max="2"/>
+                <unify>
+                    <token postag="NN.*" postag_regexp="yes"/>
+                    <token postag="NN.*" postag_regexp="yes"/>
+                </unify>
+            </pattern>
+            <message>Unification.</message>
+        </rule>
+    </category>
+</rules>"#
+        );
+        assert_eq!(
+            run(
+                &x,
+                &[
+                    ("te", &["DT:f:s"]),
+                    ("te", &["DT:f:s"]),
+                    ("dom", &["NN:sg:m"]),
+                    ("domy", &["NN:sg:m"])
+                ]
+            ),
+            2,
+            "both start positions must unify the noun pair, not shifted tokens"
+        );
+    }
+
+    fn sentence_readings(parts: &[(&str, &[(&str, &str)])]) -> AnalyzedSentence {
+        let mut tokens = vec![AnalyzedTokenReadings::new(
+            AnalyzedToken::new("<S>", 0, 0).with_pos_tags(vec!["SENT_START".to_string()]),
+        )];
+        let mut offset = 0;
+        for (text, readings) in parts {
+            let readings: Vec<AnalyzedToken> = readings
+                .iter()
+                .map(|(lemma, tags)| {
+                    AnalyzedToken::new(*text, offset, offset + text.len())
+                        .with_lemma(*lemma)
+                        .with_pos_tags(vec![tags.to_string()])
+                })
+                .collect();
+            let primary = AnalyzedToken::new(*text, offset, offset + text.len()).with_pos_tags(
+                readings
+                    .iter()
+                    .flat_map(|r| r.pos_tags().iter().cloned())
+                    .collect(),
+            );
+            tokens.push(AnalyzedTokenReadings::new(primary).with_readings(readings));
+            offset += text.len() + 1;
+        }
+        let mut s = AnalyzedSentence::new("", 0, offset);
+        s.set_tokens(tokens);
+        s
+    }
+
+    fn run_readings(xml: &str, parts: &[(&str, &[(&str, &str)])]) -> usize {
+        let rules = compile(xml);
+        PatternRuleEngine::new()
+            .match_rule(&rules[0], &sentence_readings(parts))
+            .len()
+    }
+
+    #[test]
+    fn inflected_element_restricts_unify_readings_by_lemma() {
+        let body = r#"<unify><feature id="number"/><token postag="NN.*" postag_regexp="yes"/><token postag="NN.*" postag_regexp="yes" inflected="yes">dom</token></unify>"#;
+        let x = xml(body);
+        assert_eq!(
+            run_readings(
+                &x,
+                &[
+                    ("psy", &[("", "NN:pl:f1")]),
+                    ("domy", &[("dom", "NN:sg"), ("chat", "NN:pl:m1")])
+                ]
+            ),
+            0,
+            "only the lemma-matching reading may enter unification (Java filters readings through the full element matcher)"
+        );
+        assert_eq!(
+            run_readings(
+                &x,
+                &[
+                    ("psy", &[("", "NN:pl:f1")]),
+                    ("domy", &[("dom", "NN:pl:m1"), ("chat", "NN:sg")])
+                ]
+            ),
+            1
+        );
+    }
+
+    #[test]
+    fn and_group_between_unify_tokens_participates_with_head_criteria() {
+        let body = r#"<unify><token postag="NN.*" postag_regexp="yes"/><and><token postag="VB.*" postag_regexp="yes"/><token postag="NN.*" postag_regexp="yes"/></and><token postag="NN.*" postag_regexp="yes"/></unify>"#;
+        let x = xml(body);
+        assert_eq!(
+            run_readings(
+                &x,
+                &[
+                    ("psy", &[("", "NN:pl:f1")]),
+                    ("śpią", &[("śpić", "VB:pl:3:f"), ("śpi", "NN:pl:m1")]),
+                    ("psy", &[("", "NN:pl:f1")])
+                ]
+            ),
+            1,
+            "the and-group head reading set must unify with the surrounding nouns"
+        );
+        assert_eq!(
+            run_readings(
+                &x,
+                &[
+                    ("psy", &[("", "NN:pl:f1")]),
+                    ("śpią", &[("śpić", "VB:sg:3:f"), ("śpi", "NN:pl:m1")]),
+                    ("psy", &[("", "NN:pl:f1")])
+                ]
+            ),
+            0,
+            "a disagreeing head reading must break the unification"
+        );
+    }
+
+    #[test]
+    fn or_group_patterns_produce_forward_spans() {
+        let x = xml(
+            r#"<pattern><token postag="NN.*" postag_regexp="yes"/><or><token postag="VB.*:f.*" postag_regexp="yes"/><token postag="VB.*:m.*" postag_regexp="yes"/></or></pattern>"#,
+        );
+        assert_eq!(
+            run(&x, &[("psy", &["NN:pl:f1"]), ("śpią", &["VB:pl:3:f"])]),
+            1
+        );
+        let x3 = xml(
+            r#"<pattern><token postag="NN.*" postag_regexp="yes"/><or><token>śpią</token><token>xxx</token></or></pattern>"#,
+        );
+        assert_eq!(
+            run(&x3, &[("psy", &["NN:pl:f1"]), ("śpią", &["VB:pl:3:f"])]),
+            1,
+            "structured patterns must keep first_start <= last_end across elements"
+        );
+    }
+
+    #[test]
+    fn or_group_inside_unify_branches_per_alternative() {
+        let body = r#"<unify><token postag="NN.*" postag_regexp="yes"/><or><token postag="VB.*:f.*" postag_regexp="yes"/><token postag="VB.*:m.*" postag_regexp="yes"/></or></unify>"#;
+        let x = xml(body);
+        assert_eq!(
+            run(&x, &[("psy", &["NN:pl:f1"]), ("śpią", &["VB:pl:3:f"])]),
+            1
+        );
+        assert_eq!(
+            run(&x, &[("psy", &["NN:pl:f1"]), ("śpią", &["VB:pl:3:m"])]),
+            0,
+            "no alternative reading set may unify with a feminine noun"
+        );
+    }
+
+    #[test]
+    fn skipped_optional_inside_unify_does_not_fail_the_group() {
+        let body = r#"<unify><token postag="NN.*:pl.*" postag_regexp="yes" min="0"/><token postag="NN.*:pl.*" postag_regexp="yes"/></unify>"#;
+        let x = xml(body);
+        assert_eq!(
+            run(&x, &[("psy", &["NN:pl:f1"]), ("psy", &["NN:pl:f1"])]),
+            2,
+            "a skipped optional unify element is silently ignored, not a group failure"
         );
     }
 }

@@ -1,9 +1,7 @@
 use og_core::checker::{Chunker as _, Disambiguator, SentenceTokenizer, WordTokenizer};
 use og_core::{AnalyzedSentence, AnalyzedToken, AnalyzedTokenReadings, SentenceRange};
 use og_rules::pattern_rule::PatternRuleEngine;
-use og_tagger::{
-    ChainedDisambiguator, ContextualDisambiguator, EnglishTagger, Tagger, XmlDisambiguator,
-};
+use og_tagger::{EnglishTagger, Tagger, XmlDisambiguator};
 use og_xml::compiler::{CompiledRuleSet, XmlCompiler};
 use std::path::Path;
 use std::sync::Arc;
@@ -31,13 +29,26 @@ impl TestRunSummary {
     }
 }
 
-struct TestWordTokenizer;
+enum TestWordTokenizer {
+    Default(bool),
+    German,
+    French(Arc<og_tokenizer::FrenchWordTokenizer>),
+}
 
 impl WordTokenizer for TestWordTokenizer {
     fn tokenize(&self, text: &str, offset: usize) -> Vec<AnalyzedTokenReadings> {
-        let tokenizer = og_tokenizer::DefaultWordTokenizer::new();
         use og_tokenizer::WordTokenizer as _;
-        let tokens = tokenizer.tokenize(text);
+        let tokens = match self {
+            TestWordTokenizer::Default(true) => {
+                let tokenizer = og_tokenizer::DefaultWordTokenizer::new();
+                tokenizer.split_underscores(tokenizer.tokenize(text))
+            }
+            TestWordTokenizer::Default(false) => {
+                og_tokenizer::DefaultWordTokenizer::new_generic().tokenize(text)
+            }
+            TestWordTokenizer::German => og_tokenizer::GermanWordTokenizer::new().tokenize(text),
+            TestWordTokenizer::French(fr) => fr.tokenize(text),
+        };
         tokens
             .into_iter()
             .map(|t| {
@@ -71,6 +82,7 @@ impl SentenceTokenizer for TestSentenceTokenizer {
 pub enum AnyTagger {
     English(EnglishTagger),
     German(og_tagger::GermanTagger),
+    Generic(og_tagger::GenericTagger),
 }
 
 impl AnyTagger {
@@ -78,6 +90,7 @@ impl AnyTagger {
         match self {
             AnyTagger::English(t) => Tagger::tag(t, tokens),
             AnyTagger::German(t) => Tagger::tag(t, tokens),
+            AnyTagger::Generic(t) => Tagger::tag(t, tokens),
         }
     }
 }
@@ -87,6 +100,7 @@ pub struct TestRunner {
     pattern_engine: PatternRuleEngine,
     tagger: AnyTagger,
     disambiguator: Option<Arc<dyn Disambiguator>>,
+    french_tokenizer: Option<Arc<og_tokenizer::FrenchWordTokenizer>>,
 }
 
 impl TestRunner {
@@ -106,6 +120,38 @@ impl TestRunner {
 
         let (tagger, disambiguator, pattern_engine) = std::thread::scope(|scope| {
             let tagger_h = scope.spawn(|| {
+                let generic_stems: &[(&str, &str)] = &[
+                    ("fr", "french"),
+                    ("es", "spanish"),
+                    ("pt", "portuguese"),
+                    ("nl", "dutch"),
+                    ("pl", "polish"),
+                    ("ru", "russian"),
+                    ("it", "italian"),
+                    ("ar", "arabic"),
+                    ("ast", "asturian"),
+                    ("br", "breton"),
+                    ("el", "greek"),
+                    ("gl", "galician"),
+                    ("ro", "romanian"),
+                    ("sv", "swedish"),
+                ];
+                if let Some((_, stem)) = generic_stems.iter().find(|(c, _)| *c == code)
+                    && resource_dir.exists()
+                {
+                    if code == "fr" {
+                        return AnyTagger::Generic(og_tagger::GenericTagger::french(&resource_dir));
+                    }
+                    if code == "ru" {
+                        return AnyTagger::Generic(og_tagger::GenericTagger::russian(
+                            &resource_dir,
+                        ));
+                    }
+                    return AnyTagger::Generic(og_tagger::GenericTagger::from_resource_dir(
+                        &resource_dir,
+                        stem,
+                    ));
+                }
                 if code == "de" && resource_dir.exists() {
                     og_tagger::GermanTagger::from_resource_dir(&resource_dir)
                         .map(AnyTagger::German)
@@ -120,35 +166,80 @@ impl TestRunner {
             let disambiguator_h = scope.spawn(|| {
                 let disambig_path = resource_dir.join("disambiguation.xml");
                 match std::fs::read_to_string(&disambig_path) {
-                    Ok(xml) => match XmlDisambiguator::from_xml(&xml) {
-                        Ok(d) => {
-                            eprintln!("Loaded {} disambiguation rules", d.rule_count());
-                            let stages: Vec<Arc<dyn Disambiguator>> = if code == "en" {
-                                vec![Arc::new(d), Arc::new(ContextualDisambiguator)]
-                            } else {
-                                vec![Arc::new(d)]
-                            };
-                            Some(Arc::new(ChainedDisambiguator::new(stages))
-                                as Arc<dyn Disambiguator>)
+                    Ok(xml) => {
+                        let english_tagger = if code == "nl" {
+                            std::sync::Arc::new(og_tagger::EnglishTagger::from_resource_dir(
+                                &lt_modules
+                                    .join("en/src/main/resources/org/languagetool/resource/en"),
+                            ))
+                        } else {
+                            std::sync::Arc::new(og_tagger::EnglishTagger::new())
+                        };
+                        let english_tagger =
+                            (english_tagger.entry_count() > 0).then_some(english_tagger);
+                        match XmlDisambiguator::from_xml_with_english(&xml, english_tagger) {
+                            Ok(d) => {
+                                eprintln!("Loaded {} disambiguation rules", d.rule_count());
+                                Some(og_tagger::hybrid_disambiguator(
+                                    code,
+                                    &resource_dir,
+                                    &core_resource_dir,
+                                    d,
+                                ))
+                            }
+                            Err(e) => {
+                                eprintln!("Warning: failed to load disambiguation: {}", e);
+                                None
+                            }
                         }
-                        Err(e) => {
-                            eprintln!("Warning: failed to load disambiguation: {}", e);
-                            None
-                        }
-                    },
-                    Err(_) if code == "en" => {
-                        Some(Arc::new(ContextualDisambiguator) as Arc<dyn Disambiguator>)
                     }
                     Err(_) => None,
                 }
             });
 
             let engine_h = scope.spawn(|| {
+                let generic_multitoken =
+                    ["nl", "pt", "es", "fr"].contains(&code) && resource_dir.exists();
                 let support = if code == "en" && resource_dir.exists() && core_resource_dir.exists()
                 {
-                    og_rules::spelling_support::SpellingSupport::from_dirs(
+                    og_rules::spelling_support::SpellingSupport::dictionary_from_dir(
                         &lt_modules.join("en/src/main/resources/org/languagetool/resource/en"),
-                        core_resource_dir,
+                    )
+                    .map(|dict| {
+                        og_rules::spelling_support::SpellingSupport::new_for_language(
+                            dict,
+                            core_resource_dir,
+                            &lt_modules.join("en/src/main/resources/org/languagetool/resource/en"),
+                            "en",
+                        )
+                    })
+                } else if generic_multitoken && core_resource_dir.exists() {
+                    let mut dict = og_spell::Dictionary::new();
+                    if let Ok(words) =
+                        std::fs::read_to_string(resource_dir.join("hunspell/spelling.txt"))
+                    {
+                        for line in words.lines() {
+                            let word = line.trim();
+                            if !word.is_empty() && !word.starts_with('#') {
+                                dict.add_word(word);
+                            }
+                        }
+                    }
+                    if let Ok(words) = std::fs::read_to_string(resource_dir.join("added.txt")) {
+                        for line in words.lines() {
+                            let word = line.trim();
+                            if !word.is_empty() && !word.starts_with('#') {
+                                dict.add_word(word);
+                            }
+                        }
+                    }
+                    Some(
+                        og_rules::spelling_support::SpellingSupport::new_for_language(
+                            dict,
+                            core_resource_dir,
+                            &resource_dir,
+                            code,
+                        ),
                     )
                 } else if code == "de" && resource_dir.exists() && core_resource_dir.exists() {
                     let dictionary = og_tagger::morfologik::MorfologikDictionary::load(
@@ -160,13 +251,26 @@ impl TestRunner {
                         for word in dict.word_list() {
                             d.add_word(&word);
                         }
+                        if let Ok(words) =
+                            std::fs::read_to_string(resource_dir.join("hunspell/spelling.txt"))
+                        {
+                            for line in words.lines() {
+                                for word in og_rules::spelling_support::prepare_line_for_speller(
+                                    og_rules::spelling_support::SpellerVariant::German,
+                                    line,
+                                ) {
+                                    d.add_word(&word);
+                                }
+                            }
+                        }
                         d
                     });
                     dictionary.map(|dictionary| {
-                        og_rules::spelling_support::SpellingSupport::new_with(
+                        og_rules::spelling_support::SpellingSupport::new_for_language(
                             dictionary,
                             core_resource_dir,
                             &resource_dir,
+                            "de",
                         )
                     })
                 } else {
@@ -174,9 +278,24 @@ impl TestRunner {
                 };
                 match support {
                     Some(support) => {
-                        PatternRuleEngine::new().with_spelling_support(std::sync::Arc::new(support))
+                        let mut engine = PatternRuleEngine::new()
+                            .with_spelling_support(std::sync::Arc::new(support));
+                        if let Some(synth) =
+                            og_rules::postponed_adjective::LangSynthesizer::for_language(
+                                &resource_dir, code,
+                            )
+                        {
+                            engine = engine.with_synthesizer(std::sync::Arc::new(synth));
+                        }
+                        engine
                     }
-                    None => PatternRuleEngine::new(),
+                    None => match og_rules::postponed_adjective::LangSynthesizer::for_language(
+                        &resource_dir, code,
+                    ) {
+                        Some(synth) => PatternRuleEngine::new()
+                            .with_synthesizer(std::sync::Arc::new(synth)),
+                        None => PatternRuleEngine::new(),
+                    },
                 }
             });
 
@@ -187,16 +306,29 @@ impl TestRunner {
             )
         });
 
+        let french_tokenizer = (code == "fr").then(|| {
+            let dir = lt_modules.join("fr/src/main/resources/org/languagetool/resource/fr");
+            let tagger = og_tagger::GenericTagger::french(&dir);
+            Arc::new(og_tokenizer::FrenchWordTokenizer::new(Arc::new(
+                move |w: &str| tagger.is_word_tagged(w),
+            )))
+        });
+
         Self {
             language: code.to_string(),
             pattern_engine,
             tagger,
             disambiguator,
+            french_tokenizer,
         }
     }
 
     fn tokenize_sentence(&self, text: &str) -> AnalyzedSentence {
-        let tokenizer = TestWordTokenizer;
+        let tokenizer = match &self.french_tokenizer {
+            Some(fr) => TestWordTokenizer::French(fr.clone()),
+            None if self.language == "de" => TestWordTokenizer::German,
+            None => TestWordTokenizer::Default(self.language == "en"),
+        };
         let mut sentence = AnalyzedSentence::new(text, 0, text.len());
         let mut tokens = tokenizer.tokenize(text, 0);
         let start_token = AnalyzedTokenReadings::new(
@@ -215,6 +347,7 @@ impl TestRunner {
         for (i, tagged_atr) in tagged.into_iter().enumerate() {
             let token_idx = i + 1;
             if token_idx < tokens.len() {
+                let tagged_chunks = tagged_atr.chunks().to_vec();
                 let readings = tagged_atr.into_readings();
                 if !readings.is_empty() {
                     let primary = tokens[token_idx].token().clone();
@@ -227,8 +360,14 @@ impl TestRunner {
                             .with_pos_tags(all_tags)
                             .with_lemma(readings[0].lemma().unwrap_or(primary.token()).to_string());
 
-                    tokens[token_idx] =
+                    let mut atr =
                         AnalyzedTokenReadings::new(updated_primary).with_readings(readings);
+                    if !tagged_chunks.is_empty() {
+                        atr.set_chunks(tagged_chunks);
+                    }
+                    tokens[token_idx] = atr;
+                } else if !tagged_chunks.is_empty() {
+                    tokens[token_idx].set_chunks(tagged_chunks);
                 }
             }
         }
@@ -262,6 +401,10 @@ impl TestRunner {
             og_tagger::german_chunker::shared_german_chunker().add_chunk_tags(&mut sentence);
         }
 
+        if self.language == "ru" {
+            og_tagger::russian_chunker::shared_russian_chunker().add_chunk_tags(&mut sentence);
+        }
+
         sentence
     }
 
@@ -280,9 +423,7 @@ impl TestRunner {
             (Some(s), Some(e)) => {
                 let marker_start = s;
                 let marker_end = e - start_marker.len();
-                let clean = text[..s].to_string()
-                    + &text[s + start_marker.len()..e]
-                    + &text[e + end_marker.len()..];
+                let clean = text.replace(start_marker, "").replace(end_marker, "");
                 (clean, Some((marker_start, marker_end)))
             }
             _ => (text.to_string(), None),
@@ -319,8 +460,22 @@ impl TestRunner {
         self.tokenize_sentence(text)
     }
 
+    pub fn match_rule_on_text(
+        &self,
+        rule: &og_xml::compiler::CompiledRule,
+        text: &str,
+    ) -> (String, Option<(usize, usize)>, Vec<og_core::RuleMatch>) {
+        let (clean_text, marker_range) = Self::extract_marker(text);
+        let sentence = self.tokenize_sentence(&clean_text);
+        let matches = self.pattern_engine.match_rule(rule, &sentence);
+        (clean_text, marker_range, matches)
+    }
+
     pub fn run_rule_set_example_tests(&self, rule_set: &CompiledRuleSet) -> TestRunSummary {
         use rayon::prelude::*;
+
+        let started = std::time::Instant::now();
+        og_rules::pattern_rule::set_test_date_hack(true);
 
         let pairs: Vec<(&og_xml::compiler::CompiledRule, &og_xml::types::XmlExample)> = rule_set
             .rules
@@ -340,6 +495,17 @@ impl TestRunner {
 
         let passed = results.iter().filter(|r| r.passed).count();
         let failed = results.len() - passed;
+        let elapsed = started.elapsed();
+        eprintln!(
+            "Suite wall-clock: {:.2}s for {} examples ({:.0} examples/s), {failed} failed",
+            elapsed.as_secs_f64(),
+            results.len(),
+            if elapsed.as_secs_f64() > 0.0 {
+                results.len() as f64 / elapsed.as_secs_f64()
+            } else {
+                0.0
+            }
+        );
         TestRunSummary {
             total: results.len(),
             passed,
@@ -508,8 +674,7 @@ impl Default for TestRunner {
     }
 }
 
-#[cfg(test)]
-mod test_support {
+pub mod test_support {
     use super::*;
     use std::sync::OnceLock;
 
@@ -524,10 +689,10 @@ mod test_support {
     pub fn german_grammar_rules() -> &'static CompiledRuleSet {
         static GRAMMAR: OnceLock<CompiledRuleSet> = OnceLock::new();
         GRAMMAR.get_or_init(|| {
-            let xml =
-                std::fs::read_to_string(DE_GRAMMAR_PATH).expect("Failed to read de grammar.xml");
+            let path = std::path::Path::new(DE_GRAMMAR_PATH);
+            let xml = std::fs::read_to_string(path).expect("Failed to read de grammar.xml");
             XmlCompiler::new()
-                .compile_file(&xml)
+                .compile_file_with_base(&xml, path.parent())
                 .expect("Failed to compile de grammar.xml")
         })
     }
@@ -544,15 +709,45 @@ mod test_support {
     pub fn shared_grammar_rules() -> &'static CompiledRuleSet {
         static GRAMMAR: OnceLock<CompiledRuleSet> = OnceLock::new();
         GRAMMAR.get_or_init(|| {
-            let xml = std::fs::read_to_string(GRAMMAR_PATH).expect("Failed to read grammar.xml");
+            let path = std::path::Path::new(GRAMMAR_PATH);
+            let xml = std::fs::read_to_string(path).expect("Failed to read grammar.xml");
             XmlCompiler::new()
-                .compile_file(&xml)
+                .compile_file_with_base(&xml, path.parent())
                 .expect("Failed to compile grammar.xml")
         })
     }
 
     pub fn grammar_available() -> bool {
         Path::new(GRAMMAR_PATH).exists()
+    }
+
+    pub fn generic_grammar_available(code: &str) -> bool {
+        Path::new(&format!(
+            "/home/agent/opengrammar-rs/languagetool/languagetool-language-modules/{code}/src/main/resources/org/languagetool/rules/{code}/grammar.xml"
+        ))
+        .exists()
+    }
+
+    pub fn generic_grammar_rules(code: &'static str) -> &'static CompiledRuleSet {
+        static CACHE: std::sync::OnceLock<
+            std::sync::Mutex<std::collections::HashMap<&'static str, &'static CompiledRuleSet>>,
+        > = std::sync::OnceLock::new();
+        let cache = CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+        let mut guard = cache.lock().unwrap();
+        if let Some(hit) = guard.get(code) {
+            return hit;
+        }
+        let path = std::path::PathBuf::from(format!(
+            "/home/agent/opengrammar-rs/languagetool/languagetool-language-modules/{code}/src/main/resources/org/languagetool/rules/{code}/grammar.xml"
+        ));
+        let xml = std::fs::read_to_string(&path).expect("Failed to read grammar.xml");
+        let compiled: &'static CompiledRuleSet = Box::leak(Box::new(
+            XmlCompiler::new()
+                .compile_file_with_base(&xml, path.parent())
+                .expect("Failed to compile grammar.xml"),
+        ));
+        guard.insert(code, compiled);
+        compiled
     }
 }
 
@@ -1040,6 +1235,35 @@ mod tests {
     }
 
     #[test]
+    fn test_no_break_space_example_not_flagged() {
+        if !test_support::grammar_available() {
+            return;
+        }
+        let rules = test_support::shared_grammar_rules();
+        let runner = test_support::shared_runner();
+        let rule = rules
+            .rules
+            .iter()
+            .find(|r| {
+                r.id == "SENT_START_CONJUNCTIVE_LINKING_ADVERB_COMMA"
+                    && r.examples.iter().any(|e| e.text.contains('\u{a0}'))
+            })
+            .expect("sub-rule with no-break-space example");
+        let example = rule
+            .examples
+            .iter()
+            .find(|e| e.text.contains('\u{a0}'))
+            .unwrap();
+        let (_clean, _marker, matches) = runner.match_rule_on_text(rule, &example.text);
+        assert!(
+            matches.is_empty(),
+            "no-break-space example flagged: '{}' got {} matches",
+            example.text,
+            matches.len()
+        );
+    }
+
+    #[test]
     #[ignore]
     fn test_it_is_rule_its_cool_man() {
         let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -1117,7 +1341,7 @@ mod tests {
             "We want go to the cinema.",
             "You will see what an American looks like.",
         ] {
-            let tokenizer = TestWordTokenizer;
+            let tokenizer = TestWordTokenizer::Default(true);
             let mut sentence = AnalyzedSentence::new(text, 0, text.len());
             let mut tokens = tokenizer.tokenize(text, 0);
             let start_token = AnalyzedTokenReadings::new(
@@ -1700,7 +1924,7 @@ fn test_debug_a_infinitive_fps() {
     for text in &sentences {
         let sentence = runner.tokenize_sentence(text);
         let nwt: Vec<_> = sentence.non_whitespace_tokens();
-        eprintln!("\n'{}':", text);
+        eprintln!("\n'{text}':");
         for (i, token) in nwt.iter().enumerate() {
             let chunk = token.chunk().unwrap_or("-");
             eprintln!(
@@ -1712,4 +1936,201 @@ fn test_debug_a_infinitive_fps() {
             );
         }
     }
+}
+
+#[test]
+#[ignore]
+fn test_real_danish_grammar_examples() {
+    run_generic_example_suite("da");
+}
+
+#[test]
+#[ignore]
+fn test_real_de_CH_grammar_examples() {
+    run_german_variant_example_suite("de-CH");
+}
+
+#[test]
+#[ignore]
+fn test_real_de_AT_grammar_examples() {
+    run_german_variant_example_suite("de-AT");
+}
+
+#[test]
+#[ignore]
+fn test_real_french_grammar_examples() {
+    run_generic_example_suite("fr");
+}
+
+#[test]
+#[ignore]
+fn test_real_spanish_grammar_examples() {
+    run_generic_example_suite("es");
+}
+
+#[test]
+#[ignore]
+fn test_real_portuguese_grammar_examples() {
+    run_generic_example_suite("pt");
+}
+
+#[test]
+#[ignore]
+fn test_real_dutch_grammar_examples() {
+    run_generic_example_suite("nl");
+}
+
+#[test]
+#[ignore]
+fn test_real_polish_grammar_examples() {
+    run_generic_example_suite("pl");
+}
+
+#[test]
+#[ignore]
+fn test_real_russian_grammar_examples() {
+    run_generic_example_suite("ru");
+}
+
+#[test]
+#[ignore]
+fn test_real_italian_grammar_examples() {
+    run_generic_example_suite("it");
+}
+
+#[test]
+#[ignore]
+fn test_real_arabic_grammar_examples() {
+    run_generic_example_suite("ar");
+}
+
+#[test]
+#[ignore]
+fn test_real_asturian_grammar_examples() {
+    run_generic_example_suite("ast");
+}
+
+#[test]
+#[ignore]
+fn test_real_belarusian_grammar_examples() {
+    run_generic_example_suite("be");
+}
+
+#[test]
+#[ignore]
+fn test_real_breton_grammar_examples() {
+    run_generic_example_suite("br");
+}
+
+#[test]
+#[ignore]
+fn test_real_greek_grammar_examples() {
+    run_generic_example_suite("el");
+}
+
+#[test]
+#[ignore]
+fn test_real_galician_grammar_examples() {
+    run_generic_example_suite("gl");
+}
+
+#[test]
+#[ignore]
+fn test_real_romanian_grammar_examples() {
+    run_generic_example_suite("ro");
+}
+
+#[test]
+#[ignore]
+fn test_real_swedish_grammar_examples() {
+    run_generic_example_suite("sv");
+}
+
+#[cfg(test)]
+fn run_german_variant_example_suite(code: &'static str) {
+    let variant_dir = if code == "de-CH" { "de-CH" } else { "de-DE-AT" };
+    let path = std::path::PathBuf::from(format!(
+        "/home/agent/opengrammar-rs/languagetool/languagetool-language-modules/de/src/main/resources/org/languagetool/rules/de/{variant_dir}/grammar.xml"
+    ));
+    if !path.exists() {
+        eprintln!("Skipping: {variant_dir} grammar.xml not found");
+        return;
+    }
+    let runner = test_support::german_runner();
+    let xml = std::fs::read_to_string(&path).expect("grammar.xml read");
+    let rules = XmlCompiler::new()
+        .compile_file_with_base(&xml, path.parent())
+        .expect("grammar compile");
+    let summary = runner.run_rule_set_example_tests(&rules);
+
+    let mut no_match = 0;
+    let mut fp = 0;
+    let mut marker = 0;
+    for r in &summary.results {
+        if r.passed {
+            continue;
+        }
+        if r.message.contains("Expected no match") {
+            fp += 1;
+        } else if r.message.contains("marker") {
+            marker += 1;
+        } else {
+            no_match += 1;
+        }
+    }
+    eprintln!(
+        "{code}: {}/{} passed ({:.1}%) - no_match: {no_match}, fp: {fp}, marker: {marker}",
+        summary.passed,
+        summary.total,
+        100.0 * summary.passed as f64 / summary.total.max(1) as f64
+    );
+    let mut fail_file = String::new();
+    for r in &summary.results {
+        if !r.passed {
+            fail_file.push_str(&format!("FAIL: [{}] {}\n", r.rule_id, r.message));
+        }
+    }
+    let artifact_code = code.replace('-', "_");
+    let _ = std::fs::write(format!("/tmp/test_failures_{artifact_code}.txt"), fail_file);
+}
+
+#[cfg(test)]
+fn run_generic_example_suite(code: &'static str) {
+    if !test_support::generic_grammar_available(code) {
+        eprintln!("Skipping: {code} grammar.xml not found");
+        return;
+    }
+    let rules_handle = std::thread::spawn(move || test_support::generic_grammar_rules(code));
+    let runner = TestRunner::for_language(code);
+    let rules = rules_handle.join().expect("grammar compile thread");
+    let summary = runner.run_rule_set_example_tests(rules);
+
+    let mut no_match = 0;
+    let mut fp = 0;
+    let mut marker = 0;
+    for r in &summary.results {
+        if r.passed {
+            continue;
+        }
+        if r.message.contains("Expected no match") {
+            fp += 1;
+        } else if r.message.contains("marker") {
+            marker += 1;
+        } else {
+            no_match += 1;
+        }
+    }
+    eprintln!(
+        "{code}: {}/{} passed ({:.1}%) - no_match: {no_match}, fp: {fp}, marker: {marker}",
+        summary.passed,
+        summary.total,
+        100.0 * summary.passed as f64 / summary.total.max(1) as f64
+    );
+    let mut fail_file = String::new();
+    for r in &summary.results {
+        if !r.passed {
+            fail_file.push_str(&format!("FAIL: [{}] {}\n", r.rule_id, r.message));
+        }
+    }
+    let _ = std::fs::write(format!("/tmp/test_failures_{code}.txt"), fail_file);
 }

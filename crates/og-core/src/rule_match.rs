@@ -21,6 +21,10 @@ impl SuggestedReplacement {
         self
     }
 
+    pub fn set_value(&mut self, value: impl Into<String>) {
+        self.value = value.into();
+    }
+
     pub fn value(&self) -> &str {
         &self.value
     }
@@ -82,6 +86,8 @@ pub struct RuleMatchRule {
     urls: Vec<RuleMatchUrl>,
     #[serde(default)]
     category: Category,
+    #[serde(default, skip_serializing)]
+    picky: bool,
 }
 
 impl RuleMatchRule {
@@ -94,7 +100,25 @@ impl RuleMatchRule {
             issue_type: "grammar".to_string(),
             urls: Vec::new(),
             category: Category::new("MISC", "Miscellaneous"),
+            picky: false,
         }
+    }
+
+    pub fn with_picky(mut self, picky: bool) -> Self {
+        self.picky = picky;
+        self
+    }
+
+    pub fn set_picky(&mut self, picky: bool) {
+        self.picky = picky;
+    }
+
+    pub fn is_picky(&self) -> bool {
+        self.picky
+    }
+
+    pub fn set_issue_type(&mut self, issue_type: impl Into<String>) {
+        self.issue_type = issue_type.into();
     }
 
     pub fn with_issue_type(mut self, issue_type: impl Into<String>) -> Self {
@@ -127,6 +151,10 @@ impl RuleMatchRule {
 
     pub fn id(&self) -> &str {
         &self.id
+    }
+
+    pub fn category(&self) -> &Category {
+        &self.category
     }
 
     pub fn description(&self) -> &str {
@@ -213,6 +241,10 @@ impl RuleMatch {
         self
     }
 
+    pub fn set_message(&mut self, message: impl Into<String>) {
+        self.message = message.into();
+    }
+
     pub fn with_match_type(mut self, kind: RuleMatchKind) -> Self {
         self.issue_type = Some(MatchType { kind });
         self
@@ -248,6 +280,15 @@ impl RuleMatch {
         self
     }
 
+    pub fn set_offset_length(&mut self, offset: usize, length: usize) {
+        self.offset = offset;
+        self.length = length;
+    }
+
+    pub fn set_replacements(&mut self, replacements: Vec<SuggestedReplacement>) {
+        self.replacements = replacements;
+    }
+
     pub fn message(&self) -> &str {
         &self.message
     }
@@ -268,12 +309,24 @@ impl RuleMatch {
         &self.replacements
     }
 
+    pub fn replacements_mut(&mut self) -> &mut Vec<SuggestedReplacement> {
+        &mut self.replacements
+    }
+
+    pub fn set_picky(&mut self, picky: bool) {
+        self.rule.set_picky(picky);
+    }
+
     pub fn context(&self) -> &RuleMatchContext {
         &self.context
     }
 
     pub fn rule(&self) -> &RuleMatchRule {
         &self.rule
+    }
+
+    pub fn rule_mut(&mut self) -> &mut RuleMatchRule {
+        &mut self.rule
     }
 
     pub fn sentence(&self) -> Option<&str> {

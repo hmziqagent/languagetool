@@ -22,6 +22,84 @@ fn cases() -> Vec<GoldenCase> {
         )
         .expect("PRP_HAVE_VB", 6, 5)
         .presence_only_marker(),
+        GoldenCase::new(
+            "correct-node-js-extension-not-flagged",
+            "The team maintains node.JS services for the API gateway.",
+        ),
+        GoldenCase::new(
+            "correct-gov-abbreviation-name-not-passive",
+            "Gov. Gray Davis signed the legislation in Sacramento last week.",
+        ),
+        GoldenCase::new(
+            "correct-plain-sentence-no-matches",
+            "The children walked slowly towards the old harbour before sunset.",
+        ),
+        GoldenCase::new(
+            "contraction-typo-coud-t-flagged",
+            "They coud't come to the party yesterday.",
+        )
+        .presence_only_expect("COUD_T"),
+        GoldenCase::new(
+            "correct-date-past-not-future-flagged",
+            "Wir haben am 7.8.2010 den Kunden informiert.",
+        ),
+        GoldenCase::new(
+            "unit-conversion-suggests-metric",
+            "The trail is 5 miles long.",
+        )
+        .presence_only_expect("METRIC_UNITS_EN_GENERAL"),
+        GoldenCase::new(
+            "fp-guard-hippa-lowercase-adjacent",
+            "The hippa compliant server stores patient data securely.",
+        ),
+        GoldenCase::new(
+            "fp-guard-hippa-proper-name",
+            "She works at the Hippa institute in Vienna.",
+        ),
+        GoldenCase::new(
+            "fp-guard-gov-abbreviation-passive",
+            "Gov. Gray Davis signed the legislation in Sacramento last week.",
+        ),
+        GoldenCase::new(
+            "fp-guard-node-js-extension",
+            "We use node.JS for the backend services.",
+        ),
+        GoldenCase::new(
+            "fp-guard-node-js-prose",
+            "This chapter covers node.JS deployment in production systems.",
+        ),
+        GoldenCase::new(
+            "fp-guard-usa-abbrev",
+            "The U.S.A. has fifty states.",
+        ),
+        GoldenCase::new(
+            "fp-guard-dr-abbreviation",
+            "Dr. Smith arrived early.",
+        ),
+        GoldenCase::new(
+            "fp-guard-mr-abbreviation",
+            "I saw Mr. Thompson at the store.",
+        ),
+        GoldenCase::new(
+            "fp-guard-sen-abbreviation",
+            "The result was announced by Sen. Kennedy yesterday afternoon.",
+        ),
+        GoldenCase::new(
+            "fp-guard-third-street",
+            "Their house is on the third street to the left of the bank.",
+        ),
+        GoldenCase::new(
+            "fp-guard-committee-proposal",
+            "It was a surprise to no one that the committee approved the proposal unanimously.",
+        ),
+        GoldenCase::new(
+            "fp-guard-data-trend",
+            "The data shows that the trend is continuing into the next quarter.",
+        ),
+        GoldenCase::new(
+            "fp-guard-include-skipped-suggestion",
+            "Please note that we will revert the change.",
+        ),
     ]
 }
 

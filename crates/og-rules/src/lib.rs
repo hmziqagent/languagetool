@@ -1,5 +1,7 @@
+pub mod de_comma_tagger;
 pub mod native_rules;
 pub mod pattern_rule;
+pub mod postponed_adjective;
 pub mod spelling_support;
 pub mod text_level_rules;
 

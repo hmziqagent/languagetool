@@ -8,6 +8,9 @@ pub trait Rule: Send + Sync {
     fn is_default_on(&self) -> bool {
         true
     }
+    fn is_picky(&self) -> bool {
+        false
+    }
     fn category(&self) -> Category {
         Category::new("MISC", "Miscellaneous")
     }
@@ -24,6 +27,9 @@ pub trait TextLevelRule: Send + Sync {
     }
     fn is_default_on(&self) -> bool {
         true
+    }
+    fn is_picky(&self) -> bool {
+        false
     }
     fn category(&self) -> Category {
         Category::new("MISC", "Miscellaneous")

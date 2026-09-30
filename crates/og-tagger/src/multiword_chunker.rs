@@ -1,7 +1,10 @@
+use crate::disambiguator::ChainedDisambiguator;
+use crate::xml_disambiguator::XmlDisambiguator;
 use og_core::checker::Disambiguator;
 use og_core::{AnalyzedSentence, AnalyzedToken, AnalyzedTokenReadings};
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Arc;
 
 const MAX_TOKENS_IN_MULTIWORD: usize = 20;
 const TAG_FOR_NOT_ADDING_TAGS: &str = "_NONE_";
@@ -17,6 +20,7 @@ pub struct MultiWordChunker {
     m_full_space: HashMap<String, MultiwordEntry>,
     m_full_no_space: HashMap<String, MultiwordEntry>,
     remove_previous_tags: bool,
+    add_ignore_spelling: bool,
 }
 
 fn is_camel_case(token: &str) -> bool {
@@ -64,6 +68,41 @@ fn load_lines(content: &str) -> (String, Vec<String>) {
     (separator, lines)
 }
 
+// Java splits lines on the separator as a regex; data files use the [\t;] class form.
+fn split_line<'a>(line: &'a str, separator: &str) -> Vec<&'a str> {
+    let mut parts: Vec<&str> = if let Some(class) = separator
+        .strip_prefix('[')
+        .and_then(|s| s.strip_suffix(']'))
+    {
+        let chars = unescape_class(class);
+        line.split(|c| chars.contains(&c)).collect()
+    } else {
+        line.split(separator).collect()
+    };
+    while parts.last().is_some_and(|p| p.is_empty()) {
+        parts.pop();
+    }
+    parts
+}
+
+fn unescape_class(class: &str) -> Vec<char> {
+    let mut chars = Vec::new();
+    let mut it = class.chars();
+    while let Some(c) = it.next() {
+        match c {
+            '\\' => match it.next() {
+                Some('t') => chars.push('\t'),
+                Some('n') => chars.push('\n'),
+                Some('r') => chars.push('\r'),
+                Some(esc) => chars.push(esc),
+                None => {}
+            },
+            _ => chars.push(c),
+        }
+    }
+    chars
+}
+
 fn expand_german_line(line: &str) -> Vec<String> {
     let suffix = line.rsplit('/').next().unwrap_or("");
     let has_slash = line.contains('/');
@@ -92,6 +131,7 @@ impl MultiWordChunker {
         allow_titlecase: bool,
         default_tag: Option<&str>,
         remove_previous_tags: bool,
+        add_ignore_spelling: bool,
     ) -> Option<Self> {
         let content = std::fs::read_to_string(path).ok()?;
         Some(Self::from_content(
@@ -101,6 +141,7 @@ impl MultiWordChunker {
             allow_titlecase,
             default_tag,
             remove_previous_tags,
+            add_ignore_spelling,
         ))
     }
 
@@ -111,6 +152,7 @@ impl MultiWordChunker {
         allow_titlecase: bool,
         default_tag: Option<&str>,
         remove_previous_tags: bool,
+        add_ignore_spelling: bool,
     ) -> Self {
         let (separator, lines) = load_lines(content);
         let mut m_start_space: HashMap<String, usize> = HashMap::new();
@@ -119,7 +161,7 @@ impl MultiWordChunker {
         let mut m_full_no_space: HashMap<String, MultiwordEntry> = HashMap::new();
 
         for line in lines {
-            let parts: Vec<&str> = line.split(&separator).collect();
+            let parts = split_line(&line, &separator);
             let tag = match default_tag {
                 Some(dt) => {
                     if parts.len() != 1 {
@@ -217,6 +259,7 @@ impl MultiWordChunker {
             m_full_space,
             m_full_no_space,
             remove_previous_tags,
+            add_ignore_spelling,
         }
     }
 
@@ -237,20 +280,26 @@ impl MultiWordChunker {
                 while j < n && j - i < MAX_TOKENS_IN_MULTIWORD {
                     if !tokens[j].is_whitespace() {
                         key.push_str(tokens[j].token().token());
-                        if let Some(at) = self.m_full_space.get(&key)
-                            && at.tag != TAG_FOR_NOT_ADDING_TAGS
-                        {
-                            if final_len == 0 {
-                                let tag = at.tag.clone();
-                                let lemma = at.lemma.clone();
-                                add_plain_reading(&mut tokens[i], &tag, &lemma);
-                            } else {
-                                let tag = at.tag.clone();
-                                let lemma = at.lemma.clone();
-                                prepare_new_reading(&mut tokens[i], &tag, &lemma, false);
-                                let tag = at.tag.clone();
-                                let lemma = at.lemma.clone();
-                                prepare_new_reading(&mut tokens[final_len], &tag, &lemma, true);
+                        if let Some(at) = self.m_full_space.get(&key) {
+                            if at.tag != TAG_FOR_NOT_ADDING_TAGS {
+                                if final_len == 0 {
+                                    let tag = at.tag.clone();
+                                    let lemma = at.lemma.clone();
+                                    add_plain_reading(&mut tokens[i], &tag, &lemma);
+                                } else {
+                                    let tag = at.tag.clone();
+                                    let lemma = at.lemma.clone();
+                                    prepare_new_reading(&mut tokens[i], &tag, &lemma, false);
+                                    let tag = at.tag.clone();
+                                    let lemma = at.lemma.clone();
+                                    prepare_new_reading(&mut tokens[final_len], &tag, &lemma, true);
+                                }
+                            }
+                            if self.add_ignore_spelling {
+                                let end = if final_len == 0 { i } else { final_len };
+                                for token in &mut tokens[i..=end] {
+                                    token.ignore_spelling();
+                                }
                             }
                         }
                     } else {
@@ -275,20 +324,25 @@ impl MultiWordChunker {
                 let mut j = i;
                 while j < n && !tokens[j].is_whitespace() && j - i < MAX_TOKENS_IN_MULTIWORD {
                     key.push_str(tokens[j].token().token());
-                    if let Some(at) = self.m_full_no_space.get(&key)
-                        && at.tag != TAG_FOR_NOT_ADDING_TAGS
-                    {
-                        if i == j {
-                            let tag = at.tag.clone();
-                            let lemma = at.lemma.clone();
-                            add_plain_reading(&mut tokens[i], &tag, &lemma);
-                        } else {
-                            let tag = at.tag.clone();
-                            let lemma = at.lemma.clone();
-                            prepare_new_reading(&mut tokens[i], &tag, &lemma, false);
-                            let tag = at.tag.clone();
-                            let lemma = at.lemma.clone();
-                            prepare_new_reading(&mut tokens[j], &tag, &lemma, true);
+                    if let Some(at) = self.m_full_no_space.get(&key) {
+                        if at.tag != TAG_FOR_NOT_ADDING_TAGS {
+                            if i == j {
+                                let tag = at.tag.clone();
+                                let lemma = at.lemma.clone();
+                                add_plain_reading(&mut tokens[i], &tag, &lemma);
+                            } else {
+                                let tag = at.tag.clone();
+                                let lemma = at.lemma.clone();
+                                prepare_new_reading(&mut tokens[i], &tag, &lemma, false);
+                                let tag = at.tag.clone();
+                                let lemma = at.lemma.clone();
+                                prepare_new_reading(&mut tokens[j], &tag, &lemma, true);
+                            }
+                        }
+                        if self.add_ignore_spelling {
+                            for token in &mut tokens[i..=j] {
+                                token.ignore_spelling();
+                            }
                         }
                     }
                     j += 1;
@@ -450,6 +504,8 @@ fn push_reading(atr: &mut AnalyzedTokenReadings, reading: AnalyzedToken) {
 
 fn replace_readings(atr: &mut AnalyzedTokenReadings, new_readings: &[(&str, &str)]) {
     let chunks = atr.chunks().to_vec();
+    let ignored_by_speller = atr.is_ignored_by_speller();
+    let was_immunized = atr.is_immunized();
     let readings: Vec<AnalyzedToken> = new_readings
         .iter()
         .map(|(pos, lemma)| make_reading(atr, pos, lemma))
@@ -462,6 +518,12 @@ fn replace_readings(atr: &mut AnalyzedTokenReadings, new_readings: &[(&str, &str
         None => AnalyzedTokenReadings::new(atr.token().clone()),
     };
     updated.set_chunks(chunks);
+    if ignored_by_speller {
+        updated.ignore_spelling();
+    }
+    if was_immunized {
+        updated.immunize();
+    }
     *atr = updated;
 }
 
@@ -480,15 +542,176 @@ pub struct MultiWordChunkerDisambiguator {
     chunker: MultiWordChunker,
 }
 
+pub struct ChunkerParams {
+    pub allow_first_capitalized: bool,
+    pub allow_all_uppercase: bool,
+    pub allow_titlecase: bool,
+    pub default_tag: Option<&'static str>,
+    pub remove_previous_tags: bool,
+    pub add_ignore_spelling: bool,
+}
+
 impl MultiWordChunkerDisambiguator {
-    pub fn from_resource_dir(resource_dir: &Path) -> Option<Self> {
-        let path = resource_dir.join("multiwords.txt");
-        if !path.exists() {
-            return None;
-        }
-        let chunker = MultiWordChunker::from_file(&path, true, true, false, None, true)?;
+    pub fn from_params(path: &Path, params: ChunkerParams) -> Option<Self> {
+        let chunker = MultiWordChunker::from_file(
+            path,
+            params.allow_first_capitalized,
+            params.allow_all_uppercase,
+            params.allow_titlecase,
+            params.default_tag.as_deref(),
+            params.remove_previous_tags,
+            params.add_ignore_spelling,
+        )?;
         Some(Self { chunker })
     }
+
+    pub fn from_resource_dir(resource_dir: &Path) -> Option<Self> {
+        Self::from_params(
+            &resource_dir.join("multiwords.txt"),
+            ChunkerParams {
+                allow_first_capitalized: true,
+                allow_all_uppercase: true,
+                allow_titlecase: false,
+                default_tag: None,
+                remove_previous_tags: true,
+                add_ignore_spelling: true,
+            },
+        )
+    }
+
+    pub fn spelling_global(core_resource_dir: &Path) -> Option<Self> {
+        Self::from_params(
+            &core_resource_dir.join("spelling_global.txt"),
+            ChunkerParams {
+                allow_first_capitalized: true,
+                allow_all_uppercase: true,
+                allow_titlecase: false,
+                default_tag: Some(TAG_FOR_NOT_ADDING_TAGS),
+                remove_previous_tags: false,
+                add_ignore_spelling: true,
+            },
+        )
+    }
+}
+
+const FR_MULTIWORDS: ChunkerParams = ChunkerParams {
+    allow_first_capitalized: true,
+    allow_all_uppercase: true,
+    allow_titlecase: false,
+    default_tag: None,
+    remove_previous_tags: true,
+    add_ignore_spelling: false,
+};
+const FR_SPELLING_GLOBAL: ChunkerParams = ChunkerParams {
+    allow_first_capitalized: false,
+    allow_all_uppercase: true,
+    allow_titlecase: false,
+    default_tag: Some(TAG_FOR_NOT_ADDING_TAGS),
+    remove_previous_tags: false,
+    add_ignore_spelling: true,
+};
+const ES_MULTIWORDS: ChunkerParams = ChunkerParams {
+    allow_first_capitalized: true,
+    allow_all_uppercase: true,
+    allow_titlecase: false,
+    default_tag: None,
+    remove_previous_tags: true,
+    add_ignore_spelling: false,
+};
+const ES_SPELLING_GLOBAL: ChunkerParams = ChunkerParams {
+    allow_first_capitalized: false,
+    allow_all_uppercase: true,
+    allow_titlecase: false,
+    default_tag: Some("NPCN000"),
+    remove_previous_tags: false,
+    add_ignore_spelling: false,
+};
+const PT_MULTIWORDS: ChunkerParams = ChunkerParams {
+    allow_first_capitalized: true,
+    allow_all_uppercase: true,
+    allow_titlecase: true,
+    default_tag: None,
+    remove_previous_tags: true,
+    add_ignore_spelling: true,
+};
+const PT_SPELLING_GLOBAL: ChunkerParams = ChunkerParams {
+    allow_first_capitalized: false,
+    allow_all_uppercase: true,
+    allow_titlecase: true,
+    default_tag: Some("NPCN000"),
+    remove_previous_tags: false,
+    add_ignore_spelling: true,
+};
+const NL_MULTIWORDS: ChunkerParams = ChunkerParams {
+    allow_first_capitalized: true,
+    allow_all_uppercase: true,
+    allow_titlecase: false,
+    default_tag: Some(TAG_FOR_NOT_ADDING_TAGS),
+    remove_previous_tags: false,
+    add_ignore_spelling: true,
+};
+const NL_SPELLING_GLOBAL: ChunkerParams = ChunkerParams {
+    allow_first_capitalized: false,
+    allow_all_uppercase: true,
+    allow_titlecase: false,
+    default_tag: Some(TAG_FOR_NOT_ADDING_TAGS),
+    remove_previous_tags: false,
+    add_ignore_spelling: true,
+};
+const BARE_MULTIWORDS: ChunkerParams = ChunkerParams {
+    allow_first_capitalized: false,
+    allow_all_uppercase: false,
+    allow_titlecase: false,
+    default_tag: None,
+    remove_previous_tags: false,
+    add_ignore_spelling: false,
+};
+
+pub fn hybrid_disambiguator(
+    code: &str,
+    language_resource_dir: &Path,
+    core_resource_dir: &Path,
+    xml: XmlDisambiguator,
+) -> Arc<dyn Disambiguator> {
+    let (multiwords, global, xml_first) = match code {
+        "fr" => (Some(FR_MULTIWORDS), Some(FR_SPELLING_GLOBAL), false),
+        "es" => (Some(ES_MULTIWORDS), Some(ES_SPELLING_GLOBAL), false),
+        "pt" => (Some(PT_MULTIWORDS), Some(PT_SPELLING_GLOBAL), false),
+        "nl" => (Some(NL_MULTIWORDS), Some(NL_SPELLING_GLOBAL), false),
+        "ru" => (Some(BARE_MULTIWORDS), None, false),
+        "gl" => (Some(BARE_MULTIWORDS), None, false),
+        "pl" => (Some(BARE_MULTIWORDS), None, true),
+        "sv" => (Some(BARE_MULTIWORDS), None, true),
+        _ => (None, None, false),
+    };
+    let mut stages: Vec<Arc<dyn Disambiguator>> = Vec::new();
+    if let Some(params) = global
+        && let Some(chunker) = MultiWordChunkerDisambiguator::from_params(
+            &core_resource_dir.join("spelling_global.txt"),
+            params,
+        )
+    {
+        stages.push(Arc::new(chunker));
+    }
+    let xml_stage: Arc<dyn Disambiguator> = Arc::new(xml);
+    if xml_first {
+        stages.push(xml_stage.clone());
+    }
+    if let Some(params) = multiwords
+        && let Some(chunker) = MultiWordChunkerDisambiguator::from_params(
+            &language_resource_dir.join("multiwords.txt"),
+            params,
+        )
+    {
+        stages.push(Arc::new(chunker));
+    }
+    if stages.is_empty() {
+        return xml_stage;
+    }
+    if !xml_first {
+        stages.push(xml_stage);
+    }
+    Arc::new(ChainedDisambiguator::new(stages))
 }
 
 impl Disambiguator for MultiWordChunkerDisambiguator {
@@ -533,7 +756,7 @@ mod tests {
     #[test]
     fn multiword_phrase_replaces_readings() {
         let content = "status quo\tNN:UN\nquid pro quo\tNN\n";
-        let chunker = MultiWordChunker::from_content(content, true, true, false, None, true);
+        let chunker = MultiWordChunker::from_content(content, true, true, false, None, true, false);
         let mut tokens = sentence_tokens("The status quo is odd");
         chunker.apply(&mut tokens);
         let status = tokens
@@ -571,7 +794,7 @@ mod tests {
     #[test]
     fn single_token_entry_keeps_existing_readings() {
         let content = "coffee\tNN:UN\n";
-        let chunker = MultiWordChunker::from_content(content, true, true, false, None, true);
+        let chunker = MultiWordChunker::from_content(content, true, true, false, None, true, false);
         let mut tokens = sentence_tokens("coffee");
         tokens[0].readings_mut().push(
             AnalyzedToken::new("coffee", 0, 6)
@@ -586,7 +809,7 @@ mod tests {
     #[test]
     fn no_space_entry_spans_split_tokens() {
         let content = "don't\tVB\n";
-        let chunker = MultiWordChunker::from_content(content, true, true, false, None, true);
+        let chunker = MultiWordChunker::from_content(content, true, true, false, None, true, false);
         let mut tokens = vec![atr("do", 0), atr("n't", 2), atr("!", 5)];
         chunker.apply(&mut tokens);
         assert_eq!(
@@ -610,7 +833,7 @@ mod tests {
     #[test]
     fn casing_variants_match() {
         let content = "big sur\tNNP\n";
-        let chunker = MultiWordChunker::from_content(content, true, true, false, None, true);
+        let chunker = MultiWordChunker::from_content(content, true, true, false, None, true, false);
         let mut tokens = sentence_tokens("We visited Big sur today");
         chunker.apply(&mut tokens);
         let big = tokens.iter().find(|t| t.token().token() == "Big").unwrap();
@@ -625,5 +848,180 @@ mod tests {
         chunker.apply(&mut title);
         let big = title.iter().find(|t| t.token().token() == "Big").unwrap();
         assert!(big.readings().iter().all(|r| r.pos_tags().is_empty()));
+    }
+
+    #[test]
+    fn spelling_global_marks_phrase_without_adding_readings() {
+        let content = "Emmanuel Macron\nBrigitte Macron\n";
+        let chunker = MultiWordChunker::from_content(
+            content,
+            true,
+            true,
+            false,
+            Some(TAG_FOR_NOT_ADDING_TAGS),
+            false,
+            true,
+        );
+        let mut tokens = sentence_tokens("We met Emmanuel Macron yesterday");
+        chunker.apply(&mut tokens);
+        let emmanuel = tokens
+            .iter()
+            .find(|t| t.token().token() == "Emmanuel")
+            .unwrap();
+        let macron = tokens
+            .iter()
+            .find(|t| t.token().token() == "Macron")
+            .unwrap();
+        let yesterday = tokens
+            .iter()
+            .find(|t| t.token().token() == "yesterday")
+            .unwrap();
+        assert!(emmanuel.is_ignored_by_speller());
+        assert!(macron.is_ignored_by_speller());
+        assert!(!yesterday.is_ignored_by_speller());
+        assert!(emmanuel.readings().iter().all(|r| r.pos_tags().is_empty()));
+        assert!(macron.readings().iter().all(|r| r.pos_tags().is_empty()));
+    }
+
+    #[test]
+    fn spelling_global_marks_single_token() {
+        let content = "log4j\nb2match\n";
+        let chunker = MultiWordChunker::from_content(
+            content,
+            true,
+            true,
+            false,
+            Some(TAG_FOR_NOT_ADDING_TAGS),
+            false,
+            true,
+        );
+        let mut tokens = sentence_tokens("log4j is used");
+        chunker.apply(&mut tokens);
+        assert!(tokens[0].is_ignored_by_speller());
+        assert!(!tokens[2].is_ignored_by_speller());
+        assert!(tokens[0].readings().iter().all(|r| r.pos_tags().is_empty()));
+    }
+
+    #[test]
+    fn ignore_spelling_marking_keeps_existing_readings() {
+        let content = "coffee bar\n";
+        let chunker = MultiWordChunker::from_content(
+            content,
+            true,
+            true,
+            false,
+            Some(TAG_FOR_NOT_ADDING_TAGS),
+            false,
+            true,
+        );
+        let mut tokens = sentence_tokens("coffee bar");
+        let start = AnalyzedTokenReadings::new(
+            AnalyzedToken::new("<S>", 0, 0).with_pos_tags(vec!["SENT_START".to_string()]),
+        );
+        tokens.insert(0, start);
+        tokens[1]
+            .readings_mut()
+            .push(AnalyzedToken::new("coffee", 0, 6).with_pos_tags(vec!["NN".to_string()]));
+        chunker.apply(&mut tokens);
+        assert!(tokens[1].is_ignored_by_speller());
+        assert!(tokens[3].is_ignored_by_speller());
+        assert!(tokens[1].has_pos_tag("NN"));
+    }
+}
+
+#[cfg(test)]
+mod hybrid_tests {
+    use super::*;
+
+    fn fr_resource_dir() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../languagetool/languagetool-language-modules/fr/src/main/resources/org/languagetool/resource/fr")
+    }
+
+    fn core_resource_dir() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(
+            "../../../languagetool/languagetool-core/src/main/resources/org/languagetool/resource",
+        )
+    }
+
+    #[test]
+    fn french_multiwords_chunker_tags_phrases_from_resource_file() {
+        let disambiguator = MultiWordChunkerDisambiguator::from_params(
+            &fr_resource_dir().join("multiwords.txt"),
+            FR_MULTIWORDS,
+        );
+        let Some(disambiguator) = disambiguator else {
+            panic!("fr multiwords.txt should load");
+        };
+        let mut sentence = AnalyzedSentence::new("home page", 0, 9);
+        sentence.set_tokens(vec![
+            AnalyzedTokenReadings::new(
+                AnalyzedToken::new("<S>", 0, 3).with_pos_tags(vec!["SENT_START".to_string()]),
+            ),
+            AnalyzedTokenReadings::new(
+                AnalyzedToken::new("home", 3, 7)
+                    .with_pos_tags(vec!["J".to_string()])
+                    .with_lemma("home".to_string()),
+            ),
+            AnalyzedTokenReadings::new(
+                AnalyzedToken::new(" ", 7, 8).with_pos_tags(vec![" ".to_string()]),
+            ),
+            AnalyzedTokenReadings::new(
+                AnalyzedToken::new("page", 8, 12)
+                    .with_pos_tags(vec!["N".to_string()])
+                    .with_lemma("page".to_string()),
+            ),
+        ]);
+        disambiguator.disambiguate(&mut sentence);
+        let home = &sentence.tokens()[1];
+        assert!(
+            home.readings()
+                .iter()
+                .any(|r| r.pos_tags().contains(&"N f s".to_string())),
+            "home page should be chunked as N f s, got {:?}",
+            home.readings()
+        );
+    }
+
+    #[test]
+    fn hybrid_disambiguator_builds_french_chain() {
+        let xml = XmlDisambiguator::from_xml("<rules></rules>").unwrap();
+        let chain = hybrid_disambiguator("fr", &fr_resource_dir(), &core_resource_dir(), xml);
+        let mut sentence = AnalyzedSentence::new("x", 0, 1);
+        chain.disambiguate(&mut sentence);
+    }
+}
+
+#[cfg(test)]
+mod sep_tests {
+    use super::*;
+
+    #[test]
+    fn semicolon_separator_header_is_honored() {
+        let content = "#separatorRegExp=[\\t;]\nhome page;N f s\n";
+        let chunker = MultiWordChunker::from_content(content, true, true, false, None, true, false);
+        let mut tokens = vec![
+            AnalyzedTokenReadings::new(
+                AnalyzedToken::new("<S>", 0, 3).with_pos_tags(vec!["SENT_START".to_string()]),
+            ),
+            AnalyzedTokenReadings::new(
+                AnalyzedToken::new("home", 3, 7).with_pos_tags(vec!["J".to_string()]),
+            ),
+            AnalyzedTokenReadings::new(
+                AnalyzedToken::new(" ", 7, 8).with_pos_tags(vec![" ".to_string()]),
+            ),
+            AnalyzedTokenReadings::new(
+                AnalyzedToken::new("page", 8, 12).with_pos_tags(vec!["N".to_string()]),
+            ),
+        ];
+        chunker.apply(&mut tokens);
+        assert!(
+            tokens[1]
+                .readings()
+                .iter()
+                .any(|r| r.pos_tags().contains(&"N f s".to_string())),
+            "got {:?}",
+            tokens[1].readings()
+        );
     }
 }

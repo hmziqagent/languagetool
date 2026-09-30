@@ -10,6 +10,7 @@ og-tokenizer = { workspace = true }
 og-tagger = { workspace = true }
 og-spell = { workspace = true }
 regex = { workspace = true }
+fancy-regex = "0.14"
 rayon = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }

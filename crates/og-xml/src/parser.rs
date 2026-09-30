@@ -21,7 +21,16 @@ impl XmlRuleParser {
 
     #[allow(unused_assignments, unused_variables)]
     pub fn parse(&self, xml: &str) -> Result<XmlRuleFile, XmlParseError> {
-        let expanded = Self::expand_entities(xml);
+        self.parse_with_base(xml, None)
+    }
+
+    #[allow(unused_assignments, unused_variables)]
+    pub fn parse_with_base(
+        &self,
+        xml: &str,
+        base_dir: Option<&std::path::Path>,
+    ) -> Result<XmlRuleFile, XmlParseError> {
+        let expanded = Self::expand_entities_with_base(xml, base_dir);
         let cleaned = Self::strip_doctype(&expanded);
 
         let mut reader = Reader::from_str(&cleaned);
@@ -49,6 +58,7 @@ impl XmlRuleParser {
         let mut suggestion_parts: Vec<SuggestionPart> = Vec::new();
         let mut message_text = String::new();
         let mut in_example = false;
+        let mut rulegroup_antipattern_examples: Vec<String> = Vec::new();
         let mut example_type = XmlExampleType::Correct;
         let mut example_text = String::new();
         let mut current_text = String::new();
@@ -80,6 +90,9 @@ impl XmlRuleParser {
         let mut url_text = String::new();
         // Example correction attribute
         let mut example_correction: Option<String> = None;
+        // Rule-level <regexp> state
+        let mut current_rule_regexp: Option<XmlRuleRegexp> = None;
+        let mut rule_regexp_text = String::new();
 
         loop {
             match reader.read_event_into(&mut buf) {
@@ -153,6 +166,26 @@ impl XmlRuleParser {
                             current_pattern = Some(pattern);
                             pattern_marker_start = None;
                         }
+                        "regexp"
+                            if current_rule.is_some()
+                                && current_pattern.is_none()
+                                && current_token.is_none()
+                                && current_antipattern.is_none() =>
+                        {
+                            let mut rule_regexp = XmlRuleRegexp::default();
+                            for attr in e.attributes().flatten() {
+                                let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
+                                let val = String::from_utf8_lossy(&attr.value).to_string();
+                                match key.as_str() {
+                                    "case_sensitive" => rule_regexp.case_sensitive = val == "yes",
+                                    "type" => rule_regexp.exact = val == "exact",
+                                    "mark" => rule_regexp.mark = val.parse().unwrap_or(0),
+                                    _ => {}
+                                }
+                            }
+                            current_rule_regexp = Some(rule_regexp);
+                            rule_regexp_text.clear();
+                        }
                         "antipattern" => {
                             in_antipattern = true;
                             let mut ap = XmlPattern::default();
@@ -181,6 +214,11 @@ impl XmlRuleParser {
                                     "inflected" => exc.inflected = val == "yes",
                                     "case_sensitive" => exc.case_sensitive = val == "yes",
                                     "scope" => exc.scope = Some(val),
+                                    "spacebefore" => {
+                                        if val != "ignore" {
+                                            exc.space_before = Some(val == "yes");
+                                        }
+                                    }
                                     _ => {}
                                 }
                             }
@@ -234,6 +272,14 @@ impl XmlRuleParser {
                             in_message = true;
                             message_text.clear();
                         }
+                        "short" => {
+                            in_short = true;
+                            short_text.clear();
+                        }
+                        "url" => {
+                            in_url = true;
+                            url_text.clear();
+                        }
                         "suggestion" => {
                             in_suggestion = true;
                             suggestion_text.clear();
@@ -251,6 +297,7 @@ impl XmlRuleParser {
                                     "regexp_match" => m.regexp_match = Some(val),
                                     "regexp_replace" => m.regexp_replace = Some(val),
                                     "include_inflected" => m.include_inflected = val == "yes",
+                                    "include_skipped" => m.include_skipped = Some(val),
                                     _ => {}
                                 }
                             }
@@ -333,6 +380,7 @@ impl XmlRuleParser {
                                 unify_elem_start = Some(pattern.elements.len());
                             } else if let Some(ap) = &mut current_antipattern {
                                 unify_start = Some(ap.tokens.len());
+                                unify_elem_start = Some(ap.elements.len());
                             }
                             unify_negate = false;
                             unify_features.clear();
@@ -381,6 +429,25 @@ impl XmlRuleParser {
                 Ok(Event::Empty(e)) => {
                     let local_name = String::from_utf8_lossy(e.name().as_ref()).to_string();
                     match local_name.as_str() {
+                        "feature" if unify_start.is_some() => {
+                            let mut id = String::new();
+                            for attr in e.attributes().flatten() {
+                                if attr.key.as_ref() == b"id" {
+                                    id = String::from_utf8_lossy(&attr.value).to_string();
+                                }
+                            }
+                            if !id.is_empty() {
+                                unify_features.push((id, Vec::new()));
+                            }
+                        }
+                        "type" if unify_start.is_some() => {
+                            for attr in e.attributes().flatten() {
+                                if attr.key.as_ref() == b"id" {
+                                    unify_feature_types
+                                        .push(String::from_utf8_lossy(&attr.value).to_string());
+                                }
+                            }
+                        }
                         "token" if current_unification.is_some() => {
                             let mut token = XmlPatternToken::default();
                             for attr in e.attributes().flatten() {
@@ -422,10 +489,16 @@ impl XmlRuleParser {
                             }
                             if in_or_group {
                                 if let Some(ref mut or_group) = current_or_group {
+                                    if in_unify_ignore {
+                                        token.unify_neutral = true;
+                                    }
                                     or_group.alternatives.push(token);
                                 }
                             } else if in_and_group {
                                 if let Some(ref mut and_group) = current_and_group {
+                                    if in_unify_ignore {
+                                        token.unify_neutral = true;
+                                    }
                                     and_group.constraints.push(token);
                                 }
                             } else if in_antipattern {
@@ -435,6 +508,9 @@ impl XmlRuleParser {
                                 let trimmed = antipattern_text.trim();
                                 if !trimmed.is_empty() {
                                     token.text = Some(trimmed.to_string());
+                                }
+                                if in_unify_ignore {
+                                    token.unify_neutral = true;
                                 }
                                 if let Some(ref mut ap) = current_antipattern {
                                     ap.tokens.push(token.clone());
@@ -468,6 +544,11 @@ impl XmlRuleParser {
                                     "inflected" => exc.inflected = val == "yes",
                                     "case_sensitive" => exc.case_sensitive = val == "yes",
                                     "scope" => exc.scope = Some(val),
+                                    "spacebefore" => {
+                                        if val != "ignore" {
+                                            exc.space_before = Some(val == "yes");
+                                        }
+                                    }
                                     _ => {}
                                 }
                             }
@@ -493,6 +574,7 @@ impl XmlRuleParser {
                                     "regexp_match" => m.regexp_match = Some(val),
                                     "regexp_replace" => m.regexp_replace = Some(val),
                                     "include_inflected" => m.include_inflected = val == "yes",
+                                    "include_skipped" => m.include_skipped = Some(val),
                                     _ => {}
                                 }
                             }
@@ -517,6 +599,26 @@ impl XmlRuleParser {
                         "antipattern" => {
                             // Antipattern
                         }
+                        "regexp"
+                            if current_rule.is_some()
+                                && current_pattern.is_none()
+                                && current_token.is_none()
+                                && current_antipattern.is_none() =>
+                        {
+                            let mut rule_regexp = XmlRuleRegexp::default();
+                            for attr in e.attributes().flatten() {
+                                let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
+                                let val = String::from_utf8_lossy(&attr.value).to_string();
+                                match key.as_str() {
+                                    "case_sensitive" => rule_regexp.case_sensitive = val == "yes",
+                                    "type" => rule_regexp.exact = val == "exact",
+                                    "mark" => rule_regexp.mark = val.parse().unwrap_or(0),
+                                    _ => {}
+                                }
+                            }
+                            current_rule_regexp = Some(rule_regexp);
+                            rule_regexp_text.clear();
+                        }
                         "filter" => {
                             let mut filter = XmlFilter::default();
                             for attr in e.attributes().flatten() {
@@ -536,7 +638,10 @@ impl XmlRuleParser {
                     }
                 }
                 Ok(Event::Text(e)) => {
-                    let text = e.unescape().unwrap_or_default().to_string();
+                    let text = e
+                        .unescape()
+                        .map(|c| c.to_string())
+                        .unwrap_or_else(|_| String::from_utf8_lossy(e.as_ref()).to_string());
                     if in_short {
                         short_text.push_str(&text);
                     } else if in_url {
@@ -553,6 +658,8 @@ impl XmlRuleParser {
                         example_text.push_str(&text);
                     } else if in_exception {
                         exception_text.push_str(&text);
+                    } else if current_rule_regexp.is_some() {
+                        rule_regexp_text.push_str(&text);
                     } else if current_token.is_some() {
                         current_text.push_str(&text);
                     } else if in_antipattern {
@@ -568,6 +675,7 @@ impl XmlRuleParser {
                             }
                         }
                         "rulegroup" => {
+                            rulegroup_antipattern_examples.clear();
                             if let Some(mut group) = current_group.take() {
                                 let group_antipatterns = group.antipatterns.clone();
                                 for rule in &mut group.rules {
@@ -579,7 +687,19 @@ impl XmlRuleParser {
                             }
                         }
                         "rule" => {
-                            if let Some(rule) = current_rule.take() {
+                            if let Some(mut rule) = current_rule.take() {
+                                if let Some(mut rule_regexp) = current_rule_regexp.take() {
+                                    rule_regexp.text = rule_regexp_text.trim().to_string();
+                                    rule.rule_regexp = Some(rule_regexp);
+                                }
+                                rule_regexp_text.clear();
+                                for text in &rulegroup_antipattern_examples {
+                                    rule.examples.push(XmlExample {
+                                        example_type: XmlExampleType::Correct,
+                                        text: text.clone(),
+                                        corrections: Vec::new(),
+                                    });
+                                }
                                 if let Some(group) = &mut current_group {
                                     group.rules.push(rule);
                                 } else {
@@ -636,18 +756,30 @@ impl XmlRuleParser {
                                 }
                                 if in_or_group {
                                     if let Some(ref mut or_group) = current_or_group {
+                                        if in_unify_ignore {
+                                            token.unify_neutral = true;
+                                        }
                                         or_group.alternatives.push(token);
                                     }
                                 } else if in_and_group {
                                     if let Some(ref mut and_group) = current_and_group {
+                                        if in_unify_ignore {
+                                            token.unify_neutral = true;
+                                        }
                                         and_group.constraints.push(token);
                                     }
                                 } else if in_antipattern {
+                                    if in_unify_ignore {
+                                        token.unify_neutral = true;
+                                    }
                                     if let Some(ref mut ap) = current_antipattern {
                                         ap.tokens.push(token.clone());
                                         ap.elements.push(XmlPatternElement::Token(token));
                                     }
                                 } else if let Some(pattern) = &mut current_pattern {
+                                    if in_unify_ignore {
+                                        token.unify_neutral = true;
+                                    }
                                     pattern.tokens.push(token.clone());
                                     pattern.elements.push(XmlPatternElement::Token(token));
                                 }
@@ -701,6 +833,9 @@ impl XmlRuleParser {
                                     text: example_text.trim().to_string(),
                                     corrections,
                                 });
+                            } else if in_antipattern {
+                                rulegroup_antipattern_examples
+                                    .push(example_text.trim().to_string());
                             }
                             example_correction = None;
                         }
@@ -743,20 +878,25 @@ impl XmlRuleParser {
                         }
                         "unify" => {
                             if let Some(start) = unify_start.take() {
+                                let elem_start = unify_elem_start.take().unwrap_or(start);
                                 let group = crate::types::XmlUnifyGroup {
                                     negate: unify_negate,
                                     features: unify_features.clone(),
                                     token_start: start,
                                     token_end: 0,
+                                    elem_start,
+                                    elem_end: 0,
                                 };
                                 if let Some(pattern) = &mut current_pattern {
                                     pattern.unify_groups.push(crate::types::XmlUnifyGroup {
                                         token_end: pattern.tokens.len(),
+                                        elem_end: pattern.elements.len(),
                                         ..group
                                     });
                                 } else if let Some(ap) = &mut current_antipattern {
                                     ap.unify_groups.push(crate::types::XmlUnifyGroup {
                                         token_end: ap.tokens.len(),
+                                        elem_end: ap.elements.len(),
                                         ..group
                                     });
                                 }
@@ -814,6 +954,45 @@ impl XmlRuleParser {
     }
 
     pub fn expand_entities(xml: &str) -> String {
+        Self::expand_entities_with_base(xml, None)
+    }
+
+    pub fn expand_entities_with_base(xml: &str, base_dir: Option<&std::path::Path>) -> String {
+        let mut xml = xml.to_string();
+        if let Some(base) = base_dir {
+            xml = Self::include_external_entities(&xml, base, 0);
+        }
+        Self::expand_internal_entities(&xml)
+    }
+
+    fn include_external_entities(xml: &str, base: &std::path::Path, depth: usize) -> String {
+        let decl = regex::Regex::new(r#"<!ENTITY\s+%\s+(\w+)\s+SYSTEM\s+"([^"]+)"\s*>"#).unwrap();
+        let mut params: Vec<(String, std::path::PathBuf)> = Vec::new();
+        for cap in decl.captures_iter(xml) {
+            let rel = cap[2].replace('\\', "/");
+            let path = base.join(&rel);
+            if path.exists() {
+                params.push((cap[1].to_string(), path));
+            }
+        }
+        if params.is_empty() || depth > 8 {
+            return xml.to_string();
+        }
+        let mut out = xml.to_string();
+        for (name, path) in params {
+            let marker = format!("%{name};");
+            if !out.contains(&marker) {
+                continue;
+            }
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                let expanded = Self::include_external_entities(&content, base, depth + 1);
+                out = out.replace(&marker, &expanded);
+            }
+        }
+        out
+    }
+
+    fn expand_internal_entities(xml: &str) -> String {
         let double_q = regex::Regex::new(r#"<!ENTITY\s+(\w+)\s+"([^"]*)">"#).unwrap();
         let single_q = regex::Regex::new(r#"<!ENTITY\s+(\w+)\s+'([^']*)'>"#).unwrap();
         let mut entities: std::collections::HashMap<String, String> =
@@ -1183,6 +1362,34 @@ mod tests {
         assert_eq!(exc.regexp.as_deref(), Some("yes"));
         assert!(exc.negate);
         assert_eq!(exc.scope.as_deref(), Some("next"));
+    }
+
+    #[test]
+    fn test_parse_exception_spacebefore() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <category id="GRAMMAR" name="Grammar">
+                <rule id="EXC_SB" name="Exception spacebefore">
+                    <pattern>
+                        <token>foo<exception scope="next" spacebefore="no">bar</exception></token>
+                        <token>baz<exception spacebefore="yes">quux</exception></token>
+                        <token>one<exception spacebefore="ignore">two</exception></token>
+                        <token>three<exception>four</exception></token>
+                        <token>five<exception spacebefore="no"/></token>
+                    </pattern>
+                    <message>Test</message>
+                </rule>
+            </category>
+        </rules>"#;
+
+        let parser = XmlRuleParser::new();
+        let result = parser.parse(xml).unwrap();
+        let tokens = &result.rules[0].pattern.tokens;
+        assert_eq!(tokens[0].exceptions[0].space_before, Some(false));
+        assert_eq!(tokens[1].exceptions[0].space_before, Some(true));
+        assert_eq!(tokens[2].exceptions[0].space_before, None);
+        assert_eq!(tokens[3].exceptions[0].space_before, None);
+        assert_eq!(tokens[4].exceptions[0].space_before, Some(false));
     }
 
     #[test]
@@ -2117,5 +2324,61 @@ mod tests {
         let rule = &result.rule_groups[0].rules[0];
         assert_eq!(rule.category.id, "CAT_B");
         assert_eq!(rule.category.name, "Category B");
+    }
+
+    #[test]
+    fn test_parse_self_closing_unify_feature() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="ru">
+            <category id="CAT_C" name="Category C">
+                <rule id="UNIFY_SC" name="Unify self-closing feature">
+                    <pattern>
+                        <unify negate="yes">
+                            <feature id="case"/>
+                            <token postag="ADJ:.*" postag_regexp="yes"/>
+                            <token postag="NN:.*" postag_regexp="yes"/>
+                        </unify>
+                    </pattern>
+                    <message>Msg</message>
+                </rule>
+            </category>
+        </rules>"#;
+
+        let parser = XmlRuleParser::new();
+        let result = parser.parse(xml).unwrap();
+
+        let groups = &result.rules[0].pattern.unify_groups;
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].features, vec![("case".to_string(), Vec::new())]);
+        assert!(groups[0].negate);
+    }
+
+    #[test]
+    fn test_parse_self_closing_unify_type_inside_open_feature() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="pl">
+            <category id="CAT_D" name="Category D">
+                <rule id="UNIFY_SC_TYPE" name="Unify self-closing type">
+                    <pattern>
+                        <unify>
+                            <feature id="number"><type id="sg"/></feature>
+                            <token postag="NN:.*" postag_regexp="yes"/>
+                            <token postag="NN:.*" postag_regexp="yes"/>
+                        </unify>
+                    </pattern>
+                    <message>Msg</message>
+                </rule>
+            </category>
+        </rules>"#;
+
+        let parser = XmlRuleParser::new();
+        let result = parser.parse(xml).unwrap();
+
+        let groups = &result.rules[0].pattern.unify_groups;
+        assert_eq!(groups.len(), 1);
+        assert_eq!(
+            groups[0].features,
+            vec![("number".to_string(), vec!["sg".to_string()])]
+        );
     }
 }

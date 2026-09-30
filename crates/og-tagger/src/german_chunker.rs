@@ -1,6 +1,14 @@
+use crate::openregex::PhraseTag;
+use crate::openregex::Token;
+use crate::openregex::apply;
+use crate::openregex::build_expanded;
+use crate::openregex::lru_cache::BoundedMap;
+use crate::openregex::sentence_forms;
 use og_core::AnalyzedSentence;
-use og_core::AnalyzedTokenReadings;
 use std::sync::Arc;
+use std::sync::OnceLock;
+
+const FILTER_TAGS: [&str; 3] = ["PP", "NPP", "NPS"];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum PhraseType {
@@ -11,653 +19,448 @@ enum PhraseType {
 }
 
 impl PhraseType {
-    fn tag(self, at_start: bool) -> &'static str {
+    fn tag(self) -> PhraseTag {
         match self {
-            PhraseType::Np => {
-                if at_start {
-                    "B-NP"
-                } else {
-                    "I-NP"
-                }
-            }
-            PhraseType::Nps => "NPS",
-            PhraseType::Npp => "NPP",
-            PhraseType::Pp => "PP",
+            PhraseType::Np => PhraseTag::Bi {
+                start: "B-NP",
+                inner: "I-NP",
+            },
+            PhraseType::Nps => PhraseTag::Flat("NPS"),
+            PhraseType::Npp => PhraseTag::Flat("NPP"),
+            PhraseType::Pp => PhraseTag::Flat("PP"),
         }
     }
 }
 
-#[derive(Clone, Debug)]
-enum Atom {
-    All(Vec<Constraint>),
-    Any,
-    Forms(Vec<String>),
-    Pos(String),
-    PosRe(regex::Regex),
-    Regex(String),
-    RegexCs(String),
-    Chunk(String),
+fn is_hint_char(c: char) -> bool {
+    matches!(
+        c,
+        'a'..='z' | 'A'..='Z' | 'ä' | 'ö' | 'ü' | 'ß' | 'Ä' | 'Ö' | 'Ü' | '|' | '(' | ')'
+            | '[' | ']' | '?' | ','
+    )
 }
 
-#[derive(Clone, Debug)]
-enum Piece {
-    Single {
-        atom: Atom,
-        min: u32,
-        max: Option<u32>,
-    },
-    Group {
-        alts: Vec<Vec<Piece>>,
-        min: u32,
-        max: Option<u32>,
-    },
+fn possible_values(body: &str) -> Option<Vec<String>> {
+    let parts: Vec<&str> = body.split('|').collect();
+    if parts.iter().any(|p| p.is_empty()) {
+        return None;
+    }
+    if parts.iter().any(|p| {
+        p.chars().any(|c| {
+            matches!(
+                c,
+                '(' | ')' | '[' | ']' | '?' | '\\' | '.' | '*' | '+' | '^' | '$' | '{' | '}'
+            )
+        })
+    }) {
+        return None;
+    }
+    Some(parts.iter().map(|p| p.to_lowercase()).collect())
 }
 
-struct Rule {
-    pieces: Vec<Piece>,
+fn calc_form_hints(expanded: &str) -> Vec<Vec<String>> {
+    let chars: Vec<char> = expanded.chars().collect();
+    let mut hints = Vec::new();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] != '<' {
+            i += 1;
+            continue;
+        }
+        let before_ok = i == 0 || chars[i - 1] == ' ';
+        let mut j = i + 1;
+        while j < chars.len() && chars[j] != '>' {
+            j += 1;
+        }
+        if j >= chars.len() {
+            break;
+        }
+        let body: String = chars[i + 1..j].iter().collect();
+        let after = if j + 1 < chars.len() && chars[j + 1] == '+' {
+            j + 2
+        } else {
+            j + 1
+        };
+        let after_ok = after >= chars.len() || chars[after] == ' ';
+        if before_ok
+            && after_ok
+            && !body.is_empty()
+            && body.chars().all(is_hint_char)
+            && let Some(values) = possible_values(&body)
+        {
+            hints.push(values);
+        }
+        i = j + 1;
+    }
+    hints
+}
+
+fn expand(expr: &str) -> String {
+    expr.replace("<NP>", "<chunk=B-NP> <chunk=I-NP>*")
+        .replace("&prozent;", "Prozent|Kilo|Kilogramm|Gramm|Euro|Pfund")
+}
+
+fn build(expr: &str, phrase: PhraseType, overwrite: bool) -> crate::openregex::Rule {
+    let expanded = expand(expr);
+    let hints = calc_form_hints(&expanded);
+    build_expanded(&expanded, phrase.tag(), overwrite, &FILTER_TAGS, hints)
+}
+
+fn build_with_hints(
+    expr: &str,
     phrase: PhraseType,
     overwrite: bool,
     form_hints: Vec<Vec<String>>,
+) -> crate::openregex::Rule {
+    let expanded = expand(expr);
+    build_expanded(&expanded, phrase.tag(), overwrite, &FILTER_TAGS, form_hints)
 }
 
-const FILTER_TAGS: [&str; 3] = ["PP", "NPP", "NPS"];
-
-fn parse_atom(body: &str) -> Atom {
-    let body = body.trim();
-    if body == "." {
-        return Atom::Any;
-    }
-    if let Some(value) = body.strip_prefix("posre=") {
-        if let Ok(re) = regex::Regex::new(&format!("^(?:{value})")) {
-            return Atom::PosRe(re);
-        }
-        return Atom::Pos(value.to_string());
-    }
-    if let Some(value) = body.strip_prefix("pos=") {
-        return Atom::Pos(value.to_string());
-    }
-    if let Some(value) = body.strip_prefix("regexCS=") {
-        return Atom::RegexCs(value.to_string());
-    }
-    if let Some(value) = body.strip_prefix("regex=") {
-        return Atom::Regex(value.to_string());
-    }
-    if let Some(value) = body.strip_prefix("chunk=") {
-        return Atom::Chunk(value.to_string());
-    }
-    Atom::Forms(body.split('|').map(str::to_string).collect())
+fn rules() -> &'static [crate::openregex::Rule] {
+    static RULES: OnceLock<Vec<crate::openregex::Rule>> = OnceLock::new();
+    RULES.get_or_init(|| {
+        let mut v = Vec::new();
+        let und_oder_bzw = vec![vec![
+            "und".to_string(),
+            "oder".to_string(),
+            "bzw".to_string(),
+        ]];
+        v.push(build(
+            r"(<posre=^ART.*>|<pos=PRO>)? <pos=ADV>* <pos=PA2>* <pos=ADJ>* <pos=SUB>+",
+            PhraseType::Np,
+            false,
+        ));
+        v.push(build_with_hints(
+            r"<pos=SUB> (<und|oder>|(<bzw> <.>)) <pos=SUB>",
+            PhraseType::Np,
+            false,
+            und_oder_bzw.clone(),
+        ));
+        v.push(build_with_hints(
+            r"<pos=ADJ> (<und|oder>|(<bzw> <.>)) <pos=PA2> <pos=SUB>",
+            PhraseType::Np,
+            false,
+            und_oder_bzw.clone(),
+        ));
+        v.push(build_with_hints(
+            r"<pos=ADJ> (<und|oder>|(<bzw> <.>)) <pos=ADJ> <pos=SUB>",
+            PhraseType::Np,
+            false,
+            und_oder_bzw,
+        ));
+        v.push(build(
+            r"<posre=^ART.*> <pos=ADV>* <pos=ADJ>* <regexCS=[A-ZÖÄÜ][a-zöäü]+>",
+            PhraseType::Np,
+            false,
+        ));
+        v.push(build(
+            r"<pos=PRO>? <pos=ZAL> <pos=SUB>",
+            PhraseType::Np,
+            false,
+        ));
+        v.push(build(
+            r"<Herr|Herrn|Frau> <pos=EIG>+",
+            PhraseType::Np,
+            false,
+        ));
+        v.push(build(
+            r"<Herr|Herrn|Frau> <regexCS=[A-ZÖÄÜ][a-zöäü-]+>+",
+            PhraseType::Np,
+            false,
+        ));
+        v.push(build(r"<der>", PhraseType::Np, false));
+        v
+    })
 }
 
-fn split_top(body: &str, sep: char) -> Vec<String> {
-    let mut parts = Vec::new();
-    let mut depth = 0i32;
-    let mut in_bracket = false;
-    let mut current = String::new();
-    for c in body.chars() {
-        match c {
-            '<' => in_bracket = true,
-            '>' => in_bracket = false,
-            '(' if !in_bracket => depth += 1,
-            ')' if !in_bracket => depth -= 1,
-            c if c == sep && depth == 0 && !in_bracket => {
-                parts.push(current.clone());
-                current.clear();
-                continue;
-            }
-            _ => {}
-        }
-        current.push(c);
-    }
-    if !current.trim().is_empty() {
-        parts.push(current);
-    }
-    parts
-}
-
-fn tokenize(expr: &str) -> Vec<String> {
-    let re = regex::Regex::new(r"<[^>]*>|\(|\)|\||[?*+]|[A-Za-zÄÖÜäöüß0-9,._\-]+").unwrap();
-    re.find_iter(expr).map(|m| m.as_str().to_string()).collect()
-}
-
-fn parse_sequence(expr: &str) -> Vec<Piece> {
-    let tokens = tokenize(expr);
-    let mut pieces = Vec::new();
-    let mut i = 0usize;
-    while i < tokens.len() {
-        let tok = tokens[i].as_str();
-        if tok == " " {
-            i += 1;
-            continue;
-        }
-        let (body, min, max) = {
-            let mut body = tok.to_string();
-            let mut min = 1u32;
-            let mut max = Some(1u32);
-            if i + 1 < tokens.len() && matches!(tokens[i + 1].as_str(), "?" | "*" | "+") {
-                match tokens[i + 1].as_str() {
-                    "?" => {
-                        min = 0;
-                        max = Some(1);
-                    }
-                    "*" => {
-                        min = 0;
-                        max = None;
-                    }
-                    _ => {
-                        min = 1;
-                        max = None;
-                    }
-                }
-                i += 1;
-            }
-            if body.starts_with('<') && body.ends_with('>') && body.len() > 2 {
-                body = body[1..body.len() - 1].to_string();
-            }
-            (body, min, max)
-        };
-        if tok == "(" {
-            let mut depth = 1i32;
-            let mut inner = String::new();
-            i += 1;
-            while i < tokens.len() {
-                let t = tokens[i].as_str();
-                if t == "(" {
-                    depth += 1;
-                } else if t == ")" {
-                    depth -= 1;
-                    if depth == 0 {
-                        i += 1;
-                        break;
-                    }
-                }
-                inner.push(' ');
-                inner.push_str(t);
-                i += 1;
-            }
-            let (gmin, gmax) = if i < tokens.len() && matches!(tokens[i].as_str(), "?" | "*" | "+")
-            {
-                let q = tokens[i].as_str();
-                i += 1;
-                match q {
-                    "?" => (0u32, Some(1u32)),
-                    "*" => (0, None),
-                    _ => (1, None),
-                }
-            } else {
-                (1u32, Some(1u32))
-            };
-            let alts: Vec<Vec<Piece>> = split_top(&inner, '|')
-                .iter()
-                .map(|alt| parse_sequence(alt))
-                .collect();
-            pieces.push(Piece::Group {
-                alts,
-                min: gmin,
-                max: gmax,
-            });
-            continue;
-        }
-        let atom = parse_conjunctive(&body);
-        pieces.push(Piece::Single { atom, min, max });
-        i += 1;
-    }
-    pieces
-}
-
-#[derive(Clone, Debug)]
-enum Constraint {
-    Positive(Atom),
-    Negated(Atom),
-}
-
-fn parse_constraint(body: &str) -> Constraint {
-    let trimmed = body.trim();
-    if let Some(rest) = trimmed.strip_prefix('!') {
-        Constraint::Negated(parse_atom(rest))
-    } else {
-        Constraint::Positive(parse_atom(trimmed))
-    }
-}
-
-fn parse_conjunctive(body: &str) -> Atom {
-    let parts = split_top(body, '&');
-    if parts.len() == 1 {
-        return parse_atom(&parts[0]);
-    }
-    let mut atoms = Vec::new();
-    for part in parts {
-        atoms.push(parse_constraint(&part));
-    }
-    Atom::All(atoms)
-}
-
-fn atom_matches(
-    atom: &Atom,
-    token: &AnalyzedTokenReadings,
-    chunks: &[String],
-    forms: &[String],
-) -> bool {
-    match atom {
-        Atom::All(_) => true,
-        Atom::Any => true,
-        Atom::Forms(values) => values.iter().any(|v| forms.contains(v)),
-        Atom::Pos(value) => token
-            .readings()
-            .iter()
-            .any(|r| r.pos_tags().iter().any(|t| t.contains(value.as_str()))),
-        Atom::PosRe(re) => token
-            .readings()
-            .iter()
-            .any(|r| r.pos_tags().iter().any(|t| re.is_match(t))),
-        Atom::Regex(value) => regex::Regex::new(&format!("^(?:{value})$"))
-            .map(|re| forms.iter().any(|f| re.is_match(f)))
-            .unwrap_or(false),
-        Atom::RegexCs(value) => regex::Regex::new(&format!("^(?:{value})$"))
-            .map(|re| forms.iter().any(|f| re.is_match(f)))
-            .unwrap_or(false),
-        Atom::Chunk(value) => chunks.iter().any(|c| c == value),
-    }
-}
-
-struct Token<'a> {
-    reading: &'a AnalyzedTokenReadings,
-    chunks: Vec<String>,
-    forms: Vec<String>,
-}
-
-impl<'a> Token<'a> {
-    fn matches(&self, constraint: &Constraint) -> bool {
-        match constraint {
-            Constraint::Positive(atom) => {
-                atom_matches(atom, self.reading, &self.chunks, &self.forms)
-            }
-            Constraint::Negated(atom) => {
-                !atom_matches(atom, self.reading, &self.chunks, &self.forms)
-            }
-        }
-    }
-
-    fn new(reading: &'a AnalyzedTokenReadings) -> Self {
-        let text = reading.token().token();
-        let mut forms = vec![text.to_string()];
-        if text.chars().any(|c| c.is_uppercase()) {
-            forms.push(text.to_lowercase());
-        }
-        Self {
-            reading,
-            chunks: reading.chunks().to_vec(),
-            forms,
-        }
-    }
-
-    fn matches_atom(&self, atom: &Atom) -> bool {
-        match atom {
-            Atom::All(constraints) => constraints.iter().all(|c| self.matches(c)),
-            other => atom_matches(other, self.reading, &self.chunks, &self.forms),
-        }
-    }
-}
-
-fn match_piece(
-    piece: &Piece,
-    tokens: &[Token],
-    at: usize,
-    used: &mut Vec<(usize, usize)>,
-) -> Option<usize> {
-    let try_once = |piece: &Piece,
-                    tokens: &[Token],
-                    at: usize,
-                    used: &mut Vec<(usize, usize)>|
-     -> Option<usize> {
-        match piece {
-            Piece::Single { atom, .. } => {
-                if at >= tokens.len() {
-                    return None;
-                }
-                if tokens[at].matches_atom(atom) {
-                    Some(at + 1)
-                } else {
-                    None
-                }
-            }
-            Piece::Group { alts, .. } => {
-                for alt in alts {
-                    if let Some(next) = match_sequence(alt, tokens, at, used) {
-                        return Some(next);
-                    }
-                }
-                None
-            }
-        }
-    };
-
-    let (min, max) = match piece {
-        Piece::Single { min, max, .. } => (*min, *max),
-        Piece::Group { min, max, .. } => (*min, *max),
-    };
-    let mut position = at;
-    let mut count = 0u32;
-    while max.is_none_or(|m| count < m) {
-        let snapshot = used.len();
-        match try_once(piece, tokens, position, used) {
-            Some(next) if next > position => {
-                used.push((position, next));
-                position = next;
-                count += 1;
-            }
-            _ => {
-                used.truncate(snapshot);
-                break;
-            }
-        }
-    }
-    if count >= min {
-        Some(position)
-    } else {
-        let target = used.len() - count as usize;
-        used.truncate(target);
-        None
-    }
-}
-
-fn match_sequence(
-    pieces: &[Piece],
-    tokens: &[Token],
-    at: usize,
-    used: &mut Vec<(usize, usize)>,
-) -> Option<usize> {
-    let mut position = at;
-    let mut consumed = Vec::new();
-    for piece in pieces {
-        let mut local = Vec::new();
-        match match_piece(piece, tokens, position, &mut local) {
-            Some(next) => {
-                position = next;
-                consumed.extend(local);
-            }
-            None => return None,
-        }
-    }
-    used.extend(consumed);
-    Some(position)
-}
-
-fn build(expr: &str, phrase: PhraseType, overwrite: bool) -> Rule {
-    let expanded = expr.replace("<NP>", "<chunk=B-NP> <chunk=I-NP>*");
-    let mut form_hints = Vec::new();
-    let mut chars = expanded.char_indices().peekable();
-    while let Some((idx, c)) = chars.next() {
-        if c != '<' {
-            continue;
-        }
-        let rest = &expanded[idx + 1..];
-        let Some(end) = rest.find('>') else { continue };
-        let body = &rest[..end];
-        if body.contains('=') || body == "." {
-            continue;
-        }
-        if body.contains('|') {
-            form_hints.push(body.split('|').map(str::to_string).collect());
-        }
-        for _ in 0..=end {
-            chars.next();
-        }
-    }
-    Rule {
-        pieces: parse_sequence(&expanded),
-        phrase,
-        overwrite,
-        form_hints,
-    }
-}
-
-fn rules() -> Vec<Rule> {
-    let mut v = Vec::new();
-    let mut np = |e: &str| {
-        v.push(build(e, PhraseType::Np, false));
-    };
-    np("(<posre=^ART.*>|<pos=PRO>)? <pos=ADV>* <pos=PA2>* <pos=ADJ>* <pos=SUB>+");
-    np("<pos=SUB> (<und|oder>|(<bzw> <.>)) <pos=SUB>");
-    np("<pos=ADJ> (<und|oder>|(<bzw> <.>)) <pos=ADJ> <pos=SUB>");
-    np("<pos=ADJ> (<und|oder>|(<bzw> <.>)) <pos=PA2> <pos=SUB>");
-    np("<posre=^ART.*> <pos=ADV>* <pos=ADJ>* <regexCS=[A-ZÖÄÜ][a-zöäü]+>");
-    np("<pos=PRO>? <pos=ZAL> <pos=SUB>");
-    np("<Herr|Herrn|Frau> <pos=EIG>+");
-    np("<Herr|Herrn|Frau> <regexCS=[A-ZÖÄÜ][a-zöäü-]+>+");
-    np("<der>");
-    v
-}
-
-fn rules2() -> Vec<Rule> {
-    let mut v = Vec::new();
-    fn npp(v: &mut Vec<Rule>, e: &str, o: bool) {
-        v.push(build(e, PhraseType::Npp, o));
-    }
-    fn nps(v: &mut Vec<Rule>, e: &str, o: bool) {
-        v.push(build(e, PhraseType::Nps, o));
-    }
-    fn pp(v: &mut Vec<Rule>, e: &str, o: bool) {
-        v.push(build(e, PhraseType::Pp, o));
-    }
-    npp(
-        &mut v,
-        "<pos=ADJ> <,> <chunk=B-NP> <chunk=I-NP>* <und|sowie> <NP>",
-        false,
-    );
-    npp(
-        &mut v,
-        "<chunk=B-NP & !regex=jede[rs]?> <chunk=I-NP>* <und|sowie> <pos=ADV>? <NP>",
-        false,
-    );
-    nps(
-        &mut v,
-        "<pos=ADJ> <und|sowie> <chunk=B-NP & !pos=PLU> <chunk=I-NP>*",
-        true,
-    );
-    nps(
-        &mut v,
-        "<deren> <chunk=B-NP & !pos=PLU> <und|sowie> <chunk=B-NP>*",
-        true,
-    );
-    npp(&mut v, "<pos=EIG> <und> <pos=EIG>", false);
-    nps(
-        &mut v,
-        "<pos=ART> <pos=ADJ> <und|sowie> (<pos=ADJ>|<pos=PA2>) <chunk=I-NP & !pos=PLU>+",
-        true,
-    );
-    nps(
-        &mut v,
-        "<chunk=B-NP & !pos=PLU> <chunk=I-NP>* <und|sowie> <keine> <chunk=I-NP>+",
-        true,
-    );
-    npp(
-        &mut v,
-        "<NP> <und|sowie> <pos=ART> <pos=PA1> <pos=SUB>",
-        true,
-    );
-    nps(&mut v, "<eins|eines> <chunk=B-NP> <chunk=I-NP>+", false);
-    npp(
-        &mut v,
-        "<ich|du|er|sie|es|wir|ihr|sie> <und|oder|sowie> <NP>",
-        false,
-    );
-    npp(&mut v, "<sowohl> <NP> <als> <auch> <NP>", false);
-    npp(&mut v, "<sowohl> <pos=EIG> <als> <auch> <pos=EIG>", false);
-    npp(
-        &mut v,
-        "<sowohl> <ich|du|er|sie|es|wir|ihr|sie> <als> <auch> <NP>",
-        false,
-    );
-    npp(
-        &mut v,
-        "<pos=SUB> <und|oder|sowie> <chunk=B-NP & !ihre> <chunk=I-NP>*",
-        false,
-    );
-    npp(&mut v, "<weder> <pos=SUB> <noch> <pos=SUB>", false);
-    npp(
-        &mut v,
-        "<zwei|drei|vier|fünf|sechs|sieben|acht|neun|zehn|elf|zwölf> <chunk=I-NP>",
-        false,
-    );
-    nps(
-        &mut v,
-        "<chunk=B-NP> <pos=PRP> <NP> <chunk=B-NP & pos=SIN> <chunk=I-NP>*",
-        false,
-    );
-    npp(
-        &mut v,
-        "<chunk=B-NP> <pos=PRP> <NP> <chunk=B-NP & pos=PLU> <chunk=I-NP>*",
-        false,
-    );
-    nps(
-        &mut v,
-        "<chunk=B-NP> <pos=PRP> <NP> <pos=PA2> <chunk=B-NP & !pos=PLU> <chunk=I-NP>*",
-        false,
-    );
-    npp(
-        &mut v,
-        "<chunk=B-NP> <pos=PRP> <NP> <pos=PA2> <chunk=B-NP & !pos=SIN> <chunk=I-NP>*",
-        false,
-    );
-    npp(&mut v, "<Herr|Frau> <und> <Herr|Frau> <pos=EIG>*", false);
-    nps(
-        &mut v,
-        "<chunk=B-NP & !pos=ZAL & !pos=PLU & !chunk=NPP & !einige & !(regex=(Prozent|Kilo|Kilogramm|Gramm|Euro|Pfund))> <chunk=I-NP & !pos=PLU & !und>*",
-        true,
-    );
-    npp(
-        &mut v,
-        "<chunk=B-NP & !pos=SIN & !chunk=NPS & !Ellen> <chunk=I-NP & !pos=SIN>*",
-        true,
-    );
-    nps(
-        &mut v,
-        "<chunk=NPS> <pos=PRO> <pos=ADJ> <pos=ADJ> <NP>",
-        false,
-    );
-    nps(
-        &mut v,
-        "<regex=eine[rs]?> <der> <am> <pos=ADJ> <pos=PA2> <NP>",
-        false,
-    );
-    nps(
-        &mut v,
-        "<regex=eine[rs]?> <der> <beiden> <pos=ADJ>* <pos=SUB>",
-        false,
-    );
-    nps(
-        &mut v,
-        "<regex=eine[rs]?> <seiner|ihrer> <pos=PA1> <pos=SUB>",
-        false,
-    );
-    nps(
-        &mut v,
-        "<regex=[\\d,.]+> <Prozent|Kilo|Kilogramm|Gramm|Euro|Pfund>",
-        false,
-    );
-    npp(
-        &mut v,
-        "<regex=[\\d,.]+> <Prozent|Kilo|Kilogramm|Gramm|Euro|Pfund>",
-        false,
-    );
-    npp(&mut v, "<dass> <sie> <wie> <NP>", false);
-    npp(&mut v, "<pos=PLU> <die> <Regel>", false);
-    nps(
-        &mut v,
-        "<chunk=B-NP & pos=SIN> <chunk=I-NP & pos=SIN>* <,> <die> <pos=ADV>+ <chunk=NPS>+",
-        false,
-    );
-    npp(
-        &mut v,
-        "<chunk=B-NP & pos=PLU> <chunk=I-NP & pos=PLU>* <,> <die> <pos=ADV>+ <chunk=NPS>+",
-        false,
-    );
-    nps(
-        &mut v,
-        "<der|die|das> <pos=ADJ> <der> <pos=PA1> <pos=SUB>",
-        false,
-    );
-    npp(
-        &mut v,
-        "<pos=SUB & pos=PLU> <der> <pos=PA1> <pos=SUB>",
-        false,
-    );
-    nps(
-        &mut v,
-        "<der|die|das> <pos=ADJ> <der> <pos=PRO>? <pos=SUB>",
-        false,
-    );
-    nps(
-        &mut v,
-        "<chunk=NPS & !einige> <chunk=NPP & (pos=GEN |pos=ZAL)>+",
-        true,
-    );
-    npp(&mut v, "<chunk=NPP> <chunk=NPS & pos=GEN>+", true);
-    nps(
-        &mut v,
-        "<chunk=NPS>+ <und> <chunk=NP[SP] & (pos=GEN | pos=ADV)>+",
-        true,
-    );
-    nps(
-        &mut v,
-        "<chunk=NPS>+ <der> <pos=ADV> <pos=PA2> <chunk=I-NP>",
-        true,
-    );
-    nps(
-        &mut v,
-        "<chunk=NPS>+ <der> (<pos=ADJ>|<pos=ZAL>) <NP>",
-        true,
-    );
-    nps(&mut v, "<chunk=NPS>+ <der> <NP>", true);
-    pp(&mut v, "<laut> <regex=.*>{0,3} <Quellen>", true);
-    pp(
-        &mut v,
-        "<pos=PRP> <pos=ART:> <pos=ADV>* <pos=ADJ> <NP>",
-        true,
-    );
-    v
-}
-
-fn has_all_form_hints(rule: &Rule, forms: &[String]) -> bool {
-    rule.form_hints
-        .iter()
-        .all(|hints| hints.iter().any(|h| forms.contains(h)))
-}
-
-fn apply(rule: &Rule, tokens: &mut [Token]) {
-    let all_forms: Vec<String> = tokens
-        .iter()
-        .flat_map(|t| t.forms.clone())
-        .collect::<std::collections::HashSet<_>>()
-        .into_iter()
-        .collect();
-    if !has_all_form_hints(rule, &all_forms) {
-        return;
-    }
-    let mut start = 0;
-    while start < tokens.len() {
-        let mut used = Vec::new();
-        if let Some(end) = match_sequence(&rule.pieces, tokens, start, &mut used)
-            && end > start
-        {
-            let span: Vec<(usize, usize)> = (start..end).map(|i| (i, i + 1)).collect();
-            for (i, _) in span {
-                let mut new_chunks = tokens[i].chunks.clone();
-                if rule.overwrite {
-                    new_chunks.retain(|c| !FILTER_TAGS.contains(&c.as_str()));
-                }
-                let new_tag = rule.phrase.tag(i == start);
-                if !new_chunks.iter().any(|c| c == new_tag) {
-                    new_chunks.retain(|c| c != "O");
-                    new_chunks.push(new_tag.to_string());
-                }
-                tokens[i].chunks = new_chunks;
-            }
-            start = end;
-            continue;
-        }
-        start += 1;
-    }
+fn rules2() -> &'static [crate::openregex::Rule] {
+    static RULES: OnceLock<Vec<crate::openregex::Rule>> = OnceLock::new();
+    RULES.get_or_init(|| {
+        let mut v = Vec::new();
+        let mut add = |e: &str, p: PhraseType, o: bool| v.push(build(e, p, o));
+        add(
+            r"<pos=ADJ> <,> <chunk=B-NP> <chunk=I-NP>* <und|sowie> <NP>",
+            PhraseType::Npp,
+            false,
+        );
+        add(
+            r"<chunk=B-NP & !regex=jede[rs]?> <chunk=I-NP>* <und|sowie> <pos=ADV>? <NP>",
+            PhraseType::Npp,
+            false,
+        );
+        add(
+            r"<pos=ADJ> <und|sowie> <chunk=B-NP & !pos=PLU> <chunk=I-NP>*",
+            PhraseType::Nps,
+            true,
+        );
+        add(
+            r"<deren> <chunk=B-NP & !pos=PLU> <und|sowie> <chunk=B-NP>*",
+            PhraseType::Nps,
+            true,
+        );
+        add(r"<pos=EIG> <und> <pos=EIG>", PhraseType::Npp, false);
+        add(
+            r"<pos=ART> <pos=ADJ> <und|sowie> (<pos=ADJ>|<pos=PA2>) <chunk=I-NP & !pos=PLU>+",
+            PhraseType::Nps,
+            true,
+        );
+        add(
+            r"<chunk=B-NP & !pos=PLU> <chunk=I-NP>* <und|sowie> <keine> <chunk=I-NP>+",
+            PhraseType::Nps,
+            true,
+        );
+        add(
+            r"<NP> <und|sowie> <pos=ART> <pos=PA1> <pos=SUB>",
+            PhraseType::Npp,
+            true,
+        );
+        add(
+            r"<eins|eines> <chunk=B-NP> <chunk=I-NP>+",
+            PhraseType::Nps,
+            false,
+        );
+        add(
+            r"<ich|du|er|sie|es|wir|ihr|sie> <und|oder|sowie> <NP>",
+            PhraseType::Npp,
+            false,
+        );
+        add(r"<sowohl> <NP> <als> <auch> <NP>", PhraseType::Npp, false);
+        add(
+            r"<sowohl> <pos=EIG> <als> <auch> <pos=EIG>",
+            PhraseType::Npp,
+            false,
+        );
+        add(
+            r"<sowohl> <ich|du|er|sie|es|wir|ihr|sie> <als> <auch> <NP>",
+            PhraseType::Npp,
+            false,
+        );
+        add(
+            r"<pos=SUB> <und|oder|sowie> <chunk=B-NP & !ihre> <chunk=I-NP>*",
+            PhraseType::Npp,
+            false,
+        );
+        add(r"<weder> <pos=SUB> <noch> <pos=SUB>", PhraseType::Npp, false);
+        add(
+            r"<zwei|drei|vier|fünf|sechs|sieben|acht|neun|zehn|elf|zwölf> <chunk=I-NP>",
+            PhraseType::Npp,
+            false,
+        );
+        add(
+            r"<chunk=B-NP> <pos=PRP> <NP> <chunk=B-NP & pos=SIN> <chunk=I-NP>*",
+            PhraseType::Nps,
+            false,
+        );
+        add(
+            r"<chunk=B-NP> <pos=PRP> <NP> <chunk=B-NP & pos=PLU> <chunk=I-NP>*",
+            PhraseType::Npp,
+            false,
+        );
+        add(
+            r"<chunk=B-NP> <pos=PRP> <NP> <pos=PA2> <chunk=B-NP & !pos=PLU> <chunk=I-NP>*",
+            PhraseType::Nps,
+            false,
+        );
+        add(
+            r"<chunk=B-NP> <pos=PRP> <NP> <pos=PA2> <chunk=B-NP & !pos=SIN> <chunk=I-NP>*",
+            PhraseType::Npp,
+            false,
+        );
+        add(
+            r"<Herr|Frau> <und> <Herr|Frau> <pos=EIG>*",
+            PhraseType::Npp,
+            false,
+        );
+        add(
+            r"<chunk=B-NP & !pos=ZAL & !pos=PLU & !chunk=NPP & !einige & !(regex=&prozent;)> <chunk=I-NP & !pos=PLU & !und>*",
+            PhraseType::Nps,
+            false,
+        );
+        add(
+            r"<chunk=B-NP & !pos=SIN & !chunk=NPS & !Ellen> <chunk=I-NP & !pos=SIN>*",
+            PhraseType::Npp,
+            false,
+        );
+        add(
+            r"<chunk=NPS> <pos=PRO> <pos=ADJ> <pos=ADJ> <NP>",
+            PhraseType::Nps,
+            false,
+        );
+        add(
+            r"<regex=eine[rs]?> <der> <am> <pos=ADJ> <pos=PA2> <NP>",
+            PhraseType::Nps,
+            false,
+        );
+        add(
+            r"<regex=eine[rs]?> <der> <beiden> <pos=ADJ>* <pos=SUB>",
+            PhraseType::Nps,
+            false,
+        );
+        add(
+            r"<regex=eine[rs]?> <seiner|ihrer> <pos=PA1> <pos=SUB>",
+            PhraseType::Nps,
+            false,
+        );
+        add(r"<regex=[\d,.]+> <&prozent;>", PhraseType::Nps, false);
+        add(r"<regex=[\d,.]+> <&prozent;>", PhraseType::Npp, false);
+        add(r"<dass> <sie> <wie> <NP>", PhraseType::Npp, false);
+        add(r"<pos=PLU> <die> <Regel>", PhraseType::Npp, false);
+        add(
+            r"<chunk=B-NP & pos=SIN> <chunk=I-NP & pos=SIN>* <,> <die> <pos=ADV>+ <chunk=NPS>+",
+            PhraseType::Nps,
+            false,
+        );
+        add(
+            r"<chunk=B-NP & pos=PLU> <chunk=I-NP & pos=PLU>* <,> <die> <pos=ADV>+ <chunk=NPS>+",
+            PhraseType::Npp,
+            false,
+        );
+        add(
+            r"<der|die|das> <pos=ADJ> <der> <pos=PA1> <pos=SUB>",
+            PhraseType::Nps,
+            false,
+        );
+        add(
+            r"<pos=SUB & pos=PLU> <der> <pos=PA1> <pos=SUB>",
+            PhraseType::Npp,
+            false,
+        );
+        add(
+            r"<der|die|das> <pos=ADJ> <der> <pos=PRO>? <pos=SUB>",
+            PhraseType::Nps,
+            false,
+        );
+        add(
+            r"<chunk=NPS & !einige> <chunk=NPP & (pos=GEN |pos=ZAL)>+",
+            PhraseType::Nps,
+            true,
+        );
+        add(
+            r"<chunk=NPP> <chunk=NPS & pos=GEN>+",
+            PhraseType::Npp,
+            true,
+        );
+        add(
+            r"<chunk=NPS>+ <und> <chunk=NP[SP] & (pos=GEN | pos=ADV)>+",
+            PhraseType::Nps,
+            true,
+        );
+        add(
+            r"<chunk=NPS>+ <der> <pos=ADV> <pos=PA2> <chunk=I-NP>",
+            PhraseType::Nps,
+            true,
+        );
+        add(
+            r"<chunk=NPS>+ <der> (<pos=ADJ>|<pos=ZAL>) <NP>",
+            PhraseType::Nps,
+            true,
+        );
+        add(r"<chunk=NPS>+ <der> <NP>", PhraseType::Nps, true);
+        add(
+            r"<chunk=NPS>+ <der> <pos=ADJ> <pos=ADV> <pos=PA2> <NP>",
+            PhraseType::Nps,
+            true,
+        );
+        add(
+            r"<chunk=NPS>+ <pos=PRO:POS> <pos=ADJ> <NP>",
+            PhraseType::Nps,
+            true,
+        );
+        add(
+            r"<der|das> <pos=ADJ> <der> <pos=ZAL> <NP>",
+            PhraseType::Nps,
+            true,
+        );
+        add(r"<eine> <menge> <NP>+", PhraseType::Npp, true);
+        add(r"<er|sie|es> <und> <NP> <NP>", PhraseType::Npp, false);
+        add(r"<laut> <regex=.*>{0,3} <Quellen>", PhraseType::Pp, true);
+        add(
+            r"<pos=PRP> <pos=ART:> <pos=ADV>* <pos=ADJ> <NP>",
+            PhraseType::Pp,
+            true,
+        );
+        add(r"<pos=PRP> <chunk=NPP>+ <,> <NP>", PhraseType::Pp, true);
+        add(r"<pos=PRP> <chunk=NPP>+", PhraseType::Pp, true);
+        add(r"<pos=PRP> <der> <chunk=NPP>+", PhraseType::Pp, false);
+        add(r"<pos=PRP> <NP>", PhraseType::Pp, false);
+        add(
+            r"<pos=PRP> <NP> <pos=ADJ> <und|oder|bzw.> <NP>",
+            PhraseType::Pp,
+            false,
+        );
+        add(r"<pos=PRP> (<NP>)+", PhraseType::Pp, false);
+        add(
+            r"<pos=PRP> <chunk=B-NP> <pos=ADV> <NP>",
+            PhraseType::Pp,
+            false,
+        );
+        add(
+            r"<pos=PRP> <pos=ADV> <pos=ZAL> <chunk=B-NP>",
+            PhraseType::Pp,
+            false,
+        );
+        add(r"<pos=PRP> <pos=PRO> <NP>", PhraseType::Pp, false);
+        add(
+            r"<pos=PRP> <pos=ADJ> <und|oder|sowie> <NP>",
+            PhraseType::Pp,
+            false,
+        );
+        add(r"<pos=PRP> <pos=ADV> <regex=\d+> <NP>", PhraseType::Pp, false);
+        add(r"<pos=PRP> <pos=PA1> <NP>", PhraseType::Pp, false);
+        add(
+            r"<pos=PRP> <pos=ADJ> <pos=PA1> <NP>",
+            PhraseType::Pp,
+            false,
+        );
+        add(
+            r"<pos=PRP> <NP> <NP> <und|oder> <NP>",
+            PhraseType::Pp,
+            false,
+        );
+        add(r"<pos=PRP> <pos=ADV> <pos=ADJ> <NP>", PhraseType::Pp, false);
+        add(
+            r"<pos=PRP> <pos=ADJ:PRD:GRU> <pos=ZAL> <NP>",
+            PhraseType::Pp,
+            false,
+        );
+        add(
+            r"<die> <pos=ADJ> <Sekunden|Minuten|Stunden|Tage|Wochen|Monate|Jahre|Jahrzehnte|Jahrhunderte> (<NP>)?",
+            PhraseType::Pp,
+            false,
+        );
+        add(
+            r"<die> <pos=ADJ> <pos=ZAL> <Sekunden|Minuten|Stunden|Tage|Wochen|Monate|Jahre|Jahrzehnte|Jahrhunderte> (<NP>)?",
+            PhraseType::Pp,
+            false,
+        );
+        add(
+            r"<regex=(vor)?letzte[sn]?> <Woche|Monat|Jahr|Jahrzehnt|Jahrhundert>",
+            PhraseType::Pp,
+            false,
+        );
+        add(
+            r"<für> <in> <pos=EIG> <pos=PA1> <pos=SUB> <und> <pos=SUB>",
+            PhraseType::Pp,
+            true,
+        );
+        add(
+            r"<chunk=NPP> <zwischen> <pos=EIG> <und|sowie> <NP>",
+            PhraseType::Npp,
+            false,
+        );
+        add(
+            r"<,> <die|welche> <NP> <chunk=NPS & pos=GEN>+",
+            PhraseType::Npp,
+            false,
+        );
+        add(r"<NP> <,> <NP> <,> <NP>", PhraseType::Npp, false);
+        add(
+            r"<NP> <,> <NP> <,> <wie> <auch> <chunk=NPS>+",
+            PhraseType::Npp,
+            false,
+        );
+        v
+    })
 }
 
 pub struct GermanChunker;
@@ -665,6 +468,23 @@ pub struct GermanChunker;
 impl GermanChunker {
     pub fn new() -> Self {
         Self
+    }
+
+    fn compute_chunks(&self, sentence: &AnalyzedSentence) -> Vec<Vec<String>> {
+        let forms = sentence_forms(sentence);
+        let mut tokens: Vec<Token> = sentence
+            .tokens()
+            .iter()
+            .filter(|t| !t.is_whitespace())
+            .map(|t| Token::new(t, t.chunks().to_vec()))
+            .collect();
+        for rule in rules() {
+            apply(rule, &mut tokens, &forms);
+        }
+        for rule in rules2() {
+            apply(rule, &mut tokens, &forms);
+        }
+        tokens.into_iter().map(|t| t.chunks).collect()
     }
 }
 
@@ -676,21 +496,40 @@ impl Default for GermanChunker {
 
 impl og_core::checker::Chunker for GermanChunker {
     fn add_chunk_tags(&self, sentence: &mut AnalyzedSentence) {
-        let rule_set = rules();
-        let rule_set2 = rules2();
-        let mut tokens: Vec<Token> = sentence
-            .tokens()
-            .iter()
-            .filter(|t| !t.is_whitespace())
-            .map(Token::new)
-            .collect();
-        for rule in &rule_set {
-            apply(rule, &mut tokens);
+        static CACHE: std::sync::OnceLock<std::sync::Mutex<BoundedMap>> =
+            std::sync::OnceLock::new();
+        let cache_cell = CACHE.get_or_init(|| std::sync::Mutex::new(BoundedMap::new()));
+        let mut key = String::new();
+        for atr in sentence.tokens() {
+            if atr.is_whitespace() {
+                continue;
+            }
+            key.push_str(atr.token().token());
+            key.push('\u{1}');
+            let reading = atr.token();
+            for tag in reading.pos_tags() {
+                key.push_str(tag);
+                key.push('\u{2}');
+            }
+            for chunk in atr.chunks() {
+                key.push_str(chunk);
+                key.push('\u{3}');
+            }
+            key.push('\u{4}');
         }
-        for rule in &rule_set2 {
-            apply(rule, &mut tokens);
+        if key.is_empty() {
+            return;
         }
-        let assigned: Vec<Vec<String>> = tokens.iter().map(|t| t.chunks.clone()).collect();
+        let assigned: Vec<Vec<String>> = {
+            let mut cache = cache_cell.lock().unwrap();
+            if let Some(hit) = cache.get(&key) {
+                hit.clone()
+            } else {
+                let computed = self.compute_chunks(sentence);
+                cache.put(key, computed.clone());
+                computed
+            }
+        };
         let sentence_tokens = sentence.tokens_mut();
         let mut idx = 0;
         for token in sentence_tokens.iter_mut() {
@@ -713,8 +552,11 @@ pub fn shared_german_chunker() -> Arc<GermanChunker> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::openregex::Token;
     use og_core::AnalyzedToken;
+    use og_core::AnalyzedTokenReadings;
     use og_core::checker::Chunker as _;
+    use std::collections::HashSet;
 
     fn sentence(parts: &[(&str, &[&str])]) -> AnalyzedSentence {
         let mut tokens = vec![AnalyzedTokenReadings::new(
@@ -739,6 +581,59 @@ mod tests {
         s
     }
 
+    fn sentence_with_chunks(parts: &[(&str, &[&str], &[&str])]) -> AnalyzedSentence {
+        let mut tokens = vec![AnalyzedTokenReadings::new(
+            AnalyzedToken::new("<S>", 0, 0).with_pos_tags(vec!["SENT_START".to_string()]),
+        )];
+        let mut offset = 0;
+        for (text, tags, chunks) in parts {
+            let readings: Vec<AnalyzedToken> = tags
+                .iter()
+                .map(|t| {
+                    AnalyzedToken::new(*text, offset, offset + text.len())
+                        .with_pos_tags(vec![t.to_string()])
+                })
+                .collect();
+            let primary = AnalyzedToken::new(*text, offset, offset + text.len())
+                .with_pos_tags(tags.iter().map(|t| t.to_string()).collect());
+            let mut atr = AnalyzedTokenReadings::new(primary).with_readings(readings);
+            atr.set_chunks(chunks.iter().map(|c| c.to_string()).collect());
+            tokens.push(atr);
+            offset += text.len() + 1;
+        }
+        let mut s = AnalyzedSentence::new("", 0, offset);
+        s.set_tokens(tokens);
+        s
+    }
+
+    fn chunk_strings(s: &AnalyzedSentence) -> Vec<String> {
+        s.tokens()
+            .iter()
+            .filter(|t| !t.is_whitespace())
+            .map(|t| t.chunks().join("|"))
+            .collect()
+    }
+
+    fn apply_rule_to(
+        rule: &crate::openregex::Rule,
+        parts: &[(&str, &[&str], &[&str])],
+    ) -> Vec<String> {
+        let s = sentence_with_chunks(parts);
+        let forms: HashSet<String> = s
+            .tokens()
+            .iter()
+            .map(|t| t.token().token().to_lowercase())
+            .collect();
+        let mut tokens: Vec<Token> = s
+            .tokens()
+            .iter()
+            .filter(|t| !t.is_whitespace())
+            .map(|t| Token::new(t, t.chunks().to_vec()))
+            .collect();
+        apply(rule, &mut tokens, &forms);
+        tokens.iter().map(|t| t.chunks.join("|")).collect()
+    }
+
     #[test]
     fn chunks_simple_noun_phrase() {
         let mut s = sentence(&[
@@ -747,12 +642,7 @@ mod tests {
             ("Auto", &["SUB:NOM:SIN:NEU"]),
         ]);
         GermanChunker::new().add_chunk_tags(&mut s);
-        let chunks: Vec<String> = s
-            .tokens()
-            .iter()
-            .filter(|t| !t.is_whitespace())
-            .map(|t| t.chunks().join("|"))
-            .collect();
+        let chunks = chunk_strings(&s);
         assert!(chunks[1].contains("B-NP"), "{chunks:?}");
         assert!(chunks[2].contains("I-NP"), "{chunks:?}");
         assert!(chunks[3].contains("I-NP"), "{chunks:?}");
@@ -772,26 +662,177 @@ mod tests {
             ("Katze", &["SUB:NOM:SIN:FEM"]),
         ]);
         GermanChunker::new().add_chunk_tags(&mut s);
-        let joined: String = s
-            .tokens()
-            .iter()
-            .filter(|t| !t.is_whitespace())
-            .flat_map(|t| t.chunks().to_vec())
-            .collect::<Vec<_>>()
-            .join(",");
-        assert!(joined.contains("NPP"), "{joined:?}");
+        let chunks = chunk_strings(&s);
+        assert!(chunks.iter().any(|c| c.contains("NPP")), "{chunks:?}");
     }
 
     #[test]
     fn untagged_punctuation_stays_o() {
         let mut s = sentence(&[(".", &["."])]);
         GermanChunker::new().add_chunk_tags(&mut s);
-        let chunks: Vec<String> = s
-            .tokens()
-            .iter()
-            .filter(|t| !t.is_whitespace())
-            .map(|t| t.chunks().join("|"))
-            .collect();
+        let chunks = chunk_strings(&s);
         assert!(chunks[0].is_empty() || chunks[0] == "O", "{chunks:?}");
+    }
+
+    #[test]
+    fn mythen_und_sagen_form_one_np() {
+        let mut s = sentence(&[
+            ("Mythen", &["SUB:NOM:PLU"]),
+            ("und", &["KON"]),
+            ("Sagen", &["SUB:NOM:PLU"]),
+        ]);
+        GermanChunker::new().add_chunk_tags(&mut s);
+        let chunks = chunk_strings(&s);
+        assert!(chunks[1].contains("B-NP"), "{chunks:?}");
+        assert!(chunks[2].contains("I-NP"), "{chunks:?}");
+        assert!(chunks[3].contains("I-NP"), "{chunks:?}");
+    }
+
+    #[test]
+    fn julia_und_karsten_is_npp() {
+        let mut s = sentence(&[
+            ("Julia", &["EIG:NOM:SIN:FEM"]),
+            ("und", &["KON"]),
+            ("Karsten", &["EIG:NOM:SIN:MAS"]),
+        ]);
+        GermanChunker::new().add_chunk_tags(&mut s);
+        let chunks = chunk_strings(&s);
+        assert!(chunks.iter().any(|c| c.contains("NPP")), "{chunks:?}");
+    }
+
+    #[test]
+    fn groesste_und_erfolgreichste_erfindung_is_nps() {
+        let mut s = sentence(&[
+            ("die", &["ART:NOM:SIN:FEM"]),
+            ("größte", &["ADJ:NOM:SIN:FEM:GRU:SUP"]),
+            ("und", &["KON"]),
+            ("erfolgreichste", &["ADJ:NOM:SIN:FEM:GRU:SUP"]),
+            ("Erfindung", &["SUB:NOM:SIN:FEM"]),
+        ]);
+        GermanChunker::new().add_chunk_tags(&mut s);
+        let chunks = chunk_strings(&s);
+        assert!(chunks[2].contains("NPS"), "{chunks:?}");
+        assert!(chunks[3].contains("NPS"), "{chunks:?}");
+        assert!(chunks[4].contains("NPS"), "{chunks:?}");
+    }
+
+    #[test]
+    fn laut_quellen_is_pp_with_minmax() {
+        let mut s = sentence(&[
+            ("laut", &["PRP:DAT"]),
+            ("den", &["ART:DAT:PLU"]),
+            ("meisten", &["ADJ:DAT:PLU:GRU:SUP"]),
+            ("Quellen", &["SUB:DAT:PLU"]),
+        ]);
+        GermanChunker::new().add_chunk_tags(&mut s);
+        let chunks = chunk_strings(&s);
+        assert!(chunks[1].contains("PP"), "{chunks:?}");
+        assert!(chunks[4].contains("PP"), "{chunks:?}");
+    }
+
+    #[test]
+    fn dot_atom_matches_literal_dot_only() {
+        let rule = build(r"<bzw> <.>", PhraseType::Np, false);
+        let chunks = apply_rule_to(
+            &rule,
+            &[
+                ("bzw", &["KON"], &[]),
+                (".", &["$."], &[]),
+                ("und", &["KON"], &[]),
+            ],
+        );
+        assert!(chunks[1].contains("B-NP"), "{chunks:?}");
+        assert!(chunks[2].contains("I-NP"), "{chunks:?}");
+        assert!(!chunks[3].contains("NP"), "{chunks:?}");
+
+        let rule = build(r"<bzw> <.>", PhraseType::Np, false);
+        let chunks = apply_rule_to(&rule, &[("bzw", &["KON"], &[]), ("x", &["SUB"], &[])]);
+        assert!(!chunks[1].contains("NP"), "{chunks:?}");
+    }
+
+    #[test]
+    fn chunk_atom_is_a_regex() {
+        let rule = build(r"<chunk=NP[SP]>", PhraseType::Nps, false);
+        let chunks = apply_rule_to(&rule, &[("Friedens", &["SUB:GEN:SIN:MAS"], &["NPS"])]);
+        assert!(chunks[1].contains("NPS"), "{chunks:?}");
+
+        let chunks = apply_rule_to(&rule, &[("Friedens", &["SUB:GEN:SIN:MAS"], &["B-NP"])]);
+        assert!(!chunks[1].contains("NPS"), "{chunks:?}");
+    }
+
+    #[test]
+    fn leftmost_longest_match_backtracks_repetition() {
+        let rule = build(r"<regex=a+> <regex=aa>", PhraseType::Np, false);
+        let chunks = apply_rule_to(&rule, &[("a", &["X"], &[]), ("aa", &["X"], &[])]);
+        assert!(chunks[1].contains("B-NP"), "{chunks:?}");
+        assert!(chunks[2].contains("I-NP"), "{chunks:?}");
+    }
+
+    #[test]
+    fn string_atoms_match_case_insensitively() {
+        let rule = build(r"<und|oder|sowie>", PhraseType::Pp, false);
+        let chunks = apply_rule_to(&rule, &[("Und", &["KON"], &[])]);
+        assert!(chunks[1].contains("PP"), "{chunks:?}");
+    }
+
+    #[test]
+    fn regex_atom_is_case_insensitive_full_match() {
+        let rule = build(r"<regex=jede[rs]?>", PhraseType::Pp, false);
+        let chunks = apply_rule_to(&rule, &[("Jeder", &["ART"], &[])]);
+        assert!(chunks[1].contains("PP"), "{chunks:?}");
+
+        let chunks = apply_rule_to(&rule, &[("jedem", &["ART"], &[])]);
+        assert!(!chunks[1].contains("PP"), "{chunks:?}");
+    }
+
+    #[test]
+    fn posre_atom_is_case_sensitive_full_match() {
+        let rule = build(r"<posre=^ART.*>", PhraseType::Pp, false);
+        let chunks = apply_rule_to(&rule, &[("der", &["ART:NOM:SIN:NEU"], &[])]);
+        assert!(chunks[1].contains("PP"), "{chunks:?}");
+
+        let chunks = apply_rule_to(&rule, &[("x", &["PART:NOM"], &[])]);
+        assert!(!chunks[1].contains("PP"), "{chunks:?}");
+    }
+
+    #[test]
+    fn negated_leaf_conjunction() {
+        let rule = build(r"<chunk=B-NP & !pos=PLU>", PhraseType::Nps, false);
+        let chunks = apply_rule_to(&rule, &[("Hunde", &["SUB:NOM:PLU"], &["B-NP"])]);
+        assert!(!chunks[1].contains("NPS"), "{chunks:?}");
+
+        let chunks = apply_rule_to(&rule, &[("Hund", &["SUB:NOM:SIN:MAS"], &["B-NP"])]);
+        assert!(chunks[1].contains("NPS"), "{chunks:?}");
+    }
+
+    #[test]
+    fn parenthesized_leaf_disjunction() {
+        let rule = build(r"<chunk=NPP & (pos=GEN |pos=ZAL)>+", PhraseType::Nps, false);
+        let chunks = apply_rule_to(&rule, &[("Städte", &["SUB:GEN:PLU"], &["NPP"])]);
+        assert!(chunks[1].contains("NPS"), "{chunks:?}");
+
+        let chunks = apply_rule_to(&rule, &[("Städte", &["SUB:DAT:PLU"], &["NPP"])]);
+        assert!(!chunks[1].contains("NPS"), "{chunks:?}");
+    }
+
+    #[test]
+    fn form_hint_gate_skips_rules_without_forms() {
+        let rule = build(r"<sowohl> <NP> <als> <auch> <NP>", PhraseType::Npp, false);
+        let chunks = apply_rule_to(
+            &rule,
+            &[
+                ("a", &["X"], &["B-NP"]),
+                ("b", &["X"], &["I-NP"]),
+                ("c", &["X"], &["B-NP"]),
+                ("d", &["X"], &["I-NP"]),
+            ],
+        );
+        assert!(!chunks.iter().any(|c| c.contains("NPP")), "{chunks:?}");
+    }
+
+    #[test]
+    fn all_rules_build() {
+        assert_eq!(rules().len(), 9);
+        assert_eq!(rules2().len(), 73);
     }
 }

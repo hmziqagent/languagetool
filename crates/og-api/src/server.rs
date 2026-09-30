@@ -35,13 +35,17 @@ impl AppState {
 }
 
 pub const ENGINE_CODES: &[&str] = &[
-    "en", "en-US", "en-GB", "en-CA", "en-AU", "en-NZ", "en-ZA", "de", "de-DE",
+    "en", "en-US", "en-GB", "en-CA", "en-AU", "en-NZ", "en-ZA", "de", "de-DE", "de-AT", "de-CH",
+    "fr", "es", "pt", "pt-BR", "pt-PT", "nl", "pl", "ru", "it", "ar", "ast", "be", "br", "da",
+    "el", "gl", "ro", "sv",
 ];
 
 enum EngineSource {
     EnglishBase,
     EnglishVariant(&'static str),
     German,
+    GermanVariant(&'static str),
+    Generic(&'static str),
 }
 
 fn engine_source(code: &str) -> Option<EngineSource> {
@@ -53,6 +57,25 @@ fn engine_source(code: &str) -> Option<EngineSource> {
         "en-NZ" => Some(EngineSource::EnglishVariant("en-NZ")),
         "en-ZA" => Some(EngineSource::EnglishVariant("en-ZA")),
         "de" | "de-DE" => Some(EngineSource::German),
+        "de-AT" => Some(EngineSource::GermanVariant("de-AT")),
+        "de-CH" => Some(EngineSource::GermanVariant("de-CH")),
+        "da" => Some(EngineSource::Generic("da")),
+        "fr" => Some(EngineSource::Generic("fr")),
+        "es" => Some(EngineSource::Generic("es")),
+        "pt" | "pt-PT" => Some(EngineSource::Generic("pt")),
+        "pt-BR" => Some(EngineSource::Generic("pt")),
+        "nl" => Some(EngineSource::Generic("nl")),
+        "pl" => Some(EngineSource::Generic("pl")),
+        "ru" => Some(EngineSource::Generic("ru")),
+        "it" => Some(EngineSource::Generic("it")),
+        "ar" => Some(EngineSource::Generic("ar")),
+        "ast" => Some(EngineSource::Generic("ast")),
+        "be" => Some(EngineSource::Generic("be")),
+        "br" => Some(EngineSource::Generic("br")),
+        "el" => Some(EngineSource::Generic("el")),
+        "gl" => Some(EngineSource::Generic("gl")),
+        "ro" => Some(EngineSource::Generic("ro")),
+        "sv" => Some(EngineSource::Generic("sv")),
         _ => None,
     }
 }
@@ -90,8 +113,38 @@ fn build_engine_for(code: &str) -> Arc<LanguageEngine> {
             info!("Loaded {code} engine with {} rules", variant.rule_count());
             Arc::new(variant)
         }
+        Some(EngineSource::Generic(short)) => shared_generic_engine(short),
+        Some(EngineSource::GermanVariant(code)) => {
+            info!("Loading {code} engine...");
+            let variant = shared_german_engine().german_variant(code);
+            info!("Loaded {code} engine with {} rules", variant.rule_count());
+            Arc::new(variant)
+        }
         Some(EngineSource::German) | None => shared_german_engine(),
     }
+}
+
+fn shared_generic_engine(short_code: &'static str) -> Arc<LanguageEngine> {
+    static CACHE: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<&'static str, Arc<LanguageEngine>>>,
+    > = std::sync::OnceLock::new();
+    let cache = CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+    let mut guard = cache.lock().unwrap();
+    if let Some(hit) = guard.get(short_code) {
+        return hit.clone();
+    }
+    info!("Loading {short_code} engine...");
+    let engine = Arc::new(LanguageEngine::for_code(short_code).unwrap_or_else(|| {
+        LanguageEngine::new(
+            og_core::Language::from_code(short_code).unwrap_or(og_core::Language::English),
+        )
+    }));
+    info!(
+        "Loaded {short_code} engine with {} rules",
+        engine.rule_count()
+    );
+    guard.insert(short_code, engine.clone());
+    engine
 }
 
 impl Default for AppState {
@@ -162,9 +215,11 @@ mod tests {
     fn app_state_resolves_variant_codes() {
         let state = AppState::new();
         let codes = state.language_codes();
-        for code in ["en", "en-US", "en-GB", "de", "de-DE"] {
+        for code in [
+            "en", "en-US", "en-GB", "de", "de-DE", "fr", "es", "pt", "nl", "pl", "ru",
+        ] {
             assert!(codes.contains(&code), "missing {code}");
         }
-        assert!(!codes.contains(&"fr"));
+        assert!(!codes.contains(&"ca"));
     }
 }

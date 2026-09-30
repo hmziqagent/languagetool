@@ -94,6 +94,10 @@ pub struct AnalyzedTokenReadings {
     is_whitespace: bool,
     #[serde(default)]
     chunks: Vec<String>,
+    #[serde(default)]
+    is_ignored_by_speller: bool,
+    #[serde(default)]
+    is_immunized: bool,
 }
 
 impl AnalyzedTokenReadings {
@@ -104,6 +108,8 @@ impl AnalyzedTokenReadings {
             readings: vec![token],
             is_whitespace,
             chunks: Vec::new(),
+            is_ignored_by_speller: false,
+            is_immunized: false,
         }
     }
 
@@ -134,6 +140,22 @@ impl AnalyzedTokenReadings {
 
     pub fn is_whitespace(&self) -> bool {
         self.is_whitespace
+    }
+
+    pub fn ignore_spelling(&mut self) {
+        self.is_ignored_by_speller = true;
+    }
+
+    pub fn is_ignored_by_speller(&self) -> bool {
+        self.is_ignored_by_speller
+    }
+
+    pub fn immunize(&mut self) {
+        self.is_immunized = true;
+    }
+
+    pub fn is_immunized(&self) -> bool {
+        self.is_immunized
     }
 
     pub fn first_reading(&self) -> Option<&AnalyzedToken> {

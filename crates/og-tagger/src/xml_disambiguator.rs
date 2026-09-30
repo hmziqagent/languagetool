@@ -1,7 +1,7 @@
 use og_core::analyzed::{AnalyzedSentence, AnalyzedToken, AnalyzedTokenReadings};
 use og_core::checker::Disambiguator;
 use og_xml::compiler::{
-    CompiledPattern, CompiledPatternElement, CompiledPatternToken, XmlCompiler,
+    CompiledPattern, CompiledPatternElement, CompiledPatternToken, PosMatcher, XmlCompiler,
 };
 use og_xml::disambig_parser::DisambigXmlParser;
 use og_xml::disambig_types::{CompiledDisambigRule, DisambigAction, DisambigRule};
@@ -10,17 +10,19 @@ enum FirstTokenGate {
     None,
     Text { text: String, case_sensitive: bool },
     LiteralSet(std::collections::HashSet<String>),
+    OrLiteralSet(std::collections::HashSet<String>),
     PostagPlain { tag: String, negate_pos: bool },
 }
 
 pub struct XmlDisambiguator {
     rules: Vec<CompiledDisambigRule>,
-    unifications: Vec<(String, Vec<(String, regex::Regex)>)>,
+    unifications: Vec<(String, Vec<(String, PosMatcher)>)>,
     action_regexes: Vec<DisambigActionRegex>,
     gates: Vec<FirstTokenGate>,
     prepared: Vec<Option<CompiledPattern>>,
     first_literal: Vec<Option<FirstLiteralFilter>>,
     first_regex: Vec<Option<FirstRegexFilter>>,
+    english_tagger: Option<std::sync::Arc<crate::english_tagger::EnglishTagger>>,
 }
 
 struct FirstRegexFilter {
@@ -36,8 +38,8 @@ struct FirstLiteralFilter {
 
 enum DisambigActionRegex {
     Remove(Vec<RemoveWordMatcher>),
-    RemovePostag(Option<regex::Regex>),
-    Filter(Option<regex::Regex>),
+    RemovePostag(Option<regex::Regex>, Option<fancy_regex::Regex>),
+    Filter(Option<regex::Regex>, Option<fancy_regex::Regex>),
     None,
 }
 
@@ -49,6 +51,13 @@ struct RemoveWordMatcher {
 
 impl XmlDisambiguator {
     pub fn from_xml(xml: &str) -> Result<Self, String> {
+        Self::from_xml_with_english(xml, None)
+    }
+
+    pub fn from_xml_with_english(
+        xml: &str,
+        english_tagger: Option<std::sync::Arc<crate::english_tagger::EnglishTagger>>,
+    ) -> Result<Self, String> {
         let parser = DisambigXmlParser::new();
         let rule_set = parser.parse(xml).map_err(|e| e.to_string())?;
 
@@ -59,11 +68,11 @@ impl XmlDisambiguator {
             .map(|r| compile_disambig_rule(&compiler, r))
             .collect();
 
-        let mut unifications: Vec<(String, Vec<(String, regex::Regex)>)> = Vec::new();
+        let mut unifications: Vec<(String, Vec<(String, PosMatcher)>)> = Vec::new();
         for uni in &rule_set.unifications {
             let mut compiled = Vec::new();
             for eq in &uni.equivalences {
-                if let Ok(re) = regex::Regex::new(&format!("^(?:{})$", eq.postag)) {
+                if let Some(re) = PosMatcher::new_anchored(&format!("^(?:{})$", eq.postag)) {
                     compiled.push((eq.eq_type.clone(), re));
                 }
             }
@@ -97,11 +106,19 @@ impl XmlDisambiguator {
                         })
                         .collect(),
                 ),
-                DisambigAction::RemovePostag(postag) => DisambigActionRegex::RemovePostag(
-                    regex::Regex::new(&format!("^(?:{})$", postag)).ok(),
-                ),
+                DisambigAction::RemovePostag(postag) => {
+                    let anchored = format!("^(?:{})$", postag);
+                    DisambigActionRegex::RemovePostag(
+                        regex::Regex::new(&anchored).ok(),
+                        fancy_regex::Regex::new(&anchored).ok(),
+                    )
+                }
                 DisambigAction::Filter { postag } => {
-                    DisambigActionRegex::Filter(regex::Regex::new(postag).ok())
+                    let anchored = format!("^(?:{postag})$");
+                    DisambigActionRegex::Filter(
+                        regex::Regex::new(&anchored).ok(),
+                        fancy_regex::Regex::new(&anchored).ok(),
+                    )
                 }
                 _ => DisambigActionRegex::None,
             })
@@ -180,6 +197,7 @@ impl XmlDisambiguator {
             prepared,
             first_literal,
             first_regex,
+            english_tagger,
         })
     }
 
@@ -213,6 +231,28 @@ fn parse_literal_alternation(pattern: &str) -> Option<Vec<String>> {
 }
 
 fn build_first_token_gate(rule: &CompiledDisambigRule) -> FirstTokenGate {
+    if let Some(og_xml::compiler::CompiledPatternElement::OrGroup(group)) =
+        rule.pattern.elements.first()
+    {
+        let mut set = std::collections::HashSet::new();
+        let mut usable = !group.is_empty();
+        for alt in group {
+            if alt.negate
+                || alt.min == Some(0)
+                || alt.inflected
+                || alt.compiled_regexp.is_some()
+                || alt.text.as_deref().is_none_or(str::is_empty)
+            {
+                usable = false;
+                break;
+            }
+            set.insert(alt.text.clone().unwrap_or_default().to_lowercase());
+        }
+        if usable {
+            return FirstTokenGate::OrLiteralSet(set);
+        }
+        return FirstTokenGate::None;
+    }
     let Some(first) = rule.pattern.tokens.first() else {
         return FirstTokenGate::None;
     };
@@ -263,315 +303,512 @@ fn build_first_token_gate(rule: &CompiledDisambigRule) -> FirstTokenGate {
 
 impl Disambiguator for XmlDisambiguator {
     fn disambiguate(&self, sentence: &mut AnalyzedSentence) {
-        let mut pending_actions: Vec<(usize, &DisambigAction, &DisambigActionRegex)> = Vec::new();
-        let mut pending_unify: Vec<(usize, AnalyzedToken, Vec<AnalyzedToken>)> = Vec::new();
-
-        let tokens: Vec<&AnalyzedTokenReadings> = sentence.non_whitespace_tokens();
-        let raw_texts: std::collections::HashSet<&str> =
-            tokens.iter().map(|t| t.token().token()).collect();
-        let lower_texts: std::collections::HashSet<String> = tokens
-            .iter()
-            .map(|t| t.token().token().to_lowercase())
-            .collect();
-        let mut postag_cache: std::collections::HashMap<&str, Vec<bool>> =
-            std::collections::HashMap::new();
-        let mut postag_evaluated: std::collections::HashMap<&str, Vec<bool>> =
-            std::collections::HashMap::new();
-
-        let pos_tags: Vec<std::collections::HashSet<&str>> = tokens
-            .iter()
-            .map(|t| {
-                t.readings()
-                    .iter()
-                    .flat_map(|r| r.pos_tags().iter().map(|t| t.as_str()))
-                    .collect::<std::collections::HashSet<&str>>()
-            })
-            .collect();
-
         for (rule_idx, rule) in self.rules.iter().enumerate() {
-            if rule.pattern.tokens.is_empty() {
+            if rule.pattern.tokens.is_empty() && rule.pattern.elements.is_empty() {
                 continue;
             }
-
-            let first = &rule.pattern.tokens[0];
-            match &self.gates[rule_idx] {
-                FirstTokenGate::Text {
-                    text,
-                    case_sensitive,
-                } => {
-                    let can_match = if *case_sensitive {
-                        raw_texts.contains(text.as_str())
-                    } else {
-                        lower_texts.contains(text.as_str()) || raw_texts.contains(text.as_str())
-                    };
-                    if !can_match {
-                        continue;
-                    }
-                }
-                FirstTokenGate::LiteralSet(set) => {
-                    let any = if first.case_sensitive {
-                        tokens.iter().any(|t| set.contains(t.token().token()))
-                    } else {
-                        lower_texts.iter().any(|l| set.contains(l))
-                    };
-                    if !any {
-                        continue;
-                    }
-                }
-                FirstTokenGate::PostagPlain { tag, negate_pos } => {
-                    let any = pos_tags.iter().any(|set| set.contains(tag.as_str()));
-                    if any == *negate_pos {
-                        continue;
-                    }
-                }
-                FirstTokenGate::None => {}
-            }
-
-            for start_idx in 0..tokens.len() {
-                if let FirstTokenGate::PostagPlain { tag, negate_pos } = &self.gates[rule_idx]
-                    && pos_tags[start_idx].contains(tag.as_str()) == *negate_pos
-                {
-                    continue;
-                }
-                if let Some(re) = first.compiled_postag_regexp.as_ref()
-                    && first.text.is_none()
-                    && first.compiled_regexp.is_none()
-                {
-                    let key = re.as_str();
-                    let evaluated = postag_evaluated.entry(key).or_default();
-                    if evaluated.len() < tokens.len() {
-                        evaluated.resize(tokens.len(), false);
-                    }
-                    if !evaluated[start_idx] {
-                        let results = postag_cache.entry(key).or_default();
-                        if results.len() < tokens.len() {
-                            results.resize(tokens.len(), false);
+            let mut pending_ignore_spelling: Vec<(usize, usize)> = Vec::new();
+            let mut pending_actions: Vec<(usize, &DisambigAction, &DisambigActionRegex)> =
+                Vec::new();
+            let mut pending_unify: Vec<(usize, AnalyzedToken, Vec<AnalyzedToken>)> = Vec::new();
+            let mut pending_filterall: Vec<(usize, &CompiledPatternToken)> = Vec::new();
+            let mut pending_immunize: Vec<usize> = Vec::new();
+            let synthesized_tokens: Vec<CompiledPatternToken> = if rule.pattern.tokens.is_empty()
+                && !rule.pattern.elements.is_empty()
+            {
+                rule.pattern
+                    .elements
+                    .iter()
+                    .filter_map(|e| match e {
+                        og_xml::compiler::CompiledPatternElement::Token(t) => Some((**t).clone()),
+                        og_xml::compiler::CompiledPatternElement::OrGroup(alts) => {
+                            alts.first().cloned()
                         }
-                        results[start_idx] = tokens[start_idx]
-                            .readings()
+                        og_xml::compiler::CompiledPatternElement::AndGroup(cs) => {
+                            cs.first().cloned()
+                        }
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            {
+                let tokens: Vec<&AnalyzedTokenReadings> = sentence.non_whitespace_tokens();
+                let raw_texts: std::collections::HashSet<&str> =
+                    tokens.iter().map(|t| t.token().token()).collect();
+                let lower_texts: std::collections::HashSet<String> = tokens
+                    .iter()
+                    .map(|t| t.token().token().to_lowercase())
+                    .collect();
+                let mut postag_cache: std::collections::HashMap<&str, Vec<bool>> =
+                    std::collections::HashMap::new();
+                let mut postag_evaluated: std::collections::HashMap<&str, Vec<bool>> =
+                    std::collections::HashMap::new();
+
+                let pos_tags: Vec<std::collections::HashSet<&str>> = tokens
+                    .iter()
+                    .map(|t| {
+                        t.readings()
                             .iter()
-                            .any(|r| r.pos_tags().iter().any(|t| re.is_match(t)));
-                        evaluated[start_idx] = true;
+                            .flat_map(|r| r.pos_tags().iter().map(|t| t.as_str()))
+                            .collect::<std::collections::HashSet<&str>>()
+                    })
+                    .collect();
+
+                let Some(first) = synthesized_tokens.first().or(rule.pattern.tokens.first()) else {
+                    continue;
+                };
+                match &self.gates[rule_idx] {
+                    FirstTokenGate::Text {
+                        text,
+                        case_sensitive,
+                    } => {
+                        let can_match = if *case_sensitive {
+                            raw_texts.contains(text.as_str())
+                        } else {
+                            lower_texts.contains(text.as_str()) || raw_texts.contains(text.as_str())
+                        };
+                        if !can_match {
+                            continue;
+                        }
                     }
-                    if !postag_cache[key][start_idx] && !first.negate_pos {
-                        continue;
+                    FirstTokenGate::LiteralSet(set) => {
+                        let any = if first.case_sensitive {
+                            tokens.iter().any(|t| set.contains(t.token().token()))
+                        } else {
+                            lower_texts.iter().any(|l| set.contains(l))
+                        };
+                        if !any {
+                            continue;
+                        }
                     }
-                    if postag_cache[key][start_idx] && first.negate_pos {
-                        continue;
+                    FirstTokenGate::OrLiteralSet(set) => {
+                        if !lower_texts.iter().any(|l| set.contains(l)) {
+                            continue;
+                        }
                     }
+                    FirstTokenGate::PostagPlain { tag, negate_pos } => {
+                        let any = pos_tags.iter().any(|set| set.contains(tag.as_str()));
+                        if any == *negate_pos {
+                            continue;
+                        }
+                    }
+                    FirstTokenGate::None => {}
                 }
-                let mut first_preverified = false;
-                if let Some(f) = self.first_literal[rule_idx].as_ref() {
-                    let t = tokens[start_idx];
-                    let surface = if f.case_sensitive {
-                        t.token().token() == f.text
-                    } else {
-                        t.token().token().eq_ignore_ascii_case(&f.text)
-                    };
-                    let ok = if f.inflected {
-                        surface
-                            || t.readings().iter().any(|r| {
-                                r.lemma().is_some_and(|lemma| {
-                                    if f.case_sensitive {
-                                        lemma == f.text
-                                    } else {
-                                        lemma.eq_ignore_ascii_case(&f.text)
-                                    }
-                                })
-                            })
-                    } else {
-                        surface
-                    };
-                    if !ok {
+
+                for start_idx in 0..tokens.len() {
+                    if let FirstTokenGate::PostagPlain { tag, negate_pos } = &self.gates[rule_idx]
+                        && pos_tags[start_idx].contains(tag.as_str()) == *negate_pos
+                    {
                         continue;
                     }
-                }
-                if let Some(f) = self.first_regex[rule_idx].as_ref() {
-                    let tok = tokens[start_idx];
-                    let surface = f.re.is_match(tok.token().token());
-                    let matched = if f.inflected {
-                        surface
-                            || tok
+                    if let Some(re) = first.compiled_postag_regexp.as_ref()
+                        && first.text.is_none()
+                        && first.compiled_regexp.is_none()
+                    {
+                        let key = re.as_str();
+                        let evaluated = postag_evaluated.entry(key).or_default();
+                        if evaluated.len() < tokens.len() {
+                            evaluated.resize(tokens.len(), false);
+                        }
+                        if !evaluated[start_idx] {
+                            let results = postag_cache.entry(key).or_default();
+                            if results.len() < tokens.len() {
+                                results.resize(tokens.len(), false);
+                            }
+                            results[start_idx] = tokens[start_idx]
                                 .readings()
                                 .iter()
-                                .any(|r| r.lemma().is_some_and(|lemma| f.re.is_match(lemma)))
-                    } else {
-                        surface
-                    };
-                    if !matched {
-                        continue;
-                    }
-                    first_preverified = true;
-                }
-                let effective_pattern = self.prepared[rule_idx].as_ref().unwrap_or(&rule.pattern);
-                let mp_result = if first_preverified
-                    && !effective_pattern.case_sensitive
-                    && !effective_pattern.has_structured_elements
-                {
-                    match_tokens_preverified(&effective_pattern.tokens, &tokens, start_idx)
-                } else {
-                    match_pattern(effective_pattern, &tokens, start_idx)
-                };
-                if let Some(match_result) = mp_result {
-                    let mut blocked = false;
-                    for ap in &rule.antipatterns {
-                        if antipattern_matches(ap, &tokens, start_idx) {
-                            blocked = true;
-                            break;
+                                .any(|r| r.pos_tags().iter().any(|t| re.is_match(t)));
+                            evaluated[start_idx] = true;
+                        }
+                        if !postag_cache[key][start_idx] && !first.negate_pos {
+                            continue;
+                        }
+                        if postag_cache[key][start_idx] && first.negate_pos {
+                            continue;
                         }
                     }
-                    if blocked {
-                        continue;
-                    }
-
-                    let mut unify_keep: Option<Vec<regex::Regex>> = None;
-                    if let Some(ref spec) = rule.unify {
-                        let Some((_, equivalences)) =
-                            self.unifications.iter().find(|(f, _)| *f == spec.feature)
-                        else {
-                            continue;
-                        };
-                        let has_structured = rule.pattern.has_structured_elements;
-                        let (start, end) = if has_structured {
-                            (spec.elem_start, spec.elem_end)
+                    let mut first_preverified = false;
+                    if let Some(f) = self.first_literal[rule_idx].as_ref() {
+                        let t = tokens[start_idx];
+                        let surface = if f.case_sensitive {
+                            t.token().token() == f.text
                         } else {
-                            (spec.token_start, spec.token_end)
+                            t.token().token().eq_ignore_ascii_case(&f.text)
                         };
-                        let unify_positions: Vec<usize> = match_result
-                            .matched_positions
-                            .iter()
-                            .enumerate()
-                            .filter(|(i, _)| *i >= start && *i < end)
-                            .map(|(_, &p)| p)
-                            .collect();
-                        if unify_positions.len() != end - start {
-                            continue;
-                        }
-                        let mut common: Option<Vec<String>> = None;
-                        for &pos in &unify_positions {
-                            let values: Vec<String> = equivalences
-                                .iter()
-                                .filter(|(_, re)| {
-                                    tokens[pos]
-                                        .readings()
-                                        .iter()
-                                        .any(|r| r.pos_tags().iter().any(|t| re.is_match(t)))
+                        let ok = if f.inflected {
+                            surface
+                                || t.readings().iter().any(|r| {
+                                    r.lemma().is_some_and(|lemma| {
+                                        if f.case_sensitive {
+                                            lemma == f.text
+                                        } else {
+                                            lemma.eq_ignore_ascii_case(&f.text)
+                                        }
+                                    })
                                 })
-                                .map(|(ty, _)| ty.clone())
-                                .collect();
-                            if values.is_empty() {
-                                common = None;
-                                break;
-                            }
-                            common = Some(match common {
-                                None => values,
-                                Some(prev) => {
-                                    prev.into_iter().filter(|v| values.contains(v)).collect()
-                                }
-                            });
-                            if common.as_ref().is_some_and(|c| c.is_empty()) {
-                                break;
-                            }
-                        }
-                        let keep = common.unwrap_or_default();
-                        if keep.is_empty() {
+                        } else {
+                            surface
+                        };
+                        if !ok {
                             continue;
                         }
-                        unify_keep = Some(
-                            equivalences
-                                .iter()
-                                .filter(|(ty, _)| keep.contains(ty))
-                                .map(|(_, re)| re.clone())
-                                .collect::<Vec<_>>(),
-                        );
                     }
-
-                    let target_indices = if let (Some(ms), Some(me)) =
-                        (rule.pattern.marker_start, rule.pattern.marker_end)
-                    {
-                        match_result
-                            .matched_positions
-                            .iter()
-                            .enumerate()
-                            .filter(|(i, _)| *i >= ms && *i < me)
-                            .map(|(_, &pos)| pos)
-                            .collect()
-                    } else {
-                        match_result
-                            .matched_positions
-                            .first()
-                            .map(|&p| vec![p])
-                            .unwrap_or_default()
-                    };
-
-                    if matches!(rule.disambig, DisambigAction::RemovePostag(_)) {
-                        if let Some(&first) = target_indices.first() {
-                            pending_actions.push((
-                                first,
-                                &rule.disambig,
-                                &self.action_regexes[rule_idx],
-                            ));
+                    if let Some(f) = self.first_regex[rule_idx].as_ref() {
+                        let tok = tokens[start_idx];
+                        let surface = f.re.is_match(tok.token().token());
+                        let matched = if f.inflected {
+                            surface
+                                || tok
+                                    .readings()
+                                    .iter()
+                                    .any(|r| r.lemma().is_some_and(|lemma| f.re.is_match(lemma)))
+                        } else {
+                            surface
+                        };
+                        if !matched {
+                            continue;
                         }
-                    } else if matches!(rule.disambig, DisambigAction::Unify)
-                        && let Some(ref regexes) = unify_keep
+                        first_preverified = true;
+                    }
+                    let effective_pattern =
+                        self.prepared[rule_idx].as_ref().unwrap_or(&rule.pattern);
+                    let mp_result = if first_preverified
+                        && !effective_pattern.case_sensitive
+                        && !effective_pattern.has_structured_elements
                     {
+                        match_tokens_preverified(&effective_pattern.tokens, &tokens, start_idx)
+                    } else {
+                        match_pattern(effective_pattern, &tokens, start_idx)
+                    };
+                    if let Some(match_result) = mp_result {
+                        let mut blocked = false;
+                        for ap in &rule.antipatterns {
+                            if antipattern_matches(ap, &tokens, start_idx) {
+                                blocked = true;
+                                break;
+                            }
+                        }
+                        if blocked {
+                            continue;
+                        }
+
+                        if rule.filter_class.as_deref()
+                            == Some("org.languagetool.rules.IsEnglishWordFilter")
+                            && !self.passes_english_word_filter(rule, &tokens, &match_result)
+                        {
+                            continue;
+                        }
+
+                        let mut unify_survivors: Option<Vec<(usize, Vec<u32>)>> = None;
                         if let Some(ref spec) = rule.unify {
+                            let feature_list: Vec<&str> = if spec.features.is_empty() {
+                                vec![spec.feature.as_str()]
+                            } else {
+                                spec.features.iter().map(String::as_str).collect()
+                            };
+                            let mut features: Vec<(String, Vec<&str>)> =
+                                Vec::with_capacity(feature_list.len());
+                            let mut eq_matchers: std::collections::HashMap<
+                                (&str, &str),
+                                &PosMatcher,
+                            > = std::collections::HashMap::new();
+                            let mut all_found = true;
+                            for f in &feature_list {
+                                match self.unifications.iter().find(|(name, _)| name == f) {
+                                    Some((_, eqs)) => {
+                                        for (ty, re) in eqs {
+                                            eq_matchers.insert((f, ty.as_str()), re);
+                                        }
+                                        features.push((
+                                            (*f).to_string(),
+                                            eqs.iter().map(|(ty, _)| ty.as_str()).collect(),
+                                        ));
+                                    }
+                                    None => {
+                                        all_found = false;
+                                        break;
+                                    }
+                                }
+                            }
+                            if !all_found {
+                                continue;
+                            }
                             let has_structured = rule.pattern.has_structured_elements;
                             let (start, end) = if has_structured {
                                 (spec.elem_start, spec.elem_end)
                             } else {
                                 (spec.token_start, spec.token_end)
                             };
-                            let unify_positions: Vec<usize> = match_result
-                                .matched_positions
-                                .iter()
-                                .enumerate()
-                                .filter(|(i, _)| *i >= start && *i < end)
-                                .map(|(_, &p)| p)
-                                .collect();
-                            for pos in unify_positions {
-                                let base = tokens[pos].token().clone();
-                                let kept: Vec<AnalyzedToken> = tokens[pos]
-                                    .readings()
-                                    .to_vec()
-                                    .into_iter()
-                                    .filter(|r| {
-                                        r.pos_tags()
-                                            .iter()
-                                            .any(|t| regexes.iter().any(|re| re.is_match(t)))
-                                    })
+                            if end <= start {
+                                if spec.negate {
+                                    unify_survivors = None;
+                                } else {
+                                    continue;
+                                }
+                            } else {
+                                let indexed_unify: Vec<(usize, usize)> = match_result
+                                    .matched_positions
+                                    .iter()
+                                    .enumerate()
+                                    .filter(|(i, _)| *i >= start && *i < end)
+                                    .map(|(i, &p)| (p, i))
                                     .collect();
-                                if !kept.is_empty() {
-                                    pending_unify.push((pos, base, kept));
+                                if indexed_unify.len() != end - start && !spec.negate {
+                                    continue;
+                                }
+                                let mut plans: Vec<og_xml::unifier::UnifyElemPlan> =
+                                    Vec::with_capacity(end - start);
+                                let mut fed_positions: Vec<usize> = Vec::with_capacity(end - start);
+                                for &(pos, pattern_idx) in &indexed_unify {
+                                    let token = tokens[pos];
+                                    let neutral = if has_structured {
+                                        match rule.pattern.elements.get(pattern_idx) {
+                                            Some(
+                                                og_xml::compiler::CompiledPatternElement::Token(t),
+                                            ) => t.unify_neutral,
+                                            _ => false,
+                                        }
+                                    } else {
+                                        rule.pattern
+                                            .tokens
+                                            .get(pattern_idx)
+                                            .is_some_and(|t| t.unify_neutral)
+                                    };
+                                    if neutral {
+                                        plans.push(og_xml::unifier::UnifyElemPlan {
+                                            elem_idx: pattern_idx,
+                                            neutral_readings: vec![token.readings().len()],
+                                            reading_sets: Vec::new(),
+                                        });
+                                        fed_positions.push(pos);
+                                        continue;
+                                    }
+                                    let criteria: Vec<&CompiledPatternToken> =
+                                        if has_structured {
+                                            match rule.pattern.elements.get(pattern_idx) {
+                                            Some(
+                                                og_xml::compiler::CompiledPatternElement::Token(t),
+                                            ) => vec![t.as_ref()],
+                                            Some(og_xml::compiler::CompiledPatternElement::AndGroup(
+                                                cs,
+                                            )) => match cs.first() {
+                                                Some(head) => vec![head],
+                                                None => continue,
+                                            },
+                                            Some(og_xml::compiler::CompiledPatternElement::OrGroup(
+                                                alts,
+                                            )) => alts.iter().collect(),
+                                            None => continue,
+                                        }
+                                        } else {
+                                            match rule.pattern.tokens.get(pattern_idx) {
+                                                Some(t) => vec![t],
+                                                None => continue,
+                                            }
+                                        };
+                                    let surface = og_xml::unifier::surface_text(token);
+                                    let untagged = og_xml::unifier::has_no_tag_reading(token);
+                                    let mut all_variants: Vec<
+                                        Vec<Vec<og_xml::unifier::UnifyReading<'_>>>,
+                                    > = Vec::with_capacity(criteria.len());
+                                    for criterion in &criteria {
+                                        let mut reading_tags: Vec<
+                                            og_xml::unifier::UnifyReading<'_>,
+                                        > = Vec::with_capacity(token.readings().len());
+                                        for (ri, reading) in token.readings().iter().enumerate() {
+                                            if og_xml::unifier::reading_matches_element(
+                                                criterion, surface, reading, untagged,
+                                            ) {
+                                                reading_tags.push(og_xml::unifier::UnifyReading {
+                                                    tags: reading
+                                                        .pos_tags()
+                                                        .iter()
+                                                        .map(String::as_str)
+                                                        .collect(),
+                                                    id: ri as u32,
+                                                });
+                                            }
+                                        }
+                                        if !reading_tags.is_empty() {
+                                            all_variants.push(vec![reading_tags]);
+                                        }
+                                    }
+                                    if all_variants.is_empty() {
+                                        continue;
+                                    }
+                                    plans.push(og_xml::unifier::UnifyElemPlan {
+                                        elem_idx: pattern_idx,
+                                        neutral_readings: Vec::new(),
+                                        reading_sets: all_variants,
+                                    });
+                                    fed_positions.push(pos);
+                                }
+                                let mut uni = og_xml::unifier::Unifier::new(features, eq_matchers);
+                                if !og_xml::unifier::eval_unify_plans(
+                                    &plans,
+                                    0,
+                                    end - 1,
+                                    spec.negate,
+                                    &mut uni,
+                                ) {
+                                    continue;
+                                }
+                                if matches!(rule.disambig, DisambigAction::Unify) && !spec.negate {
+                                    if fed_positions.len() != end - start {
+                                        continue;
+                                    }
+                                    let Some(survivors) = uni.unified_readings() else {
+                                        continue;
+                                    };
+                                    unify_survivors = Some(
+                                        fed_positions
+                                            .into_iter()
+                                            .zip(survivors)
+                                            .filter(|(_, ids)| !ids.is_empty())
+                                            .collect(),
+                                    );
                                 }
                             }
                         }
-                    } else {
-                        for token_idx in target_indices {
-                            pending_actions.push((
-                                token_idx,
-                                &rule.disambig,
-                                &self.action_regexes[rule_idx],
-                            ));
+
+                        let has_marker = matches!(
+                            (rule.pattern.marker_start, rule.pattern.marker_end),
+                            (Some(_), Some(_))
+                        );
+                        let elem_bounds = if rule.pattern.has_structured_elements {
+                            (rule.pattern.marker_elem_start, rule.pattern.marker_elem_end)
+                        } else {
+                            (None, None)
+                        };
+                        let effective_marker = if let (Some(ms), Some(me)) = elem_bounds {
+                            (Some(ms), Some(me))
+                        } else {
+                            (rule.pattern.marker_start, rule.pattern.marker_end)
+                        };
+                        let indexed_targets: Vec<(usize, usize)> =
+                            if let (Some(ms), Some(me)) = effective_marker {
+                                match_result
+                                    .matched_positions
+                                    .iter()
+                                    .enumerate()
+                                    .filter(|(i, _)| *i >= ms && *i < me)
+                                    .map(|(i, &pos)| (pos, i))
+                                    .collect()
+                            } else {
+                                match_result
+                                    .matched_positions
+                                    .iter()
+                                    .enumerate()
+                                    .map(|(i, &pos)| (pos, i))
+                                    .collect()
+                            };
+                        let target_indices: Vec<usize> = if has_marker {
+                            indexed_targets.iter().map(|&(pos, _)| pos).collect()
+                        } else {
+                            indexed_targets
+                                .first()
+                                .map(|&(pos, _)| vec![pos])
+                                .unwrap_or_default()
+                        };
+
+                        if matches!(rule.disambig, DisambigAction::FilterAll) {
+                            for (pos, pattern_idx) in indexed_targets {
+                                pending_filterall.push((
+                                    pos,
+                                    &rule.pattern.tokens[pattern_idx
+                                        .min(rule.pattern.tokens.len().saturating_sub(1))],
+                                ));
+                            }
+                        } else if matches!(rule.disambig, DisambigAction::Immunize) {
+                            pending_immunize.extend(match_result.matched_positions.iter().copied());
+                        } else if matches!(rule.disambig, DisambigAction::RemovePostag(_)) {
+                            if let Some(&first) = target_indices.first() {
+                                pending_actions.push((
+                                    first,
+                                    &rule.disambig,
+                                    &self.action_regexes[rule_idx],
+                                ));
+                            }
+                        } else if matches!(rule.disambig, DisambigAction::IgnoreSpelling) {
+                            if let (Some(&(first, _)), Some(&(last, _))) =
+                                (indexed_targets.first(), indexed_targets.last())
+                            {
+                                pending_ignore_spelling.push((first, last));
+                            }
+                        } else if matches!(rule.disambig, DisambigAction::Unify)
+                            && let Some(ref survivors) = unify_survivors
+                        {
+                            let mut entries: Vec<(usize, AnalyzedToken, Vec<AnalyzedToken>)> =
+                                Vec::with_capacity(survivors.len());
+                            for (pos, ids) in survivors.iter() {
+                                let atr = tokens[*pos];
+                                if ids.len() == atr.readings().len() {
+                                    continue;
+                                }
+                                let base = atr.token().clone();
+                                let kept: Vec<AnalyzedToken> = ids
+                                    .iter()
+                                    .filter_map(|&id| atr.readings().get(id as usize).cloned())
+                                    .collect();
+                                if kept.is_empty() {
+                                    continue;
+                                }
+                                entries.push((*pos, base, kept));
+                            }
+                            pending_unify.extend(entries);
+                        } else {
+                            for token_idx in target_indices {
+                                pending_actions.push((
+                                    token_idx,
+                                    &rule.disambig,
+                                    &self.action_regexes[rule_idx],
+                                ));
+                            }
                         }
                     }
                 }
             }
-        }
 
-        for (non_ws_idx, action, matcher) in pending_actions {
-            apply_disambiguation(sentence.tokens_mut(), non_ws_idx, action, matcher);
-        }
+            for (non_ws_idx, action, matcher) in pending_actions {
+                apply_disambiguation(sentence.tokens_mut(), non_ws_idx, action, matcher);
+            }
 
-        let tokens = sentence.tokens_mut();
-        let nw: Vec<usize> = (0..tokens.len())
-            .filter(|&i| !tokens[i].is_whitespace())
-            .collect();
-        for (non_ws_idx, base, kept) in pending_unify {
-            if let Some(&real_idx) = nw.get(non_ws_idx) {
-                let chunks = tokens[real_idx].chunks().to_vec();
-                tokens[real_idx] = AnalyzedTokenReadings::new(base).with_readings(kept);
-                tokens[real_idx].set_chunks(chunks);
+            for (non_ws_idx, pattern_token) in pending_filterall {
+                apply_filterall(sentence.tokens_mut(), non_ws_idx, pattern_token);
+            }
+
+            let tokens = sentence.tokens_mut();
+            let nw: Vec<usize> = (0..tokens.len())
+                .filter(|&i| !tokens[i].is_whitespace())
+                .collect();
+            for (first, last) in pending_ignore_spelling {
+                if let (Some(&start), Some(&end)) = (nw.get(first), nw.get(last)) {
+                    for token in &mut tokens[start..=end] {
+                        token.ignore_spelling();
+                    }
+                }
+            }
+            for non_ws_idx in pending_immunize {
+                if let Some(&real_idx) = nw.get(non_ws_idx) {
+                    tokens[real_idx].immunize();
+                }
+            }
+            for (non_ws_idx, base, kept) in pending_unify {
+                if let Some(&real_idx) = nw.get(non_ws_idx) {
+                    let chunks = tokens[real_idx].chunks().to_vec();
+                    let ignored_by_speller = tokens[real_idx].is_ignored_by_speller();
+                    let was_immunized = tokens[real_idx].is_immunized();
+                    tokens[real_idx] = AnalyzedTokenReadings::new(base).with_readings(kept);
+                    tokens[real_idx].set_chunks(chunks);
+                    if ignored_by_speller {
+                        tokens[real_idx].ignore_spelling();
+                    }
+                    if was_immunized {
+                        tokens[real_idx].immunize();
+                    }
+                }
             }
         }
     }
@@ -687,14 +924,31 @@ fn match_tokens_recursive(
     };
 
     if first_matched {
-        let skip = if pt.skip > 0 { pt.skip as usize } else { 0 };
-        let next_token = token_idx + 1 + skip;
+        if pt.skip < 0 {
+            let mut next_token = token_idx + 1;
+            while next_token <= tokens.len() {
+                if let Some(mut result) = match_tokens_recursive(
+                    pattern_tokens,
+                    tokens,
+                    next_token,
+                    pattern_idx + 1,
+                    false,
+                ) {
+                    result.matched_positions.insert(0, token_idx);
+                    return Some(result);
+                }
+                next_token += 1;
+            }
+        } else {
+            let skip = pt.skip as usize;
+            let next_token = token_idx + 1 + skip;
 
-        if let Some(mut result) =
-            match_tokens_recursive(pattern_tokens, tokens, next_token, pattern_idx + 1, false)
-        {
-            result.matched_positions.insert(0, token_idx);
-            return Some(result);
+            if let Some(mut result) =
+                match_tokens_recursive(pattern_tokens, tokens, next_token, pattern_idx + 1, false)
+            {
+                result.matched_positions.insert(0, token_idx);
+                return Some(result);
+            }
         }
     }
 
@@ -721,28 +975,64 @@ fn token_matches_text_verified(
         return false;
     }
     let token = tokens[token_idx];
+    if token.is_immunized() {
+        return false;
+    }
 
-    if pt.space_before.as_deref() == Some("no") && has_previous && token_idx > 0 {
+    if has_previous && token_idx > 0 {
         let prev = tokens[token_idx - 1];
-        if token.token().start() != prev.token().end() {
-            return false;
+        let spaced = token.token().start() != prev.token().end();
+        match pt.space_before.as_deref() {
+            Some("no") if spaced => return false,
+            Some("yes") if !spaced => return false,
+            _ => {}
         }
     }
 
-    token_matches_tail(pt, token, token.token().token())
+    token_matches_tail(
+        pt,
+        token,
+        token.token().token(),
+        token_idx > 0 && {
+            let prev = tokens[token_idx - 1];
+            token.token().start() != prev.token().end()
+        },
+    )
+}
+
+fn readings_match_postag_regex(
+    plain: Option<&regex::Regex>,
+    fancy: Option<&fancy_regex::Regex>,
+    token: &AnalyzedTokenReadings,
+) -> bool {
+    if let Some(re) = plain {
+        return token
+            .readings()
+            .iter()
+            .any(|r| r.pos_tags().iter().any(|t| re.is_match(t)));
+    }
+    if let Some(re) = fancy {
+        return token
+            .readings()
+            .iter()
+            .any(|r| r.pos_tags().iter().any(|t| re.is_match(t).unwrap_or(false)));
+    }
+    false
 }
 
 fn token_matches_tail(
     pt: &CompiledPatternToken,
     token: &AnalyzedTokenReadings,
     text: &str,
+    token_space_before: bool,
 ) -> bool {
     let pos_matches = if let Some(ref postag) = pt.postag {
-        if let Some(ref re) = pt.compiled_postag_regexp {
-            let has_matching = token
-                .readings()
-                .iter()
-                .any(|r| r.pos_tags().iter().any(|t| re.is_match(t)));
+        if pt.compiled_postag_regexp.is_some() || pt.compiled_postag_regexp_fancy.is_some() {
+            let has_matching = readings_match_postag_regex(
+                pt.compiled_postag_regexp.as_ref(),
+                pt.compiled_postag_regexp_fancy.as_ref(),
+                token,
+            );
             if pt.negate_pos {
                 !has_matching
             } else {
@@ -778,6 +1068,12 @@ fn token_matches_tail(
     }
 
     for exc in &pt.exceptions {
+        if exc
+            .space_before
+            .is_some_and(|required| required != token_space_before)
+        {
+            continue;
+        }
         let text_exc = if let Some(ref exc_text) = exc.text {
             if let Some(ref re) = exc.compiled_regexp {
                 re.is_match(text)
@@ -788,11 +1084,12 @@ fn token_matches_tail(
             false
         };
         let pos_exc = if let Some(ref postag) = exc.postag {
-            if let Some(ref re) = exc.compiled_postag_regexp {
-                token
-                    .readings()
-                    .iter()
-                    .any(|r| r.pos_tags().iter().any(|t| re.is_match(t)))
+            if exc.compiled_postag_regexp.is_some() || exc.compiled_postag_regexp_fancy.is_some() {
+                readings_match_postag_regex(
+                    exc.compiled_postag_regexp.as_ref(),
+                    exc.compiled_postag_regexp_fancy.as_ref(),
+                    token,
+                )
             } else {
                 token
                     .readings()
@@ -837,14 +1134,51 @@ fn match_elements(
     let mut positions = Vec::new();
     let mut token_idx = start_idx;
 
-    for elem in elements {
+    for (elem_idx, elem) in elements.iter().enumerate() {
         if token_idx >= tokens.len() {
             return None;
         }
 
         match elem {
             CompiledPatternElement::Token(pt) => {
-                if token_matches(pt, tokens, token_idx, token_idx > start_idx) {
+                if pt.skip != 0 && token_matches(pt, tokens, token_idx, token_idx > start_idx) {
+                    if pt.skip < 0 {
+                        let mut next = token_idx + 1;
+                        while next <= tokens.len() {
+                            if let Some(rest) =
+                                match_elements(&elements[elem_idx + 1..], tokens, next)
+                            {
+                                let mut result = MatchResult {
+                                    matched_positions: positions.clone(),
+                                };
+                                result.matched_positions.push(token_idx);
+                                result.matched_positions.extend(rest.matched_positions);
+                                return Some(result);
+                            }
+                            next += 1;
+                        }
+                    } else {
+                        let mut off = 0usize;
+                        while off <= pt.skip as usize {
+                            let next = token_idx + 1 + off;
+                            if next > tokens.len() {
+                                break;
+                            }
+                            if let Some(rest) =
+                                match_elements(&elements[elem_idx + 1..], tokens, next)
+                            {
+                                let mut result = MatchResult {
+                                    matched_positions: positions.clone(),
+                                };
+                                result.matched_positions.push(token_idx);
+                                result.matched_positions.extend(rest.matched_positions);
+                                return Some(result);
+                            }
+                            off += 1;
+                        }
+                    }
+                    return None;
+                } else if token_matches(pt, tokens, token_idx, token_idx > start_idx) {
                     positions.push(token_idx);
                     token_idx += 1;
                 } else if pt.min.unwrap_or(1) == 0 {
@@ -900,6 +1234,9 @@ fn token_matches(
         return false;
     }
     let token = tokens[token_idx];
+    if token.is_immunized() {
+        return false;
+    }
     let text = token.token().token();
 
     if pt.space_before.as_deref() == Some("no") && has_previous && token_idx > 0 {
@@ -968,7 +1305,15 @@ fn token_matches(
         return false;
     }
 
-    token_matches_tail(pt, token, text)
+    token_matches_tail(
+        pt,
+        token,
+        text,
+        has_previous && token_idx > 0 && {
+            let prev = tokens[token_idx - 1];
+            token.token().start() != prev.token().end()
+        },
+    )
 }
 
 fn antipattern_matches(
@@ -982,6 +1327,119 @@ fn antipattern_matches(
         }
     }
     false
+}
+
+impl XmlDisambiguator {
+    fn passes_english_word_filter(
+        &self,
+        rule: &CompiledDisambigRule,
+        tokens: &[&AnalyzedTokenReadings],
+        match_result: &MatchResult,
+    ) -> bool {
+        let Some(tagger) = self.english_tagger.as_ref() else {
+            return false;
+        };
+        let Some(args) = rule.filter_args.as_deref() else {
+            return false;
+        };
+        let Some(form_positions) = args.split(',').find_map(|kv| {
+            let (k, v) = kv.split_once(':')?;
+            (k.trim() == "formPositions").then_some(v.to_string())
+        }) else {
+            return false;
+        };
+        for pos_str in form_positions.split(',') {
+            let Ok(one_based) = pos_str.trim().parse::<usize>() else {
+                return false;
+            };
+            let Some(&token_idx) = match_result
+                .matched_positions
+                .get(one_based.saturating_sub(1))
+            else {
+                return false;
+            };
+            let Some(token) = tokens.get(token_idx) else {
+                return false;
+            };
+            let readings = tagger.tag_word(token.token().token(), 0, 0);
+            if readings.is_empty() {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+fn apply_filterall(
+    tokens: &mut [AnalyzedTokenReadings],
+    token_idx: usize,
+    pattern_token: &CompiledPatternToken,
+) {
+    let Some(postag) = pattern_token.postag.as_deref() else {
+        return;
+    };
+    let re = pattern_token
+        .compiled_postag_regexp
+        .as_ref()
+        .map(|re| re.clone())
+        .or_else(|| regex::Regex::new(&format!("^(?:{})$", postag)).ok());
+    let Some(re) = re else {
+        return;
+    };
+    let mut real_idx: Option<usize> = None;
+    let mut non_ws_count = 0;
+    for (i, t) in tokens.iter().enumerate() {
+        if !t.is_whitespace() {
+            if non_ws_count == token_idx {
+                real_idx = Some(i);
+                break;
+            }
+            non_ws_count += 1;
+        }
+    }
+    let Some(real_idx) = real_idx else {
+        return;
+    };
+    let prior_chunks = tokens[real_idx].chunks().to_vec();
+    let ignored_by_speller = tokens[real_idx].is_ignored_by_speller();
+    let was_immunized = tokens[real_idx].is_immunized();
+    let base = tokens[real_idx].token().clone();
+    let had_sent_end = current_had_sent_end(&[], &tokens[real_idx]);
+    let current_readings = tokens[real_idx].readings().to_vec();
+    let kept: Vec<AnalyzedToken> = current_readings
+        .into_iter()
+        .filter(|r| r.pos_tags().iter().any(|t| re.is_match(t)))
+        .collect();
+    if kept.is_empty() {
+        return;
+    }
+    let mut updated = AnalyzedTokenReadings::new(base).with_readings(kept);
+    restore_sent_end_if_lost(&mut updated, had_sent_end);
+    updated.set_chunks(prior_chunks);
+    if ignored_by_speller {
+        updated.ignore_spelling();
+    }
+    if was_immunized {
+        updated.immunize();
+    }
+    tokens[real_idx] = updated;
+}
+
+fn current_had_sent_end(filtered: &[AnalyzedToken], token: &AnalyzedTokenReadings) -> bool {
+    let still_present = filtered
+        .iter()
+        .any(|r| r.pos_tags().iter().any(|t| t == "SENT_END"));
+    !still_present
+        && token
+            .readings()
+            .iter()
+            .any(|r| r.pos_tags().iter().any(|t| t == "SENT_END"))
+}
+
+fn restore_sent_end_if_lost(updated: &mut AnalyzedTokenReadings, had_sent_end: bool) {
+    if had_sent_end {
+        updated.add_sent_end();
+    }
 }
 
 fn apply_disambiguation(
@@ -1006,15 +1464,27 @@ fn apply_disambiguation(
         None => return,
     };
     let prior_chunks = tokens[real_idx].chunks().to_vec();
-
+    let ignored_by_speller = tokens[real_idx].is_ignored_by_speller();
+    let was_immunized = tokens[real_idx].is_immunized();
     match action {
         DisambigAction::SetPos(pos) => {
             let base = tokens[real_idx].token().clone();
+            let surviving_lemma = tokens[real_idx]
+                .readings()
+                .iter()
+                .find(|r| r.pos_tags().iter().any(|t| t == pos))
+                .and_then(|r| r.lemma().map(str::to_string));
             let mut new_reading = AnalyzedToken::new(base.token(), base.start(), base.end());
             new_reading.set_pos_tags(vec![pos.clone()]);
-            new_reading.set_lemma(base.lemma().map(|l| l.to_string()));
+            new_reading.set_lemma(surviving_lemma.or_else(|| base.lemma().map(|l| l.to_string())));
             let mut updated = AnalyzedTokenReadings::new(base).with_readings(vec![new_reading]);
             updated.set_chunks(prior_chunks.clone());
+            if ignored_by_speller {
+                updated.ignore_spelling();
+            }
+            if was_immunized {
+                updated.immunize();
+            }
             tokens[real_idx] = updated;
         }
         DisambigAction::Replace(wds) => {
@@ -1022,21 +1492,28 @@ fn apply_disambiguation(
             let new_readings: Vec<AnalyzedToken> = wds
                 .iter()
                 .map(|w| {
-                    let mut reading = AnalyzedToken::new(base.token(), base.start(), base.end());
+                    let token_text = if w.text.is_empty() {
+                        base.token().to_string()
+                    } else {
+                        w.text.clone()
+                    };
+                    let mut reading = AnalyzedToken::new(&token_text, base.start(), base.end());
                     if let Some(pos) = &w.pos {
                         reading.set_pos_tags(vec![pos.clone()]);
                     }
-                    if let Some(lemma) = &w.lemma {
-                        reading.set_lemma(Some(lemma.clone()));
-                    } else {
-                        reading.set_lemma(base.lemma().map(|l| l.to_string()));
-                    }
+                    reading.set_lemma(Some(w.lemma.clone().unwrap_or(token_text)));
                     reading
                 })
                 .collect();
             if !new_readings.is_empty() {
                 let mut updated = AnalyzedTokenReadings::new(base).with_readings(new_readings);
                 updated.set_chunks(prior_chunks.clone());
+                if ignored_by_speller {
+                    updated.ignore_spelling();
+                }
+                if was_immunized {
+                    updated.immunize();
+                }
                 tokens[real_idx] = updated;
             }
         }
@@ -1063,35 +1540,67 @@ fn apply_disambiguation(
                     })
                 })
                 .collect();
-            if !filtered.is_empty() {
-                let mut updated = AnalyzedTokenReadings::new(base).with_readings(filtered);
-                updated.set_chunks(prior_chunks.clone());
-                tokens[real_idx] = updated;
+            let mut filtered = filtered;
+            let had_sent_end = current_had_sent_end(&filtered, &tokens[real_idx]);
+            if filtered.is_empty() {
+                filtered.push(AnalyzedToken::new(base.token(), base.start(), base.end()));
             }
+            let mut updated = AnalyzedTokenReadings::new(base).with_readings(filtered);
+            restore_sent_end_if_lost(&mut updated, had_sent_end);
+            updated.set_chunks(prior_chunks.clone());
+            if ignored_by_speller {
+                updated.ignore_spelling();
+            }
+            if was_immunized {
+                updated.immunize();
+            }
+            tokens[real_idx] = updated;
         }
         DisambigAction::RemovePostag(_) => {
-            let DisambigActionRegex::RemovePostag(re) = matcher else {
+            let DisambigActionRegex::RemovePostag(re, re_fancy) = matcher else {
                 return;
             };
-            let Some(re) = re else {
+            if re.is_none() && re_fancy.is_none() {
                 return;
+            }
+            let tag_matches = |t: &str| -> bool {
+                re.as_ref().is_some_and(|re| re.is_match(t))
+                    || re_fancy
+                        .as_ref()
+                        .is_some_and(|re| re.is_match(t).unwrap_or(false))
             };
             let base = tokens[real_idx].token().clone();
             let current_readings = tokens[real_idx].readings().to_vec();
-            let filtered: Vec<AnalyzedToken> = current_readings
+            let mut filtered: Vec<AnalyzedToken> = current_readings
                 .into_iter()
-                .filter(|r| !r.pos_tags().iter().any(|t| re.is_match(t)))
+                .filter(|r| !r.pos_tags().iter().any(|t| tag_matches(t)))
                 .collect();
-            if !filtered.is_empty() {
-                let mut updated = AnalyzedTokenReadings::new(base).with_readings(filtered);
-                updated.set_chunks(prior_chunks.clone());
-                tokens[real_idx] = updated;
+            let had_sent_end = current_had_sent_end(&filtered, &tokens[real_idx]);
+            if filtered.is_empty() {
+                filtered.push(AnalyzedToken::new(base.token(), base.start(), base.end()));
             }
+            let mut updated = AnalyzedTokenReadings::new(base).with_readings(filtered);
+            restore_sent_end_if_lost(&mut updated, had_sent_end);
+            updated.set_chunks(prior_chunks.clone());
+            if ignored_by_speller {
+                updated.ignore_spelling();
+            }
+            if was_immunized {
+                updated.immunize();
+            }
+            tokens[real_idx] = updated;
         }
         DisambigAction::Add(wds) => {
             let current_readings = tokens[real_idx].readings().to_vec();
             let base = tokens[real_idx].token().clone();
-            let mut new_readings = current_readings;
+            let mut new_readings: Vec<AnalyzedToken> =
+                Vec::with_capacity(current_readings.len() + wds.len());
+            if let Some((last, head)) = current_readings.split_last() {
+                new_readings.extend_from_slice(head);
+                if !last.pos_tags().is_empty() {
+                    new_readings.push(last.clone());
+                }
+            }
             for w in wds {
                 let mut reading = AnalyzedToken::new(base.token(), base.start(), base.end());
                 if let Some(pos) = &w.pos {
@@ -1106,24 +1615,44 @@ fn apply_disambiguation(
             }
             let mut updated = AnalyzedTokenReadings::new(base).with_readings(new_readings);
             updated.set_chunks(prior_chunks.clone());
+            if ignored_by_speller {
+                updated.ignore_spelling();
+            }
+            if was_immunized {
+                updated.immunize();
+            }
             tokens[real_idx] = updated;
         }
         DisambigAction::Filter { .. } => {
-            let DisambigActionRegex::Filter(re) = matcher else {
+            let DisambigActionRegex::Filter(re, re_fancy) = matcher else {
                 return;
             };
-            let Some(re) = re else {
+            if re.is_none() && re_fancy.is_none() {
                 return;
+            }
+            let tag_matches = |t: &str| -> bool {
+                re.as_ref().is_some_and(|re| re.is_match(t))
+                    || re_fancy
+                        .as_ref()
+                        .is_some_and(|re| re.is_match(t).unwrap_or(false))
             };
             let base = tokens[real_idx].token().clone();
             let current_readings = tokens[real_idx].readings().to_vec();
             let filtered: Vec<AnalyzedToken> = current_readings
                 .into_iter()
-                .filter(|r| r.pos_tags().iter().any(|t| re.is_match(t)))
+                .filter(|r| r.pos_tags().iter().any(|t| tag_matches(t)))
                 .collect();
+            let had_sent_end = current_had_sent_end(&filtered, &tokens[real_idx]);
             if !filtered.is_empty() {
                 let mut updated = AnalyzedTokenReadings::new(base).with_readings(filtered);
+                restore_sent_end_if_lost(&mut updated, had_sent_end);
                 updated.set_chunks(prior_chunks.clone());
+                if ignored_by_speller {
+                    updated.ignore_spelling();
+                }
+                if was_immunized {
+                    updated.immunize();
+                }
                 tokens[real_idx] = updated;
             }
         }
@@ -1132,10 +1661,17 @@ fn apply_disambiguation(
             let empty_reading = AnalyzedToken::new(base.token(), base.start(), base.end());
             let mut updated = AnalyzedTokenReadings::new(base).with_readings(vec![empty_reading]);
             updated.set_chunks(prior_chunks.clone());
+            if ignored_by_speller {
+                updated.ignore_spelling();
+            }
+            if was_immunized {
+                updated.immunize();
+            }
             tokens[real_idx] = updated;
         }
         DisambigAction::IgnoreSpelling => {}
         DisambigAction::Unify => {}
+        DisambigAction::Immunize => {}
     }
 }
 
@@ -1143,9 +1679,11 @@ fn compile_disambig_rule(compiler: &XmlCompiler, rule: DisambigRule) -> Compiled
     CompiledDisambigRule {
         id: rule.id,
         name: rule.name,
+        filter_class: rule.filter_class,
+        filter_args: rule.filter_args,
         pattern: CompiledPattern {
-            marker_elem_start: None,
-            marker_elem_end: None,
+            marker_elem_start: rule.pattern.marker_elem_start,
+            marker_elem_end: rule.pattern.marker_elem_end,
             unify_groups: Vec::new(),
             tokens: rule
                 .pattern
@@ -1304,6 +1842,58 @@ mod tests {
         let first = &sentence.tokens()[0];
         assert!(first.has_pos_tag("MD"));
         assert!(!first.has_pos_tag("NN"));
+    }
+
+    #[test]
+    fn test_ignore_spelling_marks_full_match_range() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<rules lang="en">
+    <rule id="CRON" name="ignore cron job">
+        <pattern>
+            <token>cron</token>
+            <token regexp="yes">jobs?</token>
+        </pattern>
+        <disambig action="ignore_spelling"/>
+    </rule>
+    <rule id="CA" name="ignore ca in ca n't">
+        <pattern>
+            <marker>
+                <token>ca</token>
+            </marker>
+            <token spacebefore="no">n't</token>
+        </pattern>
+        <disambig action="ignore_spelling"/>
+    </rule>
+</rules>"#;
+
+        let disambig = XmlDisambiguator::from_xml(xml).unwrap();
+
+        let mut sentence = AnalyzedSentence::new("cron job", 0, 8);
+        let mut tokens = Vec::new();
+        tokens.push(AnalyzedTokenReadings::new(
+            AnalyzedToken::new("cron", 0, 4).with_pos_tags(vec!["NN".to_string()]),
+        ));
+        tokens.push(AnalyzedTokenReadings::new(
+            AnalyzedToken::new("job", 5, 8).with_pos_tags(vec!["NN".to_string()]),
+        ));
+        sentence.set_tokens(tokens);
+        disambig.disambiguate(&mut sentence);
+        assert!(sentence.tokens()[0].is_ignored_by_speller());
+        assert!(sentence.tokens()[1].is_ignored_by_speller());
+        assert!(sentence.tokens()[0].has_pos_tag("NN"));
+
+        let mut sentence = AnalyzedSentence::new("ca n't", 0, 5);
+        let mut tokens = Vec::new();
+        tokens.push(AnalyzedTokenReadings::new(
+            AnalyzedToken::new("ca", 0, 2).with_pos_tags(vec!["NN".to_string()]),
+        ));
+        tokens.push(AnalyzedTokenReadings::new(
+            AnalyzedToken::new("n't", 2, 5).with_pos_tags(vec!["RB".to_string()]),
+        ));
+        sentence.set_tokens(tokens);
+        disambig.disambiguate(&mut sentence);
+        assert!(sentence.tokens()[0].is_ignored_by_speller());
+        assert!(!sentence.tokens()[1].is_ignored_by_speller());
     }
 
     #[test]
@@ -1530,6 +2120,79 @@ mod tests {
         assert!(!token.has_pos_tag("VBP"), "VBP must be removed");
     }
     #[test]
+    fn test_immunize_action_marks_all_matched_tokens() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<rules lang="de">
+    <rule id="LOS_ANGELES" name="Los Angeles">
+        <pattern>
+            <token>Los</token>
+            <token>Angeles</token>
+        </pattern>
+        <disambig action="immunize"/>
+    </rule>
+    <rule id="AFTER" name="filter after immunize">
+        <pattern>
+            <token>Angeles</token>
+        </pattern>
+        <disambig action="replace"><wd pos="NN"/></disambig>
+    </rule>
+</rules>"#;
+
+        let disambig = XmlDisambiguator::from_xml(xml).unwrap();
+        let mut sentence = make_sentence(vec![("Los", vec!["NE"]), ("Angeles", vec!["NE"])]);
+
+        assert!(!sentence.tokens()[0].is_immunized());
+        assert!(!sentence.tokens()[1].is_immunized());
+
+        disambig.disambiguate(&mut sentence);
+
+        assert!(sentence.tokens()[0].is_immunized());
+        assert!(sentence.tokens()[1].is_immunized());
+        assert!(
+            sentence.tokens()[1].has_pos_tag("NE"),
+            "immunized token must be invisible to later rules"
+        );
+    }
+
+    #[test]
+    fn test_filter_action_requires_full_postag_match() {
+        let exact = r#"<?xml version="1.0" encoding="utf-8"?>
+<rules lang="en">
+    <rule id="FILT" name="Filter exact">
+        <pattern>
+            <token>run</token>
+        </pattern>
+        <disambig action="filter" postag="NN"/>
+    </rule>
+</rules>"#;
+        let disambig = XmlDisambiguator::from_xml(exact).unwrap();
+        let mut sentence = make_sentence(vec![("run", vec!["NN", "VB", "NNP"])]);
+        disambig.disambiguate(&mut sentence);
+        let token = &sentence.tokens()[0];
+        assert!(token.has_pos_tag("NN"));
+        assert!(!token.has_pos_tag("VB"), "partial matches must be dropped");
+        assert!(!token.has_pos_tag("NNP"), "postag N must not match NNP");
+
+        let no_match = r#"<?xml version="1.0" encoding="utf-8"?>
+<rules lang="en">
+    <rule id="FILT" name="Filter no full match">
+        <pattern>
+            <token>run</token>
+        </pattern>
+        <disambig action="filter" postag="V"/>
+    </rule>
+</rules>"#;
+        let disambig = XmlDisambiguator::from_xml(no_match).unwrap();
+        let mut sentence = make_sentence(vec![("run", vec!["NN", "VB"])]);
+        disambig.disambiguate(&mut sentence);
+        let token = &sentence.tokens()[0];
+        assert!(
+            token.has_pos_tag("NN") && token.has_pos_tag("VB"),
+            "no full match means the filter is a no-op"
+        );
+    }
+
+    #[test]
     fn test_unify_action_filters_readings_by_number_feature() {
         let xml = r#"<?xml version="1.0" encoding="utf-8"?>
 <rules lang="en">
@@ -1584,5 +2247,141 @@ mod tests {
         let token = &plural.tokens()[2];
         assert!(token.has_pos_tag("JJ"), "untouched example keeps JJ");
         assert!(token.has_pos_tag("NNP"), "untouched example keeps NNP");
+    }
+
+    const DE_UNIFICATIONS: &str = r#"
+    <unification feature="number">
+        <equivalence type="sg"><token postag=".*:SIN:.*" postag_regexp="yes"/></equivalence>
+        <equivalence type="pl"><token postag=".*:PLU:.*" postag_regexp="yes"/></equivalence>
+    </unification>
+    <unification feature="case">
+        <equivalence type="nom"><token postag=".*:NOM:.*" postag_regexp="yes"/></equivalence>
+        <equivalence type="akk"><token postag=".*:AKK:.*" postag_regexp="yes"/></equivalence>
+        <equivalence type="dat"><token postag=".*:DAT:.*" postag_regexp="yes"/></equivalence>
+        <equivalence type="gen"><token postag=".*:GEN:.*" postag_regexp="yes"/></equivalence>
+    </unification>
+    <unification feature="gender">
+        <equivalence type="mas"><token postag=".*:(MAS|NOG).*" postag_regexp="yes"/></equivalence>
+        <equivalence type="fem"><token postag=".*:(FEM|NOG).*" postag_regexp="yes"/></equivalence>
+        <equivalence type="neu"><token postag=".*:(NEU|NOG).*" postag_regexp="yes"/></equivalence>
+    </unification>"#;
+
+    fn det_noun_rule(unify_attrs: &str, extra: &str) -> String {
+        format!(
+            r#"<?xml version="1.0" encoding="utf-8"?>
+<rules lang="de">{unifications}
+    <rule id="UNIFY_DET_SUB" name="det sub">
+        <pattern>
+            <unify{unify_attrs}>
+                <feature id="number"/><feature id="case"/><feature id="gender"/>
+                <token regexp="yes">der|die|das</token>
+                <token postag="SUB:.*" postag_regexp="yes"/>
+            </unify>
+        </pattern>
+        {extra}
+    </rule>
+</rules>"#,
+            unifications = DE_UNIFICATIONS,
+            unify_attrs = unify_attrs,
+            extra = extra
+        )
+    }
+
+    #[test]
+    fn test_unify_threads_all_declared_features_per_reading() {
+        let disambiguator =
+            XmlDisambiguator::from_xml(&det_noun_rule("", r#"<disambig action="unify"/>"#))
+                .unwrap();
+        let mut sentence = make_sentence(vec![
+            ("Der", vec!["ART:NOM:SIN:MAS", "ART:GEN:PLU:NEU"]),
+            ("Haus", vec!["SUB:NOM:SIN:NEU", "SUB:NOM:SIN:MAS"]),
+        ]);
+        disambiguator.disambiguate(&mut sentence);
+        let der = &sentence.tokens()[0];
+        assert_eq!(der.readings().len(), 1);
+        assert!(der.has_pos_tag("ART:NOM:SIN:MAS"));
+        let haus = &sentence.tokens()[1];
+        assert_eq!(haus.readings().len(), 1);
+        assert!(haus.has_pos_tag("SUB:NOM:SIN:MAS"));
+    }
+
+    #[test]
+    fn test_unify_leaves_readings_untouched_when_sequence_does_not_unify() {
+        let disambiguator =
+            XmlDisambiguator::from_xml(&det_noun_rule("", r#"<disambig action="unify"/>"#))
+                .unwrap();
+        let mut sentence = make_sentence(vec![
+            ("Der", vec!["ART:NOM:SIN:MAS"]),
+            ("Harz", vec!["SUB:AKK:SIN:NEU", "SUB:NOM:SIN:NEU"]),
+        ]);
+        disambiguator.disambiguate(&mut sentence);
+        assert_eq!(sentence.tokens()[0].readings().len(), 1);
+        assert_eq!(sentence.tokens()[1].readings().len(), 2);
+    }
+
+    #[test]
+    fn test_unify_ignore_position_keeps_all_its_readings() {
+        let xml = format!(
+            r#"<?xml version="1.0" encoding="utf-8"?>
+<rules lang="de">{unifications}
+    <rule id="UNIFY_NEUTRAL" name="neutral">
+        <pattern>
+            <unify>
+                <feature id="number"/>
+                <token postag="ART:.*" postag_regexp="yes"/>
+                <unify-ignore>
+                    <token>und</token>
+                </unify-ignore>
+                <token postag="SUB:.*" postag_regexp="yes"/>
+            </unify>
+        </pattern>
+        <disambig action="unify"/>
+    </rule>
+</rules>"#,
+            unifications = DE_UNIFICATIONS
+        );
+        let disambiguator = XmlDisambiguator::from_xml(&xml).unwrap();
+        let mut sentence = make_sentence(vec![
+            ("die", vec!["ART:NOM:SIN:MAS", "ART:NOM:PLU:MAS"]),
+            ("und", vec!["KON", "SUB:NOM:PLU:NEU"]),
+            ("Haus", vec!["SUB:NOM:SIN:NEU"]),
+        ]);
+        disambiguator.disambiguate(&mut sentence);
+        assert!(sentence.tokens()[0].has_pos_tag("ART:NOM:SIN:MAS"));
+        assert!(
+            !sentence.tokens()[0].has_pos_tag("ART:NOM:PLU:MAS"),
+            "the plural article finds no singular partner"
+        );
+        assert_eq!(
+            sentence.tokens()[1].readings().len(),
+            2,
+            "neutral positions keep every reading"
+        );
+        assert!(sentence.tokens()[2].has_pos_tag("SUB:NOM:SIN:NEU"));
+    }
+
+    #[test]
+    fn test_negated_unify_blocks_the_rule_when_the_sequence_unifies() {
+        let disambiguator = XmlDisambiguator::from_xml(&det_noun_rule(
+            r#" negate="yes""#,
+            r#"<disambig action="immunize"/>"#,
+        ))
+        .unwrap();
+        let mut unified = make_sentence(vec![
+            ("Der", vec!["ART:NOM:SIN:MAS"]),
+            ("Haus", vec!["SUB:NOM:SIN:MAS"]),
+        ]);
+        disambiguator.disambiguate(&mut unified);
+        assert!(
+            !unified.tokens()[0].is_immunized(),
+            "unifying sequence must fail a negated unify rule"
+        );
+
+        let mut split = make_sentence(vec![
+            ("Der", vec!["ART:NOM:SIN:MAS"]),
+            ("Harz", vec!["SUB:NOM:SIN:NEU"]),
+        ]);
+        disambiguator.disambiguate(&mut split);
+        assert!(split.tokens()[0].is_immunized());
     }
 }

@@ -8,11 +8,15 @@ pub struct DisambigRule {
     pub antipatterns: Vec<XmlPattern>,
     pub disambig: DisambigAction,
     pub unify: Option<UnifySpec>,
+    pub filter_class: Option<String>,
+    pub filter_args: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct UnifySpec {
     pub feature: String,
+    pub features: Vec<String>,
+    pub negate: bool,
     pub token_start: usize,
     pub token_end: usize,
     pub elem_start: usize,
@@ -45,6 +49,7 @@ pub enum DisambigAction {
     FilterAll,
     IgnoreSpelling,
     Unify,
+    Immunize,
     SetPos(String),
 }
 
@@ -52,6 +57,7 @@ pub enum DisambigAction {
 pub struct DisambigWord {
     pub pos: Option<String>,
     pub lemma: Option<String>,
+    pub text: String,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -68,4 +74,6 @@ pub struct CompiledDisambigRule {
     pub antipatterns: Vec<crate::compiler::CompiledPattern>,
     pub disambig: DisambigAction,
     pub unify: Option<UnifySpec>,
+    pub filter_class: Option<String>,
+    pub filter_args: Option<String>,
 }

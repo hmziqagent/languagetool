@@ -215,38 +215,40 @@ impl EnglishTagger {
     }
 
     pub fn tag_word(&self, surface: &str, start: usize, end: usize) -> Vec<AnalyzedToken> {
-        let normalized: String;
-        let word: &str = if surface.len() > 1 && surface.contains('’') {
-            normalized = surface.replace('’', "'");
-            &normalized
-        } else {
-            surface
-        };
+        let word = normalize_english_word(surface);
 
         let lower_word = word.to_lowercase();
         let is_lowercase = word == lower_word;
-        let is_mixed = is_mixed_case(word);
-        let is_all_upper = is_all_uppercase(word);
+        let is_mixed = is_mixed_case(&word);
+        let is_all_upper = is_all_uppercase(&word);
 
-        let mut readings = self.readings_for(surface, word, start, end);
+        let mut readings = self.readings_for(&word, &word, start, end);
         if !is_lowercase && !is_mixed {
-            readings.extend(self.readings_for(surface, &lower_word, start, end));
+            readings.extend(self.readings_for(&word, &lower_word, start, end));
         }
         if readings.is_empty() && is_all_upper {
             let first_upper = uppercase_first_char(&lower_word);
-            readings.extend(self.readings_for(surface, &first_upper, start, end));
+            readings.extend(self.readings_for(&word, &first_upper, start, end));
         }
         if readings.is_empty() && lower_word.ends_with("in'") {
             let mut corrected = word.to_string();
             let corrected_tail = if is_all_upper { 'G' } else { 'g' };
             corrected.pop();
             corrected.push(corrected_tail);
-            readings.extend(self.readings_for(surface, &corrected, start, end));
+            readings.extend(self.readings_for(&word, &corrected, start, end));
             if !is_lowercase && !is_mixed {
-                readings.extend(self.readings_for(surface, &corrected.to_lowercase(), start, end));
+                readings.extend(self.readings_for(&word, &corrected.to_lowercase(), start, end));
             }
         }
         readings
+    }
+}
+
+fn normalize_english_word(surface: &str) -> std::borrow::Cow<'_, str> {
+    if surface.chars().count() > 1 && surface.contains('’') {
+        std::borrow::Cow::Owned(surface.replace('’', "'"))
+    } else {
+        std::borrow::Cow::Borrowed(surface)
     }
 }
 
@@ -263,8 +265,9 @@ impl Tagger for EnglishTagger {
         for token_text in tokens {
             let start = byte_offset;
             let end = start + token_text.len();
+            let word = normalize_english_word(token_text);
             let readings = self.tag_word(token_text, start, end);
-            results.push(build_atr(token_text, start, end, readings));
+            results.push(build_atr(&word, start, end, readings));
             byte_offset = end;
         }
         results
@@ -272,7 +275,7 @@ impl Tagger for EnglishTagger {
 }
 
 fn build_atr(
-    surface: &str,
+    word: &str,
     start: usize,
     end: usize,
     readings: Vec<AnalyzedToken>,
@@ -284,11 +287,15 @@ fn build_atr(
     let lemma = readings
         .first()
         .and_then(|r| r.lemma().map(str::to_string))
-        .unwrap_or_else(|| surface.to_string());
-    let primary = AnalyzedToken::new(surface, start, end)
+        .unwrap_or_else(|| word.to_string());
+    let primary = AnalyzedToken::new(word, start, end)
         .with_pos_tags(all_tags)
         .with_lemma(lemma);
-    AnalyzedTokenReadings::new(primary).with_readings(readings)
+    let mut atr = AnalyzedTokenReadings::new(primary);
+    if !readings.is_empty() {
+        atr = atr.with_readings(readings);
+    }
+    atr
 }
 
 impl og_core::checker::Tagger for EnglishTagger {
@@ -298,6 +305,7 @@ impl og_core::checker::Tagger for EnglishTagger {
             let surface = primary.token().to_string();
             let start = primary.start();
             let end = primary.end();
+            let word = normalize_english_word(&surface);
             let readings = self.tag_word(&surface, start, end);
             let all_tags: Vec<String> = readings
                 .iter()
@@ -306,11 +314,15 @@ impl og_core::checker::Tagger for EnglishTagger {
             let lemma = readings
                 .first()
                 .and_then(|r| r.lemma().map(str::to_string))
-                .unwrap_or_else(|| surface.clone());
-            let updated = AnalyzedToken::new(surface, start, end)
+                .unwrap_or_else(|| word.to_string());
+            let updated = AnalyzedToken::new(word.as_ref(), start, end)
                 .with_pos_tags(all_tags)
                 .with_lemma(lemma);
-            *atr = AnalyzedTokenReadings::new(updated).with_readings(readings);
+            let mut next = AnalyzedTokenReadings::new(updated);
+            if !readings.is_empty() {
+                next = next.with_readings(readings);
+            }
+            *atr = next;
         }
     }
 }
@@ -364,6 +376,7 @@ mod tests {
         t.finish();
         let atr = t.tag(&["can’t"]).remove(0);
         assert!(atr.has_pos_tag("MD"));
+        assert_eq!(atr.token().token(), "can't");
     }
 
     #[test]

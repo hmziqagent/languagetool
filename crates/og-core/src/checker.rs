@@ -1,7 +1,7 @@
 use crate::{
     AnalyzedSentence, AnalyzedToken, AnalyzedTokenReadings, CheckResult, DetectedLanguageRate,
     ExtendedSentenceRange, Language, LanguageDetectedInfo, LanguageInfo, RuleMatch, SoftwareInfo,
-    Warnings, rule::Rule,
+    Warnings, match_filters::LanguageMatchFilter, rule::Rule,
 };
 use std::sync::Arc;
 
@@ -41,21 +41,19 @@ impl CheckRequest {
         }
     }
 
-    pub fn rule_enabled_by_id(&self, rule_id: &str, default_on: bool) -> bool {
+    pub fn rule_enabled_by_id(&self, rule_id: &str, default_on: bool, picky_tagged: bool) -> bool {
         if !self.enabled_rules.is_empty() && !self.enabled_rules.iter().any(|r| r == rule_id) {
             return false;
         }
         if self.disabled_rules.iter().any(|r| r == rule_id) {
             return false;
         }
-        if !(default_on
-            || self.picky
-            || self.level.as_deref() == Some("picky")
-            || self.enabled_rules.iter().any(|r| r == rule_id))
-        {
-            return false;
+        let explicitly_enabled = self.enabled_rules.iter().any(|r| r == rule_id);
+        if !default_on {
+            return explicitly_enabled;
         }
-        true
+        let picky_level = self.picky || self.level.as_deref() == Some("picky");
+        !(picky_tagged && !picky_level && !explicitly_enabled)
     }
 
     pub fn category_enabled(&self, category_id: &str) -> bool {
@@ -74,7 +72,13 @@ impl CheckRequest {
         !self.enabled_categories.is_empty() || !self.disabled_categories.is_empty()
     }
 
-    pub fn is_rule_enabled(&self, rule_id: &str, category_id: &str, default_on: bool) -> bool {
+    pub fn is_rule_enabled(
+        &self,
+        rule_id: &str,
+        category_id: &str,
+        default_on: bool,
+        picky_tagged: bool,
+    ) -> bool {
         if !self.enabled_rules.is_empty() && !self.enabled_rules.iter().any(|r| r == rule_id) {
             return false;
         }
@@ -89,15 +93,12 @@ impl CheckRequest {
         if self.disabled_categories.iter().any(|c| c == category_id) {
             return false;
         }
-        if !(default_on
-            || self.picky
-            || self.level.as_deref() == Some("picky")
-            || self.enabled_rules.iter().any(|r| r == rule_id)
-            || self.enabled_categories.iter().any(|c| c == category_id))
-        {
-            return false;
+        let explicitly_enabled = self.enabled_rules.iter().any(|r| r == rule_id);
+        if !default_on {
+            return explicitly_enabled;
         }
-        true
+        let picky_level = self.picky || self.level.as_deref() == Some("picky");
+        !(picky_tagged && !picky_level && !explicitly_enabled)
     }
 }
 
@@ -130,6 +131,8 @@ pub struct Checker {
     post_chunker: Option<Arc<dyn Chunker>>,
     rules: Vec<Arc<dyn Rule>>,
     text_level_rules: Vec<Arc<dyn TextLevelRule>>,
+    language_filter: Option<Arc<dyn LanguageMatchFilter>>,
+    clean_overlapping_matches: bool,
 }
 
 impl Checker {
@@ -143,6 +146,8 @@ impl Checker {
             post_chunker: None,
             rules: Vec::new(),
             text_level_rules: Vec::new(),
+            language_filter: None,
+            clean_overlapping_matches: true,
         }
     }
 
@@ -193,6 +198,16 @@ impl Checker {
 
     pub fn set_text_level_rules(mut self, rules: Vec<Arc<dyn TextLevelRule>>) -> Self {
         self.text_level_rules = rules;
+        self
+    }
+
+    pub fn with_language_filter(mut self, filter: Arc<dyn LanguageMatchFilter>) -> Self {
+        self.language_filter = Some(filter);
+        self
+    }
+
+    pub fn with_clean_overlapping_matches(mut self, clean: bool) -> Self {
+        self.clean_overlapping_matches = clean;
         self
     }
 
@@ -270,10 +285,15 @@ impl Checker {
                         rule.id(),
                         rule.category().id().as_str(),
                         rule.is_default_on(),
+                        rule.is_picky(),
                     ) {
                         continue;
                     }
-                } else if !request.rule_enabled_by_id(rule.id(), rule.is_default_on()) {
+                } else if !request.rule_enabled_by_id(
+                    rule.id(),
+                    rule.is_default_on(),
+                    rule.is_picky(),
+                ) {
                     continue;
                 }
                 let matches = rule.match_sentence(&sentence);
@@ -290,17 +310,33 @@ impl Checker {
                     rule.id(),
                     rule.category().id().as_str(),
                     rule.is_default_on(),
+                    rule.is_picky(),
                 ) {
                     continue;
                 }
-            } else if !request.rule_enabled_by_id(rule.id(), rule.is_default_on()) {
+            } else if !request.rule_enabled_by_id(rule.id(), rule.is_default_on(), rule.is_picky())
+            {
                 continue;
             }
             let matches = rule.match_text(text, &analyzed_sentences);
             all_matches.extend(matches);
         }
 
-        all_matches.sort_by_key(|m| m.offset());
+        crate::match_filters::same_rule_group_filter(&mut all_matches);
+        if self.clean_overlapping_matches || self.language_filter.is_some() {
+            static BASE: crate::match_filters::BaseLanguageMatchFilter =
+                crate::match_filters::BaseLanguageMatchFilter;
+            let language_filter: &dyn LanguageMatchFilter =
+                self.language_filter.as_deref().unwrap_or(&BASE);
+            language_filter.filter_rule_matches(&mut all_matches, text);
+            if self.clean_overlapping_matches {
+                all_matches = crate::match_filters::clean_overlapping_filter(
+                    all_matches,
+                    text,
+                    language_filter,
+                );
+            }
+        }
 
         let sentence_ranges_json: Vec<Vec<usize>> = sentence_ranges
             .iter()
@@ -370,47 +406,68 @@ mod rule_enabled_tests {
 
     #[test]
     fn default_on_rules_run_without_parameters() {
-        assert!(request().is_rule_enabled("SOME_RULE", "GRAMMAR", true));
+        assert!(request().is_rule_enabled("SOME_RULE", "GRAMMAR", true, false));
     }
 
     #[test]
-    fn default_off_rules_need_picky_or_explicit_enable() {
-        assert!(!request().is_rule_enabled("STYLE_RULE", "STYLE", false));
+    fn default_off_rules_stay_off_even_at_picky_level() {
+        assert!(!request().is_rule_enabled("STYLE_RULE", "STYLE", false, false));
         let mut picky = request();
         picky.picky = true;
-        assert!(picky.is_rule_enabled("STYLE_RULE", "STYLE", false));
+        assert!(!picky.is_rule_enabled("STYLE_RULE", "STYLE", false, false));
         let mut leveled = request();
         leveled.level = Some("picky".to_string());
-        assert!(leveled.is_rule_enabled("STYLE_RULE", "STYLE", false));
+        assert!(!leveled.is_rule_enabled("STYLE_RULE", "STYLE", false, false));
+    }
+
+    #[test]
+    fn default_off_rules_run_when_explicitly_enabled() {
+        let mut req = request();
+        req.enabled_rules = vec!["STYLE_RULE".to_string()];
+        assert!(req.is_rule_enabled("STYLE_RULE", "STYLE", false, false));
+    }
+
+    #[test]
+    fn picky_tagged_default_on_rules_need_picky_level() {
+        assert!(!request().is_rule_enabled("DASH_RULE", "TYPOGRAPHY", true, true));
+        let mut picky = request();
+        picky.picky = true;
+        assert!(picky.is_rule_enabled("DASH_RULE", "TYPOGRAPHY", true, true));
+        let mut leveled = request();
+        leveled.level = Some("picky".to_string());
+        assert!(leveled.is_rule_enabled("DASH_RULE", "TYPOGRAPHY", true, true));
+        let mut enabled = request();
+        enabled.enabled_rules = vec!["DASH_RULE".to_string()];
+        assert!(enabled.is_rule_enabled("DASH_RULE", "TYPOGRAPHY", true, true));
     }
 
     #[test]
     fn disabled_rules_suppress_matches() {
         let mut req = request();
         req.disabled_rules = vec!["SOME_RULE".to_string()];
-        assert!(!req.is_rule_enabled("SOME_RULE", "GRAMMAR", true));
-        assert!(req.is_rule_enabled("OTHER_RULE", "GRAMMAR", true));
+        assert!(!req.is_rule_enabled("SOME_RULE", "GRAMMAR", true, false));
+        assert!(req.is_rule_enabled("OTHER_RULE", "GRAMMAR", true, false));
     }
 
     #[test]
     fn enabled_rules_restrict_to_the_listed_set() {
         let mut req = request();
         req.enabled_rules = vec!["STYLE_RULE".to_string()];
-        assert!(!req.is_rule_enabled("SOME_RULE", "GRAMMAR", true));
-        assert!(req.is_rule_enabled("STYLE_RULE", "STYLE", false));
+        assert!(!req.is_rule_enabled("SOME_RULE", "GRAMMAR", true, false));
+        assert!(req.is_rule_enabled("STYLE_RULE", "STYLE", false, false));
     }
 
     #[test]
     fn category_filters_apply() {
         let mut req = request();
         req.disabled_categories = vec!["STYLE".to_string()];
-        assert!(!req.is_rule_enabled("STYLE_RULE", "STYLE", true));
-        assert!(req.is_rule_enabled("SOME_RULE", "GRAMMAR", true));
+        assert!(!req.is_rule_enabled("STYLE_RULE", "STYLE", true, false));
+        assert!(req.is_rule_enabled("SOME_RULE", "GRAMMAR", true, false));
 
         let mut req = request();
         req.enabled_categories = vec!["GRAMMAR".to_string()];
-        assert!(!req.is_rule_enabled("STYLE_RULE", "STYLE", true));
-        assert!(req.is_rule_enabled("SOME_RULE", "GRAMMAR", true));
+        assert!(!req.is_rule_enabled("STYLE_RULE", "STYLE", true, false));
+        assert!(req.is_rule_enabled("SOME_RULE", "GRAMMAR", true, false));
     }
 }
 

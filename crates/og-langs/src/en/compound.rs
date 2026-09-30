@@ -17,18 +17,54 @@ struct CompoundEntry {
 }
 
 pub struct CompoundRule {
+    id: String,
+    description: String,
+    with_hyphen_msg: String,
+    without_hyphen_msg: String,
+    either_msg: String,
+    url: String,
     entries: Vec<CompoundEntry>,
     max_parts: usize,
 }
 
 impl CompoundRule {
     pub fn new() -> Self {
+        Self::for_language(
+            "EN_COMPOUNDS",
+            "Hyphenated words",
+            "This word is normally spelled with a hyphen.",
+            "This word is normally spelled as one.",
+            "This word is normally spelled as one or with a hyphen.",
+            include_str!("../../../../languagetool/languagetool-language-modules/en/src/main/resources/org/languagetool/resource/en/compounds.txt"),
+        )
+        .with_url("https://languagetool.org/insights/post/hyphen/")
+    }
+
+    pub fn for_language(
+        id: &str,
+        description: &str,
+        with_hyphen_msg: &str,
+        without_hyphen_msg: &str,
+        either_msg: &str,
+        data: &str,
+    ) -> Self {
         let mut rule = Self {
+            id: id.to_string(),
+            description: description.to_string(),
+            with_hyphen_msg: with_hyphen_msg.to_string(),
+            without_hyphen_msg: without_hyphen_msg.to_string(),
+            either_msg: either_msg.to_string(),
+            url: String::new(),
             entries: Vec::new(),
             max_parts: 0,
         };
-        rule.load_data(include_str!("../../../../languagetool/languagetool-language-modules/en/src/main/resources/org/languagetool/resource/en/compounds.txt"));
+        rule.load_data(data);
         rule
+    }
+
+    fn with_url(mut self, url: &str) -> Self {
+        self.url = url.to_string();
+        self
     }
 
     fn load_data(&mut self, data: &str) {
@@ -81,11 +117,11 @@ impl Default for CompoundRule {
 
 impl Rule for CompoundRule {
     fn id(&self) -> &str {
-        "EN_COMPOUNDS"
+        &self.id
     }
 
     fn description(&self) -> &str {
-        "Hyphenated words"
+        &self.description
     }
 
     fn is_default_on(&self) -> bool {
@@ -156,18 +192,18 @@ impl Rule for CompoundRule {
                     }
                 };
 
-                let msg = if entry.hyphenated.contains('-') {
-                    "This word is normally spelled with a hyphen."
-                } else {
-                    "This word is normally spelled as one."
+                let msg = match &entry.mode {
+                    SuggestionMode::JoinOnly => &self.without_hyphen_msg,
+                    SuggestionMode::HyphenOnly => &self.with_hyphen_msg,
+                    SuggestionMode::Both => &self.either_msg,
                 };
 
-                let rm_rule = RuleMatchRule::new(self.id(), self.description())
+                let mut rm_rule = RuleMatchRule::new(self.id(), self.description())
                     .with_category(self.category())
-                    .with_issue_type(self.issue_type().as_str())
-                    .with_urls(vec![
-                        "https://languagetool.org/insights/post/hyphen/".to_string(),
-                    ]);
+                    .with_issue_type(self.issue_type().as_str());
+                if !self.url.is_empty() {
+                    rm_rule = rm_rule.with_urls(vec![self.url.to_string()]);
+                }
 
                 let ctx_start = match_start.saturating_sub(40);
                 let ctx_end = std::cmp::min(match_end + 40, text.len());

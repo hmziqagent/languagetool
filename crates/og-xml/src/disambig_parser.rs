@@ -1,7 +1,74 @@
 use crate::disambig_types::*;
 use crate::types::*;
 use quick_xml::Reader;
+use quick_xml::events::BytesStart;
 use quick_xml::events::Event;
+
+fn exception_from_attrs(e: &BytesStart<'_>) -> XmlException {
+    let mut exc = XmlException::default();
+    for attr in e.attributes().flatten() {
+        let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
+        let val = String::from_utf8_lossy(&attr.value).to_string();
+        match key.as_str() {
+            "regexp" => exc.regexp = Some(val),
+            "postag" => exc.postag = Some(val.trim().to_string()),
+            "postag_regexp" => exc.postag_regexp = Some(val),
+            "negate" => exc.negate = val == "yes",
+            "negate_pos" => exc.negate_pos = val == "yes",
+            "inflected" => exc.inflected = val == "yes",
+            "scope" => exc.scope = Some(val),
+            "spacebefore" => {
+                if val != "ignore" {
+                    exc.space_before = Some(val == "yes");
+                }
+            }
+            _ => {}
+        }
+    }
+    exc
+}
+
+#[allow(clippy::too_many_arguments)]
+fn attach_exception(
+    exc: XmlException,
+    current_token: &mut Option<XmlPatternToken>,
+    antipattern_token: &mut Option<XmlPatternToken>,
+    in_or_group: bool,
+    current_or_group: &mut Option<XmlOrGroup>,
+    in_and_group: bool,
+    current_and_group: &mut Option<XmlAndGroup>,
+    in_antipattern: bool,
+    current_antipattern: &mut Option<XmlPattern>,
+    current_pattern: &mut Option<XmlPattern>,
+) {
+    if current_token.is_some() {
+        current_token.as_mut().unwrap().exceptions.push(exc);
+    } else if in_antipattern && antipattern_token.is_some() {
+        antipattern_token.as_mut().unwrap().exceptions.push(exc);
+    } else if in_or_group {
+        if let Some(g) = current_or_group.as_mut()
+            && let Some(last) = g.alternatives.last_mut()
+        {
+            last.exceptions.push(exc);
+        }
+    } else if in_and_group {
+        if let Some(g) = current_and_group.as_mut()
+            && let Some(last) = g.constraints.last_mut()
+        {
+            last.exceptions.push(exc);
+        }
+    } else if in_antipattern {
+        if let Some(ap) = current_antipattern.as_mut()
+            && let Some(last) = ap.tokens.last_mut()
+        {
+            last.exceptions.push(exc);
+        }
+    } else if let Some(p) = current_pattern.as_mut()
+        && let Some(last) = p.tokens.last_mut()
+    {
+        last.exceptions.push(exc);
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum DisambigParseError {
@@ -37,7 +104,10 @@ impl DisambigXmlParser {
         let mut antipattern_token: Option<XmlPatternToken> = None;
         let mut in_pattern_marker = false;
         let mut pattern_marker_start: Option<usize> = None;
+        let mut pattern_marker_elem_start: Option<usize> = None;
         let mut in_exception = false;
+        let mut pending_filter_class: Option<String> = None;
+        let mut pending_filter_args: Option<String> = None;
         let mut current_exception: Option<XmlException> = None;
         let mut exception_text = String::new();
         let mut in_or_group = false;
@@ -47,10 +117,14 @@ impl DisambigXmlParser {
         let mut current_text = String::new();
         let mut current_unification: Option<UnificationFeature> = None;
         let mut unify_feature: Option<String> = None;
+        let mut unify_features: Vec<String> = Vec::new();
         let mut unify_start: Option<usize> = None;
         let mut unify_elem_start: Option<usize> = None;
+        let mut unify_negate = false;
+        let mut in_unify_ignore = false;
         let mut buf = Vec::new();
         let mut in_wd = false;
+        let mut current_wd_text = String::new();
         let mut current_wd: DisambigWord = DisambigWord::default();
         let mut current_disambig: Option<DisambigAction> = None;
         let mut disambig_wds: Vec<DisambigWord> = Vec::new();
@@ -78,6 +152,8 @@ impl DisambigXmlParser {
                                 rule.name = rule.name.or(Some(name));
                             }
                             current_rule = Some(rule);
+                            pending_filter_class = None;
+                            pending_filter_args = None;
                         }
                         "rulegroup" => {
                             current_group_id = None;
@@ -88,6 +164,17 @@ impl DisambigXmlParser {
                                 match key.as_str() {
                                     "id" => current_group_id = Some(val),
                                     "name" => current_group_name = Some(val),
+                                    _ => {}
+                                }
+                            }
+                        }
+                        "filter" => {
+                            for attr in e.attributes().flatten() {
+                                let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
+                                let val = String::from_utf8_lossy(&attr.value).to_string();
+                                match key.as_str() {
+                                    "class" => pending_filter_class = Some(val),
+                                    "args" => pending_filter_args = Some(val),
                                     _ => {}
                                 }
                             }
@@ -134,13 +221,28 @@ impl DisambigXmlParser {
                                 unify_elem_start = Some(p.elements.len());
                             }
                             unify_feature = None;
+                            unify_features.clear();
+                            unify_negate = false;
+                            for attr in e.attributes().flatten() {
+                                let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
+                                let val = String::from_utf8_lossy(&attr.value).to_string();
+                                if key == "negate" {
+                                    unify_negate = val == "yes";
+                                }
+                            }
                         }
-                        "feature" => {
+                        "unify-ignore" => {
+                            in_unify_ignore = true;
+                        }
+                        "feature" if current_pattern.is_some() => {
                             for attr in e.attributes().flatten() {
                                 let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
                                 let val = String::from_utf8_lossy(&attr.value).to_string();
                                 if key == "id" {
-                                    unify_feature = Some(val);
+                                    unify_feature = Some(val.clone());
+                                    if !unify_features.contains(&val) {
+                                        unify_features.push(val);
+                                    }
                                 }
                             }
                         }
@@ -163,23 +265,11 @@ impl DisambigXmlParser {
                         "marker" if current_pattern.is_some() => {
                             in_pattern_marker = true;
                             pattern_marker_start = current_pattern.as_ref().map(|p| p.tokens.len());
+                            pattern_marker_elem_start =
+                                current_pattern.as_ref().map(|p| p.elements.len());
                         }
                         "exception" => {
-                            let mut exc = XmlException::default();
-                            for attr in e.attributes().flatten() {
-                                let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
-                                let val = String::from_utf8_lossy(&attr.value).to_string();
-                                match key.as_str() {
-                                    "regexp" => exc.regexp = Some(val),
-                                    "postag" => exc.postag = Some(val.trim().to_string()),
-                                    "postag_regexp" => exc.postag_regexp = Some(val),
-                                    "negate" => exc.negate = val == "yes",
-                                    "negate_pos" => exc.negate_pos = val == "yes",
-                                    "inflected" => exc.inflected = val == "yes",
-                                    "scope" => exc.scope = Some(val),
-                                    _ => {}
-                                }
-                            }
+                            let exc = exception_from_attrs(&e);
                             in_exception = true;
                             current_exception = Some(exc);
                             exception_text.clear();
@@ -250,6 +340,7 @@ impl DisambigXmlParser {
                                 Some("filterall") => Some(DisambigAction::FilterAll),
                                 Some("ignore_spelling") => Some(DisambigAction::IgnoreSpelling),
                                 Some("unify") => Some(DisambigAction::Unify),
+                                Some("immunize") => Some(DisambigAction::Immunize),
                                 None if postag.is_some() => {
                                     Some(DisambigAction::SetPos(postag.unwrap()))
                                 }
@@ -275,12 +366,30 @@ impl DisambigXmlParser {
                 Ok(Event::Empty(e)) => {
                     let local_name = String::from_utf8_lossy(e.name().as_ref()).to_string();
                     match local_name.as_str() {
+                        "exception" => {
+                            let exc = exception_from_attrs(&e);
+                            attach_exception(
+                                exc,
+                                &mut current_token,
+                                &mut antipattern_token,
+                                in_or_group,
+                                &mut current_or_group,
+                                in_and_group,
+                                &mut current_and_group,
+                                in_antipattern,
+                                &mut current_antipattern,
+                                &mut current_pattern,
+                            );
+                        }
                         "feature" => {
                             for attr in e.attributes().flatten() {
                                 let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
                                 let val = String::from_utf8_lossy(&attr.value).to_string();
                                 if key == "id" {
-                                    unify_feature = Some(val);
+                                    unify_feature = Some(val.clone());
+                                    if !unify_features.contains(&val) {
+                                        unify_features.push(val);
+                                    }
                                 }
                             }
                         }
@@ -380,6 +489,7 @@ impl DisambigXmlParser {
                                 Some("filterall") => Some(DisambigAction::FilterAll),
                                 Some("ignore_spelling") => Some(DisambigAction::IgnoreSpelling),
                                 Some("unify") => Some(DisambigAction::Unify),
+                                Some("immunize") => Some(DisambigAction::Immunize),
                                 None if postag.is_some() => {
                                     Some(DisambigAction::SetPos(postag.unwrap()))
                                 }
@@ -390,7 +500,13 @@ impl DisambigXmlParser {
                     }
                 }
                 Ok(Event::Text(e)) => {
-                    let text = e.unescape().unwrap_or_default().to_string();
+                    let text = e
+                        .unescape()
+                        .map(|c| c.to_string())
+                        .unwrap_or_else(|_| String::from_utf8_lossy(e.as_ref()).to_string());
+                    if in_wd {
+                        current_wd_text.push_str(&text);
+                    }
                     if in_wd {
                     } else if in_exception {
                         exception_text.push_str(&text);
@@ -406,6 +522,8 @@ impl DisambigXmlParser {
                                 if let Some(da) = current_disambig.take() {
                                     rule.disambig = da;
                                 }
+                                rule.filter_class = pending_filter_class.take();
+                                rule.filter_args = pending_filter_args.take();
                                 rule_set.rules.push(rule);
                             }
                             disambig_wds.clear();
@@ -437,8 +555,15 @@ impl DisambigXmlParser {
                                 && let Some(p) = current_pattern.as_ref()
                                 && let Some(rule) = current_rule.as_mut()
                             {
+                                let features = if unify_features.is_empty() {
+                                    vec![unify_feature.clone().unwrap_or_default()]
+                                } else {
+                                    unify_features.clone()
+                                };
                                 rule.unify = Some(UnifySpec {
                                     feature: unify_feature.clone().unwrap_or_default(),
+                                    features,
+                                    negate: unify_negate,
                                     token_start: start,
                                     token_end: p.tokens.len(),
                                     elem_start,
@@ -448,6 +573,11 @@ impl DisambigXmlParser {
                             unify_start = None;
                             unify_elem_start = None;
                             unify_feature = None;
+                            unify_features.clear();
+                            unify_negate = false;
+                        }
+                        "unify-ignore" => {
+                            in_unify_ignore = false;
                         }
                         "unification" => {
                             if let Some(uni) = current_unification.take() {
@@ -459,6 +589,8 @@ impl DisambigXmlParser {
                             if let Some(ref mut p) = current_pattern {
                                 p.marker_start = pattern_marker_start;
                                 p.marker_end = Some(p.tokens.len());
+                                p.marker_elem_start = pattern_marker_elem_start;
+                                p.marker_elem_end = Some(p.elements.len());
                             }
                         }
                         "exception" if in_exception => {
@@ -468,39 +600,32 @@ impl DisambigXmlParser {
                                 if !exception_text.is_empty() {
                                     exc.text = Some(exception_text.trim().to_string());
                                 }
-                                if in_or_group {
-                                    if let Some(ref mut g) = current_or_group
-                                        && let Some(last) = g.alternatives.last_mut()
-                                    {
-                                        last.exceptions.push(exc);
-                                    }
-                                } else if in_and_group {
-                                    if let Some(ref mut g) = current_and_group
-                                        && let Some(last) = g.constraints.last_mut()
-                                    {
-                                        last.exceptions.push(exc);
-                                    }
-                                } else if in_antipattern {
-                                    if let Some(ref mut ap) = current_antipattern
-                                        && let Some(last) = ap.tokens.last_mut()
-                                    {
-                                        last.exceptions.push(exc);
-                                    }
-                                } else if let Some(ref mut p) = current_pattern
-                                    && let Some(last) = p.tokens.last_mut()
-                                {
-                                    last.exceptions.push(exc);
-                                }
+                                attach_exception(
+                                    exc,
+                                    &mut current_token,
+                                    &mut antipattern_token,
+                                    in_or_group,
+                                    &mut current_or_group,
+                                    in_and_group,
+                                    &mut current_and_group,
+                                    in_antipattern,
+                                    &mut current_antipattern,
+                                    &mut current_pattern,
+                                );
                             }
                             exception_text.clear();
                         }
                         "token" => {
                             let token = current_token.take().or(antipattern_token.take());
                             if let Some(mut token) = token {
-                                if !current_text.is_empty() {
-                                    token.text = Some(current_text.trim().to_string());
+                                let trimmed = current_text.trim();
+                                if !trimmed.is_empty() {
+                                    token.text = Some(trimmed.to_string());
                                 }
                                 current_text.clear();
+                                if in_unify_ignore {
+                                    token.unify_neutral = true;
+                                }
 
                                 if in_or_group {
                                     if let Some(ref mut g) = current_or_group {
@@ -558,6 +683,8 @@ impl DisambigXmlParser {
                         }
                         "wd" if in_wd => {
                             in_wd = false;
+                            current_wd.text = current_wd_text.trim().to_string();
+                            current_wd_text.clear();
                             disambig_wds.push(current_wd.clone());
                         }
                         _ => {}
@@ -907,5 +1034,55 @@ mod tests {
         let result = parser.parse(xml).unwrap();
 
         assert!(result.rules[0].pattern.case_sensitive);
+    }
+}
+
+#[cfg(test)]
+mod self_closing_exception_tests {
+    use super::*;
+
+    #[test]
+    fn exception_postag_is_parsed_inside_pattern_token() {
+        let xml = r##"<rules lang="fr">
+    <rule name="nom" id="NOM">
+        <pattern>
+            <token postag="SENT_START"/>
+            <token regexp="yes">Les?|La</token>
+            <marker>
+                <token postag="[NJZK].*" postag_regexp="yes">
+                    <exception postag="V ppr"/></token>
+            </marker>
+        </pattern>
+        <disambig action="filter" postag="[NJZKD].*"/>
+    </rule>
+</rules>"##;
+        let rs = DisambigXmlParser::new().parse(xml).unwrap();
+        let toks = &rs.rules[0].pattern.tokens;
+        let marked = toks
+            .iter()
+            .find(|t| t.postag.as_deref() == Some("[NJZK].*"))
+            .expect("marked token with [NJZK].* postag");
+        assert_eq!(marked.exceptions.len(), 1);
+        assert_eq!(marked.exceptions[0].postag.as_deref(), Some("V ppr"));
+    }
+
+    #[test]
+    fn self_closing_exception_in_antipattern_is_parsed() {
+        let xml = r##"<rules lang="fr">
+    <rule id="R" name="r">
+        <antipattern>
+            <token>a</token>
+            <token postag="N.*" postag_regexp="yes"><exception postag="V ppr"/></token>
+        </antipattern>
+        <pattern>
+            <token>b</token>
+        </pattern>
+        <disambig action="filter" postag="N"/>
+    </rule>
+</rules>"##;
+        let rs = DisambigXmlParser::new().parse(xml).unwrap();
+        let ap = &rs.rules[0].antipatterns[0];
+        assert_eq!(ap.tokens[1].exceptions.len(), 1);
+        assert_eq!(ap.tokens[1].exceptions[0].postag.as_deref(), Some("V ppr"));
     }
 }

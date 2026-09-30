@@ -5,21 +5,31 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
-impl SpellingSupport {
-    pub fn from_dirs(resource_dir: &Path, core_resource_dir: &Path) -> Option<Self> {
-        let multitoken_file = if resource_dir.join("multiwords.txt").exists() {
-            "multiwords.txt"
-        } else {
-            "multitoken-suggest.txt"
-        };
-        Self::from_dirs_with_multitoken(resource_dir, core_resource_dir, multitoken_file)
-    }
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SpellerVariant {
+    Base,
+    German,
+    Dutch,
+    English,
+    Spanish,
+    French,
+    Portuguese,
+}
 
-    pub fn from_dirs_with_multitoken(
-        resource_dir: &Path,
-        core_resource_dir: &Path,
-        multitoken_file: &str,
-    ) -> Option<Self> {
+impl SpellerVariant {
+    fn checks_tokens_with_speller(self) -> bool {
+        matches!(
+            self,
+            SpellerVariant::English
+                | SpellerVariant::German
+                | SpellerVariant::Portuguese
+                | SpellerVariant::Dutch
+        )
+    }
+}
+
+impl SpellingSupport {
+    pub fn dictionary_from_dir(resource_dir: &Path) -> Option<Dictionary> {
         let mut dictionary =
             Dictionary::from_morfologik(&resource_dir.join("dict_decoded.txt")).ok()?;
         if let Ok(words) = std::fs::read_to_string(resource_dir.join("hunspell/spelling.txt")) {
@@ -30,13 +40,50 @@ impl SpellingSupport {
                 }
             }
         }
+        Some(dictionary)
+    }
+
+    pub fn new_for_language(
+        dictionary: Dictionary,
+        core_resource_dir: &Path,
+        resource_dir: &Path,
+        code: &str,
+    ) -> Self {
+        let mut dictionary = dictionary;
+        if code == "de" {
+            for word in german_hunspell_words(resource_dir) {
+                dictionary.add_word(&word);
+            }
+        }
+        let (variant, extra_file) = match code {
+            "de" => (SpellerVariant::German, Some("hunspell/spelling.txt")),
+            "en" => (SpellerVariant::English, None),
+            "nl" => (SpellerVariant::Dutch, None),
+            "pt" => (SpellerVariant::Portuguese, Some("hyphenated_words.txt")),
+            "es" => (SpellerVariant::Spanish, Some("hyphenated_words.txt")),
+            "fr" => (SpellerVariant::French, Some("hyphenated_words.txt")),
+            _ => {
+                return Self::new_with_variant(dictionary, "", SpellerVariant::Base);
+            }
+        };
+        let multitoken_file = if resource_dir.join("multiwords.txt").exists() {
+            "multiwords.txt"
+        } else {
+            "multitoken-suggest.txt"
+        };
         let mut multitoken_data =
-            std::fs::read_to_string(resource_dir.join(multitoken_file)).ok()?;
+            std::fs::read_to_string(resource_dir.join(multitoken_file)).unwrap_or_default();
         if let Ok(global) = std::fs::read_to_string(core_resource_dir.join("spelling_global.txt")) {
             multitoken_data.push('\n');
             multitoken_data.push_str(&global);
         }
-        Some(Self::new(dictionary, &multitoken_data))
+        if let Some(extra) = extra_file
+            && let Ok(words) = std::fs::read_to_string(resource_dir.join(extra))
+        {
+            multitoken_data.push('\n');
+            multitoken_data.push_str(&words);
+        }
+        Self::new_with_variant(dictionary, &multitoken_data, variant)
     }
 }
 
@@ -48,33 +95,30 @@ pub struct SpellingSupport {
 }
 
 impl SpellingSupport {
-    pub fn new_with(dictionary: Dictionary, core_resource_dir: &Path, resource_dir: &Path) -> Self {
-        let mut multitoken_data =
-            std::fs::read_to_string(resource_dir.join("multitoken-suggest.txt"))
-                .unwrap_or_default();
-        if let Ok(global) = std::fs::read_to_string(core_resource_dir.join("spelling_global.txt")) {
-            multitoken_data.push('\n');
-            multitoken_data.push_str(&global);
-        }
-        if let Ok(spelling) = std::fs::read_to_string(resource_dir.join("hunspell/spelling.txt")) {
-            multitoken_data.push('\n');
-            multitoken_data.push_str(&spelling);
-        }
-        Self::new(dictionary, &multitoken_data)
+    pub fn new(dictionary: Dictionary, multitoken_data: &str) -> Self {
+        Self::new_with_variant(dictionary, multitoken_data, SpellerVariant::Base)
     }
 
-    pub fn new(dictionary: Dictionary, multitoken_data: &str) -> Self {
+    pub fn new_with_variant(
+        dictionary: Dictionary,
+        multitoken_data: &str,
+        variant: SpellerVariant,
+    ) -> Self {
         let suggestion_engine = SuggestionEngine::new(&dictionary);
         Self {
             dictionary,
             suggestion_engine,
-            multitoken: MultitokenSpeller::from_data(multitoken_data),
+            multitoken: MultitokenSpeller::from_data_with(multitoken_data, variant),
             tagger: None,
         }
     }
 
     pub fn dictionary(&self) -> &Dictionary {
         &self.dictionary
+    }
+
+    pub fn multitoken_checks_tokens_with_speller(&self) -> bool {
+        self.multitoken.variant.checks_tokens_with_speller()
     }
 
     pub fn with_tagger(mut self, tagger: Arc<dyn og_tagger::Tagger>) -> Self {
@@ -114,43 +158,49 @@ impl SpellingSupport {
 pub struct MultitokenSpeller {
     by_first_char: HashMap<char, HashMap<String, Vec<String>>>,
     no_spaces: HashMap<String, Vec<String>>,
+    variant: SpellerVariant,
+    cache: std::sync::Mutex<HashMap<(String, bool), Vec<String>>>,
 }
 
 const MAX_LENGTH_DIFF: usize = 3;
 
 impl MultitokenSpeller {
     pub fn from_data(data: &str) -> Self {
+        Self::from_data_with(data, SpellerVariant::Base)
+    }
+
+    pub fn from_data_with(data: &str, variant: SpellerVariant) -> Self {
         let mut by_first_char: HashMap<char, HashMap<String, Vec<String>>> = HashMap::new();
         let mut no_spaces: HashMap<String, Vec<String>> = HashMap::new();
         for line_original in data.lines() {
             if line_original.is_empty() || line_original.starts_with('#') {
                 continue;
             }
-            let Some(line) = prepare_line_for_speller(line_original) else {
-                continue;
-            };
-            if line.is_empty() {
-                continue;
+            for line in prepare_line_for_speller(variant, line_original) {
+                if line.is_empty() {
+                    continue;
+                }
+                let normalized = normalize_key(&line);
+                if !normalized.contains(' ') {
+                    continue;
+                }
+                let first_char = normalized.chars().next().unwrap_or(' ');
+                let bucket = by_first_char.entry(first_char).or_default();
+                let list = bucket.entry(normalized.clone()).or_default();
+                if !list.contains(&line) {
+                    list.push(line.clone());
+                }
+                let list = no_spaces.entry(normalized.replace(' ', "")).or_default();
+                if !list.contains(&line) {
+                    list.push(line);
+                }
             }
-            let normalized = normalize_key(&line);
-            if !normalized.contains(' ') {
-                continue;
-            }
-            let first_char = normalized.chars().next().unwrap_or(' ');
-            by_first_char
-                .entry(first_char)
-                .or_default()
-                .entry(normalized.clone())
-                .or_default()
-                .push(line.clone());
-            no_spaces
-                .entry(normalized.replace(' ', ""))
-                .or_default()
-                .push(line);
         }
         Self {
             by_first_char,
             no_spaces,
+            variant,
+            cache: std::sync::Mutex::new(HashMap::new()),
         }
     }
 
@@ -160,7 +210,30 @@ impl MultitokenSpeller {
         are_tokens_accepted_by_speller: bool,
         dict: &Dictionary,
     ) -> Vec<String> {
-        let original_word = original_word.replace(['\u{00A0}', '\u{2007}', '\u{202F}'], " ");
+        let normalized_word = normalize_zs(original_word);
+        let key = (normalized_word.clone(), are_tokens_accepted_by_speller);
+        {
+            let cache = self.cache.lock().unwrap();
+            if let Some(hit) = cache.get(&key) {
+                return hit.clone();
+            }
+        }
+        let result =
+            self.compute_suggestions(&normalized_word, are_tokens_accepted_by_speller, dict);
+        let mut cache = self.cache.lock().unwrap();
+        if cache.len() >= 2000 {
+            cache.clear();
+        }
+        cache.insert(key, result.clone());
+        result
+    }
+
+    fn compute_suggestions(
+        &self,
+        original_word: &str,
+        are_tokens_accepted_by_speller: bool,
+        dict: &Dictionary,
+    ) -> Vec<String> {
         let word = original_word.replace("- ", "-").replace(" -", "-");
         if self.discard_run_on_words(&word, dict) {
             return Vec::new();
@@ -169,7 +242,7 @@ impl MultitokenSpeller {
         let mut weighted: Vec<(String, i64)> = Vec::new();
 
         if let Some(candidates) = self.no_spaces.get(&normalized.replace(' ', "")) {
-            if stop_searching(candidates, &original_word) {
+            if stop_searching(candidates, &original_word, self.variant) {
                 return Vec::new();
             }
             for candidate in candidates {
@@ -183,7 +256,7 @@ impl MultitokenSpeller {
                 .get(&normalized.chars().next().unwrap_or(' '))
         {
             for (normalized_candidate, candidates) in bucket {
-                if stop_searching(candidates, &original_word) {
+                if stop_searching(candidates, &original_word, self.variant) {
                     return Vec::new();
                 }
                 if normalized_candidate
@@ -269,32 +342,111 @@ impl MultitokenSpeller {
         let tail = parts[1].chars().collect::<Vec<_>>();
         let sugg1a: String = head[..head.len() - 1].iter().collect();
         let sugg1b: String = head[head.len() - 1..].iter().chain(tail.iter()).collect();
-        if !dict.contains(&sugg1a) && !dict.contains(&sugg1b) {
+        if dict.contains(&sugg1a) && dict.contains(&sugg1b) {
             return true;
         }
         let sugg2a: String = head.iter().chain(tail[..1].iter()).collect();
         let sugg2b: String = tail[1..].iter().collect();
-        !dict.contains(&sugg2a) && !dict.contains(&sugg2b)
+        dict.contains(&sugg2a) && dict.contains(&sugg2b)
     }
 }
 
-fn prepare_line_for_speller(line_original: &str) -> Option<String> {
-    let stripped = line_original.split('#').next().unwrap_or("").trim();
-    if stripped.contains('+') {
-        return None;
-    }
-    let mut parts = stripped.splitn(2, '\t');
-    let form = parts.next().unwrap_or("").trim();
-    match parts.next() {
-        Some(tag) => {
-            let tag = tag.trim();
-            if tag.starts_with("NN") || tag.starts_with("JJ") {
-                Some(form.to_string())
-            } else {
-                None
+fn normalize_zs(word: &str) -> String {
+    let mut out = String::with_capacity(word.len());
+    let mut in_space = false;
+    for c in word.chars() {
+        if matches!(
+            c,
+            ' ' | '\u{00A0}' | '\u{2000}'..='\u{200A}' | '\u{202F}' | '\u{205F}' | '\u{3000}'
+        ) {
+            if !in_space {
+                out.push(' ');
+                in_space = true;
             }
+        } else {
+            out.push(c);
+            in_space = false;
         }
-        None => Some(stripped.to_string()),
+    }
+    out
+}
+
+pub fn prepare_line_for_speller(variant: SpellerVariant, line_original: &str) -> Vec<String> {
+    let stripped = line_original.split('#').next().unwrap_or("").trim();
+    match variant {
+        SpellerVariant::Base | SpellerVariant::Dutch => vec![stripped.to_string()],
+        SpellerVariant::German => prepare_line_german(stripped),
+        SpellerVariant::English => {
+            if stripped.contains('+') {
+                return vec![String::new()];
+            }
+            prepare_line_tagged(
+                stripped,
+                &['\t'],
+                &|tag| tag.starts_with("NN") || tag.starts_with("JJ"),
+                &[],
+            )
+        }
+        SpellerVariant::Spanish => prepare_line_tagged(
+            stripped,
+            &['\t', ';'],
+            &|tag| tag.starts_with('N') || tag == "_Latin_" || tag == "LOC_ADV",
+            &[],
+        ),
+        SpellerVariant::French => prepare_line_tagged(
+            stripped,
+            &['\t', ';'],
+            &|tag| tag.starts_with('Z') || tag.starts_with('N') || tag == "A",
+            &["Ho Chi Minh"],
+        ),
+        SpellerVariant::Portuguese => prepare_line_tagged(
+            stripped,
+            &['\t', ';'],
+            &|tag| tag.starts_with('N') || tag == "_Latin_",
+            &[],
+        ),
+    }
+}
+
+fn prepare_line_german(stripped: &str) -> Vec<String> {
+    let form_tag: Vec<&str> = stripped.split('/').collect();
+    let Some(form) = form_tag.first() else {
+        return vec![String::new()];
+    };
+    let mut results = vec![form.to_string()];
+    if form_tag.len() == 2 {
+        let tag = form_tag[1];
+        if tag.contains('E') {
+            results.push(format!("{form}e"));
+        }
+        if tag.contains('S') {
+            results.push(format!("{form}s"));
+        }
+        if tag.contains('N') {
+            results.push(format!("{form}n"));
+        }
+    }
+    results
+}
+
+fn prepare_line_tagged(
+    stripped: &str,
+    separators: &[char],
+    tag_accepted: &(dyn Fn(&str) -> bool + Sync),
+    form_exceptions: &[&str],
+) -> Vec<String> {
+    let mut form_tag = stripped.split(separators);
+    let Some(form) = form_tag.next() else {
+        return vec![stripped.to_string()];
+    };
+    let form = form.trim();
+    if form_exceptions.contains(&form) {
+        return vec![String::new()];
+    }
+    match form_tag.next() {
+        Some(tag) if tag_accepted(tag.trim()) => vec![form.to_string()],
+        Some(_) => vec![String::new()],
+        None => vec![stripped.to_string()],
     }
 }
 
@@ -310,8 +462,11 @@ fn is_capitalized_word(s: &str) -> bool {
     }
 }
 
-fn stop_searching(candidates: &[String], original_word: &str) -> bool {
+fn stop_searching(candidates: &[String], original_word: &str, variant: SpellerVariant) -> bool {
     for candidate in candidates {
+        if is_exception(variant, original_word, candidate) {
+            return true;
+        }
         if candidate == original_word {
             return true;
         }
@@ -323,6 +478,31 @@ fn stop_searching(candidates: &[String], original_word: &str) -> bool {
         }
     }
     false
+}
+
+fn is_exception(variant: SpellerVariant, original: &str, candidate: &str) -> bool {
+    let chars: Vec<char> = original.chars().collect();
+    match variant {
+        SpellerVariant::German => {
+            if chars.len() > 1 && &chars[..chars.len() - 1].iter().collect::<String>() == candidate
+            {
+                return original.ends_with('s') || original.ends_with('-');
+            }
+            false
+        }
+        SpellerVariant::Dutch => {
+            if chars.len() > 2 {
+                if &chars[..chars.len() - 1].iter().collect::<String>() == candidate {
+                    return original.ends_with('s') || original.ends_with('-');
+                }
+                if &chars[..chars.len() - 2].iter().collect::<String>() == candidate {
+                    return original.ends_with("'s") || original.ends_with("\u{2019}s");
+                }
+            }
+            false
+        }
+        _ => false,
+    }
 }
 
 fn title_case(s: &str) -> String {
@@ -498,7 +678,7 @@ mod tests {
         ] {
             dict.add_word(w);
         }
-        let data = "The Dark Knight Rises\tNNP\nRocky Mountain National Park\tNNP # comment\n";
+        let data = "The Dark Knight Rises\nRocky Mountain National Park # comment\n";
         SpellingSupport::new(dict, data)
     }
 
@@ -529,16 +709,82 @@ mod tests {
     }
 
     #[test]
-    fn prepare_line_keeps_noun_and_adjective_tags_only() {
+    fn prepare_line_per_variant_tags() {
         assert_eq!(
-            prepare_line_for_speller("Foo Bar\tNNP"),
-            Some("Foo Bar".to_string())
+            prepare_line_for_speller(SpellerVariant::Base, "Foo Bar # note"),
+            vec!["Foo Bar".to_string()]
         );
-        assert_eq!(prepare_line_for_speller("Foo Bar\tRB"), None);
         assert_eq!(
-            prepare_line_for_speller("Plain Global Term"),
-            Some("Plain Global Term".to_string())
+            prepare_line_for_speller(SpellerVariant::English, "The Dark Knight Rises\tNNP"),
+            vec!["The Dark Knight Rises".to_string()]
         );
+        assert_eq!(
+            prepare_line_for_speller(SpellerVariant::English, "very quickly\tRB"),
+            vec![String::new()]
+        );
+        assert_eq!(
+            prepare_line_for_speller(SpellerVariant::English, "a+b\tNN"),
+            vec![String::new()]
+        );
+        assert_eq!(
+            prepare_line_for_speller(SpellerVariant::Spanish, "folia cerebelosa;NCFS000"),
+            vec!["folia cerebelosa".to_string()]
+        );
+        assert_eq!(
+            prepare_line_for_speller(SpellerVariant::Spanish, "venir abajo;VN000000"),
+            vec![String::new()]
+        );
+        assert_eq!(
+            prepare_line_for_speller(SpellerVariant::French, "Ho Chi Minh\tNPP"),
+            vec![String::new()]
+        );
+        assert_eq!(
+            prepare_line_for_speller(SpellerVariant::Portuguese, "SESMT Brasil\tNPFSO00"),
+            vec!["SESMT Brasil".to_string()]
+        );
+        assert_eq!(
+            prepare_line_for_speller(SpellerVariant::Portuguese, "à borliú\tRG"),
+            vec![String::new()]
+        );
+        assert_eq!(
+            prepare_line_for_speller(SpellerVariant::Dutch, "Den Haag"),
+            vec!["Den Haag".to_string()]
+        );
+    }
+
+    #[test]
+    fn german_suffix_tags_expand_forms() {
+        let out = prepare_line_for_speller(SpellerVariant::German, "Osama bin Laden/S");
+        assert_eq!(
+            out,
+            vec![
+                "Osama bin Laden".to_string(),
+                "Osama bin Ladens".to_string()
+            ]
+        );
+        assert_eq!(
+            prepare_line_for_speller(SpellerVariant::German, "Britney Spears"),
+            vec!["Britney Spears".to_string()]
+        );
+        assert_eq!(
+            prepare_line_for_speller(SpellerVariant::German, "a/b/c"),
+            vec!["a".to_string()]
+        );
+    }
+
+    #[test]
+    fn run_on_words_discarded_only_when_both_splits_are_words() {
+        let mut dict = Dictionary::new();
+        for w in ["ne", "wyork"] {
+            dict.add_word(w);
+        }
+        let ms = MultitokenSpeller::from_data_with("New York\n", SpellerVariant::Base);
+        assert!(ms.get_suggestions("new york", false, &dict).is_empty());
+        let mut dict2 = Dictionary::new();
+        dict2.add_word("ne");
+        let ms2 = MultitokenSpeller::from_data_with("New York\n", SpellerVariant::Base);
+        let got = ms2.get_suggestions("new york", false, &dict2);
+        assert!(got.iter().any(|c| c == "New York"), "got {got:?}");
     }
 
     #[test]
@@ -546,4 +792,17 @@ mod tests {
         assert_eq!(levenshtein_distance("abc", "acb"), 1);
         assert_eq!(levenshtein_distance("knight", "knyght"), 0);
     }
+}
+
+pub fn german_hunspell_words(resource_dir: &Path) -> Vec<String> {
+    let Ok(content) = std::fs::read_to_string(resource_dir.join("hunspell/de_DE.dic")) else {
+        return Vec::new();
+    };
+    content
+        .lines()
+        .filter_map(|line| {
+            let word = line.split('/').next().unwrap_or("").trim();
+            (!word.is_empty() && !word.starts_with('#')).then(|| word.to_string())
+        })
+        .collect()
 }

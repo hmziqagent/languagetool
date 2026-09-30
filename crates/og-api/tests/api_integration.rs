@@ -262,7 +262,17 @@ async fn test_v2_languages_lists_only_implementable_languages() {
         "/v2/languages must advertise the implemented German engine"
     );
     assert!(
-        !json.iter().any(|l| l["code"] == "fr"),
+        json.iter()
+            .any(|l| l["code"] == "fr" && l["longCode"] == "fr"),
+        "/v2/languages must advertise the implemented French engine"
+    );
+    assert!(
+        json.iter()
+            .any(|l| l["code"] == "ru" && l["longCode"] == "ru"),
+        "/v2/languages must advertise the implemented Russian engine"
+    );
+    assert!(
+        !json.iter().any(|l| l["code"] == "ca"),
         "/v2/languages must not advertise languages without an engine"
     );
 }
@@ -317,4 +327,93 @@ async fn test_v2_check_response_shape() {
     assert!(json["language"].get("detected").is_none());
     assert!(json["matches"].is_array());
     assert_eq!(json["warnings"]["incompleteResults"], false);
+}
+
+#[tokio::test]
+async fn test_v2_check_auto_detects_german() {
+    let app = app();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/check?language=auto&text=Der+schnelle+braune+Fuchs+springt+%C3%BCber+den+faulen+Hund+und+rennt+schnell+davon.")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        json["language"]["detectedLanguage"]["code"].as_str(),
+        Some("de-DE"),
+        "expected German detection: {json}"
+    );
+    assert!(
+        json["language"]["detectedLanguage"]["confidence"]
+            .as_f64()
+            .unwrap_or(0.0)
+            > 0.9
+    );
+}
+
+#[tokio::test]
+async fn test_v2_check_auto_detects_english() {
+    let app = app();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/check?language=auto&text=The+quick+brown+fox+jumps+over+the+lazy+dog+and+then+it+runs+away+quickly.")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        json["language"]["detectedLanguage"]["code"].as_str(),
+        Some("en-US"),
+        "expected English detection: {json}"
+    );
+}
+
+#[tokio::test]
+async fn test_v2_check_french_engine_registered() {
+    let app = app();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/check?language=fr&text=Bonjour+le+monde.")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["language"]["code"].as_str(), Some("fr"));
+}
+
+#[tokio::test]
+async fn test_v2_languages_lists_all_registered_engines() {
+    let json = check_response("/v2/languages").await;
+    let codes: Vec<&str> = json
+        .as_array()
+        .map(|langs| {
+            langs
+                .iter()
+                .filter_map(|l| l["longCode"].as_str())
+                .collect()
+        })
+        .unwrap_or_default();
+    for code in [
+        "en-US", "de-DE", "fr", "es", "pt-BR", "pt-PT", "nl", "pl", "ru", "el", "gl", "ro", "sv",
+    ] {
+        assert!(codes.contains(&code), "missing {code} in {codes:?}");
+    }
 }

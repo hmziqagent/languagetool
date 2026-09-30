@@ -30,14 +30,35 @@ pub async fn handle_check(
         ));
     }
 
+    let auto_requested = params.language.eq_ignore_ascii_case("auto");
     let language = match params.get_language() {
         Some(l) => l,
+        None if auto_requested => Language::English,
         None => {
             return Err((
                 StatusCode::BAD_REQUEST,
                 Json(serde_json::json!({"error": "Missing or invalid 'language' parameter"})),
             ));
         }
+    };
+
+    let (language, detected) = if auto_requested {
+        match detect_language(&text) {
+            Some((lang, confidence)) => {
+                let detected = (lang.clone(), confidence);
+                (lang, Some(detected))
+            }
+            None => {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({
+                        "error": "Language detection failed for 'auto'; specify an explicit 'language' parameter"
+                    })),
+                ));
+            }
+        }
+    } else {
+        (language, None)
     };
 
     let engine = if let Some(e) = state.engine_for(language.code()) {
@@ -65,8 +86,20 @@ pub async fn handle_check(
         .as_deref()
         .and_then(Language::from_code);
 
-    let result = engine.check_with_request(&request);
+    let mut result = engine.check_with_request(&request);
+    if let Some((lang, confidence)) = detected {
+        result.language.detected.code = lang.code().to_string();
+        result.language.detected.name = lang.name().to_string();
+        result.language.detected.confidence = confidence;
+    }
     Ok(Json(result))
+}
+
+fn detect_language(text: &str) -> Option<(Language, f64)> {
+    let detector = og_langs::detection::LanguageDetector::shared()?;
+    let supported = ["en", "de"];
+    let (code, confidence) = detector.detect(text, &supported)?;
+    Language::from_code(&code).map(|lang| (lang, confidence))
 }
 
 pub async fn handle_languages(State(state): State<Arc<AppState>>) -> Json<Vec<LanguagesResponse>> {

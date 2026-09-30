@@ -7,8 +7,7 @@ use og_core::{
 use og_rules::pattern_rule::PatternRuleEngine;
 use og_spell::SpellingCheckRule;
 use og_tagger::{
-    ChainedDisambiguator, ContextualDisambiguator, EnglishTagger, MultiWordChunkerDisambiguator,
-    XmlDisambiguator,
+    ChainedDisambiguator, EnglishTagger, MultiWordChunkerDisambiguator, XmlDisambiguator,
 };
 use og_xml::compiler::{CompiledRule, XmlCompiler};
 use std::collections::{HashMap, HashSet};
@@ -30,10 +29,21 @@ impl XmlPatternRule {
         compiled: CompiledRule,
         spelling: Option<Arc<og_rules::spelling_support::SpellingSupport>>,
     ) -> Self {
+        Self::with_resources(compiled, spelling, None)
+    }
+
+    pub fn with_resources(
+        compiled: CompiledRule,
+        spelling: Option<Arc<og_rules::spelling_support::SpellingSupport>>,
+        synthesizer: Option<Arc<og_rules::postponed_adjective::LangSynthesizer>>,
+    ) -> Self {
         let category = Category::new(&compiled.category.id, &compiled.category.name);
         let mut engine = PatternRuleEngine::new();
         if let Some(spelling) = spelling {
             engine = engine.with_spelling_support(spelling);
+        }
+        if let Some(synthesizer) = synthesizer {
+            engine = engine.with_synthesizer(synthesizer);
         }
         Self {
             compiled,
@@ -78,7 +88,9 @@ pub struct LanguageEngine {
     disambiguator: Option<Arc<dyn og_core::checker::Disambiguator>>,
     post_chunker: Option<Arc<dyn og_core::checker::Chunker>>,
     spelling_support: Option<Arc<og_rules::spelling_support::SpellingSupport>>,
+    synthesizer: Option<Arc<og_rules::postponed_adjective::LangSynthesizer>>,
     checker: Checker,
+    language_filter: Arc<dyn og_core::match_filters::LanguageMatchFilter>,
     l2_rules: std::sync::Mutex<HashMap<String, Vec<Arc<dyn Rule>>>>,
     l2_checkers: std::sync::Mutex<HashMap<String, Checker>>,
 }
@@ -86,9 +98,14 @@ pub struct LanguageEngine {
 impl LanguageEngine {
     pub fn new(language: Language) -> Self {
         let checker = Checker::new()
-            .with_sentence_tokenizer(Arc::new(SentenceSplitterBridge("en")))
-            .with_word_tokenizer(Arc::new(WordTokenizerBridge));
+            .with_sentence_tokenizer(Arc::new(SentenceSplitterBridge(
+                language.short_code().to_string(),
+            )))
+            .with_word_tokenizer(Arc::new(WordTokenizerBridge::for_code(
+                language.short_code(),
+            )));
 
+        let language_filter = crate::match_priority::for_code(language.short_code());
         Self {
             language,
             rules: Vec::new(),
@@ -97,10 +114,31 @@ impl LanguageEngine {
             disambiguator: None,
             post_chunker: None,
             spelling_support: None,
+            synthesizer: None,
             checker,
+            language_filter,
             l2_rules: std::sync::Mutex::new(HashMap::new()),
             l2_checkers: std::sync::Mutex::new(HashMap::new()),
         }
+    }
+
+    pub fn shared_for_code(code: &str) -> Option<&'static LanguageEngine> {
+        static CACHE: std::sync::OnceLock<
+            std::sync::Mutex<HashMap<String, &'static LanguageEngine>>,
+        > = std::sync::OnceLock::new();
+        let cache = CACHE.get_or_init(Default::default);
+        let mut guard = cache.lock().unwrap();
+        if let Some(engine) = guard.get(code) {
+            return Some(engine);
+        }
+        let engine = match code {
+            "en" => Self::english(),
+            "de" => Self::german(),
+            other => Self::for_code(other)?,
+        };
+        let leaked: &'static LanguageEngine = Box::leak(Box::new(engine));
+        guard.insert(code.to_string(), leaked);
+        Some(leaked)
     }
 
     pub fn english() -> Self {
@@ -127,9 +165,11 @@ impl LanguageEngine {
             disambiguator: None,
             post_chunker: None,
             spelling_support: None,
+            synthesizer: None,
             checker: Checker::new()
-                .with_sentence_tokenizer(Arc::new(SentenceSplitterBridge("en")))
-                .with_word_tokenizer(Arc::new(WordTokenizerBridge)),
+                .with_sentence_tokenizer(Arc::new(SentenceSplitterBridge("en".to_string())))
+                .with_word_tokenizer(Arc::new(WordTokenizerBridge::Default(true))),
+            language_filter: crate::match_priority::for_code("en"),
             l2_rules: std::sync::Mutex::new(HashMap::new()),
             l2_checkers: std::sync::Mutex::new(HashMap::new()),
         };
@@ -139,9 +179,15 @@ impl LanguageEngine {
             let resource_dir = lt_root.join("en/src/main/resources/org/languagetool/resource/en");
             og_tagger::chunker::load_opennlp_chunker(&resource_dir);
             if let Some(support) = find_lt_core_resource_dir().and_then(|core_resource_dir| {
-                og_rules::spelling_support::SpellingSupport::from_dirs(
-                    &resource_dir,
-                    &core_resource_dir,
+                og_rules::spelling_support::SpellingSupport::dictionary_from_dir(&resource_dir).map(
+                    |dict| {
+                        og_rules::spelling_support::SpellingSupport::new_for_language(
+                            dict,
+                            &core_resource_dir,
+                            &resource_dir,
+                            "en",
+                        )
+                    },
                 )
             }) {
                 spelling_support = Some(Arc::new(support));
@@ -192,11 +238,18 @@ impl LanguageEngine {
                             disambiguator.rule_count()
                         );
                         let mut chain: Vec<Arc<dyn og_core::checker::Disambiguator>> =
-                            vec![Arc::new(disambiguator), Arc::new(ContextualDisambiguator)];
+                            vec![Arc::new(disambiguator)];
                         if let Some(multiword) =
                             MultiWordChunkerDisambiguator::from_resource_dir(&resource_dir)
                         {
                             chain.insert(0, Arc::new(multiword));
+                        }
+                        if let Some(core_resource_dir) = find_lt_core_resource_dir() {
+                            if let Some(global) =
+                                MultiWordChunkerDisambiguator::spelling_global(&core_resource_dir)
+                            {
+                                chain.insert(0, Arc::new(global));
+                            }
                         }
                         engine.disambiguator = Some(Arc::new(ChainedDisambiguator::new(chain)));
                     }
@@ -208,6 +261,7 @@ impl LanguageEngine {
                 lt_root.join("en/src/main/resources/org/languagetool/rules/en/det_a.txt");
             let det_an_path =
                 lt_root.join("en/src/main/resources/org/languagetool/rules/en/det_an.txt");
+            let mut native_rules: Vec<Arc<dyn Rule>> = Vec::new();
             if det_a_path.exists()
                 && det_an_path.exists()
                 && let (Ok(det_a), Ok(det_an)) = (
@@ -217,35 +271,37 @@ impl LanguageEngine {
             {
                 let mut avsan = crate::en::AvsAnRule::new();
                 avsan.load_data(&det_a, &det_an);
-                engine.add_rule(Arc::new(avsan));
+                native_rules.push(Arc::new(avsan));
             }
 
-            engine.add_rule(Arc::new(crate::en::SimpleReplaceRule::english_default()));
-
-            engine.add_rule(Arc::new(
+            native_rules.push(Arc::new(crate::en::SimpleReplaceRule::english_default()));
+            native_rules.push(Arc::new(
                 crate::en::SimpleReplaceRule::english_redundancies(),
             ));
-            engine.add_rule(Arc::new(crate::en::SimpleReplaceRule::english_profanity()));
-            engine.add_rule(Arc::new(crate::en::SimpleReplaceRule::american_replace()));
-            engine.add_rule(Arc::new(crate::en::SimpleReplaceRule::british_replace()));
-            engine.add_rule(Arc::new(crate::en::SimpleReplaceRule::new_zealand_replace()));
+            native_rules.push(Arc::new(crate::en::SimpleReplaceRule::english_profanity()));
+            native_rules.push(Arc::new(crate::en::SimpleReplaceRule::american_replace()));
+            native_rules.push(Arc::new(crate::en::SimpleReplaceRule::british_replace()));
+            native_rules.push(Arc::new(crate::en::SimpleReplaceRule::new_zealand_replace()));
 
-            engine.add_rule(Arc::new(
+            native_rules.push(Arc::new(
                 og_rules::native_rules::DoublePunctuationRule::new(),
             ));
-            engine.add_rule(Arc::new(
+            native_rules.push(Arc::new(
                 og_rules::native_rules::UppercaseSentenceStartRule::new(),
             ));
-            engine.add_rule(Arc::new(og_rules::native_rules::CommaWhitespaceRule::new()));
+            native_rules.push(Arc::new(og_rules::native_rules::CommaWhitespaceRule::new()));
 
-            engine.add_rule(Arc::new(crate::en::ContractionSpellingRule::new()));
-            engine.add_rule(Arc::new(crate::en::SpecificCaseRule::new()));
-            engine.add_rule(Arc::new(crate::en::DiacriticsRule::new()));
-            engine.add_rule(Arc::new(crate::en::PlainEnglishRule::new()));
-            engine.add_rule(Arc::new(crate::en::CompoundRule::new()));
-            engine.add_rule(Arc::new(crate::en::DashRule::new()));
-            engine.add_rule(Arc::new(crate::en::WrongWordInContextRule::new()));
-            engine.add_rule(Arc::new(crate::en::EnglishWordRepeatRule::new()));
+            native_rules.push(Arc::new(crate::en::ContractionSpellingRule::new()));
+            native_rules.push(Arc::new(crate::en::SpecificCaseRule::new()));
+            native_rules.push(Arc::new(crate::en::DiacriticsRule::new()));
+            native_rules.push(Arc::new(crate::en::PlainEnglishRule::new()));
+            native_rules.push(Arc::new(crate::en::CompoundRule::new()));
+            native_rules.push(Arc::new(crate::en::DashRule::new()));
+            native_rules.push(Arc::new(crate::en::WrongWordInContextRule::new()));
+            native_rules.push(Arc::new(crate::en::EnglishWordRepeatRule::new()));
+            native_rules.push(Arc::new(
+                crate::en::unit_conversion::UnitConversionRule::new(),
+            ));
 
             let hunspell_dir =
                 lt_root.join("en/src/main/resources/org/languagetool/resource/en/hunspell");
@@ -271,40 +327,46 @@ impl LanguageEngine {
                 )
                 .with_ignore_words(ignore_words);
                 eprintln!("Loaded spellchecker with {} words", spell_rule.dict_size());
-                engine.add_rule(Arc::new(spell_rule));
+                native_rules.push(Arc::new(spell_rule));
             }
+            engine.add_rules(native_rules);
         }
 
-        engine.add_text_level_rule(Arc::new(
-            og_rules::text_level_rules::MultipleWhitespaceRule::new(),
-        ));
-        engine.add_text_level_rule(Arc::new(
-            og_rules::text_level_rules::SentenceWhitespaceRule::new(),
-        ));
-        engine.add_text_level_rule(Arc::new(
-            og_rules::text_level_rules::GenericUnpairedBracketsRule::new(),
-        ));
-        engine.add_text_level_rule(Arc::new(
-            og_rules::text_level_rules::GenericUnpairedQuotesRule::english(),
-        ));
-        engine.add_text_level_rule(Arc::new(og_rules::text_level_rules::LongSentenceRule::new(
-            40,
-        )));
-        engine.add_text_level_rule(Arc::new(
-            og_rules::text_level_rules::WordRepeatBeginningRule::new(),
-        ));
-        engine.add_text_level_rule(Arc::new(crate::en::ConsistentApostrophesRule::new()));
-        engine.add_text_level_rule(Arc::new(crate::en::WordCoherencyRule::new()));
+        let mut extra_text_level: Vec<Arc<dyn TextLevelRule>> = vec![Arc::new(
+            crate::en::repeated_words::EnglishRepeatedWordsRule::new(),
+        )];
+        let text_level_rules: [Arc<dyn TextLevelRule>; 13] = [
+            Arc::new(og_rules::text_level_rules::MultipleWhitespaceRule::new()),
+            Arc::new(og_rules::text_level_rules::SentenceWhitespaceRule::new()),
+            Arc::new(og_rules::text_level_rules::GenericUnpairedBracketsRule::new()),
+            Arc::new(og_rules::text_level_rules::GenericUnpairedQuotesRule::english()),
+            Arc::new(og_rules::text_level_rules::LongSentenceRule::new(40)),
+            Arc::new(og_rules::text_level_rules::WordRepeatBeginningRule::new()),
+            Arc::new(crate::en::ConsistentApostrophesRule::new()),
+            Arc::new(crate::en::WordCoherencyRule::new()),
+            Arc::new(og_rules::text_level_rules::WhiteSpaceBeforeParagraphEndRule::new()),
+            Arc::new(og_rules::text_level_rules::EmptyLineRule::new()),
+            Arc::new(crate::en::StyleFrequencyRule::adjective()),
+            Arc::new(crate::en::StyleFrequencyRule::noun()),
+            Arc::new(crate::en::StyleFrequencyRule::verb()),
+        ];
+        engine.add_text_level_rules(text_level_rules);
+        engine.add_text_level_rules(extra_text_level.drain(..));
         engine.add_rule(Arc::new(
             og_rules::text_level_rules::WhiteSpaceAtBeginOfParagraphRule::new(),
         ));
-        engine.add_text_level_rule(Arc::new(
-            og_rules::text_level_rules::WhiteSpaceBeforeParagraphEndRule::new(),
-        ));
-        engine.add_text_level_rule(Arc::new(og_rules::text_level_rules::EmptyLineRule::new()));
-        engine.add_text_level_rule(Arc::new(crate::en::StyleFrequencyRule::adjective()));
-        engine.add_text_level_rule(Arc::new(crate::en::StyleFrequencyRule::noun()));
-        engine.add_text_level_rule(Arc::new(crate::en::StyleFrequencyRule::verb()));
+
+        if let Some(model) = og_languagemodel::DiskLanguageModel::shared_for_language("en") {
+            engine.add_rule(Arc::new(
+                crate::upper_case_ngram::EnglishUpperCaseNgramRule::new(model.clone()),
+            ));
+            engine.add_rule(Arc::new(
+                crate::confusion_probability::ConfusionRule::new_english(model.clone()),
+            ));
+            engine.add_rule(Arc::new(
+                crate::en::ngram_probability::EnglishNgramProbabilityRule::new(model),
+            ));
+        }
 
         engine.rebuild_checker();
         engine
@@ -313,10 +375,16 @@ impl LanguageEngine {
     pub fn german() -> Self {
         let mut engine = Self::new(Language::German);
 
+        let mut shared_dict: Option<Arc<og_spell::Dictionary>> = None;
+        let mut german_resource_dir: Option<PathBuf> = None;
+        let mut german_tagger: Option<Arc<og_tagger::GermanTagger>> = None;
         if let Some(lt_root) = find_lt_resource_dir() {
             let resource_dir = lt_root.join("de/src/main/resources/org/languagetool/resource/de");
+            german_resource_dir = Some(resource_dir.clone());
             if let Some(tagger) = og_tagger::GermanTagger::from_resource_dir(&resource_dir) {
-                engine.tagger = Some(Arc::new(tagger));
+                let tagger = Arc::new(tagger);
+                german_tagger = Some(tagger.clone());
+                engine.tagger = Some(tagger as Arc<dyn og_core::checker::Tagger>);
             }
             let disambig_path = resource_dir.join("disambiguation.xml");
             if disambig_path.exists()
@@ -324,6 +392,49 @@ impl LanguageEngine {
                 && let Ok(disambiguator) = XmlDisambiguator::from_xml(&xml)
             {
                 engine.disambiguator = Some(Arc::new(disambiguator));
+            }
+
+            let mut dict = og_spell::Dictionary::new();
+            if let Some(words) = load_german_wordlist(&resource_dir) {
+                for word in &words {
+                    dict.add_word(word);
+                }
+                eprintln!("Loaded {} German dictionary words", words.len());
+            }
+            if let Ok(extra) = std::fs::read_to_string(resource_dir.join("hunspell/spelling.txt")) {
+                for line in extra.lines() {
+                    for word in og_rules::spelling_support::prepare_line_for_speller(
+                        og_rules::spelling_support::SpellerVariant::German,
+                        line,
+                    ) {
+                        dict.add_word(&word);
+                    }
+                }
+            }
+            for word in og_rules::spelling_support::german_hunspell_words(&resource_dir) {
+                dict.add_word(&word);
+            }
+            if !dict.is_empty() {
+                if let Some(core_resource_dir) = find_lt_core_resource_dir() {
+                    engine.spelling_support = Some(Arc::new(
+                        og_rules::spelling_support::SpellingSupport::new_for_language(
+                            dict.clone(),
+                            &core_resource_dir,
+                            &resource_dir,
+                            "de",
+                        ),
+                    ));
+                }
+                let dict_arc = Arc::new(dict);
+                shared_dict = Some(dict_arc.clone());
+                engine.add_rule(Arc::new(og_spell::SpellingCheckRule::new_shared(
+                    dict_arc.clone(),
+                    "MORFOLOGIK_RULE_DE_DE",
+                    HashSet::new(),
+                )));
+                engine.add_rule(Arc::new(crate::de::CompoundInfinitivRule::new(Some(
+                    dict_arc,
+                ))));
             }
 
             let rules_dir = lt_root.join("de/src/main/resources/org/languagetool/rules/de");
@@ -337,28 +448,81 @@ impl LanguageEngine {
                     Err(e) => eprintln!("Warning: failed to load de/{file}: {e}"),
                 }
             }
-
-            let mut dict = og_spell::Dictionary::new();
-            if let Some(words) = load_german_wordlist(&resource_dir) {
-                for word in &words {
-                    dict.add_word(word);
-                }
-                eprintln!("Loaded {} German dictionary words", words.len());
-            }
-            if let Ok(extra) = std::fs::read_to_string(resource_dir.join("hunspell/spelling.txt")) {
-                for line in extra.lines() {
-                    let word = line.trim();
-                    if !word.is_empty() && !word.starts_with('#') {
-                        dict.add_word(word);
-                    }
-                }
-            }
-            if !dict.is_empty() {
-                engine.add_rule(Arc::new(
-                    og_spell::SpellingCheckRule::new(dict).with_id("MORFOLOGIK_RULE_DE_DE"),
-                ));
-            }
         }
+
+        engine.add_rule(Arc::new(crate::de::SimpleReplaceRule::new()));
+        engine.add_rule(Arc::new(
+            og_rules::native_rules::UppercaseSentenceStartRule::new(),
+        ));
+        let synth_dictionary = german_resource_dir
+            .as_deref()
+            .and_then(og_tagger::german_tagger::shared_german_dictionary);
+        engine.add_rule(Arc::new(crate::de::AgreementRule::new(
+            engine.tagger.clone(),
+            engine.disambiguator.clone(),
+            shared_dict,
+            synth_dictionary.clone(),
+        )));
+        engine.add_rule(Arc::new(crate::de::AgreementRule2::new(
+            synth_dictionary.clone(),
+        )));
+        engine.add_rule(Arc::new(crate::de::CaseRule::new(
+            german_tagger.clone(),
+            engine.spelling_support.clone(),
+        )));
+        engine.add_rule(Arc::new(crate::de::GermanDashRule));
+        engine.add_text_level_rule(Arc::new(crate::de::VerbAgreementRule::new(
+            synth_dictionary.clone(),
+        )));
+        engine.add_rule(Arc::new(crate::de::SubjectVerbAgreementRule::new(
+            german_tagger.clone(),
+        )));
+        engine.add_rule(Arc::new(crate::de::OldSpellingRule::new("DE")));
+        engine.add_rule(Arc::new(crate::de::MissingVerbRule::new(
+            engine.tagger.clone(),
+        )));
+        engine.add_rule(Arc::new(crate::de::GermanWordRepeatRule::new()));
+        engine.add_rule(Arc::new(
+            crate::de::MissingCommaRelativeClauseRule::in_front(),
+        ));
+        engine.add_rule(Arc::new(crate::de::MissingCommaRelativeClauseRule::behind()));
+        engine.add_rule(Arc::new(crate::de::GermanWrongWordInContextRule));
+        engine.add_rule(Arc::new(crate::de::WiederVsWiderRule));
+        engine.add_rule(Arc::new(crate::de::RedundantModalOrAuxiliaryVerb));
+        engine.add_rule(Arc::new(crate::de::GermanUnitConversionRule::new()));
+        engine.add_text_level_rule(Arc::new(crate::de::GermanWordCoherencyRule));
+        engine.add_text_level_rule(Arc::new(crate::de::CompoundCoherencyRule));
+        engine.add_text_level_rule(Arc::new(crate::de::DuUpperLowerCaseRule));
+        engine.add_text_level_rule(Arc::new(crate::de::SimilarNameRule));
+        engine.add_text_level_rule(Arc::new(crate::de::GermanParagraphRepeatBeginningRule));
+        engine.add_text_level_rule(Arc::new(crate::de::GermanRepeatedWordsRule));
+        engine.add_text_level_rule(Arc::new(crate::de::GermanReadabilityRule::new(true)));
+        engine.add_text_level_rule(Arc::new(crate::de::GermanReadabilityRule::new(false)));
+        engine.add_text_level_rule(Arc::new(crate::de::GermanStyleRepeatedWordRule::new()));
+        engine.add_text_level_rule(Arc::new(crate::de::StyleTooOftenUsedWordRule::verb()));
+        engine.add_text_level_rule(Arc::new(crate::de::StyleTooOftenUsedWordRule::noun()));
+        engine.add_text_level_rule(Arc::new(crate::de::StyleTooOftenUsedWordRule::adjective()));
+        engine.add_text_level_rule(Arc::new(crate::de::StatisticSentenceStyleRule::new(
+            crate::de::SentenceCondition::Passive,
+        )));
+        engine.add_text_level_rule(Arc::new(crate::de::StatisticSentenceStyleRule::new(
+            crate::de::SentenceCondition::ModalVerb,
+        )));
+        engine.add_text_level_rule(Arc::new(crate::de::StatisticSentenceStyleRule::new(
+            crate::de::SentenceCondition::Man,
+        )));
+        engine.add_text_level_rule(Arc::new(crate::de::StatisticSentenceStyleRule::new(
+            crate::de::SentenceCondition::ConjunctionAtBegin,
+        )));
+        engine.add_text_level_rule(Arc::new(crate::de::StatisticWordStyleRule::new(
+            crate::de::WordCondition::FillerWords,
+        )));
+        engine.add_text_level_rule(Arc::new(crate::de::StatisticWordStyleRule::new(
+            crate::de::WordCondition::NonSignificantVerbs,
+        )));
+        engine.add_text_level_rule(Arc::new(crate::de::StatisticWordStyleRule::new(
+            crate::de::WordCondition::UnnecessaryPhrases,
+        )));
 
         engine.add_rule(Arc::new(
             og_rules::native_rules::DoublePunctuationRule::new(),
@@ -373,11 +537,290 @@ impl LanguageEngine {
         engine.add_text_level_rule(Arc::new(
             og_rules::text_level_rules::GenericUnpairedBracketsRule::new(),
         ));
+        engine.add_text_level_rule(Arc::new(
+            og_rules::text_level_rules::GenericUnpairedQuotesRule::new()
+                .with_id("DE_UNPAIRED_QUOTES")
+                .with_quote_symbols(vec![
+                    ("\u{201E}".to_string(), "\u{201C}".to_string()),
+                    ("\u{00BB}".to_string(), "\u{00AB}".to_string()),
+                    ("\u{00AB}".to_string(), "\u{00BB}".to_string()),
+                    ("\"".to_string(), "\"".to_string()),
+                    ("'".to_string(), "'".to_string()),
+                    ("\u{201A}".to_string(), "\u{2018}".to_string()),
+                    ("\u{203A}".to_string(), "\u{2039}".to_string()),
+                    ("\u{2039}".to_string(), "\u{203A}".to_string()),
+                ]),
+        ));
+        engine.add_text_level_rule(Arc::new(
+            og_rules::text_level_rules::WhiteSpaceBeforeParagraphEndRule::new(),
+        ));
+        engine.add_rule(Arc::new(
+            og_rules::text_level_rules::WhiteSpaceAtBeginOfParagraphRule::new(),
+        ));
+        engine.add_text_level_rule(Arc::new(og_rules::text_level_rules::EmptyLineRule::new()));
+        engine.add_text_level_rule(Arc::new(crate::de::GermanLongParagraphRule::new()));
+        engine.add_text_level_rule(Arc::new(
+            crate::de::GermanPunctuationMarkAtParagraphEnd::new(),
+        ));
+        engine.add_text_level_rule(Arc::new(og_rules::text_level_rules::LongSentenceRule::new(
+            40,
+        )));
+        engine.add_text_level_rule(Arc::new(crate::de::GermanWordRepeatBeginningRule::new()));
+        engine.add_text_level_rule(Arc::new(crate::de::StyleRepeatedVeryShortSentences::new()));
+        engine.add_text_level_rule(Arc::new(crate::de::StyleRepeatedSentenceBeginning::new()));
 
         engine.post_chunker = Some(og_tagger::german_chunker::shared_german_chunker());
 
+        if let Some(model) = og_languagemodel::DiskLanguageModel::shared_for_language("de") {
+            engine.add_rule(Arc::new(
+                crate::upper_case_ngram::GermanUpperCaseNgramRule::new(model.clone()),
+            ));
+            engine.add_rule(Arc::new(
+                crate::confusion_probability::ConfusionRule::new_german(model),
+            ));
+        }
+
         engine.rebuild_checker();
         engine
+    }
+
+    pub fn german_variant(&self, code: &str) -> Self {
+        let variant_dir = match code {
+            "de-AT" => "de-DE-AT",
+            "de-CH" => "de-CH",
+            _ => "de-DE-AT",
+        };
+        let mut rules: Vec<Arc<dyn Rule>> = self.rules.clone();
+        if let Some(lt_root) = find_lt_resource_dir() {
+            let path = lt_root.join(format!(
+                "de/src/main/resources/org/languagetool/rules/de/{variant_dir}/grammar.xml"
+            ));
+            if path.exists() {
+                let compiler = XmlCompiler::new();
+                if let Ok(xml) = std::fs::read_to_string(&path)
+                    && let Ok(rule_set) = compiler.compile_file(&xml)
+                {
+                    rules.extend(rule_set.rules.into_iter().map(|compiled| {
+                        Arc::new(XmlPatternRule::with_spelling(
+                            compiled,
+                            self.spelling_support.clone(),
+                        )) as Arc<dyn Rule>
+                    }));
+                }
+            }
+        }
+        let country = code.rsplit('-').next().unwrap_or("DE").to_string();
+        rules.retain(|r| r.id() != "OLD_SPELLING_RULE");
+        rules.push(Arc::new(crate::de::OldSpellingRule::new(&country)));
+        let mut dict = og_spell::Dictionary::new();
+        if let Some(lt_root) = find_lt_resource_dir() {
+            let hunspell_dir =
+                lt_root.join("de/src/main/resources/org/languagetool/resource/de/hunspell");
+            if let Ok(words) = std::fs::read_to_string(hunspell_dir.join("spelling.txt")) {
+                for line in words.lines() {
+                    let word = line.trim();
+                    if !word.is_empty() && !word.starts_with('#') {
+                        dict.add_word(word);
+                    }
+                }
+            }
+            if let Ok(words) =
+                std::fs::read_to_string(hunspell_dir.join(format!("spelling-de-{country}.txt")))
+            {
+                for line in words.lines() {
+                    let word = line.trim();
+                    if !word.is_empty() && !word.starts_with('#') {
+                        dict.add_word(word);
+                    }
+                }
+            }
+        }
+        if let Some(lt_root) = find_lt_resource_dir()
+            && let Some(words) = load_german_wordlist(
+                &lt_root.join("de/src/main/resources/org/languagetool/resource/de"),
+            )
+        {
+            for word in &words {
+                dict.add_word(word);
+            }
+        }
+        if !dict.is_empty() {
+            let id = format!("MORFOLOGIK_RULE_DE_{country}");
+            rules.retain(|r| r.id() != "MORFOLOGIK_RULE_DE_DE");
+            rules.push(Arc::new(og_spell::SpellingCheckRule::new_shared(
+                Arc::new(dict),
+                id,
+                HashSet::new(),
+            )));
+        }
+        let mut engine = Self::new(Language::from_code(code).unwrap_or(Language::German));
+        engine.rules = rules;
+        engine.text_level_rules = self.text_level_rules.clone();
+        engine.tagger = self.tagger.clone();
+        engine.disambiguator = self.disambiguator.clone();
+        engine.spelling_support = self.spelling_support.clone();
+        engine.synthesizer = self.synthesizer.clone();
+        engine.post_chunker = self.post_chunker.clone();
+        engine.rebuild_checker();
+        engine
+    }
+
+    pub fn for_code(code: &str) -> Option<Self> {
+        let language = Language::from_code(code)?;
+        let short = language.short_code().to_string();
+        let config = match short.as_str() {
+            "da" => ("danish", "HUNSPELL_RULE"),
+            "fr" => ("french", "FR_SPELLING_RULE"),
+            "es" => ("spanish", "MORFOLOGIK_RULE_ES"),
+            "pt" => ("portuguese", "MORFOLOGIK_RULE_PT_PT"),
+            "nl" => ("dutch", "MORFOLOGIK_RULE_NL_NL"),
+            "pl" => ("polish", "MORFOLOGIK_RULE_PL_PL"),
+            "ru" => ("russian", "MORFOLOGIK_RULE_RU_RU"),
+            "it" => ("italian", "MORFOLOGIK_RULE_IT_IT"),
+            "ar" => ("arabic", "HUNSPELL_RULE_AR"),
+            "ast" => ("asturian", "MORFOLOGIK_RULE_AST"),
+            "be" => ("", "MORFOLOGIK_RULE_BE_BY"),
+            "br" => ("breton", "MORFOLOGIK_RULE_BR_FR"),
+            "el" => ("greek", "MORFOLOGIK_RULE_EL_GR"),
+            "gl" => ("galician", "HUNSPELL_RULE"),
+            "ro" => ("romanian", "MORFOLOGIK_RULE_RO_RO"),
+            "sv" => ("swedish", "HUNSPELL_RULE"),
+            _ => return None,
+        };
+
+        let mut engine = Self::new(language);
+
+        let Some(lt_root) = find_lt_resource_dir() else {
+            return Some(engine);
+        };
+        let resource_dir = lt_root.join(format!(
+            "{short}/src/main/resources/org/languagetool/resource/{short}"
+        ));
+        let tagger = if short == "fr" {
+            og_tagger::GenericTagger::french(&resource_dir)
+        } else if short == "ru" {
+            og_tagger::GenericTagger::russian(&resource_dir)
+        } else {
+            og_tagger::GenericTagger::from_resource_dir(&resource_dir, config.0)
+        };
+        let has_manual = resource_dir.join("added.txt").exists();
+        if tagger.has_dictionary() || has_manual {
+            engine.tagger = Some(Arc::new(tagger));
+        }
+        if short == "ru" {
+            engine.post_chunker = Some(og_tagger::russian_chunker::shared_russian_chunker());
+        }
+        let disambig_path = resource_dir.join("disambiguation.xml");
+        if disambig_path.exists()
+            && let Ok(xml) = std::fs::read_to_string(&disambig_path)
+            && let Ok(disambiguator) = XmlDisambiguator::from_xml(&xml)
+            && let Some(core_resource_dir) = find_lt_core_resource_dir()
+        {
+            engine.disambiguator = Some(og_tagger::hybrid_disambiguator(
+                &short,
+                &resource_dir,
+                &core_resource_dir,
+                disambiguator,
+            ));
+        }
+
+        let mut dict = og_spell::Dictionary::new();
+        if let Some(words) = load_wordlist(&resource_dir, config.0) {
+            for word in &words {
+                dict.add_word(word);
+            }
+        }
+        if let Ok(extra) = std::fs::read_to_string(resource_dir.join("hunspell/spelling.txt")) {
+            for line in extra.lines() {
+                let word = line.trim();
+                if !word.is_empty() && !word.starts_with('#') {
+                    dict.add_word(word);
+                }
+            }
+        }
+        let mut ignore_words = HashSet::new();
+        if let Ok(words) = std::fs::read_to_string(resource_dir.join("hunspell/ignore.txt")) {
+            for line in words.lines() {
+                let word = line.trim();
+                if !word.is_empty() && !word.starts_with('#') {
+                    ignore_words.insert(word.to_lowercase());
+                }
+            }
+        }
+        let mut prohibit = HashSet::new();
+        if let Ok(words) = std::fs::read_to_string(resource_dir.join("hunspell/prohibit.txt")) {
+            for line in words.lines() {
+                let word = line.trim();
+                if !word.is_empty() && !word.starts_with('#') {
+                    prohibit.insert(word.to_string());
+                }
+            }
+        }
+        if !dict.is_empty() {
+            engine.add_rule(Arc::new(
+                og_spell::SpellingCheckRule::new_shared(
+                    Arc::new(dict.clone()),
+                    config.1,
+                    HashSet::new(),
+                )
+                .with_ignore_words(ignore_words),
+            ));
+            if let Some(core_resource_dir) = find_lt_core_resource_dir() {
+                engine.spelling_support = Some(Arc::new(
+                    og_rules::spelling_support::SpellingSupport::new_for_language(
+                        dict,
+                        &core_resource_dir,
+                        &resource_dir,
+                        &short,
+                    ),
+                ));
+            }
+        }
+        engine.synthesizer =
+            og_rules::postponed_adjective::LangSynthesizer::for_language(&resource_dir, &short)
+                .map(Arc::new);
+
+        let rules_dir = lt_root.join(format!(
+            "{short}/src/main/resources/org/languagetool/rules/{short}"
+        ));
+        for file in ["grammar.xml", "style.xml"] {
+            let path = rules_dir.join(file);
+            if !path.exists() {
+                continue;
+            }
+            match engine.load_xml_file(&path) {
+                Ok(count) => eprintln!("Loaded {} rules from {short}/{file}", count),
+                Err(e) => eprintln!("Warning: failed to load {short}/{file}: {e}"),
+            }
+        }
+
+        engine.add_rules([
+            Arc::new(og_rules::native_rules::DoublePunctuationRule::new()) as Arc<dyn Rule>,
+            Arc::new(og_rules::native_rules::CommaWhitespaceRule::new()),
+        ]);
+        engine.add_text_level_rules([
+            Arc::new(og_rules::text_level_rules::MultipleWhitespaceRule::new())
+                as Arc<dyn TextLevelRule>,
+            Arc::new(og_rules::text_level_rules::SentenceWhitespaceRule::new()),
+            Arc::new(og_rules::text_level_rules::GenericUnpairedBracketsRule::new()),
+        ]);
+
+        match short.as_str() {
+            "ro" => {
+                engine.add_rules([
+                    Arc::new(crate::ro::romanian_replace_rule()) as Arc<dyn Rule>,
+                    Arc::new(crate::ro::romanian_compound_rule()),
+                ]);
+            }
+            "sv" => {
+                engine.add_rule(Arc::new(crate::sv::swedish_compound_rule()) as Arc<dyn Rule>);
+                engine.add_text_level_rule(Arc::new(crate::sv::swedish_word_coherency_rule()));
+            }
+            _ => {}
+        }
+
+        engine.rebuild_checker();
+        Some(engine)
     }
 
     pub fn load_xml_rules(&mut self, xml: &str) -> Result<usize, String> {
@@ -391,7 +834,7 @@ impl LanguageEngine {
             .file_name()
             .and_then(|n| n.to_str())
             .map(str::to_string);
-        self.load_xml_rules_with_source(&xml, source_file.as_deref())
+        self.load_xml_rules_with_base(&xml, source_file.as_deref(), path.parent())
     }
 
     fn load_xml_rules_with_source(
@@ -399,17 +842,27 @@ impl LanguageEngine {
         xml: &str,
         source_file: Option<&str>,
     ) -> Result<usize, String> {
+        self.load_xml_rules_with_base(xml, source_file, None)
+    }
+
+    fn load_xml_rules_with_base(
+        &mut self,
+        xml: &str,
+        source_file: Option<&str>,
+        base_dir: Option<&Path>,
+    ) -> Result<usize, String> {
         let compiler = XmlCompiler::new();
         let rule_set = compiler
-            .compile_file(xml)
+            .compile_file_with_base(xml, base_dir)
             .map_err(|e| format!("XML compilation error: {}", e))?;
 
         let count = rule_set.rules.len();
         for mut compiled_rule in rule_set.rules {
             compiled_rule.source_file = source_file.map(str::to_string);
-            let rule = Arc::new(XmlPatternRule::with_spelling(
+            let rule = Arc::new(XmlPatternRule::with_resources(
                 compiled_rule,
                 self.spelling_support.clone(),
+                self.synthesizer.clone(),
             ));
             self.rules.push(rule);
         }
@@ -423,15 +876,33 @@ impl LanguageEngine {
         self.rebuild_checker();
     }
 
+    pub fn add_rules(&mut self, rules: impl IntoIterator<Item = Arc<dyn Rule>>) {
+        self.rules.extend(rules);
+        self.rebuild_checker();
+    }
+
     pub fn add_text_level_rule(&mut self, rule: Arc<dyn TextLevelRule>) {
         self.text_level_rules.push(rule);
         self.rebuild_checker();
     }
 
+    pub fn add_text_level_rules(
+        &mut self,
+        rules: impl IntoIterator<Item = Arc<dyn TextLevelRule>>,
+    ) {
+        self.text_level_rules.extend(rules);
+        self.rebuild_checker();
+    }
+
     fn rebuild_checker(&mut self) {
         let mut checker = Checker::new()
-            .with_sentence_tokenizer(Arc::new(SentenceSplitterBridge("en")))
-            .with_word_tokenizer(Arc::new(WordTokenizerBridge))
+            .with_sentence_tokenizer(Arc::new(SentenceSplitterBridge(
+                self.language.short_code().to_string(),
+            )))
+            .with_word_tokenizer(Arc::new(WordTokenizerBridge::for_code(
+                self.language.short_code(),
+            )))
+            .with_language_filter(self.language_filter.clone())
             .set_rules(self.rules.clone())
             .set_text_level_rules(self.text_level_rules.clone());
 
@@ -517,7 +988,7 @@ impl LanguageEngine {
             Ok(rule_set) => rule_set,
             Err(_) => return Vec::new(),
         };
-        rule_set
+        let mut loaded: Vec<Arc<dyn Rule>> = rule_set
             .rules
             .into_iter()
             .map(|compiled| {
@@ -526,13 +997,29 @@ impl LanguageEngine {
                     self.spelling_support.clone(),
                 )) as Arc<dyn Rule>
             })
-            .collect()
+            .collect();
+        if self.language.short_code() == "en"
+            && let Some(model) = og_languagemodel::DiskLanguageModel::shared_for_language("en")
+        {
+            loaded.push(Arc::new(
+                crate::confusion_probability::ConfusionRule::new_english_for_l2(
+                    model,
+                    mother_tongue_code,
+                ),
+            ));
+        }
+        loaded
     }
 
     fn build_checker(&self, rules: Vec<Arc<dyn Rule>>) -> Checker {
         let mut checker = Checker::new()
-            .with_sentence_tokenizer(Arc::new(SentenceSplitterBridge("en")))
-            .with_word_tokenizer(Arc::new(WordTokenizerBridge))
+            .with_sentence_tokenizer(Arc::new(SentenceSplitterBridge(
+                self.language.short_code().to_string(),
+            )))
+            .with_word_tokenizer(Arc::new(WordTokenizerBridge::for_code(
+                self.language.short_code(),
+            )))
+            .with_language_filter(self.language_filter.clone())
             .set_rules(rules)
             .set_text_level_rules(self.text_level_rules.clone());
 
@@ -634,6 +1121,14 @@ fn load_german_wordlist(resource_dir: &Path) -> Option<Vec<String>> {
     Some(dict.word_list())
 }
 
+fn load_wordlist(resource_dir: &Path, dict_stem: &str) -> Option<Vec<String>> {
+    let dict = og_tagger::morfologik::MorfologikDictionary::load(
+        &resource_dir.join(format!("{dict_stem}.dict")),
+        &resource_dir.join(format!("{dict_stem}.info")),
+    )?;
+    Some(dict.word_list())
+}
+
 fn variant_dictionary(hunspell_dir: &Path, country: &str) -> og_spell::Dictionary {
     let mut dict = og_spell::Dictionary::new();
     let mut sources = vec![
@@ -654,12 +1149,12 @@ fn variant_dictionary(hunspell_dir: &Path, country: &str) -> og_spell::Dictionar
     dict
 }
 
-struct SentenceSplitterBridge(&'static str);
+struct SentenceSplitterBridge(String);
 
 impl SentenceTokenizer for SentenceSplitterBridge {
     fn split(&self, text: &str) -> Vec<SentenceRange> {
         use og_tokenizer::SentenceTokenizer as _;
-        let sentences = match og_tokenizer::srx::srx_splitter(self.0) {
+        let sentences = match og_tokenizer::srx::srx_splitter(&self.0) {
             Some(srx) => srx.split(text),
             None => og_tokenizer::DefaultSentenceSplitter::new().split(text),
         };
@@ -673,13 +1168,55 @@ impl SentenceTokenizer for SentenceSplitterBridge {
     }
 }
 
-struct WordTokenizerBridge;
+enum WordTokenizerBridge {
+    Default(bool),
+    German,
+    French(Arc<og_tokenizer::FrenchWordTokenizer>),
+}
+
+impl WordTokenizerBridge {
+    fn for_code(code: &str) -> Self {
+        if code == "en" {
+            return Self::Default(true);
+        }
+        if code == "de" {
+            return Self::German;
+        }
+        if code != "fr" {
+            return Self::Default(false);
+        }
+        static FR: std::sync::OnceLock<Option<Arc<og_tokenizer::FrenchWordTokenizer>>> =
+            std::sync::OnceLock::new();
+        let cached = FR.get_or_init(|| {
+            let tagger = find_lt_resource_dir().map(|lt_root| {
+                let dir = lt_root.join("fr/src/main/resources/org/languagetool/resource/fr");
+                Arc::new(og_tagger::GenericTagger::french(&dir))
+            })?;
+            Some(Arc::new(og_tokenizer::FrenchWordTokenizer::new(Arc::new(
+                move |w: &str| tagger.is_word_tagged(w),
+            ))))
+        });
+        match cached {
+            Some(fr) => Self::French(fr.clone()),
+            None => Self::Default(false),
+        }
+    }
+}
 
 impl WordTokenizer for WordTokenizerBridge {
     fn tokenize(&self, text: &str, offset: usize) -> Vec<AnalyzedTokenReadings> {
-        let tokenizer = og_tokenizer::DefaultWordTokenizer::new();
         use og_tokenizer::WordTokenizer as _;
-        let tokens = tokenizer.tokenize(text);
+        let tokens = match self {
+            Self::Default(true) => {
+                let tokenizer = og_tokenizer::DefaultWordTokenizer::new();
+                tokenizer.split_underscores(tokenizer.tokenize(text))
+            }
+            Self::Default(false) => {
+                og_tokenizer::DefaultWordTokenizer::new_generic().tokenize(text)
+            }
+            Self::German => og_tokenizer::GermanWordTokenizer::new().tokenize(text),
+            Self::French(fr) => fr.tokenize(text),
+        };
         tokens
             .into_iter()
             .map(|t| {
@@ -755,6 +1292,29 @@ mod tests {
     }
 
     #[test]
+    fn matches_in_later_sentences_keep_absolute_offsets() {
+        let engine = shared_german();
+        let text = "Das ist ein vollkommen korrekter Satz. Dies ist ein fhcsal.";
+        let typo_at = text.find("fhcsal").expect("test text contains typo");
+        let result = engine.check(text);
+        let hit = result
+            .matches
+            .iter()
+            .find(|m| m.length() == "fhcsal".len() && m.offset() == typo_at);
+        assert!(
+            hit.is_some(),
+            "expected a match at byte {typo_at} for the typo in the second sentence, got {:?}",
+            result
+                .matches
+                .iter()
+                .map(|m| (m.rule().id().to_string(), m.offset(), m.length()))
+                .collect::<Vec<_>>()
+        );
+        let hit = hit.expect("checked above");
+        assert_eq!(&text[hit.offset()..hit.offset() + hit.length()], "fhcsal");
+    }
+
+    #[test]
     fn mother_tongue_adds_l2_rules_to_the_check() {
         let base = shared_english();
         let plain = base.rules.len();
@@ -793,6 +1353,113 @@ mod tests {
     }
 
     #[test]
+    fn danish_engine_registers_with_tagger_and_rules() {
+        let engine =
+            LanguageEngine::for_code("da").expect("Danish engine must be registered via for_code");
+        assert!(
+            engine.rule_count() > 10,
+            "expected Danish rules to load, got {}",
+            engine.rule_count()
+        );
+        assert!(
+            engine.tagger.is_some(),
+            "expected the Danish morfologik tagger to load"
+        );
+        let result = engine.check("Dette er en tes.");
+        let ids: Vec<&str> = result.matches.iter().map(|m| m.rule().id()).collect();
+        assert!(
+            ids.contains(&"HUNSPELL_RULE"),
+            "expected Danish speller to fire on a typo, got {ids:?}"
+        );
+    }
+
+    #[test]
+    fn romanian_engine_registers_with_tagger_and_natives() {
+        let engine = LanguageEngine::for_code("ro")
+            .expect("Romanian engine must be registered via for_code");
+        assert!(
+            engine.rule_count() > 10,
+            "expected Romanian rules to load, got {}",
+            engine.rule_count()
+        );
+        assert!(
+            engine.tagger.is_some(),
+            "expected the Romanian morfologik tagger to load"
+        );
+        let result = engine.check("Nu am fost acasã.");
+        let ids: Vec<&str> = result.matches.iter().map(|m| m.rule().id()).collect();
+        assert!(
+            ids.contains(&"MORFOLOGIK_RULE_RO_RO"),
+            "expected the Romanian speller to fire on a typo, got {ids:?}"
+        );
+    }
+
+    #[test]
+    fn swedish_engine_registers_with_tagger_and_natives() {
+        let engine =
+            LanguageEngine::for_code("sv").expect("Swedish engine must be registered via for_code");
+        assert!(
+            engine.rule_count() > 10,
+            "expected Swedish rules to load, got {}",
+            engine.rule_count()
+        );
+        assert!(
+            engine.tagger.is_some(),
+            "expected the Swedish morfologik tagger to load"
+        );
+        let result = engine.check("Han arbetar med datorrz.");
+        let ids: Vec<&str> = result.matches.iter().map(|m| m.rule().id()).collect();
+        assert!(
+            ids.contains(&"HUNSPELL_RULE"),
+            "expected the Swedish speller to fire on a typo, got {ids:?}"
+        );
+    }
+
+    #[test]
+    fn russian_engine_registers_tagger_normalization_and_chunker() {
+        let engine =
+            LanguageEngine::for_code("ru").expect("Russian engine must be registered via for_code");
+        assert!(
+            engine.rule_count() > 10,
+            "expected Russian rules to load, got {}",
+            engine.rule_count()
+        );
+        assert!(
+            engine.tagger.is_some(),
+            "expected the Russian morfologik tagger to load"
+        );
+        assert!(
+            engine.post_chunker.is_some(),
+            "expected the Russian post-disambiguation chunker"
+        );
+        let result = engine.check("Крепкий стол.");
+        let ids: Vec<&str> = result.matches.iter().map(|m| m.rule().id()).collect();
+        assert!(
+            !ids.contains(&"Unify_Adj_NN_case"),
+            "correct ADJ+NN pair must not be flagged, got {ids:?}"
+        );
+    }
+
+    #[test]
+    fn spelling_global_chunker_shields_speller_and_replace_rules() {
+        let engine = shared_english();
+        for text in [
+            "There is Givenchy here.",
+            "There is Frito-Lay here.",
+            "We met Emmanuel Macron yesterday.",
+        ] {
+            let mut request = CheckRequest::new(text, Language::English);
+            request.enabled_rules = vec!["MORFOLOGIK_RULE_EN_US".to_string()];
+            let result = engine.check_with_request(&request);
+            let hits: Vec<usize> = result.matches.iter().map(|m| m.offset()).collect();
+            assert!(
+                hits.is_empty(),
+                "spelling_global entry must not be flagged for {text:?}, got {hits:?}"
+            );
+        }
+    }
+
+    #[test]
     fn german_engine_loads_rules_and_checks_text() {
         let engine = shared_german();
         assert!(
@@ -822,6 +1489,46 @@ mod tests {
         assert!(!us.contains("colour"));
         assert!(gb.contains("colour"));
         assert!(us.len() > 100_000 && gb.len() > 100_000);
+    }
+
+    #[test]
+    fn german_variants_carry_their_own_morfologik_rule_and_variant_grammar() {
+        let base = shared_german();
+        let base_ids: Vec<String> = base.rules.iter().map(|r| r.id().to_string()).collect();
+        assert!(base_ids.iter().any(|i| i == "MORFOLOGIK_RULE_DE_DE"));
+
+        let ch = base.german_variant("de-CH");
+        let ch_ids: Vec<String> = ch.rules.iter().map(|r| r.id().to_string()).collect();
+        assert!(
+            ch_ids.iter().any(|i| i == "MORFOLOGIK_RULE_DE_CH"),
+            "de-CH must swap in its own morfologik rule"
+        );
+        assert!(!ch_ids.iter().any(|i| i == "MORFOLOGIK_RULE_DE_DE"));
+        assert!(
+            ch_ids.iter().any(|i| i == "GRUESSE_CH_SPELLING_RULE"),
+            "de-CH must load de-CH/grammar.xml rules"
+        );
+        assert!(
+            !ch_ids.iter().any(|i| i == "GRUESSE_SPELLING_RULE"),
+            "de-DE-AT rules must not leak into de-CH"
+        );
+        assert_eq!(ch.language().code(), "de-CH");
+
+        let at = base.german_variant("de-AT");
+        let at_ids: Vec<String> = at.rules.iter().map(|r| r.id().to_string()).collect();
+        assert!(
+            at_ids.iter().any(|i| i == "MORFOLOGIK_RULE_DE_AT"),
+            "de-AT must swap in its own morfologik rule"
+        );
+        assert!(
+            at_ids.iter().any(|i| i == "GRUESSE_SPELLING_RULE"),
+            "de-AT must load de-DE-AT/grammar.xml rules"
+        );
+        assert!(
+            !at_ids.iter().any(|i| i == "GRUESSE_CH_SPELLING_RULE"),
+            "de-CH rules must not leak into de-AT"
+        );
+        assert_eq!(at.language().code(), "de-AT");
     }
 
     #[test]
@@ -945,19 +1652,16 @@ mod tests {
             return;
         }
 
-        let mut engine = LanguageEngine::new(Language::English);
-        match engine.load_xml_file(&grammar_path) {
-            Ok(count) => {
-                println!("Loaded {} rules from English grammar.xml", count);
-                assert!(count > 0, "Expected at least some rules");
+        let engine = shared_english();
+        let count = engine.rule_count();
+        println!("Loaded {} rules from English grammar.xml", count);
+        assert!(
+            count > 4000,
+            "Expected the real English grammar, got {count}"
+        );
 
-                let result = engine.check("This is a test.");
-                assert_eq!(result.language.code, "en-US");
-            }
-            Err(e) => {
-                panic!("Failed to load English grammar.xml: {}", e);
-            }
-        }
+        let result = engine.check("This is a test.");
+        assert_eq!(result.language.code, "en-US");
     }
 
     #[test]

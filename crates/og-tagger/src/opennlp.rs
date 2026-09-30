@@ -414,7 +414,25 @@ fn whitespace_spans(text: &str) -> Vec<(usize, usize)> {
 }
 
 fn is_java_whitespace(c: char) -> bool {
-    matches!(c, ' ' | '\t' | '\n' | '\u{0B}' | '\u{0C}' | '\r')
+    // OpenNLP StringUtil.isWhitespace: Character.isWhitespace ∪ Unicode Zs (no-break spaces count).
+    matches!(
+        c,
+        '\t' | '\n'
+            | '\u{0B}'
+            | '\u{0C}'
+            | '\r'
+            | '\u{1C}'..='\u{1F}'
+            | '\u{85}'
+            | '\u{2028}'
+            | '\u{2029}'
+            | '\u{20}'
+            | '\u{A0}'
+            | '\u{1680}'
+            | '\u{2000}'..='\u{200A}'
+            | '\u{202F}'
+            | '\u{205F}'
+            | '\u{3000}'
+    )
 }
 
 fn is_alphanumeric(tok: &str) -> bool {
@@ -1158,6 +1176,61 @@ mod tests {
             .map(|(s, e)| &"Hello world, don't shout!"[*s..*e])
             .collect();
         assert_eq!(toks, vec!["Hello", "world", ",", "do", "n't", "shout", "!"]);
+    }
+
+    #[test]
+    fn tokenizer_treats_no_break_space_as_whitespace() {
+        let Some(dir) = resource_dir() else { return };
+        let model = GisModel::from_file(&dir.join("en-token.model")).unwrap();
+        let tok = OpenNlpTokenizer::new(model);
+        let text = "Currently\u{a0}not available";
+        let toks: Vec<&str> = tok
+            .tokenize_spans(text)
+            .iter()
+            .map(|(s, e)| &text[*s..*e])
+            .collect();
+        assert_eq!(toks, vec!["Currently", "not", "available"]);
+    }
+
+    #[test]
+    fn chunker_keeps_mapping_with_no_break_space_token() {
+        let Some(chunker) = chunker() else { return };
+        let text = "Currently\u{a0}not available for the Premium version.";
+        let mut pos = 0;
+        let mut readings = Vec::new();
+        let mut last = 0;
+        let mut parts: Vec<&str> = Vec::new();
+        for (i, c) in text.char_indices() {
+            if c == ' ' || c == '\u{a0}' {
+                if i > last {
+                    parts.push(&text[last..i]);
+                }
+                parts.push(&text[i..i + c.len_utf8()]);
+                last = i + c.len_utf8();
+            }
+        }
+        if last < text.len() {
+            parts.push(&text[last..]);
+        }
+        for part in parts {
+            let at = og_core::AnalyzedToken::new(part, pos, pos + part.len());
+            readings.push(og_core::AnalyzedTokenReadings::new(at));
+            pos += part.len();
+        }
+        chunker.add_chunk_tags_on(&mut readings);
+        let available = readings
+            .iter()
+            .find(|r| r.token().token() == "available")
+            .unwrap();
+        assert_eq!(
+            available.chunks().first().map(String::as_str),
+            Some("B-ADJP"),
+            "chunks: {:?}",
+            readings
+                .iter()
+                .map(|r| (r.token().token(), r.chunks()))
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]

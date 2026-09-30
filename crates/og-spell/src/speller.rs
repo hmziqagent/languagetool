@@ -118,6 +118,10 @@ impl Rule for SpellingCheckRule {
                 continue;
             }
 
+            if token_readings.is_ignored_by_speller() || token_readings.is_immunized() {
+                continue;
+            }
+
             if !text.chars().any(|c| c.is_alphabetic()) {
                 continue;
             }
@@ -129,9 +133,23 @@ impl Rule for SpellingCheckRule {
             if !self.is_known_word(text) {
                 let start = token_readings.token().start();
                 let end = token_readings.token().end();
-                let context_start = start.saturating_sub(40);
-                let context_end = std::cmp::min(end + 40, sentence.text().len());
-                let context_text = sentence.text()[context_start..context_end].to_string();
+                let full_text = sentence.text();
+                let rel_start = start.saturating_sub(sentence.start());
+                let rel_end = end.saturating_sub(sentence.start()).min(full_text.len());
+                let mut context_start = rel_start.saturating_sub(40);
+                while context_start < full_text.len() && !full_text.is_char_boundary(context_start)
+                {
+                    context_start += 1;
+                }
+                let mut context_end = std::cmp::min(rel_end + 40, full_text.len());
+                while context_end > context_start && !full_text.is_char_boundary(context_end) {
+                    context_end += 1;
+                    if context_end > full_text.len() {
+                        context_end = full_text.len();
+                        break;
+                    }
+                }
+                let context_text = full_text[context_start..context_end].to_string();
 
                 let suggestions = self.get_suggestions(text, 5);
                 let replacements: Vec<SuggestedReplacement> = suggestions

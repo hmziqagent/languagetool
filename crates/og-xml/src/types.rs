@@ -21,6 +21,8 @@ pub struct XmlRule {
     #[serde(default)]
     pub pattern: XmlPattern,
     #[serde(default)]
+    pub rule_regexp: Option<XmlRuleRegexp>,
+    #[serde(default)]
     pub message: String,
     #[serde(default)]
     pub short_message: Option<String>,
@@ -38,6 +40,18 @@ pub struct XmlRule {
     pub filter: Option<XmlFilter>,
     #[serde(default)]
     pub issue_type: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct XmlRuleRegexp {
+    #[serde(default)]
+    pub text: String,
+    #[serde(default)]
+    pub case_sensitive: bool,
+    #[serde(default)]
+    pub exact: bool,
+    #[serde(default)]
+    pub mark: usize,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -73,6 +87,8 @@ pub struct XmlUnifyGroup {
     pub features: Vec<(String, Vec<String>)>,
     pub token_start: usize,
     pub token_end: usize,
+    pub elem_start: usize,
+    pub elem_end: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -142,6 +158,8 @@ pub struct XmlException {
     pub inflected: bool,
     pub case_sensitive: bool,
     pub scope: Option<String>,
+    #[serde(default)]
+    pub space_before: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -151,6 +169,7 @@ pub struct XmlMatch {
     pub regexp_match: Option<String>,
     pub regexp_replace: Option<String>,
     pub include_inflected: bool,
+    pub include_skipped: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

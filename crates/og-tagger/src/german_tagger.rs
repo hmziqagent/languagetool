@@ -2,22 +2,878 @@ use crate::Tagger;
 use crate::morfologik::MorfologikDictionary;
 use og_core::AnalyzedToken;
 use og_core::AnalyzedTokenReadings;
+use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Arc;
+use std::sync::OnceLock;
 
-type Readings = Vec<(Box<str>, Box<str>)>;
-type ReadingMap = std::collections::HashMap<Box<str>, Readings>;
+type Readings = Vec<(&'static str, &'static str)>;
+type ReadingMap = HashMap<Box<str>, Readings>;
 
-pub struct GermanTagger {
-    dictionary: std::sync::Arc<MorfologikDictionary>,
-    manual: ReadingMap,
-    removals: ReadingMap,
+const PARTIZIP2CONTAINS1PLUPRA: &[&str] = &[
+    "blasen", "fahren", "fallen", "fangen", "fressen", "geben", "halten", "kommen", "laden",
+    "lassen", "laufen", "lesen", "messen", "raten", "schlafen", "schlagen", "sehen", "tragen",
+    "treten",
+];
+
+const PARTIZIP2CONTAINS1PLUPRT: &[&str] = &[
+    "bieten",
+    "bleiben",
+    "fliegen",
+    "fließen",
+    "heben",
+    "leiden",
+    "meiden",
+    "scheiden",
+    "schließen",
+    "schreiben",
+    "stehen",
+    "steigen",
+    "streiten",
+    "treiben",
+    "weisen",
+    "ziehen",
+];
+
+const POSTAGSPARTIZIPENDINGE: &[&str] = &[
+    "AKK:PLU:FEM:GRU:SOL:VER",
+    "AKK:PLU:MAS:GRU:SOL:VER",
+    "AKK:PLU:NEU:GRU:SOL:VER",
+    "AKK:SIN:FEM:GRU:DEF:VER",
+    "AKK:SIN:FEM:GRU:IND:VER",
+    "AKK:SIN:FEM:GRU:SOL:VER",
+    "AKK:SIN:NEU:GRU:DEF:VER",
+    "NOM:PLU:FEM:GRU:SOL:VER",
+    "NOM:PLU:MAS:GRU:SOL:VER",
+    "NOM:PLU:NEU:GRU:SOL:VER",
+    "NOM:SIN:FEM:GRU:DEF:VER",
+    "NOM:SIN:FEM:GRU:IND:VER",
+    "NOM:SIN:FEM:GRU:SOL:VER",
+    "NOM:SIN:MAS:GRU:DEF:VER",
+    "NOM:SIN:NEU:GRU:DEF:VER",
+];
+
+const POSTAGSPARTIZIPENDINGEM: &[&str] = &["DAT:SIN:MAS:GRU:SOL:VER", "DAT:SIN:NEU:GRU:SOL:VER"];
+
+const POSTAGSPARTIZIPENDINGEN: &[&str] = &[
+    "AKK:PLU:FEM:GRU:DEF:VER",
+    "AKK:PLU:FEM:GRU:IND:VER",
+    "AKK:PLU:MAS:GRU:DEF:VER",
+    "AKK:PLU:MAS:GRU:IND:VER",
+    "AKK:PLU:NEU:GRU:DEF:VER",
+    "AKK:PLU:NEU:GRU:IND:VER",
+    "AKK:SIN:MAS:GRU:DEF:VER",
+    "AKK:SIN:MAS:GRU:IND:VER",
+    "AKK:SIN:MAS:GRU:SOL:VER",
+    "DAT:PLU:FEM:GRU:DEF:VER",
+    "DAT:PLU:FEM:GRU:IND:VER",
+    "DAT:PLU:FEM:GRU:SOL:VER",
+    "DAT:PLU:MAS:GRU:DEF:VER",
+    "DAT:PLU:MAS:GRU:IND:VER",
+    "DAT:PLU:MAS:GRU:SOL:VER",
+    "DAT:PLU:NEU:GRU:DEF:VER",
+    "DAT:PLU:NEU:GRU:IND:VER",
+    "DAT:PLU:NEU:GRU:SOL:VER",
+    "DAT:SIN:FEM:GRU:DEF:VER",
+    "DAT:SIN:FEM:GRU:IND:VER",
+    "DAT:SIN:MAS:GRU:DEF:VER",
+    "DAT:SIN:MAS:GRU:IND:VER",
+    "DAT:SIN:NEU:GRU:DEF:VER",
+    "DAT:SIN:NEU:GRU:IND:VER",
+    "GEN:PLU:FEM:GRU:DEF:VER",
+    "GEN:PLU:FEM:GRU:IND:VER",
+    "GEN:PLU:MAS:GRU:DEF:VER",
+    "GEN:PLU:MAS:GRU:IND:VER",
+    "GEN:PLU:NEU:GRU:DEF:VER",
+    "GEN:PLU:NEU:GRU:IND:VER",
+    "GEN:SIN:FEM:GRU:DEF:VER",
+    "GEN:SIN:FEM:GRU:IND:VER",
+    "GEN:SIN:MAS:GRU:DEF:VER",
+    "GEN:SIN:MAS:GRU:IND:VER",
+    "GEN:SIN:MAS:GRU:SOL:VER",
+    "GEN:SIN:NEU:GRU:DEF:VER",
+    "GEN:SIN:NEU:GRU:IND:VER",
+    "GEN:SIN:NEU:GRU:SOL:VER",
+    "NOM:PLU:FEM:GRU:DEF:VER",
+    "NOM:PLU:FEM:GRU:IND:VER",
+    "NOM:PLU:MAS:GRU:DEF:VER",
+    "NOM:PLU:MAS:GRU:IND:VER",
+    "NOM:PLU:NEU:GRU:DEF:VER",
+    "NOM:PLU:NEU:GRU:IND:VER",
+];
+
+const POSTAGSPARTIZIPENDINGER: &[&str] = &[
+    "DAT:SIN:FEM:GRU:SOL:VER",
+    "GEN:PLU:FEM:GRU:SOL:VER",
+    "GEN:PLU:MAS:GRU:SOL:VER",
+    "GEN:PLU:NEU:GRU:SOL:VER",
+    "GEN:SIN:FEM:GRU:SOL:VER",
+    "NOM:SIN:MAS:GRU:IND:VER",
+    "NOM:SIN:MAS:GRU:SOL:VER",
+    "DAT:SIN:FEM:GRU:SOL:VER",
+    "GEN:PLU:FEM:GRU:SOL:VER",
+    "GEN:PLU:MAS:GRU:SOL:VER",
+    "GEN:PLU:NEU:GRU:SOL:VER",
+    "GEN:SIN:FEM:GRU:SOL:VER",
+    "NOM:SIN:MAS:GRU:IND:VER",
+    "NOM:SIN:MAS:GRU:SOL:VER",
+];
+
+const POSTAGSPARTIZIPENDINGES: &[&str] = &[
+    "AKK:SIN:NEU:GRU:IND:VER",
+    "AKK:SIN:NEU:GRU:SOL:VER",
+    "NOM:SIN:NEU:GRU:IND:VER",
+    "NOM:SIN:NEU:GRU:SOL:VER",
+];
+
+const NOT_A_VERB: &[&str] = &[
+    "angebot",
+    "anteil",
+    "aufenthalt",
+    "ausdruck",
+    "auswärtsspiel",
+    "beispiel",
+    "bereich",
+    "besondere",
+    "daring",
+    "einfach",
+    "einfachst",
+    "endkasten",
+    "freibetrag",
+    "grautöne",
+    "grüntöne",
+    "großherzöge",
+    "großteil",
+    "hochhaus",
+    "klarerweise",
+    "maßnahme",
+    "mitglieder",
+    "nachricht",
+    "nebenfach",
+    "niederlage",
+    "nothing",
+    "notscheid",
+    "preisver",
+    "reinweiß",
+    "schwarzweiß",
+    "schwarzgrau",
+    "schwarzgrün",
+    "schwarztöne",
+    "unbesiegt",
+    "unmenge",
+    "unrat",
+    "unver",
+    "verrückterweise",
+    "versonnen",
+    "vorlieb",
+    "vorteil",
+    "warmweiß",
+    "wohldefiniert",
+    "wohlergehen",
+    "wohlgemerkt",
+    "zuende",
+    "zuhause",
+    "zumal",
+    "zuver",
+    "darauf",
+    "einmal",
+    "kleinkram",
+    "hochsicher",
+    "ehering",
+    "freitag",
+    "großmeister",
+    "handwerk",
+    "herpes",
+    "nachfolger",
+];
+
+const PREFIXES_SEPARABLE: &[&str] = &[
+    "gegeneinander",
+    "durcheinander",
+    "nebeneinander",
+    "übereinander",
+    "aufeinander",
+    "auseinander",
+    "beieinander",
+    "aneinander",
+    "ineinander",
+    "zueinander",
+    "gegenüber",
+    "beisammen",
+    "gegenüber",
+    "hernieder",
+    "rückwärts",
+    "wiederauf",
+    "wiederein",
+    "wiederher",
+    "zufrieden",
+    "zwangsvor",
+    "entgegen",
+    "hinunter",
+    "abhanden",
+    "aufrecht",
+    "aufwärts",
+    "auswärts",
+    "beiseite",
+    "danieder",
+    "drauflos",
+    "einwärts",
+    "herunter",
+    "hindurch",
+    "verrückt",
+    "vorwärts",
+    "zunichte",
+    "zusammen",
+    "zwangsum",
+    "zwischen",
+    "abseits",
+    "abwärts",
+    "entlang",
+    "hinfort",
+    "ähnlich",
+    "daneben",
+    "general",
+    "herüber",
+    "hierher",
+    "hierhin",
+    "hinüber",
+    "schwarz",
+    "trocken",
+    "überein",
+    "vorlieb",
+    "vorüber",
+    "wichtig",
+    "zurecht",
+    "zuwider",
+    "hinweg",
+    "allein",
+    "besser",
+    "daheim",
+    "doppel",
+    "feinst",
+    "fertig",
+    "herauf",
+    "heraus",
+    "herbei",
+    "hinauf",
+    "hinaus",
+    "hinein",
+    "kaputt",
+    "kennen",
+    "kürzer",
+    "mittag",
+    "nieder",
+    "runter",
+    "sicher",
+    "sitzen",
+    "voraus",
+    "vorbei",
+    "vorweg",
+    "weiter",
+    "wieder",
+    "zugute",
+    "zurück",
+    "zwangs",
+    "abend",
+    "blank",
+    "brust",
+    "dahin",
+    "davon",
+    "drauf",
+    "drein",
+    "durch",
+    "einig",
+    "empor",
+    "grund",
+    "herum",
+    "höher",
+    "klein",
+    "knapp",
+    "krank",
+    "krumm",
+    "kugel",
+    "näher",
+    "neben",
+    "offen",
+    "preis",
+    "rüber",
+    "ruhig",
+    "statt",
+    "still",
+    "übrig",
+    "umher",
+    "unter",
+    "voran",
+    "zweck",
+    "acht",
+    "drei",
+    "fehl",
+    "feil",
+    "fort",
+    "frei",
+    "groß",
+    "hand",
+    "hart",
+    "heim",
+    "hier",
+    "hoch",
+    "klar",
+    "lahm",
+    "miss",
+    "nach",
+    "nahe",
+    "quer",
+    "rauf",
+    "raus",
+    "rein",
+    "rück",
+    "satt",
+    "stoß",
+    "teil",
+    "über",
+    "voll",
+    "wach",
+    "wahr",
+    "warm",
+    "wert",
+    "wohl",
+    "auf",
+    "aus",
+    "bei",
+    "ehe",
+    "ein",
+    "eis",
+    "end",
+    "her",
+    "hin",
+    "los",
+    "maß",
+    "mit",
+    "out",
+    "ran",
+    "rum",
+    "tot",
+    "vor",
+    "weg",
+    "weh",
+    "ab",
+    "an",
+    "da",
+    "um",
+    "zu",
+];
+const PREFIXES_NON_SEPARABLE: &[&str] = &[
+    "be", "emp", "ent", "er", "hinter", "miss", "un", "ver", "zer",
+];
+const PREFIXES_VERBS: &[&str] = &[
+    "gegeneinander",
+    "durcheinander",
+    "nebeneinander",
+    "übereinander",
+    "aufeinander",
+    "auseinander",
+    "beieinander",
+    "aneinander",
+    "ineinander",
+    "zueinander",
+    "gegenüber",
+    "beisammen",
+    "gegenüber",
+    "hernieder",
+    "rückwärts",
+    "wiederauf",
+    "wiederein",
+    "wiederher",
+    "zufrieden",
+    "zwangsvor",
+    "entgegen",
+    "hinunter",
+    "abhanden",
+    "aufrecht",
+    "aufwärts",
+    "auswärts",
+    "beiseite",
+    "danieder",
+    "drauflos",
+    "einwärts",
+    "herunter",
+    "hindurch",
+    "verrückt",
+    "vorwärts",
+    "zunichte",
+    "zusammen",
+    "zwangsum",
+    "zwischen",
+    "abseits",
+    "abwärts",
+    "entlang",
+    "hinfort",
+    "ähnlich",
+    "daneben",
+    "general",
+    "herüber",
+    "hierher",
+    "hierhin",
+    "hinüber",
+    "schwarz",
+    "trocken",
+    "überein",
+    "vorlieb",
+    "vorüber",
+    "wichtig",
+    "zurecht",
+    "zuwider",
+    "hinweg",
+    "hinter",
+    "allein",
+    "besser",
+    "daheim",
+    "doppel",
+    "feinst",
+    "fertig",
+    "herauf",
+    "heraus",
+    "herbei",
+    "hinauf",
+    "hinaus",
+    "hinein",
+    "kaputt",
+    "kennen",
+    "kürzer",
+    "mittag",
+    "nieder",
+    "runter",
+    "sicher",
+    "sitzen",
+    "voraus",
+    "vorbei",
+    "vorweg",
+    "weiter",
+    "wieder",
+    "zugute",
+    "zurück",
+    "zwangs",
+    "abend",
+    "blank",
+    "brust",
+    "dahin",
+    "davon",
+    "drauf",
+    "drein",
+    "durch",
+    "einig",
+    "empor",
+    "grund",
+    "herum",
+    "höher",
+    "klein",
+    "knapp",
+    "krank",
+    "krumm",
+    "kugel",
+    "näher",
+    "neben",
+    "offen",
+    "preis",
+    "rüber",
+    "ruhig",
+    "statt",
+    "still",
+    "übrig",
+    "umher",
+    "unter",
+    "voran",
+    "zweck",
+    "miss",
+    "acht",
+    "drei",
+    "fehl",
+    "feil",
+    "fort",
+    "frei",
+    "groß",
+    "hand",
+    "hart",
+    "heim",
+    "hier",
+    "hoch",
+    "klar",
+    "lahm",
+    "miss",
+    "nach",
+    "nahe",
+    "quer",
+    "rauf",
+    "raus",
+    "rein",
+    "rück",
+    "satt",
+    "stoß",
+    "teil",
+    "über",
+    "voll",
+    "wach",
+    "wahr",
+    "warm",
+    "wert",
+    "wohl",
+    "emp",
+    "ent",
+    "ver",
+    "zer",
+    "auf",
+    "aus",
+    "bei",
+    "ehe",
+    "ein",
+    "eis",
+    "end",
+    "her",
+    "hin",
+    "los",
+    "maß",
+    "mit",
+    "out",
+    "ran",
+    "rum",
+    "tot",
+    "vor",
+    "weg",
+    "weh",
+    "be",
+    "er",
+    "un",
+    "ab",
+    "an",
+    "da",
+    "um",
+    "zu",
+];
+const COMPOUND_VERB_PREFIXES: &[&str] = &[
+    "ab",
+    "abend",
+    "abhanden",
+    "acht",
+    "ähnlich",
+    "allein",
+    "an",
+    "auf",
+    "aufeinander",
+    "aufrecht",
+    "aufwärts",
+    "aus",
+    "auseinander",
+    "auswärts",
+    "bei",
+    "beieinander",
+    "beisammen",
+    "beiseite",
+    "besser",
+    "blank",
+    "brust",
+    "da",
+    "daheim",
+    "dahin",
+    "daneben",
+    "danieder",
+    "davon",
+    "doppel",
+    "drauflos",
+    "drei",
+    "drein",
+    "durch",
+    "durcheinander",
+    "ehe",
+    "ein",
+    "einig",
+    "einwärts",
+    "eis",
+    "empor",
+    "end",
+    "fehl",
+    "feil",
+    "feinst",
+    "fort",
+    "frei",
+    "gegenüber",
+    "general",
+    "groß",
+    "grund",
+    "hand",
+    "hart",
+    "heim",
+    "her",
+    "herauf",
+    "heraus",
+    "herbei",
+    "hernieder",
+    "herüber",
+    "herum",
+    "herunter",
+    "hier",
+    "hierher",
+    "hierhin",
+    "hin",
+    "hinauf",
+    "hinaus",
+    "hindurch",
+    "hinein",
+    "hinüber",
+    "hoch",
+    "höher",
+    "ineinander",
+    "kaputt",
+    "kennen",
+    "klar",
+    "klein",
+    "knapp",
+    "krank",
+    "krumm",
+    "kugel",
+    "kürzer",
+    "lahm",
+    "los",
+    "maß",
+    "miss",
+    "mit",
+    "mittag",
+    "nach",
+    "nahe",
+    "näher",
+    "neben",
+    "nebeneinander",
+    "nieder",
+    "offen",
+    "out",
+    "preis",
+    "quer",
+    "ran",
+    "rauf",
+    "raus",
+    "rein",
+    "rüber",
+    "rück",
+    "rückwärts",
+    "ruhig",
+    "rum",
+    "runter",
+    "satt",
+    "schwarz",
+    "sicher",
+    "sitzen",
+    "statt",
+    "still",
+    "stoß",
+    "teil",
+    "tot",
+    "trocken",
+    "über",
+    "überein",
+    "übereinander",
+    "übrig",
+    "um",
+    "umher",
+    "unter",
+    "verrückt",
+    "voll",
+    "vor",
+    "voran",
+    "voraus",
+    "vorbei",
+    "vorlieb",
+    "vorüber",
+    "vorwärts",
+    "vorweg",
+    "wach",
+    "wahr",
+    "warm",
+    "weg",
+    "weh",
+    "weiter",
+    "wert",
+    "wichtig",
+    "wieder",
+    "wiederauf",
+    "wiederein",
+    "wiederher",
+    "wohl",
+    "zu",
+    "zueinander",
+    "zufrieden",
+    "zugute",
+    "zunichte",
+    "zurecht",
+    "zurück",
+    "zusammen",
+    "zuwider",
+    "zwangs",
+    "zwangsum",
+    "zwangsvor",
+    "zweck",
+    "zwischen",
+];
+const ADJ_PREFIX_STRIP: &[&str] = &[
+    "bitter", "dunkel", "erz", "extra", "früh", "gemein", "grund", "hyper", "lau", "mega",
+    "minder", "stock", "super", "tod", "ultra", "u[nr]", "voll",
+];
+const ADJ_PREFIX_GATE: &[&str] = &[
+    "bitter", "dunkel", "erz", "extra", "früh", "gemein", "hyper", "lau", "mega", "minder",
+    "stock", "super", "tod", "ultra", "un", "ur",
+];
+const TAGS_FOR_WEISE: &[&str] = &[
+    "ADJ:AKK:PLU:FEM:GRU:SOL",
+    "ADJ:AKK:PLU:MAS:GRU:SOL",
+    "ADJ:AKK:PLU:NEU:GRU:SOL",
+    "ADJ:AKK:SIN:FEM:GRU:DEF",
+    "ADJ:AKK:SIN:FEM:GRU:IND",
+    "ADJ:AKK:SIN:FEM:GRU:SOL",
+    "ADJ:AKK:SIN:NEU:GRU:DEF",
+    "ADJ:NOM:PLU:FEM:GRU:SOL",
+    "ADJ:NOM:PLU:MAS:GRU:SOL",
+    "ADJ:NOM:PLU:NEU:GRU:SOL",
+    "ADJ:NOM:SIN:FEM:GRU:DEF",
+    "ADJ:NOM:SIN:FEM:GRU:IND",
+    "ADJ:NOM:SIN:FEM:GRU:SOL",
+    "ADJ:NOM:SIN:MAS:GRU:DEF",
+    "ADJ:NOM:SIN:NEU:GRU:DEF",
+    "ADJ:PRD:GRU",
+];
+const NOUN_TAG_EXPANSION_EXCEPTIONS: &[&str] = &["Wegstrecken"];
+const NO_IMPERATIVE_SWAP: &[&str] = &["gar", "mal", "null", "trotz"];
+const TAGS_FOR_ADJ: &[&str] = &["ADJ:PRD:GRU"];
+const TAGS_FOR_ADJ_E: &[&str] = &[
+    "ADJ:AKK:PLU:FEM:GRU:SOL",
+    "ADJ:AKK:PLU:MAS:GRU:SOL",
+    "ADJ:AKK:PLU:NEU:GRU:SOL",
+    "ADJ:AKK:SIN:FEM:GRU:DEF",
+    "ADJ:AKK:SIN:FEM:GRU:IND",
+    "ADJ:AKK:SIN:FEM:GRU:SOL",
+    "ADJ:AKK:SIN:NEU:GRU:DEF",
+    "ADJ:NOM:PLU:FEM:GRU:SOL",
+    "ADJ:NOM:PLU:MAS:GRU:SOL",
+    "ADJ:NOM:PLU:NEU:GRU:SOL",
+    "ADJ:NOM:SIN:FEM:GRU:DEF",
+    "ADJ:NOM:SIN:FEM:GRU:IND",
+    "ADJ:NOM:SIN:FEM:GRU:SOL",
+    "ADJ:NOM:SIN:MAS:GRU:DEF",
+    "ADJ:NOM:SIN:NEU:GRU:DEF",
+];
+const TAGS_FOR_ADJ_EN: &[&str] = &[
+    "ADJ:AKK:PLU:FEM:GRU:DEF",
+    "ADJ:AKK:PLU:FEM:GRU:IND",
+    "ADJ:AKK:PLU:MAS:GRU:DEF",
+    "ADJ:AKK:PLU:MAS:GRU:IND",
+    "ADJ:AKK:PLU:NEU:GRU:DEF",
+    "ADJ:AKK:PLU:NEU:GRU:IND",
+    "ADJ:AKK:SIN:MAS:GRU:DEF",
+    "ADJ:AKK:SIN:MAS:GRU:IND",
+    "ADJ:AKK:SIN:MAS:GRU:SOL",
+    "ADJ:DAT:PLU:FEM:GRU:DEF",
+    "ADJ:DAT:PLU:FEM:GRU:IND",
+    "ADJ:DAT:PLU:FEM:GRU:SOL",
+    "ADJ:DAT:PLU:MAS:GRU:DEF",
+    "ADJ:DAT:PLU:MAS:GRU:IND",
+    "ADJ:DAT:PLU:MAS:GRU:SOL",
+    "ADJ:DAT:PLU:NEU:GRU:DEF",
+    "ADJ:DAT:PLU:NEU:GRU:IND",
+    "ADJ:DAT:PLU:NEU:GRU:SOL",
+    "ADJ:DAT:SIN:FEM:GRU:DEF",
+    "ADJ:DAT:SIN:FEM:GRU:IND",
+    "ADJ:DAT:SIN:MAS:GRU:DEF",
+    "ADJ:DAT:SIN:MAS:GRU:IND",
+    "ADJ:DAT:SIN:NEU:GRU:DEF",
+    "ADJ:DAT:SIN:NEU:GRU:IND",
+    "ADJ:GEN:PLU:FEM:GRU:DEF",
+    "ADJ:GEN:PLU:FEM:GRU:IND",
+    "ADJ:GEN:PLU:MAS:GRU:DEF",
+    "ADJ:GEN:PLU:MAS:GRU:IND",
+    "ADJ:GEN:PLU:NEU:GRU:DEF",
+    "ADJ:GEN:PLU:NEU:GRU:IND",
+    "ADJ:GEN:SIN:FEM:GRU:DEF",
+    "ADJ:GEN:SIN:FEM:GRU:IND",
+    "ADJ:GEN:SIN:MAS:GRU:DEF",
+    "ADJ:GEN:SIN:MAS:GRU:IND",
+    "ADJ:GEN:SIN:MAS:GRU:SOL",
+    "ADJ:GEN:SIN:NEU:GRU:DEF",
+    "ADJ:GEN:SIN:NEU:GRU:IND",
+    "ADJ:GEN:SIN:NEU:GRU:SOL",
+    "ADJ:NOM:PLU:FEM:GRU:DEF",
+    "ADJ:NOM:PLU:FEM:GRU:IND",
+    "ADJ:NOM:PLU:MAS:GRU:DEF",
+    "ADJ:NOM:PLU:MAS:GRU:IND",
+    "ADJ:NOM:PLU:NEU:GRU:DEF",
+    "ADJ:NOM:PLU:NEU:GRU:IND",
+];
+const TAGS_FOR_ADJ_ER: &[&str] = &[
+    "ADJ:DAT:SIN:FEM:GRU:SOL",
+    "ADJ:GEN:PLU:FEM:GRU:SOL",
+    "ADJ:GEN:PLU:MAS:GRU:SOL",
+    "ADJ:GEN:PLU:NEU:GRU:SOL",
+    "ADJ:GEN:SIN:FEM:GRU:SOL",
+    "ADJ:NOM:SIN:MAS:GRU:IND",
+    "ADJ:NOM:SIN:MAS:GRU:SOL",
+];
+const TAGS_FOR_ADJ_EM: &[&str] = &["ADJ:DAT:SIN:MAS:GRU:SOL", "ADJ:DAT:SIN:NEU:GRU:SOL"];
+const TAGS_FOR_ADJ_ES: &[&str] = &[
+    "ADJ:AKK:SIN:NEU:GRU:IND",
+    "ADJ:AKK:SIN:NEU:GRU:SOL",
+    "ADJ:NOM:SIN:NEU:GRU:IND",
+    "ADJ:NOM:SIN:NEU:GRU:SOL",
+];
+
+type SentTokens<'a> = &'a [(&'a str, usize, usize)];
+
+struct TokenCtx {
+    first_word: bool,
+    prev_word: Option<String>,
+    pos: usize,
 }
 
-pub fn shared_german_dictionary(dir: &Path) -> Option<std::sync::Arc<MorfologikDictionary>> {
+impl TokenCtx {
+    fn new() -> Self {
+        Self {
+            first_word: true,
+            prev_word: None,
+            pos: 0,
+        }
+    }
+}
+
+struct PrefixInfixVerb {
+    prefix: &'static str,
+    infix: &'static str,
+    verb_baseform: &'static str,
+}
+
+struct NominalizedVerb {
+    prefix: &'static str,
+    verb_baseform: &'static str,
+}
+
+struct AdjInfo {
+    baseform: &'static str,
+    tag: &'static str,
+}
+
+#[derive(Default)]
+struct ExpansionInfos {
+    verb_infos: HashMap<&'static str, PrefixInfixVerb>,
+    nom_verb_infos: HashMap<&'static str, NominalizedVerb>,
+    nom_gen_verb_infos: HashMap<&'static str, NominalizedVerb>,
+    adj_infos: HashMap<&'static str, Vec<AdjInfo>>,
+}
+
+pub struct GermanTagger {
+    dictionary: Arc<MorfologikDictionary>,
+    manual: ReadingMap,
+    removals: ReadingMap,
+    expansion: OnceLock<Arc<ExpansionInfos>>,
+    resource_dir: Option<std::path::PathBuf>,
+}
+
+pub fn shared_german_dictionary(dir: &Path) -> Option<Arc<MorfologikDictionary>> {
     static CACHE: std::sync::OnceLock<
-        std::sync::Mutex<
-            std::collections::HashMap<std::path::PathBuf, std::sync::Arc<MorfologikDictionary>>,
-        >,
+        std::sync::Mutex<std::collections::HashMap<std::path::PathBuf, Arc<MorfologikDictionary>>>,
     > = std::sync::OnceLock::new();
     let cache = CACHE.get_or_init(Default::default);
     let key = dir.join("german.dict");
@@ -25,7 +881,7 @@ pub fn shared_german_dictionary(dir: &Path) -> Option<std::sync::Arc<MorfologikD
     if let Some(dict) = guard.get(&key) {
         return Some(dict.clone());
     }
-    let dictionary = std::sync::Arc::new(MorfologikDictionary::load(
+    let dictionary = Arc::new(MorfologikDictionary::load(
         &dir.join("german.dict"),
         &dir.join("german.info"),
     )?);
@@ -33,60 +889,156 @@ pub fn shared_german_dictionary(dir: &Path) -> Option<std::sync::Arc<MorfologikD
     Some(dictionary)
 }
 
+fn load_manual_map(dir: &Path, files: &[&str]) -> ReadingMap {
+    let mut map: ReadingMap = HashMap::new();
+    for file in files {
+        let Ok(content) = std::fs::read_to_string(dir.join(file)) else {
+            continue;
+        };
+        for line in content.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let mut parts = line.splitn(3, '\t');
+            let (Some(form), Some(lemma), Some(tag)) = (parts.next(), parts.next(), parts.next())
+            else {
+                continue;
+            };
+            let form_leaked: &'static str = Box::leak(form.to_string().into_boxed_str());
+            let lemma_leaked: &'static str = Box::leak(lemma.to_string().into_boxed_str());
+            let tag_leaked: &'static str = Box::leak(tag.trim().to_string().into_boxed_str());
+            map.entry(form_leaked.into())
+                .or_default()
+                .push((lemma_leaked, tag_leaked));
+        }
+    }
+    map
+}
+
+fn to_pa2(tags: &[&str]) -> Vec<&'static str> {
+    tags.iter()
+        .map(|t| {
+            Box::leak(format!("{}:VER", t.replace("ADJ:", "PA2:")).into_boxed_str()) as &'static str
+        })
+        .collect()
+}
+
+fn fill_adj_infos(
+    word: &'static str,
+    suffix: &str,
+    tags: &[&'static str],
+    adj_infos: &mut HashMap<&'static str, Vec<AdjInfo>>,
+) {
+    let fullform: &'static str = Box::leak(format!("{word}{suffix}").into_boxed_str());
+    let list: Vec<AdjInfo> = tags
+        .iter()
+        .map(|t| AdjInfo {
+            baseform: word,
+            tag: t,
+        })
+        .collect();
+    adj_infos.insert(fullform, list);
+}
+
+fn synthesize_verb_forms(dictionary: &MorfologikDictionary, lemma: &str) -> Vec<&'static str> {
+    let mut forms: Vec<&'static str> = Vec::new();
+    let lc_lemma = starts_lowercase(lemma);
+    if let Some(words) = dictionary.verb_forms_by_lemma().get(lemma) {
+        for word in words {
+            let leaked: &'static str = Box::leak(word.clone().into_boxed_str());
+            if leaked.contains('ß') {
+                continue;
+            }
+            if starts_lowercase(leaked) == lc_lemma && !forms.contains(&leaked) {
+                forms.push(leaked);
+            }
+        }
+    }
+    forms
+}
+
+fn add_verb_line(line: &str, infos: &mut ExpansionInfos, dictionary: &MorfologikDictionary) {
+    if !line.contains('_') || line.ends_with("_in") {
+        return;
+    }
+    let cleaned = match line.find('#') {
+        Some(idx) => &line[..idx],
+        None => line,
+    }
+    .trim();
+    let mut parts = cleaned.split('_');
+    let (Some(prefix), Some(verb_baseform)) = (parts.next(), parts.next()) else {
+        return;
+    };
+    let prefix: &'static str = Box::leak(prefix.to_string().into_boxed_str());
+    let verb_baseform: &'static str = Box::leak(verb_baseform.to_string().into_boxed_str());
+    for form in synthesize_verb_forms(dictionary, verb_baseform) {
+        let key: &'static str = Box::leak(format!("{prefix}{form}").into_boxed_str());
+        infos.verb_infos.insert(
+            key,
+            PrefixInfixVerb {
+                prefix,
+                infix: "",
+                verb_baseform,
+            },
+        );
+    }
+    let zu_key: &'static str = Box::leak(format!("{prefix}zu{verb_baseform}").into_boxed_str());
+    infos.verb_infos.insert(
+        zu_key,
+        PrefixInfixVerb {
+            prefix,
+            infix: "zu",
+            verb_baseform,
+        },
+    );
+    let upper_prefix: &'static str = Box::leak(uppercase_first(prefix).into_boxed_str());
+    let nom_key: &'static str =
+        Box::leak(format!("{upper_prefix}{verb_baseform}").into_boxed_str());
+    infos.nom_verb_infos.insert(
+        nom_key,
+        NominalizedVerb {
+            prefix: upper_prefix,
+            verb_baseform,
+        },
+    );
+    let gen_key: &'static str = Box::leak(format!("{nom_key}s").into_boxed_str());
+    infos.nom_gen_verb_infos.insert(
+        gen_key,
+        NominalizedVerb {
+            prefix: upper_prefix,
+            verb_baseform,
+        },
+    );
+}
+
 impl GermanTagger {
     pub fn from_resource_dir(dir: &Path) -> Option<Self> {
         let dictionary = shared_german_dictionary(dir)?;
+        let manual = load_manual_map(dir, &["added.txt", "added_custom.txt"]);
+        let removals = load_manual_map(dir, &["removed.txt", "removed_custom.txt"]);
         Some(Self {
             dictionary,
-            manual: std::collections::HashMap::new(),
-            removals: std::collections::HashMap::new(),
+            manual,
+            removals,
+            expansion: OnceLock::new(),
+            resource_dir: Some(dir.to_path_buf()),
         })
     }
 
     pub fn load_manual_data(&mut self, added: &str, removed: &str) {
-        for line in added.lines() {
-            let line = line.trim();
-            if line.is_empty() || line.starts_with('#') {
-                continue;
-            }
-            let mut parts = line.splitn(3, '\t');
-            let (Some(form), Some(lemma), Some(tag)) = (parts.next(), parts.next(), parts.next())
-            else {
-                continue;
-            };
-            self.manual
-                .entry(form.into())
-                .or_default()
-                .push((lemma.into(), tag.trim().into()));
-        }
-        for line in removed.lines() {
-            let line = line.trim();
-            if line.is_empty() || line.starts_with('#') {
-                continue;
-            }
-            let mut parts = line.splitn(3, '\t');
-            let (Some(form), Some(lemma), Some(tag)) = (parts.next(), parts.next(), parts.next())
-            else {
-                continue;
-            };
-            self.removals
-                .entry(form.into())
-                .or_default()
-                .push((lemma.into(), tag.trim().into()));
-        }
+        append_manual_lines(&mut self.manual, added);
+        append_manual_lines(&mut self.removals, removed);
     }
 
     pub fn entry_count(&self) -> usize {
         self.dictionary.len()
     }
 
-    fn lookup(&self, word: &str) -> Vec<(Box<str>, Box<str>)> {
-        let mut readings: Readings = self
-            .manual
-            .get(word)
-            .map(|v| v.to_vec())
-            .unwrap_or_default();
-        readings.extend(self.dictionary.lookup(word).iter().cloned());
+    fn word_tag(&self, word: &str) -> Readings {
+        let mut readings: Readings = self.manual.get(word).cloned().unwrap_or_default();
+        readings.extend(self.dictionary.lookup(word).iter().copied());
         if let Some(removals) = self.removals.get(word) {
             readings.retain(|(lemma, tag)| {
                 !removals
@@ -97,70 +1049,1145 @@ impl GermanTagger {
         readings
     }
 
-    pub fn tag_word(&self, surface: &str, start: usize, end: usize) -> Vec<AnalyzedToken> {
-        let normalized: String;
-        let word: &str = if surface.len() > 1 && surface.contains('’') {
-            normalized = surface.replace('’', "'");
-            &normalized
-        } else {
-            surface
+    fn expansions(&self) -> &Arc<ExpansionInfos> {
+        if let Some(cached) = self.expansion.get() {
+            return cached;
+        }
+        static SHARED: std::sync::OnceLock<
+            std::sync::Mutex<std::collections::HashMap<std::path::PathBuf, Arc<ExpansionInfos>>>,
+        > = std::sync::OnceLock::new();
+        let shared = SHARED.get_or_init(Default::default);
+        let key = self
+            .resource_dir
+            .clone()
+            .unwrap_or_else(|| std::path::PathBuf::from("/nonexistent"));
+        let built = {
+            let mut guard = shared.lock().unwrap();
+            Arc::clone(
+                guard
+                    .entry(key)
+                    .or_insert_with(|| Arc::new(self.build_expansion_infos())),
+            )
         };
-        let lower = word.to_lowercase();
-        let is_lowercase = word == lower;
+        let _ = self.expansion.set(built);
+        self.expansion.get().expect("expansion just set")
+    }
 
-        let mut readings = self.readings_for(word, start, end);
-        if !is_lowercase {
-            readings.extend(self.readings_for(&lower, start, end));
+    fn build_expansion_infos(&self) -> ExpansionInfos {
+        let mut infos = ExpansionInfos::default();
+        let Some(dir) = &self.resource_dir else {
+            return infos;
+        };
+        let Ok(spelling) = std::fs::read_to_string(dir.join("hunspell/spelling.txt")) else {
+            return infos;
+        };
+        let adj_tag_sets: [(&[&'static str], &str); 6] = [
+            (TAGS_FOR_ADJ, ""),
+            (TAGS_FOR_ADJ_E, "e"),
+            (TAGS_FOR_ADJ_EN, "en"),
+            (TAGS_FOR_ADJ_ER, "er"),
+            (TAGS_FOR_ADJ_EM, "em"),
+            (TAGS_FOR_ADJ_ES, "es"),
+        ];
+        let pa2_sets: [Vec<&'static str>; 6] = [
+            to_pa2(TAGS_FOR_ADJ),
+            to_pa2(TAGS_FOR_ADJ_E),
+            to_pa2(TAGS_FOR_ADJ_EN),
+            to_pa2(TAGS_FOR_ADJ_ER),
+            to_pa2(TAGS_FOR_ADJ_EM),
+            to_pa2(TAGS_FOR_ADJ_ES),
+        ];
+        for line_original in spelling.lines() {
+            if line_original.is_empty() || line_original.starts_with('#') {
+                continue;
+            }
+            let line = match line_original.find('#') {
+                Some(idx) => line_original[..idx].trim(),
+                None => line_original.trim(),
+            };
+            if line.is_empty() || line.ends_with("/PA") || line.ends_with("/AP") {
+                continue;
+            }
+            let base = line.split('/').next().unwrap_or(line);
+            if line.ends_with("/P") {
+                let word: &'static str = Box::leak(base.to_string().into_boxed_str());
+                for (i, (_, suffix)) in adj_tag_sets.iter().enumerate() {
+                    fill_adj_infos(word, suffix, &pa2_sets[i], &mut infos.adj_infos);
+                }
+            } else if line.ends_with("/A") && !line.ends_with("ste/A") && !line.ends_with("er/A") {
+                let word: &'static str = Box::leak(base.to_string().into_boxed_str());
+                for (tags, suffix) in adj_tag_sets.iter() {
+                    fill_adj_infos(word, suffix, tags, &mut infos.adj_infos);
+                }
+            } else {
+                add_verb_line(line, &mut infos, &self.dictionary);
+            }
+        }
+        infos
+    }
+
+    pub fn tag_word(&self, surface: &str, start: usize, end: usize) -> Vec<AnalyzedToken> {
+        let tokens: Vec<(&str, usize, usize)> = vec![(surface, start, end)];
+        let mut ctx = TokenCtx::new();
+        self.analyze_token(surface, start, end, &tokens, 0, &mut ctx)
+    }
+
+    pub fn lookup(&self, word: &str) -> Option<Vec<AnalyzedToken>> {
+        let tokens: Vec<(&str, usize, usize)> = vec![(word, 0, word.len())];
+        let mut ctx = TokenCtx {
+            first_word: false,
+            prev_word: None,
+            pos: usize::MAX,
+        };
+        let readings = self.analyze_token(word, 0, word.len(), &tokens, 0, &mut ctx);
+        if readings.first().is_some_and(|r| r.pos_tags().is_empty()) {
+            return None;
+        }
+        Some(readings)
+    }
+
+    fn analyze_token(
+        &self,
+        word: &str,
+        start: usize,
+        end: usize,
+        tokens: SentTokens,
+        token_idx: usize,
+        ctx: &mut TokenCtx,
+    ) -> Vec<AnalyzedToken> {
+        let mut tagger_tokens: Option<Readings> = None;
+        if token_idx + 2 < tokens.len() {
+            let mid = tokens[token_idx + 1].0;
+            let next = tokens[token_idx + 2].0;
+            if matches!(mid, "*" | ":" | "_" | "/") {
+                if matches_after_asterisk(next) {
+                    let mut combined = self.word_tag(word);
+                    combined.extend(self.word_tag(&format!("{word}{next}")));
+                    tagger_tokens = Some(combined);
+                } else if innen_pattern1(next) {
+                    let last_part = next.strip_suffix('-').unwrap_or(next);
+                    tagger_tokens = Some(self.word_tag(last_part));
+                } else if innen_pattern2(next)
+                    && let Some(idx) = next.rfind("innen")
+                {
+                    let tail = uppercase_first(&next[idx + "innen".len()..]);
+                    tagger_tokens = Some(self.word_tag(&tail));
+                }
+            }
+        }
+        let mut tagger_tokens = tagger_tokens.unwrap_or_else(|| self.word_tag(word));
+
+        let lower = word.to_lowercase();
+        if (ctx.first_word || ctx.prev_word.as_deref() == Some(":")) && tagger_tokens.is_empty() {
+            tagger_tokens = self.word_tag(&lower);
+            ctx.first_word = !is_alphanumeric(word);
+        } else if ctx.pos == 0 {
+            tagger_tokens.extend(self.word_tag(&lower));
+        } else if ctx.pos > 1 && tagger_tokens.is_empty() {
+            if let Some(idx) = tokens.iter().position(|t| t.0 == word).filter(|i| *i > 2) {
+                if tokens[idx - 1].0 == "„" && tokens[idx - 3].0 == ":" {
+                    tagger_tokens.extend(self.word_tag(&lower));
+                }
+            }
+        }
+
+        let mut readings: Vec<AnalyzedToken> = Vec::new();
+        if !tagger_tokens.is_empty() {
+            readings.extend(
+                tagger_tokens
+                    .iter()
+                    .map(|(l, t)| token_from(word, start, end, l, t)),
+            );
+            let word_lower = word.to_lowercase();
+            if !starts_with_any(&word_lower, PREFIXES_SEPARABLE)
+                && !contains_any(&word_lower, NOT_A_VERB)
+                && (word == title_case(word) || word == word_lower)
+            {
+                let (lst_prt, frst_prt) = if starts_with_any(&word_lower, PREFIXES_NON_SEPARABLE) {
+                    let lst = strip_prefix_re(&word_lower, PREFIXES_NON_SEPARABLE);
+                    let frst = word.strip_suffix(lst.as_str()).unwrap_or("").to_string();
+                    (lst, frst)
+                } else {
+                    (word.to_string(), String::new())
+                };
+                let verbs = self.word_tag(&lst_prt);
+                let at_start = tokens.iter().position(|t| t.0 == word) == Some(0)
+                    || word == lowercase_first(word);
+                if at_start && !NO_IMPERATIVE_SWAP.contains(&lst_prt.as_str()) {
+                    for (lemma, tag) in &verbs {
+                        if tag.starts_with("VER:IMP:SIN:SFT")
+                            && !readings_contain_tag(&readings, "VER:1:SIN:PRÄ:SFT")
+                        {
+                            readings.push(token_from(
+                                word,
+                                start,
+                                end,
+                                &format!("{}{}", frst_prt.to_lowercase(), lemma),
+                                "VER:1:SIN:PRÄ:SFT",
+                            ));
+                        }
+                        if tag.starts_with("VER:1:SIN:PRÄ:SFT")
+                            && !readings_contain_tag(&readings, "VER:IMP:SIN:SFT")
+                        {
+                            readings.push(token_from(
+                                word,
+                                start,
+                                end,
+                                &format!("{}{}", frst_prt.to_lowercase(), lemma),
+                                "VER:IMP:SIN:SFT",
+                            ));
+                        }
+                    }
+                }
+            }
+        } else {
+            self.expand_unknown(word, start, end, tokens, token_idx, ctx, &mut readings);
+        }
+        if readings.is_empty() {
+            readings.push(no_info_token(word, start, end));
         }
         readings
     }
 
-    fn readings_for(&self, word: &str, start: usize, end: usize) -> Vec<AnalyzedToken> {
-        self.lookup(word)
-            .into_iter()
+    fn expand_unknown(
+        &self,
+        word: &str,
+        start: usize,
+        end: usize,
+        tokens: SentTokens,
+        token_idx: usize,
+        ctx: &mut TokenCtx,
+        readings: &mut Vec<AnalyzedToken>,
+    ) {
+        let expansions = self.expansions();
+        let add_noun_tags = !NOUN_TAG_EXPANSION_EXCEPTIONS.contains(&word);
+        let verb_info = expansions.verb_infos.get(word);
+        let nom_verb_info = expansions.nom_verb_infos.get(word);
+        let nom_gen_verb_info = expansions.nom_gen_verb_infos.get(word);
+        let adj_infos = expansions.adj_infos.get(word);
+
+        if let Some(info) = verb_info.filter(|i| starts_lowercase(i.prefix)) {
+            let no_prefix_form = &word[info.prefix.len() + info.infix.len()..];
+            let tags = self.word_tag(no_prefix_form);
+            let mut is_sft = false;
+            for (lemma, tag) in &tags {
+                if (tag.starts_with("VER:") || tag.starts_with("PA1:") || tag.starts_with("PA2:"))
+                    && !tag.starts_with("VER:MOD")
+                    && !tag.starts_with("VER:AUX")
+                {
+                    let flektion = &tag[tag.len().saturating_sub(3)..];
+                    if starts_with_any(info.prefix, PREFIXES_SEPARABLE)
+                        && !contains_any(word, NOT_A_VERB)
+                    {
+                        let at_start = tokens.iter().position(|t| t.0 == word) == Some(0)
+                            || word == lowercase_first(word);
+                        if (tag.starts_with("VER:1")
+                            || tag.starts_with("VER:2")
+                            || tag.starts_with("VER:3"))
+                            && at_start
+                        {
+                            readings.push(token_from(
+                                word,
+                                start,
+                                end,
+                                &format!("{}{}", info.prefix, lemma),
+                                &format!("{tag}:NEB"),
+                            ));
+                        } else if !tag.starts_with("VER:IMP") {
+                            readings.push(token_from(
+                                word,
+                                start,
+                                end,
+                                &format!("{}{}", info.prefix, lemma),
+                                tag,
+                            ));
+                        } else if tag.starts_with("VER:IMP:SIN")
+                            && (flektion == "SFT" || !has_i_then_more(word))
+                        {
+                            readings.push(token_from(
+                                word,
+                                start,
+                                end,
+                                &format!("{}{}", info.prefix, lemma),
+                                &format!("VER:1:SIN:PRÄ:{flektion}:NEB"),
+                            ));
+                        }
+                    } else if starts_with_any(info.prefix, PREFIXES_NON_SEPARABLE)
+                        && !contains_any(word, NOT_A_VERB)
+                    {
+                        if tag.starts_with("VER:IMP:SIN") || tag.starts_with("VER:1:SIN:PRÄ") {
+                            if flektion == "SFT" || !has_i_then_more(word) {
+                                readings.push(token_from(
+                                    word,
+                                    start,
+                                    end,
+                                    &format!("{}{}", info.prefix, lemma),
+                                    &format!("VER:IMP:SIN{flektion}"),
+                                ));
+                                readings.push(token_from(
+                                    word,
+                                    start,
+                                    end,
+                                    &format!("{}{}", info.prefix, lemma),
+                                    &format!("VER:1:SIN:PRÄ:{flektion}"),
+                                ));
+                            }
+                        } else {
+                            readings.push(token_from(
+                                word,
+                                start,
+                                end,
+                                &format!("{}{}", info.prefix, lemma),
+                                tag,
+                            ));
+                        }
+                    }
+                    if tag.contains(":SFT") {
+                        is_sft = true;
+                    }
+                }
+            }
+            if info.infix == "zu" {
+                readings.clear();
+                let form = if is_sft { "SFT" } else { "NON" };
+                readings.push(token_from(
+                    word,
+                    start,
+                    end,
+                    &format!("{}{}", info.prefix, info.verb_baseform),
+                    &format!("VER:EIZ:{form}"),
+                ));
+            }
+        } else if let Some(info) = nom_verb_info.filter(|_| add_noun_tags) {
+            let lemma = format!("{}{}", info.prefix, info.verb_baseform);
+            for tag in [
+                "SUB:NOM:SIN:NEU:INF",
+                "SUB:AKK:SIN:NEU:INF",
+                "SUB:DAT:SIN:NEU:INF",
+            ] {
+                readings.push(token_from(word, start, end, &lemma, tag));
+            }
+        } else if let Some(info) = nom_gen_verb_info.filter(|_| add_noun_tags) {
+            let lemma = format!("{}{}", info.prefix, info.verb_baseform);
+            readings.push(token_from(word, start, end, &lemma, "SUB:GEN:SIN:NEU:INF"));
+        } else if let Some(adj) = adj_infos {
+            for info in adj {
+                readings.push(token_from(word, start, end, info.baseform, info.tag));
+            }
+        } else if self.is_weise_exception(word) {
+            for tag in TAGS_FOR_WEISE {
+                readings.push(token_from(word, start, end, word, tag));
+            }
+        } else if !word.trim().is_empty() && mitarbeitenden_pattern(word) {
+            if let Some(idx) = word.find("mitarbeitende") {
+                let first_part = &word[..idx];
+                let last_part = &word[idx..];
+                let tagged = self.word_tag(&uppercase_first(last_part));
+                for (_lemma, tag) in &tagged {
+                    readings.push(token_from(
+                        word,
+                        start,
+                        end,
+                        &format!("{first_part}mitarbeitende"),
+                        tag,
+                    ));
+                }
+            }
+        } else if !word.trim().is_empty() {
+            let compound_parts = self.compound_tokenize(word);
+            if compound_parts.len() <= 1 {
+                let imperative = self.get_imperative_form(word, start, end, tokens, ctx);
+                if !imperative.is_empty() {
+                    readings.extend(imperative);
+                } else {
+                    let substantivated = self.get_substantivated_forms(word, start, end, tokens);
+                    if !substantivated.is_empty() {
+                        readings.extend(substantivated);
+                    } else {
+                        self.expand_unknown_simple(word, start, end, tokens, readings);
+                    }
+                }
+            } else if !is_domain(tokens, token_idx) {
+                self.expand_compound_last_part(word, start, end, tokens, &compound_parts, readings);
+            }
+        }
+    }
+
+    fn expand_unknown_simple(
+        &self,
+        word: &str,
+        start: usize,
+        end: usize,
+        tokens: SentTokens,
+        readings: &mut Vec<AnalyzedToken>,
+    ) {
+        if starts_with_any(word, ADJ_PREFIX_GATE)
+            && let Some(last_part) = strip_adj_prefix(word)
+            && last_part.chars().count() > 3
+        {
+            let first_part = word.strip_suffix(last_part.as_str()).unwrap_or("");
+            let tagged = self.word_tag(&last_part);
+            for (lemma, tag) in &tagged {
+                if !(first_part.chars().count() == 2 && tag.starts_with("VER")) {
+                    readings.push(token_from(
+                        word,
+                        start,
+                        end,
+                        &format!("{first_part}{lemma}"),
+                        tag,
+                    ));
+                }
+            }
+        }
+        if space_split_count(word) == 1 && !word.chars().next().is_some_and(|c| c.is_numeric()) {
+            let sanitized = self.sanitize_word(word);
+            let word_stem = &word[..word.len() - sanitized.len()];
+            let compounded = self.compound_tokenize(&sanitized);
+            let mut lookup_word = compounded
+                .last()
+                .cloned()
+                .unwrap_or_else(|| sanitized.clone());
+            if compounded.len() > 1 {
+                lookup_word = uppercase_first(&lookup_word);
+            }
+            let mut linked = self.add_stem(&self.word_tag(&lookup_word), word_stem);
+            if word.contains('-')
+                && linked.is_empty()
+                && self.matches_uppercase_adjective(&lookup_word)
+            {
+                let lowered = lowercase_first(&lookup_word);
+                linked = self.word_tag(&lowered);
+            }
+            if linked.is_empty() {
+                let word_lower = word.to_lowercase();
+                if starts_with_any(&word_lower, PREFIXES_VERBS)
+                    && !contains_any(&word_lower, NOT_A_VERB)
+                    && (word == title_case(word) || word == word_lower)
+                {
+                    let last_part = strip_prefix_re(&word_lower, PREFIXES_VERBS);
+                    if last_part.chars().count() > 2 {
+                        let first_part = word.strip_suffix(last_part.as_str()).unwrap_or("");
+                        self.expand_separable_verb(
+                            word, start, end, tokens, first_part, &last_part, readings,
+                        );
+                    }
+                } else {
+                    readings.push(no_info_token(word, start, end));
+                }
+            } else if starts_uppercase(word) {
+                for (lemma, tag) in &linked {
+                    readings.push(token_from(word, start, end, lemma, tag));
+                }
+            } else {
+                for (lemma, tag) in &linked {
+                    if tag.starts_with("VER:IMP") {
+                        continue;
+                    }
+                    let mut full_lemma = String::new();
+                    for (i, part) in compounded[..compounded.len() - 1].iter().enumerate() {
+                        if i == 0 {
+                            full_lemma.push_str(part);
+                        } else {
+                            full_lemma.push_str(&lowercase_first(part));
+                        }
+                    }
+                    full_lemma.push_str(&lowercase_first(lemma));
+                    readings.push(token_from(word, start, end, &full_lemma, tag));
+                }
+            }
+        } else {
+            readings.push(no_info_token(word, start, end));
+        }
+    }
+
+    fn expand_separable_verb(
+        &self,
+        word: &str,
+        start: usize,
+        end: usize,
+        tokens: SentTokens,
+        first_part: &str,
+        last_part: &str,
+        readings: &mut Vec<AnalyzedToken>,
+    ) {
+        if let Some(infinitiv) = last_part.strip_prefix("zu") {
+            let infs = self.word_tag(infinitiv);
+            for (lemma, tag) in &infs {
+                if tag.starts_with("VER:INF") {
+                    let pstg = tag.replacen("INF", "EIZ", 1);
+                    readings.push(token_from(
+                        word,
+                        start,
+                        end,
+                        &format!("{first_part}{lemma}"),
+                        &pstg,
+                    ));
+                }
+            }
+        }
+        let at_start =
+            tokens.iter().position(|t| t.0 == word) == Some(0) || word == word.to_lowercase();
+        let first_lower = first_part.to_lowercase();
+        let tagged_words = self.word_tag(last_part);
+        for (lemma, tag) in &tagged_words {
+            if tag.starts_with("VER")
+                && !tag.starts_with("VER:PA")
+                && !tag.starts_with("VER:AUX")
+                && !tag.starts_with("VER:MOD")
+                && first_part != "un"
+            {
+                if tag.starts_with("VER:INF") {
+                    if word == uppercase_first(word) {
+                        readings.push(token_from(word, start, end, word, "SUB:NOM:SIN:NEU:INF"));
+                        readings.push(token_from(word, start, end, word, "SUB:DAT:SIN:NEU:INF"));
+                        readings.push(token_from(word, start, end, word, "SUB:AKK:SIN:NEU:INF"));
+                        if tokens.iter().position(|t| t.0 == word) == Some(0) {
+                            readings.push(token_from(
+                                word,
+                                start,
+                                end,
+                                &format!("{first_lower}{lemma}"),
+                                tag,
+                            ));
+                        }
+                    } else {
+                        readings.push(token_from(
+                            word,
+                            start,
+                            end,
+                            &format!("{first_lower}{lemma}"),
+                            tag,
+                        ));
+                    }
+                } else if tag.starts_with("VER:IMP") {
+                    let flekt = &tag[tag.len().saturating_sub(3)..];
+                    if at_start && !PREFIXES_SEPARABLE.contains(&first_lower.as_str()) {
+                        readings.push(token_from(
+                            word,
+                            start,
+                            end,
+                            &format!("{first_lower}{lemma}"),
+                            tag,
+                        ));
+                        if tag.starts_with("VER:IMP:SIN") {
+                            readings.push(token_from(
+                                word,
+                                start,
+                                end,
+                                &format!("{first_part}{lemma}"),
+                                &format!("VER:1:SIN:PRÄ:{flekt}"),
+                            ));
+                        }
+                    } else if at_start && (flekt == "SFT" || !has_i_then_more(word)) {
+                        readings.push(token_from(
+                            word,
+                            start,
+                            end,
+                            &format!("{first_part}{lemma}"),
+                            &format!("VER:1:SIN:PRÄ:{flekt}:NEB"),
+                        ));
+                    }
+                } else if PREFIXES_SEPARABLE.contains(&first_lower.as_str()) && at_start {
+                    let new_tag = if tag.ends_with(":NEB") {
+                        tag.to_string()
+                    } else {
+                        format!("{tag}:NEB")
+                    };
+                    readings.push(token_from(
+                        word,
+                        start,
+                        end,
+                        &format!("{first_lower}{lemma}"),
+                        &new_tag,
+                    ));
+                    if (first_part == "durch" || first_part == "um")
+                        && tag.starts_with("VER:3:SIN:PRÄ")
+                    {
+                        if tag.starts_with("VER:3:SIN:PRÄ:SFT") {
+                            readings.push(token_from(
+                                word,
+                                start,
+                                end,
+                                &format!("{first_part}{lemma}"),
+                                "VER:PA2:SFT",
+                            ));
+                        } else {
+                            readings.push(token_from(
+                                word,
+                                start,
+                                end,
+                                &format!("{first_part}{lemma}"),
+                                "VER:PA2:NON",
+                            ));
+                        }
+                        readings.push(token_from(word, start, end, word, "PA2:PRD:GRU:VER"));
+                    }
+                } else if PREFIXES_NON_SEPARABLE.contains(&first_lower.as_str()) && at_start {
+                    readings.push(token_from(
+                        word,
+                        start,
+                        end,
+                        &format!("{first_lower}{lemma}"),
+                        tag,
+                    ));
+                    if tag.starts_with("VER:3:SIN:PRÄ:SFT")
+                        || (tag.starts_with("VER:1:PLU:PRÄ:NON")
+                            && PARTIZIP2CONTAINS1PLUPRA.iter().any(|v| lemma.contains(v)))
+                        || (tag.starts_with("VER:1:PLU:PRT:NON")
+                            && PARTIZIP2CONTAINS1PLUPRT.iter().any(|v| lemma.contains(v)))
+                    {
+                        if first_part != "un" {
+                            let fl = &tag[tag.len().saturating_sub(3)..];
+                            readings.push(token_from(
+                                word,
+                                start,
+                                end,
+                                &format!("{first_part}{lemma}"),
+                                &format!("VER:PA2:{fl}"),
+                            ));
+                        }
+                        readings.push(token_from(word, start, end, word, "PA2:PRD:GRU:VER"));
+                    }
+                }
+            } else if (tag.starts_with("PA") || tag.starts_with("VER:PA"))
+                && at_start
+                && !(first_part == "un" && tag.starts_with("VER:PA"))
+            {
+                readings.push(token_from(
+                    word,
+                    start,
+                    end,
+                    &format!("{first_lower}{lemma}"),
+                    tag,
+                ));
+            }
+        }
+        let partizip_suffixes: [(&str, &[&str]); 5] = [
+            ("e", POSTAGSPARTIZIPENDINGE),
+            ("em", POSTAGSPARTIZIPENDINGEM),
+            ("en", POSTAGSPARTIZIPENDINGEN),
+            ("er", POSTAGSPARTIZIPENDINGER),
+            ("es", POSTAGSPARTIZIPENDINGES),
+        ];
+        for (suffix, tags) in partizip_suffixes {
+            let Some(stripped) = last_part.strip_suffix(suffix) else {
+                continue;
+            };
+            let tagged_middle = self.word_tag(stripped);
+            for (lemma, tag) in &tagged_middle {
+                if tag.starts_with("VER:3:SIN:PRÄ:SFT") && at_start && !lemma.is_empty() {
+                    let stem = &word[..word.len() - suffix.len()];
+                    for pos_tag in tags {
+                        readings.push(token_from(
+                            word,
+                            start,
+                            end,
+                            stem,
+                            &format!("PA2:{pos_tag}"),
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    fn expand_compound_last_part(
+        &self,
+        word: &str,
+        start: usize,
+        end: usize,
+        tokens: SentTokens,
+        compound_parts: &[String],
+        readings: &mut Vec<AnalyzedToken>,
+    ) {
+        let Some(last) = compound_parts.last() else {
+            readings.push(no_info_token(word, start, end));
+            return;
+        };
+        let mut last_part = last.clone();
+        if starts_uppercase(word)
+            && !["freie", "freier", "freien", "freies", "freiem"]
+                .iter()
+                .any(|f| last_part.contains(f))
+        {
+            last_part = uppercase_first(&last_part);
+        }
+        let part_tagger_tokens = self.word_tag(&last_part);
+        if part_tagger_tokens.is_empty() {
+            readings.push(no_info_token(word, start, end));
+            return;
+        }
+        let first_part = compound_parts[0].as_str();
+        if COMPOUND_VERB_PREFIXES.contains(&first_part) {
+            let at_start =
+                tokens.iter().position(|t| t.0 == word) == Some(0) || word == lowercase_first(word);
+            for (lemma, tag) in &part_tagger_tokens {
+                if (tag.starts_with("VER:1")
+                    || tag.starts_with("VER:2")
+                    || tag.starts_with("VER:3"))
+                    && at_start
+                {
+                    let new_tag = if tag.ends_with("NEB") {
+                        tag.to_string()
+                    } else {
+                        format!("{tag}:NEB")
+                    };
+                    readings.push(token_from(
+                        word,
+                        start,
+                        end,
+                        &format!("{first_part}{lemma}"),
+                        &new_tag,
+                    ));
+                } else if !tag.starts_with("VER:IMP") {
+                    readings.push(token_from(
+                        word,
+                        start,
+                        end,
+                        &format!("{first_part}{lemma}"),
+                        tag,
+                    ));
+                }
+            }
+        } else {
+            let mut lemma = String::new();
+            for (i, part) in compound_parts[..compound_parts.len() - 1]
+                .iter()
+                .enumerate()
+            {
+                if i == 0 {
+                    lemma.push_str(part);
+                } else {
+                    lemma.push_str(&lowercase_first(part));
+                }
+            }
+            for (l, tag) in &part_tagger_tokens {
+                if tag.contains("VER") {
+                    continue;
+                }
+                let full_lemma = format!("{}{}", lemma, lowercase_first(l));
+                readings.push(token_from(word, start, end, &full_lemma, tag));
+            }
+        }
+    }
+
+    fn get_imperative_form(
+        &self,
+        word: &str,
+        start: usize,
+        end: usize,
+        tokens: SentTokens,
+        ctx: &TokenCtx,
+    ) -> Vec<AnalyzedToken> {
+        let idx = tokens.iter().position(|t| t.0 == word);
+        let mut previous_word = "";
+        if let Some(mut i) = idx {
+            while i > 0 {
+                i -= 1;
+                previous_word = tokens[i].0;
+                if !previous_word.chars().all(|c| c.is_whitespace()) {
+                    break;
+                }
+            }
+        }
+        let prev_ok = [
+            "ich", "er", "es", "sie", "bitte", "aber", "nun", "jetzt", "„",
+        ]
+        .iter()
+        .any(|p| p.eq_ignore_ascii_case(previous_word));
+        if !(ctx.pos == 0 && tokens.len() > 1) && !prev_ok {
+            return Vec::new();
+        }
+        let w = if ctx.pos == 0 || previous_word == "„" {
+            word.to_lowercase()
+        } else {
+            word.to_string()
+        };
+        let tagged_with_e = self.word_tag(&format!("{w}e"));
+        for (lemma, tag) in &tagged_with_e {
+            if tag.starts_with("VER:IMP:SIN") {
+                let removed = self
+                    .removals
+                    .get(w.as_str())
+                    .is_some_and(|r| r.iter().any(|(rl, rt)| rl == lemma && rt == tag));
+                if !removed {
+                    return vec![token_from(word, start, end, lemma, tag)];
+                }
+                break;
+            }
+        }
+        Vec::new()
+    }
+
+    fn get_substantivated_forms(
+        &self,
+        word: &str,
+        start: usize,
+        end: usize,
+        tokens: SentTokens,
+    ) -> Vec<AnalyzedToken> {
+        if !word.ends_with("er") {
+            return Vec::new();
+        }
+        let stem = &word[..word.len() - 2];
+        if stem.chars().count() >= 4 && stem.chars().all(|c| c.is_ascii_digit()) {
+            return all_adj_gru_tags()
+                .iter()
+                .map(|t| token_from(word, start, end, word, t))
+                .collect();
+        }
+        let lower_tags = self.word_tag(&word.to_lowercase());
+        if lower_tags.iter().any(|(_, t)| t.starts_with("ADV")) {
+            return Vec::new();
+        }
+        let idx = tokens.iter().position(|t| t.0 == word);
+        if let Some(mut i) = idx {
+            i += 1;
+            while i < tokens.len() {
+                let next_word = tokens[i].0;
+                if next_word.chars().all(|c| c.is_whitespace()) {
+                    i += 1;
+                    continue;
+                }
+                if next_word.chars().next().is_some_and(|c| c.is_uppercase()) || next_word == "als"
+                {
+                    return Vec::new();
+                }
+                break;
+            }
+        }
+        let female_form = &word[..word.len() - 1];
+        let tagged_female = self.word_tag(female_form);
+        if tagged_female
+            .iter()
+            .any(|(_, t)| *t == "SUB:NOM:SIN:FEM:ADJ")
+        {
+            return vec![
+                token_from(word, start, end, word, "SUB:NOM:SIN:MAS:ADJ"),
+                token_from(word, start, end, word, "SUB:GEN:PLU:MAS:ADJ"),
+            ];
+        }
+        Vec::new()
+    }
+
+    fn is_weise_exception(&self, word: &str) -> bool {
+        word.strip_suffix("erweise").is_some_and(|stem| {
+            self.word_tag(stem)
+                .iter()
+                .any(|(_, t)| t.starts_with("ADJ"))
+        })
+    }
+
+    fn matches_uppercase_adjective(&self, word: &str) -> bool {
+        let lowered = lowercase_first(word);
+        self.word_tag(&lowered)
+            .first()
+            .is_some_and(|(_, t)| t.starts_with("ADJ"))
+    }
+
+    fn sanitize_word(&self, word: &str) -> String {
+        if word.ends_with('-') {
+            return word.to_string();
+        }
+        let split: Vec<&str> = word.split('-').collect();
+        let base = if split.len() > 1 && !split[split.len() - 1].trim().is_empty() {
+            split[split.len() - 1]
+        } else {
+            word
+        };
+        let compounded = self.compound_tokenize(base);
+        let last_part = if compounded.len() > 1 && starts_uppercase(word) {
+            uppercase_last(&compounded)
+        } else {
+            compounded
+                .last()
+                .cloned()
+                .unwrap_or_else(|| base.to_string())
+        };
+        let tagged = self.word_tag(&last_part);
+        if !tagged.is_empty()
+            && (tagged[0].1.starts_with("SUB")
+                || tagged[0].1.starts_with("ADJ")
+                || self.matches_uppercase_adjective(&last_part))
+        {
+            last_part
+        } else {
+            word.to_string()
+        }
+    }
+
+    fn add_stem(&self, tagged: &Readings, stem: &str) -> Readings {
+        if stem.is_empty() {
+            return tagged.to_vec();
+        }
+        tagged
+            .iter()
             .map(|(lemma, tag)| {
-                AnalyzedToken::new(word, start, end)
-                    .with_lemma(lemma.into_string())
-                    .with_pos_tags(vec![tag.into_string()])
+                let new_lemma = if !stem.ends_with('-') && tag.starts_with("SUB") {
+                    lemma.to_lowercase()
+                } else {
+                    lemma.to_string()
+                };
+                (
+                    Box::leak(format!("{stem}{new_lemma}").into_boxed_str()) as &'static str,
+                    *tag,
+                )
+            })
+            .collect()
+    }
+
+    fn compound_tokenize(&self, word: &str) -> Vec<String> {
+        if word.is_empty() {
+            return Vec::new();
+        }
+        crate::jwordsplitter::tokenize(word)
+    }
+
+    fn analyze(&self, tokens: &[(&str, usize, usize)]) -> Vec<Vec<AnalyzedToken>> {
+        let mut ctx = TokenCtx::new();
+        let mut out = Vec::with_capacity(tokens.len());
+        for (idx, (word, start, end)) in tokens.iter().enumerate() {
+            let readings = self.analyze_token(word, *start, *end, tokens, idx, &mut ctx);
+            ctx.pos += word.chars().count();
+            ctx.prev_word = Some(word.to_string());
+            out.push(readings);
+        }
+        out
+    }
+}
+
+fn append_manual_lines(map: &mut ReadingMap, content: &str) {
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let mut parts = line.splitn(3, '\t');
+        let (Some(form), Some(lemma), Some(tag)) = (parts.next(), parts.next(), parts.next())
+        else {
+            continue;
+        };
+        let form_leaked: &'static str = Box::leak(form.to_string().into_boxed_str());
+        let lemma_leaked: &'static str = Box::leak(lemma.to_string().into_boxed_str());
+        let tag_leaked: &'static str = Box::leak(tag.trim().to_string().into_boxed_str());
+        map.entry(form_leaked.into())
+            .or_default()
+            .push((lemma_leaked, tag_leaked));
+    }
+}
+
+fn token_from(surface: &str, start: usize, end: usize, lemma: &str, tag: &str) -> AnalyzedToken {
+    AnalyzedToken::new(surface, start, end)
+        .with_lemma(lemma.to_string())
+        .with_pos_tags(vec![tag.to_string()])
+}
+
+fn no_info_token(surface: &str, start: usize, end: usize) -> AnalyzedToken {
+    AnalyzedToken::new(surface, start, end)
+}
+
+fn readings_contain_tag(readings: &[AnalyzedToken], needle: &str) -> bool {
+    readings
+        .iter()
+        .any(|r| r.pos_tags().iter().any(|t| t.starts_with(needle)))
+}
+
+fn matches_after_asterisk(s: &str) -> bool {
+    matches!(s, "in" | "innen" | "r" | "e")
+}
+
+fn innen_pattern1(s: &str) -> bool {
+    let rest = s
+        .strip_prefix("innen")
+        .or_else(|| (s.len() >= 2 && (s.starts_with("in"))).then(|| &s[2..]));
+    let Some(rest) = rest else {
+        return false;
+    };
+    let Some(after_dash) = rest.strip_prefix('-') else {
+        return false;
+    };
+    let mut chars = after_dash.chars();
+    if !chars.next().is_some_and(|c| c.is_uppercase()) {
+        return false;
+    }
+    after_dash.chars().all(|c| c.is_alphabetic() || c == '-')
+}
+
+fn innen_pattern2(s: &str) -> bool {
+    let Some(idx) = s.find("innen") else {
+        return false;
+    };
+    let after = &s[idx + 5..];
+    !after.is_empty() && after.chars().all(|c| c.is_lowercase() || c == '-')
+}
+
+fn mitarbeitenden_pattern(word: &str) -> bool {
+    let stem = if let Some(s) = word.strip_suffix("mitarbeitende") {
+        s
+    } else if let Some(s) = word.strip_suffix("mitarbeitenden") {
+        s
+    } else {
+        return false;
+    };
+    let stem_chars: Vec<char> = stem.chars().collect();
+    if stem_chars.len() < 2 || stem_chars.len() > 25 {
+        return false;
+    }
+    stem_chars.first().is_some_and(|c| c.is_uppercase())
+        && stem_chars[1..]
+            .iter()
+            .all(|c| c.is_lowercase() || *c == 'ß' || *c == 'ä' || *c == 'ö' || *c == 'ü')
+}
+
+fn is_domain(tokens: SentTokens, token_idx: usize) -> bool {
+    token_idx + 2 < tokens.len()
+        && tokens[token_idx + 1].0 == "."
+        && ["com", "net", "org", "de", "at", "ch", "fr", "uk", "gov"]
+            .contains(&tokens[token_idx + 2].0)
+}
+
+fn starts_with_any(word: &str, prefixes: &[&str]) -> bool {
+    prefixes.iter().any(|p| word.starts_with(p))
+}
+
+fn contains_any(word: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|n| word.contains(n))
+}
+
+fn strip_prefix_re(word: &str, prefixes: &[&str]) -> String {
+    for p in prefixes {
+        if let Some(stripped) = word.strip_prefix(p) {
+            return stripped.to_string();
+        }
+    }
+    word.to_string()
+}
+
+fn strip_adj_prefix(word: &str) -> Option<String> {
+    for p in ADJ_PREFIX_STRIP {
+        let key = if *p == "u[nr]" { "un" } else { p };
+        if let Some(stripped) = word.strip_prefix(key) {
+            return Some(stripped.to_string());
+        }
+    }
+    word.strip_prefix("ur").map(str::to_string)
+}
+
+fn has_i_then_more(word: &str) -> bool {
+    let chars: Vec<char> = word.chars().collect();
+    (0..chars.len().saturating_sub(1)).any(|i| chars[i] == 'i')
+}
+
+fn title_case(word: &str) -> String {
+    let mut chars = word.chars();
+    match chars.next() {
+        Some(c) => c.to_uppercase().collect::<String>() + &chars.as_str().to_lowercase(),
+        None => String::new(),
+    }
+}
+
+fn uppercase_first(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
+}
+
+fn uppercase_last(parts: &[String]) -> String {
+    parts.last().map(|p| uppercase_first(p)).unwrap_or_default()
+}
+
+fn lowercase_first(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(c) => c.to_lowercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
+}
+
+fn starts_uppercase(s: &str) -> bool {
+    s.chars().next().is_some_and(|c| c.is_uppercase())
+}
+
+fn starts_lowercase(s: &str) -> bool {
+    s.chars().next().is_some_and(|c| c.is_lowercase())
+}
+
+fn is_alphanumeric(s: &str) -> bool {
+    !s.is_empty() && s.chars().all(|c| c.is_alphanumeric())
+}
+
+fn space_split_count(word: &str) -> usize {
+    word.split(' ').filter(|p| !p.is_empty()).count()
+}
+
+fn all_adj_gru_tags() -> &'static [&'static str] {
+    static TAGS: OnceLock<Vec<&'static str>> = OnceLock::new();
+    TAGS.get_or_init(|| {
+        let mut out = Vec::new();
+        for case in ["NOM", "AKK", "GEN", "DAT"] {
+            for num in ["PLU", "SIN"] {
+                for gender in ["MAS", "FEM", "NEU"] {
+                    for det in ["DEF", "IND", "SOL"] {
+                        out.push(Box::leak(
+                            format!("ADJ:{case}:{num}:{gender}:GRU:{det}").into_boxed_str(),
+                        ) as &'static str);
+                    }
+                }
+            }
+        }
+        out
+    })
+}
+
+impl Tagger for GermanTagger {
+    fn tag(&self, tokens: &[&str]) -> Vec<AnalyzedTokenReadings> {
+        let mut with_offsets: Vec<(&str, usize, usize)> = Vec::with_capacity(tokens.len());
+        let mut byte_offset = 0usize;
+        for t in tokens {
+            with_offsets.push((t, byte_offset, byte_offset + t.len()));
+            byte_offset += t.len();
+        }
+        let results = self.analyze(&with_offsets);
+        results
+            .into_iter()
+            .zip(with_offsets)
+            .map(|(readings, (text, start, end))| {
+                let all_tags: Vec<String> = readings
+                    .iter()
+                    .flat_map(|r| r.pos_tags().to_vec())
+                    .collect();
+                let lemma = readings
+                    .first()
+                    .and_then(|r| r.lemma().map(str::to_string))
+                    .unwrap_or_else(|| text.to_string());
+                let primary = AnalyzedToken::new(text, start, end)
+                    .with_pos_tags(all_tags)
+                    .with_lemma(lemma);
+                AnalyzedTokenReadings::new(primary).with_readings(readings)
             })
             .collect()
     }
 }
 
-impl Tagger for GermanTagger {
-    fn tag(&self, tokens: &[&str]) -> Vec<AnalyzedTokenReadings> {
-        let mut results = Vec::with_capacity(tokens.len());
-        let mut byte_offset = 0;
-        for token_text in tokens {
-            let start = byte_offset;
-            let end = start + token_text.len();
-            let readings = self.tag_word(token_text, start, end);
-            let all_tags: Vec<String> = readings
-                .iter()
-                .flat_map(|r| r.pos_tags().to_vec())
-                .collect();
-            let lemma = readings
-                .first()
-                .and_then(|r| r.lemma().map(str::to_string))
-                .unwrap_or_else(|| token_text.to_string());
-            let primary = AnalyzedToken::new(*token_text, start, end)
-                .with_pos_tags(all_tags)
-                .with_lemma(lemma);
-            results.push(AnalyzedTokenReadings::new(primary).with_readings(readings));
-            byte_offset = end;
-        }
-        results
-    }
-}
-
 impl og_core::checker::Tagger for GermanTagger {
-    fn tag(&self, tokens: &mut [og_core::AnalyzedTokenReadings]) {
-        for atr in tokens.iter_mut().skip(1) {
-            let primary = atr.token();
-            let surface = primary.token().to_string();
-            let start = primary.start();
-            let end = primary.end();
-            let readings = self.tag_word(&surface, start, end);
+    fn tag(&self, tokens: &mut [AnalyzedTokenReadings]) {
+        let with_offsets: Vec<(&str, usize, usize)> = tokens
+            .iter()
+            .skip(1)
+            .map(|atr| {
+                let t = atr.token();
+                (t.token(), t.start(), t.end())
+            })
+            .collect();
+        let results = self.analyze(&with_offsets);
+        for (i, readings) in results.into_iter().enumerate() {
+            let token_idx = i + 1;
+            if token_idx >= tokens.len() {
+                break;
+            }
+            let primary = tokens[token_idx].token().clone();
             let all_tags: Vec<String> = readings
                 .iter()
                 .flat_map(|r| r.pos_tags().to_vec())
@@ -168,11 +2195,11 @@ impl og_core::checker::Tagger for GermanTagger {
             let lemma = readings
                 .first()
                 .and_then(|r| r.lemma().map(str::to_string))
-                .unwrap_or_else(|| surface.clone());
-            let updated = AnalyzedToken::new(surface, start, end)
+                .unwrap_or_else(|| primary.token().to_string());
+            let updated = AnalyzedToken::new(primary.token(), primary.start(), primary.end())
                 .with_pos_tags(all_tags)
                 .with_lemma(lemma);
-            *atr = AnalyzedTokenReadings::new(updated).with_readings(readings);
+            tokens[token_idx] = AnalyzedTokenReadings::new(updated).with_readings(readings);
         }
     }
 }
@@ -191,14 +2218,14 @@ mod tests {
         .find(|p| p.join("german.dict").exists())
     }
 
+    fn tagger() -> GermanTagger {
+        let dir = resource_dir().expect("german resources");
+        GermanTagger::from_resource_dir(&dir).expect("tagger loads")
+    }
+
     #[test]
     fn tags_german_nouns_with_case_readings() {
-        let Some(dir) = resource_dir() else {
-            return;
-        };
-        let Some(tagger) = GermanTagger::from_resource_dir(&dir) else {
-            panic!("tagger must load");
-        };
+        let tagger = tagger();
         let result = Tagger::tag(&tagger, &["Haus"]);
         assert!(
             result[0].has_pos_tag("SUB:NOM:SIN:NEU"),
@@ -210,12 +2237,7 @@ mod tests {
 
     #[test]
     fn capitalized_sentence_start_falls_back_to_lowercase() {
-        let Some(dir) = resource_dir() else {
-            return;
-        };
-        let Some(tagger) = GermanTagger::from_resource_dir(&dir) else {
-            panic!("tagger must load");
-        };
+        let tagger = tagger();
         let result = Tagger::tag(&tagger, &["Der", "Hund", "schläft"]);
         assert!(
             result[0].has_pos_tag("ART:DEF:NOM:SIN:MAS"),
@@ -231,6 +2253,91 @@ mod tests {
             result[2].has_pos_tag("VER:3:SIN:PRÄ:NON"),
             "{:?}",
             result[2].all_pos_tags()
+        );
+    }
+
+    #[test]
+    fn mid_sentence_uppercase_does_not_get_lowercase_readings() {
+        let tagger = tagger();
+        let result = Tagger::tag(&tagger, &["Er", "spielte", "Lach"]);
+        let lach = result[2].readings();
+        assert!(
+            lach.iter().all(|r| r.pos_tags().is_empty()),
+            "Lach should stay untagged mid-sentence: {lach:?}"
+        );
+    }
+
+    #[test]
+    fn substantivated_adjective_gets_sub_reading() {
+        let tagger = tagger();
+        let result = Tagger::tag(
+            &tagger,
+            &["Der", "Verrückter", "ist", "wieder", "unterwegs"],
+        );
+        assert!(
+            result[1].has_pos_tag("SUB:NOM:SIN:MAS:ADJ"),
+            "{:?}",
+            result[1].all_pos_tags()
+        );
+        let result = Tagger::tag(
+            &tagger,
+            &[
+                "Er",
+                "wollte",
+                "dem",
+                "Mann",
+                "helfen",
+                ",",
+                "doch",
+                "der",
+                "Verrückter",
+                "schüttelte",
+            ],
+        );
+        assert!(
+            result[8].has_pos_tag("SUB:NOM:SIN:MAS:ADJ"),
+            "{:?}",
+            result[8].all_pos_tags()
+        );
+        let result = Tagger::tag(
+            &tagger,
+            &[
+                "Die",
+                "Sitzung",
+                ",",
+                "der",
+                "Abgeordneter",
+                "Müller",
+                "fernblieb",
+            ],
+        );
+        assert!(
+            !result[4].has_pos_tag("SUB:NOM:SIN:MAS:ADJ"),
+            "uppercase follower must suppress substantivation: {:?}",
+            result[4].all_pos_tags()
+        );
+    }
+
+    #[test]
+    fn unknown_compounds_get_last_part_pos() {
+        let tagger = tagger();
+        let result = Tagger::tag(&tagger, &["Grundprinzipien"]);
+        assert!(
+            result[0]
+                .readings()
+                .iter()
+                .any(|r| r.pos_tags().iter().any(|t| t.starts_with("SUB:DAT:PLU"))),
+            "{:?}",
+            result[0].readings()
+        );
+        let result = Tagger::tag(&tagger, &["Telefontarife"]);
+        assert!(
+            result[0]
+                .readings()
+                .iter()
+                .any(|r| r.pos_tags().iter().any(|t| t.starts_with("SUB:"))),
+            "{:?}",
+            result[0].readings()
         );
     }
 }

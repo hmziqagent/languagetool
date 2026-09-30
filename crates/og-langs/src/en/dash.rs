@@ -50,6 +50,10 @@ impl Rule for DashRule {
         "EN_DASH_RULE"
     }
 
+    fn is_picky(&self) -> bool {
+        true
+    }
+
     fn description(&self) -> &str {
         "Checks if hyphenated words were spelled with dashes"
     }
@@ -105,6 +109,7 @@ impl Rule for DashRule {
                     }
 
                     let rm_rule = RuleMatchRule::new(self.id(), self.description())
+                        .with_picky(true)
                         .with_category(self.category())
                         .with_issue_type(self.issue_type().as_str())
                         .with_urls(vec![

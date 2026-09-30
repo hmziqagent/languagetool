@@ -3,6 +3,7 @@ pub mod disambig_parser;
 pub mod disambig_types;
 pub mod parser;
 pub mod types;
+pub mod unifier;
 
 pub use compiler::*;
 pub use disambig_parser::*;

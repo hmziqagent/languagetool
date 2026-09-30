@@ -1,11 +1,21 @@
 use crate::WordTokenizer;
 use og_core::Token;
 
-pub struct DefaultWordTokenizer;
+pub struct DefaultWordTokenizer {
+    english_contractions: bool,
+}
 
 impl DefaultWordTokenizer {
     pub fn new() -> Self {
-        Self
+        Self {
+            english_contractions: true,
+        }
+    }
+
+    pub fn new_generic() -> Self {
+        Self {
+            english_contractions: false,
+        }
     }
 
     fn is_word_char(&self, c: char) -> bool {
@@ -74,20 +84,112 @@ impl DefaultWordTokenizer {
         for token in tokens {
             let text = token.text();
             let start = token.start();
-            let _end = token.end();
 
             if !text.contains('\'') && !text.contains('\u{2019}') {
                 result.push(token);
                 continue;
             }
 
+            if !self.english_contractions {
+                let mut segment_start = 0usize;
+                let mut offset = 0usize;
+                for c in text.chars() {
+                    let len = c.len_utf8();
+                    if c == '\'' || c == '\u{2019}' {
+                        if offset > segment_start {
+                            let seg = &text[segment_start..offset];
+                            result.push(Token::new(seg, start + segment_start, start + offset));
+                        }
+                        let apos = &text[offset..offset + len];
+                        result.push(Token::new(apos, start + offset, start + offset + len));
+                        segment_start = offset + len;
+                    }
+                    offset += len;
+                }
+                if offset > segment_start {
+                    let seg = &text[segment_start..offset];
+                    result.push(Token::new(seg, start + segment_start, start + offset));
+                }
+                continue;
+            }
+
             if let Some(split) = self.try_split_contraction(text, start) {
                 result.extend(split);
-            } else {
+            } else if text.eq_ignore_ascii_case("n't") || text.eq_ignore_ascii_case("n’t") {
                 result.push(token);
+            } else {
+                let mut segment_start = 0usize;
+                let mut offset = 0usize;
+                let mut segments: Vec<(usize, usize)> = Vec::new();
+                let mut apostrophes: Vec<usize> = Vec::new();
+                for c in text.chars() {
+                    let len = c.len_utf8();
+                    if c == '\'' || c == '\u{2019}' {
+                        if offset > segment_start {
+                            segments.push((segment_start, offset));
+                        }
+                        apostrophes.push(offset);
+                        segments.push((offset, offset + len));
+                        segment_start = offset + len;
+                    }
+                    offset += len;
+                }
+                if offset > segment_start {
+                    segments.push((segment_start, offset));
+                }
+                let valid_suffixes = ["'s", "'m", "'re", "'ll", "'ve", "'d"];
+                let mut ranges: Vec<(usize, usize)> = segments;
+                if let Some(&last_apos) = apostrophes.last()
+                    && let Some((_, last_end)) = ranges.last().copied()
+                {
+                    let glued: String = text[last_apos..last_end].replace('\u{2019}', "'");
+                    if glued.len() > 1 && valid_suffixes.contains(&glued.as_str()) {
+                        let merge_from = ranges[ranges.len() - 2].0;
+                        let mut merged: Vec<(usize, usize)> = ranges[..ranges.len() - 2].to_vec();
+                        merged.push((merge_from, last_end));
+                        ranges = merged;
+                    }
+                }
+                for (seg_start, seg_end) in ranges {
+                    result.push(Token::new(
+                        &text[seg_start..seg_end],
+                        start + seg_start,
+                        start + seg_end,
+                    ));
+                }
             }
         }
 
+        result
+    }
+
+    pub fn split_underscores(&self, tokens: Vec<Token>) -> Vec<Token> {
+        let mut result = Vec::with_capacity(tokens.len());
+        for token in tokens {
+            let text = token.text();
+            if !text.contains('_') || text == "_" {
+                result.push(token);
+                continue;
+            }
+            let start = token.start();
+            let mut segment_start = 0usize;
+            let mut offset = 0usize;
+            for (i, b) in text.bytes().enumerate() {
+                if b == b'_' {
+                    if i > segment_start {
+                        let seg = &text[segment_start..i];
+                        result.push(Token::new(seg, start + segment_start, start + i));
+                    }
+                    result.push(Token::new("_", start + i, start + i + 1));
+                    segment_start = i + 1;
+                }
+                offset = i + 1;
+            }
+            if offset > segment_start {
+                let seg = &text[segment_start..];
+                result.push(Token::new(seg, start + segment_start, start + text.len()));
+            }
+        }
         result
     }
 
@@ -105,6 +207,9 @@ impl DefaultWordTokenizer {
         for stem in &nt_stems {
             if let Some(rest) = normalized.strip_prefix(stem)
                 && rest == "n't"
+                && text.len() > stem.len()
+                && (text[stem.len()..].eq_ignore_ascii_case("n't")
+                    || text[stem.len()..].eq_ignore_ascii_case("n’t"))
             {
                 let byte_offset = stem.len();
                 if byte_offset > 0 && byte_offset < text_len {
@@ -137,9 +242,9 @@ impl DefaultWordTokenizer {
         }
 
         let suffix_text = &text[byte_offset..];
-        let suffix_normalized: String = suffix_text.to_lowercase().replace('\u{2019}', "'");
         let valid_suffixes = ["'s", "'m", "'re", "'ll", "'ve", "'d"];
-        if valid_suffixes.contains(&suffix_normalized.as_str()) {
+        let suffix_folded: String = suffix_text.replace('\u{2019}', "'");
+        if valid_suffixes.contains(&suffix_folded.as_str()) {
             return Some(vec![
                 Token::new(&text[..byte_offset], start, start + byte_offset),
                 Token::new(suffix_text, start + byte_offset, start + text_len),
@@ -1025,8 +1130,10 @@ mod tests {
     fn test_single_quotes_around_word() {
         let tz = DefaultWordTokenizer::new();
         let tokens = tz.tokenize("'hello'");
-        assert_eq!(tokens.len(), 1);
-        assert_eq!(tokens[0].text(), "'hello'");
+        assert_eq!(tokens.len(), 3);
+        assert_eq!(tokens[0].text(), "'");
+        assert_eq!(tokens[1].text(), "hello");
+        assert_eq!(tokens[2].text(), "'");
     }
 
     #[test]
@@ -1053,7 +1160,7 @@ mod tests {
 
     #[test]
     fn test_default_trait() {
-        let tz = DefaultWordTokenizer;
+        let tz = DefaultWordTokenizer::new();
         let tokens = tz.tokenize("test");
         assert_eq!(tokens.len(), 1);
         assert_eq!(tokens[0].text(), "test");

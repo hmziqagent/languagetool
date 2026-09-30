@@ -68,6 +68,12 @@ impl GoldenCase {
         self
     }
 
+    pub fn presence_only_expect(mut self, rule_id: &'static str) -> Self {
+        self.matches
+            .push(GoldenMatch::new(rule_id, usize::MAX, 0).presence_only());
+        self
+    }
+
     pub fn expect_with(
         mut self,
         rule_id: &'static str,

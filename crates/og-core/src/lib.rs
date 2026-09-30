@@ -4,6 +4,7 @@ pub mod checker;
 pub mod document;
 pub mod issue_type;
 pub mod language;
+pub mod match_filters;
 pub mod rule;
 pub mod rule_match;
 pub mod token;

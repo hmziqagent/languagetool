@@ -551,6 +551,10 @@ impl TextLevelRule for LongSentenceRule {
         &self.id
     }
 
+    fn is_picky(&self) -> bool {
+        true
+    }
+
     fn description(&self) -> &str {
         "Sentence is too long"
     }
@@ -564,7 +568,7 @@ impl TextLevelRule for LongSentenceRule {
     }
 
     fn is_default_on(&self) -> bool {
-        false
+        true
     }
 
     fn match_text(&self, text: &str, sentences: &[AnalyzedSentence]) -> Vec<RuleMatch> {
@@ -595,6 +599,7 @@ impl TextLevelRule for LongSentenceRule {
                     let context_text = text[context_start..context_end].to_string();
 
                     let rule = RuleMatchRule::new(&self.id, self.description())
+                        .with_picky(true)
                         .with_category(self.category.clone())
                         .with_issue_type(IssueType::Style.as_str());
 
@@ -666,18 +671,16 @@ impl TextLevelRule for WordRepeatBeginningRule {
 
     fn match_text(&self, text: &str, sentences: &[AnalyzedSentence]) -> Vec<RuleMatch> {
         let mut matches = Vec::new();
-        let mut first_words: Vec<(String, usize, usize, usize)> = Vec::new();
+        let mut first_words: Vec<(String, usize, usize)> = Vec::new();
 
-        let mut pos = 0usize;
         for sentence in sentences {
             let tokens = sentence.non_whitespace_tokens();
-            if let Some(first) = tokens.first() {
+            if let Some(first) = tokens.iter().find(|t| !t.is_sentence_start()) {
                 let word = first.token().token().to_lowercase();
-                let start = pos + first.token().start();
-                let end = pos + first.token().end();
-                first_words.push((word, pos, start, end));
+                let start = first.token().start();
+                let end = first.token().end();
+                first_words.push((word, start, end));
             }
-            pos += sentence.text().len();
         }
 
         let mut i = 0;
@@ -690,7 +693,7 @@ impl TextLevelRule for WordRepeatBeginningRule {
 
             if run_len >= self.min_sentences {
                 for j in i..i + run_len {
-                    let (_, _, start, end) = &first_words[j];
+                    let (_, start, end) = &first_words[j];
                     let context_start = if *start >= 30 { start - 30 } else { 0 };
                     let context_end = std::cmp::min(end + 30, text.len());
                     let context_text = text[context_start..context_end].to_string();
