@@ -2103,6 +2103,14 @@ impl PatternRuleEngine {
                     None
                 }
             }
+            "org.languagetool.rules.ru.INNNumberFilter" => {
+                let parsed = self.resolve_java_filter_args(&filter.args, matched_texts);
+                match parsed.get("inn") {
+                    Some(inn) if inn_is_valid(inn) => None,
+                    Some(_) => Some(rm),
+                    None => None,
+                }
+            }
             "org.languagetool.rules.it.DateCheckFilter"
             | "org.languagetool.rules.pl.DateCheckFilter"
             | "org.languagetool.rules.ru.DateCheckFilter"
@@ -3804,6 +3812,58 @@ fn day_zero_rolls_back(year: u32, month: u32, day: u32) -> (u32, u32, u32) {
         (year.saturating_sub(1), 12, 31)
     } else {
         (year, month - 1, days_in_month(year, month - 1))
+    }
+}
+
+fn inn_is_valid(inn: &str) -> bool {
+    if !inn.chars().all(|c| c.is_ascii_digit()) {
+        return true;
+    }
+    let d: Vec<u32> = inn.chars().filter_map(|c| c.to_digit(10)).collect();
+    match d.len() {
+        10 => {
+            let kz = (2 * d[0]
+                + 4 * d[1]
+                + 10 * d[2]
+                + 3 * d[3]
+                + 5 * d[4]
+                + 9 * d[5]
+                + 4 * d[6]
+                + 6 * d[7]
+                + 8 * d[8])
+                % 11;
+            let kz = if kz > 9 { kz - 10 } else { kz };
+            d[9] == kz
+        }
+        12 => {
+            let kz1 = (7 * d[0]
+                + 2 * d[1]
+                + 4 * d[2]
+                + 10 * d[3]
+                + 3 * d[4]
+                + 5 * d[5]
+                + 9 * d[6]
+                + 4 * d[7]
+                + 6 * d[8]
+                + 8 * d[9])
+                % 11;
+            let kz2 = (3 * d[0]
+                + 7 * d[1]
+                + 2 * d[2]
+                + 4 * d[3]
+                + 10 * d[4]
+                + 3 * d[5]
+                + 5 * d[6]
+                + 9 * d[7]
+                + 4 * d[8]
+                + 6 * d[9]
+                + 8 * d[10])
+                % 11;
+            let kz1 = if kz1 > 9 { kz1 - 10 } else { kz1 };
+            let kz2 = if kz2 > 9 { kz2 - 10 } else { kz2 };
+            d[10] == kz1 && d[11] == kz2
+        }
+        _ => true,
     }
 }
 
