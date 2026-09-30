@@ -83,6 +83,7 @@ pub enum AnyTagger {
     English(EnglishTagger),
     German(og_tagger::GermanTagger),
     Generic(og_tagger::GenericTagger),
+    Arabic(og_tagger::arabic_tagger::ArabicTagger),
 }
 
 impl AnyTagger {
@@ -91,6 +92,7 @@ impl AnyTagger {
             AnyTagger::English(t) => Tagger::tag(t, tokens),
             AnyTagger::German(t) => Tagger::tag(t, tokens),
             AnyTagger::Generic(t) => Tagger::tag(t, tokens),
+            AnyTagger::Arabic(t) => Tagger::tag(t, tokens),
         }
     }
 }
@@ -146,6 +148,13 @@ impl TestRunner {
                         return AnyTagger::Generic(og_tagger::GenericTagger::russian(
                             &resource_dir,
                         ));
+                    }
+                    if code == "ar" {
+                        return AnyTagger::Arabic(
+                            og_tagger::arabic_tagger::ArabicTagger::from_resource_dir(
+                                &resource_dir,
+                            ),
+                        );
                     }
                     return AnyTagger::Generic(og_tagger::GenericTagger::from_resource_dir(
                         &resource_dir,

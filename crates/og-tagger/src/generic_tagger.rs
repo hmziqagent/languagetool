@@ -225,7 +225,7 @@ impl GenericTagger {
         }
     }
 
-    fn lookup(&self, word: &str) -> Vec<(&'static str, &'static str)> {
+    pub(crate) fn lookup(&self, word: &str) -> Vec<(&'static str, &'static str)> {
         let mut readings: Readings = self
             .manual
             .get(word)
@@ -613,5 +613,26 @@ mod tests {
         };
         let tagger = GenericTagger::from_resource_dir(&dir, "dutch");
         assert!(tagger.has_dictionary());
+    }
+}
+
+#[cfg(test)]
+mod ar_lookup_probe {
+    #[test]
+    fn probe() {
+        let dir = std::path::Path::new(
+            "/home/agent/opengrammar-rs/languagetool/languagetool-language-modules/ar/src/main/resources/org/languagetool/resource/ar",
+        );
+        let t = crate::GenericTagger::from_resource_dir(dir, "arabic");
+        for w in [
+            "\u{645}\u{644}\u{64a}\u{648}\u{646}\u{64a}\u{646}",
+            "\u{648}\u{645}\u{626}\u{62a}\u{627}\u{646}",
+        ] {
+            let r = t.lookup(w);
+            eprintln!("{w} -> {}", r.len());
+            for (lemma, tag) in r {
+                eprintln!("  {lemma} {tag}");
+            }
+        }
     }
 }

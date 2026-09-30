@@ -730,8 +730,14 @@ impl LanguageEngine {
         } else {
             og_tagger::GenericTagger::from_resource_dir(&resource_dir, config.0)
         };
+        if short == "ar" && tagger.has_dictionary() {
+            let resource = resource_dir.clone();
+            engine.tagger = Some(Arc::new(
+                og_tagger::arabic_tagger::ArabicTagger::from_resource_dir(&resource),
+            ));
+        }
         let has_manual = resource_dir.join("added.txt").exists();
-        if tagger.has_dictionary() || has_manual {
+        if engine.tagger.is_none() && (tagger.has_dictionary() || has_manual) {
             engine.tagger = Some(Arc::new(tagger));
         }
         if short == "ru" {
