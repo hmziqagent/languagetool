@@ -754,17 +754,6 @@ impl Disambiguator for XmlDisambiguator {
             }
 
             for (non_ws_idx, action, matcher) in pending_actions {
-                if std::env::var("OG_TRACE_DISAMBIG").is_ok() {
-                    let token = sentence.non_whitespace_tokens()
-                        [non_ws_idx.min(sentence.non_whitespace_tokens().len().saturating_sub(1))];
-                    eprintln!(
-                        "DISAMBIG[{}] {:?} on '{}' -> {:?}",
-                        rule_idx,
-                        rule.id,
-                        token.token().token(),
-                        action
-                    );
-                }
                 apply_disambiguation(sentence.tokens_mut(), non_ws_idx, action, matcher);
             }
 
@@ -2119,6 +2108,78 @@ mod tests {
             Err(e) => panic!("Failed to load disambiguation.xml: {}", e),
         }
     }
+    #[test]
+    fn real_italian_disambiguation_io_verb() {
+        let path = "/home/agent/opengrammar-rs/languagetool/languagetool-language-modules/it/src/main/resources/org/languagetool/resource/it/disambiguation.xml";
+        if !std::path::Path::new(path).exists() {
+            eprintln!("Skipping: Italian disambiguation.xml not found");
+            return;
+        }
+        let xml = std::fs::read_to_string(path).unwrap();
+        let disambiguator = XmlDisambiguator::from_xml(&xml).unwrap();
+        let mut sentence = make_sentence(vec![
+            ("Io", vec!["PRO-PERS-1-F-S", "PRO-PERS-1-M-S"]),
+            (
+                "le",
+                vec!["PRO-PERS-CLI-3-F-P", "PRO-PERS-CLI-3-F-S", "ART-F:p"],
+            ),
+            ("ritrovo", vec!["NOUN-M:s", "VER:ind+pres+1+s"]),
+        ]);
+        disambiguator.disambiguate(&mut sentence);
+        let ritrovo = &sentence.tokens()[2];
+        assert!(
+            !ritrovo.has_pos_tag("NOUN-M:s"),
+            "real it disambiguation must drop the featureless noun reading"
+        );
+    }
+
+    #[test]
+    fn italian_io_verb_unify_drops_featureless_readings() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<rules lang="it">
+    <unification feature="number">
+        <equivalence type="sg"><token postag="NOUN.*s|ADJ.*\+s|VER:.*\+s|PRO-.*-S" postag_regexp="yes"/></equivalence>
+        <equivalence type="pl"><token postag="NOUN.*p|ADJ.*\+p|VER:.*\+p|PRO-.*-P" postag_regexp="yes"/></equivalence>
+    </unification>
+    <unification feature="persona">
+        <equivalence type="first"><token postag=".*[-\+]1[-\+].*" postag_regexp="yes"/></equivalence>
+        <equivalence type="third"><token postag=".*[-\+]3[-\+].*" postag_regexp="yes"/></equivalence>
+    </unification>
+    <rulegroup id="IO_VERB" name="io + verb">
+        <rule>
+            <pattern>
+                <marker>
+                    <unify>
+                        <feature id="number"/><feature id="persona"/>
+                        <token postag="PRO-PERS-[123].*" postag_regexp="yes"></token>
+                        <unify-ignore><token postag="PRO-PERS-CLI.*" postag_regexp="yes"/></unify-ignore>
+                        <token postag="VER:.*" postag_regexp="yes"></token>
+                    </unify>
+                </marker>
+            </pattern>
+            <disambig action="unify"/>
+        </rule>
+    </rulegroup>
+</rules>"#;
+
+        let disambiguator = XmlDisambiguator::from_xml(xml).unwrap();
+        let mut sentence = make_sentence(vec![
+            ("Io", vec!["PRO-PERS-1-F-S"]),
+            ("le", vec!["PRO-PERS-CLI-3-F-P", "ART-F:p"]),
+            ("ritrovo", vec!["NOUN-M:s", "VER:ind+pres+1+s"]),
+        ]);
+        disambiguator.disambiguate(&mut sentence);
+        let ritrovo = &sentence.tokens()[2];
+        assert!(
+            ritrovo.has_pos_tag("VER:ind+pres+1+s"),
+            "verb reading must survive unify"
+        );
+        assert!(
+            !ritrovo.has_pos_tag("NOUN-M:s"),
+            "unify must drop the featureless noun reading like Java checkNext"
+        );
+    }
+
     #[test]
     fn skip_means_up_to_n_tokens_not_exactly_n() {
         let xml = r#"<?xml version="1.0" encoding="utf-8"?>

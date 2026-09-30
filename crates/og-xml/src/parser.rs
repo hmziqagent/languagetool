@@ -757,7 +757,14 @@ impl XmlRuleParser {
                                 if !trimmed.is_empty() {
                                     token.text = Some(trimmed.to_string());
                                 }
-                                if in_or_group {
+                                if current_unification.is_some() && current_pattern.is_none() {
+                                    if let Some(uni) = current_unification.as_mut()
+                                        && let Some(eq) = uni.equivalences.last_mut()
+                                    {
+                                        eq.postag = token.postag.clone().unwrap_or_default();
+                                        eq.exact = token.postag_regexp.as_deref() != Some("yes");
+                                    }
+                                } else if in_or_group {
                                     if let Some(ref mut or_group) = current_or_group {
                                         if in_unify_ignore {
                                             token.unify_neutral = true;
