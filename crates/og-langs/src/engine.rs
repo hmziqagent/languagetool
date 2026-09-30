@@ -817,14 +817,32 @@ impl LanguageEngine {
             Arc::new(og_rules::native_rules::DoublePunctuationRule::new()) as Arc<dyn Rule>,
             Arc::new(og_rules::native_rules::CommaWhitespaceRule::new()),
         ]);
+        let brackets_rule: Arc<dyn TextLevelRule> = if short == "it" {
+            Arc::new(
+                og_rules::text_level_rules::GenericUnpairedBracketsRule::new().with_symbols(
+                    vec!["[", "(", "{", "\u{bb}", "\u{ab}"],
+                    vec!["]", ")", "}", "\u{ab}", "\u{bb}"],
+                ),
+            )
+        } else {
+            Arc::new(og_rules::text_level_rules::GenericUnpairedBracketsRule::new())
+        };
         engine.add_text_level_rules([
             Arc::new(og_rules::text_level_rules::MultipleWhitespaceRule::new())
                 as Arc<dyn TextLevelRule>,
             Arc::new(og_rules::text_level_rules::SentenceWhitespaceRule::new()),
-            Arc::new(og_rules::text_level_rules::GenericUnpairedBracketsRule::new()),
+            brackets_rule,
         ]);
 
         match short.as_str() {
+            "it" => {
+                engine.add_rules([
+                    Arc::new(og_rules::native_rules::WhitespaceBeforePunctuationRule::new())
+                        as Arc<dyn Rule>,
+                    Arc::new(og_rules::native_rules::UppercaseSentenceStartRule::new()),
+                    Arc::new(crate::it::ItalianWordRepeatRule::new()),
+                ]);
+            }
             "ro" => {
                 engine.add_rules([
                     Arc::new(crate::ro::romanian_replace_rule()) as Arc<dyn Rule>,
@@ -1128,6 +1146,10 @@ impl LanguageEngine {
 
     pub fn rule_count(&self) -> usize {
         self.rules.len()
+    }
+
+    pub fn rule_ids(&self) -> Vec<&str> {
+        self.rules.iter().map(|r| r.id()).collect()
     }
 
     pub fn language(&self) -> &Language {
@@ -1477,6 +1499,41 @@ mod tests {
                 "spelling_global entry must not be flagged for {text:?}, got {hits:?}"
             );
         }
+    }
+
+    #[test]
+    fn italian_engine_wires_java_relevant_natives() {
+        let engine =
+            LanguageEngine::for_code("it").expect("Italian engine must be registered via for_code");
+        let ids = engine.rule_ids();
+        for expected in [
+            "WHITESPACE_PUNCTUATION",
+            "UPPERCASE_SENTENCE_START",
+            "ITALIAN_WORD_REPEAT_RULE",
+        ] {
+            assert!(
+                ids.contains(&expected),
+                "expected {expected} in Italian natives, got {ids:?}"
+            );
+        }
+
+        let result = engine.check("questa \u{e8} una prova : con due punti");
+        let ids: Vec<&str> = result.matches.iter().map(|m| m.rule().id()).collect();
+        assert!(
+            ids.contains(&"WHITESPACE_PUNCTUATION"),
+            "expected WHITESPACE_PUNCTUATION on space before colon, got {ids:?}"
+        );
+        assert!(
+            ids.contains(&"UPPERCASE_SENTENCE_START"),
+            "expected UPPERCASE_SENTENCE_START on lowercase start, got {ids:?}"
+        );
+
+        let result = engine.check("Il lessico si andava via via modificando.");
+        let ids: Vec<&str> = result.matches.iter().map(|m| m.rule().id()).collect();
+        assert!(
+            !ids.contains(&"ITALIAN_WORD_REPEAT_RULE"),
+            "'via via' must be ignored, got {ids:?}"
+        );
     }
 
     #[test]

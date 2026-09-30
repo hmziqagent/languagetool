@@ -312,31 +312,118 @@ impl Rule for UppercaseSentenceStartRule {
     }
 
     fn match_sentence(&self, sentence: &AnalyzedSentence) -> Vec<RuleMatch> {
+        use std::sync::LazyLock;
+
+        static NUMERALS_EN: LazyLock<regex::Regex> = LazyLock::new(|| {
+            regex::Regex::new(
+                "^(?:[a-z]|(m{0,4}(c[md]|d?c{0,3})(x[cl]|l?x{0,3})(i[xv]|v?i{0,3}))$)",
+            )
+            .expect("valid NUMERALS_EN pattern")
+        });
+        static CONTAINS_DIGIT: LazyLock<regex::Regex> =
+            LazyLock::new(|| regex::Regex::new(r".*\d.*").expect("valid CONTAINS_DIGIT pattern"));
+        static ONLY_LOWERCASE_START: LazyLock<regex::Regex> = LazyLock::new(|| {
+            regex::Regex::new("^[a-z][A-Z].*$").expect("valid ONLY_LOWERCASE_START pattern")
+        });
+        static NO_PROTOCOL_URL: LazyLock<regex::Regex> = LazyLock::new(|| {
+            regex::Regex::new("^(?:([a-zA-Z0-9][a-zA-Z0-9-]+\\.)?([a-zA-Z0-9][a-zA-Z0-9-]+)\\.([a-zA-Z0-9][a-zA-Z0-9-]+)/.*)$")
+                .expect("valid NO_PROTOCOL_URL pattern")
+        });
+        static E_MAIL: LazyLock<fancy_regex::Regex> = LazyLock::new(|| {
+            fancy_regex::Regex::new(
+                "^(?:@?\\b[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@((\\[[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\])|(([a-zA-Z\\-0-9]+\\.)+[a-zA-Z]{2,}))\\b)$",
+            )
+            .expect("valid E_MAIL pattern")
+        });
+        static CAMEL_CASE: LazyLock<regex::Regex> = LazyLock::new(|| {
+            regex::Regex::new("^[a-z]+[A-Z][A-Za-z]+$").expect("valid CAMEL_CASE pattern")
+        });
+        const EXCEPTIONS: &[&str] = &[
+            "n", "w", "x86", "\u{24d2}", "\u{f8}", "cc", "pH", "heylogin",
+        ];
+        const PROTOCOLS: &[&str] = &[
+            "http", "https", "ws", "wss", "ftp", "ftps", "sftp", "file", "mailto", "tel", "sms",
+            "git", "ssh", "data", "magnet", "smb", "slack", "spotify",
+        ];
+
+        let is_url = |token: &str| {
+            PROTOCOLS
+                .iter()
+                .any(|p| token.starts_with(&format!("{p}://")))
+                || token.starts_with("www.")
+                || NO_PROTOCOL_URL.is_match(token)
+        };
+        let is_quote_start = |word: &str| {
+            matches!(
+                word,
+                "\"" | "'"
+                    | "\u{201e}"
+                    | "\u{bb}"
+                    | "\u{ab}"
+                    | "\u{201c}"
+                    | "\u{2018}"
+                    | "\u{a1}"
+                    | "\u{bf}"
+            )
+        };
+
         let tokens = sentence.non_whitespace_tokens();
-        if tokens.is_empty() {
+        if tokens.len() < 2 || tokens.len() == 2 {
             return Vec::new();
         }
 
-        let first = tokens[0];
-        let text = first.token().token();
+        let first_token_obj = tokens[1];
+        let first_token = first_token_obj.token().token();
+        let mut match_token_pos = 1usize;
+        let mut second_token: Option<&str> = None;
+        if tokens.len() >= 3 && is_quote_start(first_token) {
+            match_token_pos = 2;
+            second_token = Some(tokens[2].token().token());
+        }
+        let check_token = second_token.unwrap_or(first_token);
 
-        if text
-            .chars()
-            .next()
-            .map(|c| c.is_lowercase())
-            .unwrap_or(false)
+        let mut prevent_error = false;
+        if CONTAINS_DIGIT.is_match(tokens[match_token_pos].token().token()) {
+            prevent_error = true;
+        }
+        if match_token_pos + 1 < tokens.len() {
+            let next = tokens[match_token_pos + 1].token().token();
+            if NUMERALS_EN.is_match(tokens[match_token_pos].token().token())
+                && (next == "." || next == ")")
+            {
+                prevent_error = true;
+            }
+        }
+        if is_url(check_token)
+            || E_MAIL.is_match(check_token).unwrap_or(false)
+            || first_token_obj.is_immunized()
         {
-            let start = first.token().start();
-            let end = first.token().end();
+            prevent_error = true;
+        }
+
+        if check_token.is_empty() {
+            return Vec::new();
+        }
+
+        let first_char = check_token.chars().next().unwrap_or('\0');
+        let capitalized = match first_char.to_uppercase().next() {
+            Some(upper) => format!("{}{}", upper, &check_token[first_char.len_utf8()..]),
+            None => check_token.to_string(),
+        };
+
+        if capitalized != check_token
+            && !prevent_error
+            && first_char.is_lowercase()
+            && !ONLY_LOWERCASE_START.is_match(check_token)
+            && !EXCEPTIONS.contains(&check_token)
+            && !CAMEL_CASE.is_match(check_token)
+        {
+            let target = tokens[match_token_pos];
+            let start = target.token().start();
+            let end = target.token().end();
             let context_start = start.saturating_sub(20);
             let context_end = std::cmp::min(end + 20, sentence.text().len());
             let context_text = sentence.text()[context_start..context_end].to_string();
-
-            let mut capitalized = text.to_string();
-            if let Some(first_char) = capitalized.chars().next() {
-                capitalized =
-                    first_char.to_uppercase().to_string() + &capitalized[first_char.len_utf8()..];
-            }
 
             let rule = RuleMatchRule::new(&self.id, self.description())
                 .with_category(self.category.clone())
@@ -564,6 +651,122 @@ fn contains_digit(s: &str) -> bool {
     s.chars().any(|c| c.is_ascii_digit())
 }
 
+pub struct WhitespaceBeforePunctuationRule {
+    id: String,
+    category: Category,
+}
+
+impl WhitespaceBeforePunctuationRule {
+    pub fn new() -> Self {
+        Self {
+            id: "WHITESPACE_PUNCTUATION".to_string(),
+            category: Category::new("TYPOGRAPHY", "Typography"),
+        }
+    }
+}
+
+impl Default for WhitespaceBeforePunctuationRule {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Rule for WhitespaceBeforePunctuationRule {
+    fn id(&self) -> &str {
+        &self.id
+    }
+
+    fn description(&self) -> &str {
+        "Whitespace before punctuation"
+    }
+
+    fn category(&self) -> Category {
+        self.category.clone()
+    }
+
+    fn issue_type(&self) -> IssueType {
+        IssueType::Whitespace
+    }
+
+    fn match_sentence(&self, sentence: &AnalyzedSentence) -> Vec<RuleMatch> {
+        let mut matches = Vec::new();
+        let tokens = sentence.tokens();
+
+        let mut prev_white = false;
+        let mut prev_len = 0usize;
+        for (i, token_reading) in tokens.iter().enumerate() {
+            let token = token_reading.token().token();
+            let is_whitespace =
+                token_reading.is_whitespace() || token == "\u{a0}" || token == "\u{202f}";
+
+            let mut msg: Option<&str> = None;
+            let mut suggestion: Option<&str> = None;
+            if prev_white {
+                match token {
+                    ":" => {
+                        msg = Some("No space before colon.");
+                        suggestion = Some(":");
+                        if i + 2 < tokens.len()
+                            && tokens[i + 1].is_whitespace()
+                            && tokens[i + 2]
+                                .token()
+                                .token()
+                                .chars()
+                                .next()
+                                .is_some_and(|c| c.is_numeric())
+                        {
+                            msg = None;
+                        }
+                    }
+                    ";" => {
+                        msg = Some("No space before semicolon.");
+                        suggestion = Some(";");
+                    }
+                    "%" if i > 1 => {
+                        let prev_prev = tokens[i - 2].token().token();
+                        if prev_prev.chars().next().is_some_and(|c| c.is_numeric()) {
+                            msg = Some("No space before percentage sign.");
+                            suggestion = Some("%");
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if let (Some(msg), Some(suggestion)) = (msg, suggestion) {
+                let from = tokens[i - 1].token().start();
+                let to = from + 1 + prev_len;
+                let context_start = from.saturating_sub(20);
+                let context_end = std::cmp::min(to + 20, sentence.text().len());
+                let context_text = sentence.text()[context_start..context_end].to_string();
+
+                let rule = RuleMatchRule::new(&self.id, self.description())
+                    .with_category(self.category.clone())
+                    .with_issue_type(IssueType::Whitespace.as_str());
+
+                matches.push(
+                    RuleMatch::new(
+                        msg,
+                        from,
+                        to - from,
+                        rule,
+                        RuleMatchContext::new(
+                            context_text,
+                            context_start,
+                            context_end - context_start,
+                        ),
+                    )
+                    .with_sentence(sentence.text().to_string())
+                    .with_replacements(vec![SuggestedReplacement::new(suggestion)]),
+                );
+            }
+            prev_white = is_whitespace;
+            prev_len = token.len();
+        }
+
+        matches
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -582,6 +785,19 @@ mod tests {
             pos = end;
         }
         sentence.set_tokens(tokens);
+        sentence
+    }
+
+    fn make_sentence_with_start(text: &str) -> AnalyzedSentence {
+        use og_core::{AnalyzedToken, AnalyzedTokenReadings};
+        let mut sentence = make_sentence(text);
+        let mut tokens = sentence.tokens_mut();
+        tokens.insert(
+            0,
+            AnalyzedTokenReadings::new(
+                AnalyzedToken::new("<S>", 0, 0).with_pos_tags(vec!["SENT_START".to_string()]),
+            ),
+        );
         sentence
     }
 
@@ -719,16 +935,23 @@ mod tests {
     #[test]
     fn test_uppercase_sentence_start() {
         let rule = UppercaseSentenceStartRule::new();
-        let sentence = make_sentence("hello world");
+        let sentence = make_sentence_with_start("hello world again");
         let matches = rule.match_sentence(&sentence);
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].replacements()[0].value(), "Hello");
     }
 
     #[test]
+    fn test_uppercase_sentence_start_single_word_skipped() {
+        let rule = UppercaseSentenceStartRule::new();
+        let sentence = make_sentence_with_start("hello");
+        assert!(rule.match_sentence(&sentence).is_empty());
+    }
+
+    #[test]
     fn test_uppercase_sentence_start_already_capital() {
         let rule = UppercaseSentenceStartRule::new();
-        let sentence = make_sentence("Hello world");
+        let sentence = make_sentence_with_start("Hello world");
         let matches = rule.match_sentence(&sentence);
         assert!(matches.is_empty());
     }
@@ -736,12 +959,49 @@ mod tests {
     #[test]
     fn test_uppercase_sentence_start_number_ok() {
         let rule = UppercaseSentenceStartRule::new();
-        let sentence = make_sentence("123 people");
+        let sentence = make_sentence_with_start("123 people");
         let matches = rule.match_sentence(&sentence);
         assert!(
             matches.is_empty(),
             "Starting with number should not trigger"
         );
+    }
+
+    #[test]
+    fn test_uppercase_sentence_start_url_and_email_ok() {
+        let rule = UppercaseSentenceStartRule::new();
+        for text in [
+            "www.example.com is a site",
+            "example.org/path works too",
+            "user@mail.org wrote",
+            "eBay is a marketplace",
+        ] {
+            let sentence = make_sentence_with_start(text);
+            assert!(
+                rule.match_sentence(&sentence).is_empty(),
+                "should not flag '{text}'"
+            );
+        }
+    }
+
+    #[test]
+    fn test_uppercase_sentence_start_enumeration_ok() {
+        let rule = UppercaseSentenceStartRule::new();
+        for text in ["a) first item", "iv. second item"] {
+            use og_core::{AnalyzedToken, AnalyzedTokenReadings};
+            let mut sentence = make_punct_sentence(text);
+            let tokens = sentence.tokens_mut();
+            tokens.insert(
+                0,
+                AnalyzedTokenReadings::new(
+                    AnalyzedToken::new("<S>", 0, 0).with_pos_tags(vec!["SENT_START".to_string()]),
+                ),
+            );
+            assert!(
+                rule.match_sentence(&sentence).is_empty(),
+                "should not flag '{text}'"
+            );
+        }
     }
 
     #[test]
