@@ -311,7 +311,7 @@ impl XmlCompiler {
         self.compile_token_with_default(token, false)
     }
 
-    fn compile_token_with_default(
+    pub fn compile_token_with_default(
         &self,
         token: &XmlPatternToken,
         pattern_case_sensitive: bool,

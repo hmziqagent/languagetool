@@ -19,7 +19,6 @@ pub struct XmlDisambiguator {
     unifications: Vec<(String, Vec<(String, PosMatcher)>)>,
     action_regexes: Vec<DisambigActionRegex>,
     gates: Vec<FirstTokenGate>,
-    prepared: Vec<Option<CompiledPattern>>,
     first_literal: Vec<Option<FirstLiteralFilter>>,
     first_regex: Vec<Option<FirstRegexFilter>>,
     english_tagger: Option<std::sync::Arc<crate::english_tagger::EnglishTagger>>,
@@ -126,25 +125,12 @@ impl XmlDisambiguator {
 
         let gates = compiled_rules.iter().map(build_first_token_gate).collect();
 
-        let prepared: Vec<Option<CompiledPattern>> = compiled_rules
-            .iter()
-            .map(|rule| {
-                rule.pattern.case_sensitive.then(|| {
-                    let mut p = clone_with_case_sensitivity(&rule.pattern, true);
-                    p.case_sensitive = false;
-                    p
-                })
-            })
-            .collect();
-
         let first_literal = {
             let rules = &compiled_rules;
-            let prepared = &prepared;
             (0..rules.len())
                 .map(|i| {
-                    let eff = prepared[i].as_ref().unwrap_or(&rules[i].pattern);
-                    let first = eff.tokens.first()?;
-                    if eff.has_structured_elements
+                    let first = rules[i].pattern.tokens.first()?;
+                    if rules[i].pattern.has_structured_elements
                         || first.negate
                         || first.min == Some(0)
                         || first.compiled_regexp.is_some()
@@ -163,12 +149,10 @@ impl XmlDisambiguator {
 
         let first_regex: Vec<Option<FirstRegexFilter>> = {
             let rules = &compiled_rules;
-            let prepared = &prepared;
             (0..rules.len())
                 .map(|i| {
-                    let eff = prepared[i].as_ref().unwrap_or(&rules[i].pattern);
-                    let first = eff.tokens.first()?;
-                    if eff.has_structured_elements
+                    let first = rules[i].pattern.tokens.first()?;
+                    if rules[i].pattern.has_structured_elements
                         || first.negate
                         || first.min == Some(0)
                         || first.text.is_some()
@@ -194,7 +178,6 @@ impl XmlDisambiguator {
             unifications,
             action_regexes,
             gates,
-            prepared,
             first_literal,
             first_regex,
             english_tagger,
@@ -472,8 +455,7 @@ impl Disambiguator for XmlDisambiguator {
                         }
                         first_preverified = true;
                     }
-                    let effective_pattern =
-                        self.prepared[rule_idx].as_ref().unwrap_or(&rule.pattern);
+                    let effective_pattern = &rule.pattern;
                     let mp_result = if first_preverified
                         && !effective_pattern.case_sensitive
                         && !effective_pattern.has_structured_elements
@@ -826,14 +808,6 @@ fn match_pattern(
     let elements = &pattern.elements;
     let has_structured = pattern.has_structured_elements;
 
-    if pattern.case_sensitive {
-        let prepared = clone_with_case_sensitivity(pattern, true);
-        if has_structured {
-            return match_elements(&prepared.elements, tokens, start_idx);
-        }
-        return match_tokens(&prepared.tokens, tokens, start_idx);
-    }
-
     if has_structured {
         match_elements(elements, tokens, start_idx)
     } else {
@@ -841,37 +815,30 @@ fn match_pattern(
     }
 }
 
-fn clone_with_case_sensitivity(pattern: &CompiledPattern, case_sensitive: bool) -> CompiledPattern {
-    let map_tokens = |tokens: &[og_xml::compiler::CompiledPatternToken]| -> Vec<og_xml::compiler::CompiledPatternToken> {
-        tokens
-            .iter()
-            .map(|t| {
-                let mut t = t.clone();
-                t.case_sensitive = case_sensitive;
-                t
-            })
-            .collect()
-    };
-    let mut prepared = pattern.clone();
-    prepared.tokens = map_tokens(&pattern.tokens);
-    prepared.elements = pattern
-        .elements
-        .iter()
-        .map(|e| match e {
-            og_xml::compiler::CompiledPatternElement::Token(t) => {
-                let mut t = t.clone();
-                t.case_sensitive = case_sensitive;
-                og_xml::compiler::CompiledPatternElement::Token(t)
-            }
-            og_xml::compiler::CompiledPatternElement::OrGroup(alts) => {
-                og_xml::compiler::CompiledPatternElement::OrGroup(map_tokens(alts))
-            }
-            og_xml::compiler::CompiledPatternElement::AndGroup(cs) => {
-                og_xml::compiler::CompiledPatternElement::AndGroup(map_tokens(cs))
-            }
-        })
-        .collect();
-    prepared
+fn compile_disambig_element(
+    compiler: &XmlCompiler,
+    element: &og_xml::types::XmlPatternElement,
+    pattern_case_sensitive: bool,
+) -> og_xml::compiler::CompiledPatternElement {
+    use og_xml::compiler::CompiledPatternElement;
+    use og_xml::types::XmlPatternElement;
+    match element {
+        XmlPatternElement::Token(t) => CompiledPatternElement::Token(Box::new(
+            compiler.compile_token_with_default(t, pattern_case_sensitive),
+        )),
+        XmlPatternElement::OrGroup(g) => CompiledPatternElement::OrGroup(
+            g.alternatives
+                .iter()
+                .map(|t| compiler.compile_token_with_default(t, pattern_case_sensitive))
+                .collect(),
+        ),
+        XmlPatternElement::AndGroup(g) => CompiledPatternElement::AndGroup(
+            g.constraints
+                .iter()
+                .map(|t| compiler.compile_token_with_default(t, pattern_case_sensitive))
+                .collect(),
+        ),
+    }
 }
 
 fn match_tokens(
@@ -1698,13 +1665,13 @@ fn compile_disambig_rule(compiler: &XmlCompiler, rule: DisambigRule) -> Compiled
                 .pattern
                 .tokens
                 .iter()
-                .map(|t| compiler.compile_token(t))
+                .map(|t| compiler.compile_token_with_default(t, rule.pattern.case_sensitive))
                 .collect(),
             elements: rule
                 .pattern
                 .elements
                 .iter()
-                .map(|e| compiler.compile_element(e))
+                .map(|e| compile_disambig_element(compiler, e, rule.pattern.case_sensitive))
                 .collect(),
             case_sensitive: rule.pattern.case_sensitive,
             marker_start: rule.pattern.marker_start,
@@ -1727,12 +1694,12 @@ fn compile_disambig_rule(compiler: &XmlCompiler, rule: DisambigRule) -> Compiled
                 tokens: ap
                     .tokens
                     .iter()
-                    .map(|t| compiler.compile_token(t))
+                    .map(|t| compiler.compile_token_with_default(t, ap.case_sensitive))
                     .collect(),
                 elements: ap
                     .elements
                     .iter()
-                    .map(|e| compiler.compile_element(e))
+                    .map(|e| compile_disambig_element(compiler, e, ap.case_sensitive))
                     .collect(),
                 case_sensitive: ap.case_sensitive,
                 marker_start: None,

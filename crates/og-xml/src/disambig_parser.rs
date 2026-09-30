@@ -285,7 +285,10 @@ impl DisambigXmlParser {
                                     "postag_regexp" => token.postag_regexp = Some(val),
                                     "negate" => token.negate = val == "yes",
                                     "negate_pos" => token.negate_pos = val == "yes",
-                                    "case_sensitive" => token.case_sensitive = val == "yes",
+                                    "case_sensitive" => {
+                                        token.case_sensitive = val == "yes";
+                                        token.case_sensitive_set = true;
+                                    }
                                     "inflected" => token.inflected = val == "yes",
                                     "min" => token.min = val.parse().ok(),
                                     "max" => token.max = val.parse().ok(),
@@ -419,7 +422,10 @@ impl DisambigXmlParser {
                                     "postag_regexp" => token.postag_regexp = Some(val),
                                     "negate" => token.negate = val == "yes",
                                     "negate_pos" => token.negate_pos = val == "yes",
-                                    "case_sensitive" => token.case_sensitive = val == "yes",
+                                    "case_sensitive" => {
+                                        token.case_sensitive = val == "yes";
+                                        token.case_sensitive_set = true;
+                                    }
                                     "inflected" => token.inflected = val == "yes",
                                     "min" => token.min = val.parse().ok(),
                                     "max" => token.max = val.parse().ok(),
