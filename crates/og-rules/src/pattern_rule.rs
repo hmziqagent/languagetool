@@ -171,7 +171,7 @@ impl PatternRuleEngine {
                         let surface_matches = if first_token.case_sensitive {
                             t.token().token() == text
                         } else {
-                            t.token().token().eq_ignore_ascii_case(text)
+                            eq_ignore_case(t.token().token(), text)
                         };
                         if surface_matches {
                             true
@@ -181,7 +181,7 @@ impl PatternRuleEngine {
                                     if first_token.case_sensitive {
                                         lemma == text
                                     } else {
-                                        lemma.eq_ignore_ascii_case(text)
+                                        eq_ignore_case(lemma, text)
                                     }
                                 } else {
                                     false
@@ -607,7 +607,7 @@ impl PatternRuleEngine {
         let matches = if pattern_token.case_sensitive {
             token_text == ref_text
         } else {
-            token_text.eq_ignore_ascii_case(&ref_text)
+            eq_ignore_case(&token_text, &ref_text)
         };
         if pattern_token.negate {
             Some(!matches)
@@ -922,8 +922,11 @@ impl PatternRuleEngine {
             let max_count = pattern_token.max.map(|m| m as usize).unwrap_or(1);
             let mut repeat_count = 1;
             let mut last_token_idx = token_idx;
+            let remaining_elems = pattern_tokens.len() - pattern_idx - 1;
 
-            while repeat_count < max_count && last_token_idx + 1 < tokens.len() {
+            while repeat_count < max_count
+                && last_token_idx + 1 < tokens.len().saturating_sub(remaining_elems)
+            {
                 let next_matches = if let Some(br) = self.backreference_matches(
                     pattern_token,
                     tokens[last_token_idx + 1],
@@ -1120,7 +1123,7 @@ impl PatternRuleEngine {
                     let hit = if *cs {
                         text == lit.as_str()
                     } else {
-                        text.eq_ignore_ascii_case(lit)
+                        eq_ignore_case(&text, lit)
                     };
                     if !hit {
                         continue;
@@ -1159,7 +1162,7 @@ impl PatternRuleEngine {
                 let hit = if *cs {
                     text == lit.as_str()
                 } else {
-                    text.eq_ignore_ascii_case(lit)
+                    eq_ignore_case(&text, lit)
                 };
                 if !hit {
                     continue;
@@ -1458,7 +1461,7 @@ fn exception_text_matches(exc: &og_xml::compiler::CompiledException, test: &str)
         if exc.case_sensitive {
             t == norm_text
         } else {
-            t.eq_ignore_ascii_case(norm_text.as_ref())
+            eq_ignore_case(t.as_ref(), norm_text.as_ref())
         }
     } else {
         true
@@ -1509,7 +1512,7 @@ fn element_surface_text_matches(
         if pattern.case_sensitive {
             token_text == norm_text
         } else {
-            token_text.eq_ignore_ascii_case(&norm_text)
+            eq_ignore_case(&token_text, &norm_text)
         }
     } else if let Some(ref re) = pattern.compiled_regexp_fancy {
         re.is_match(&token_text).unwrap_or(false)
@@ -1534,18 +1537,20 @@ fn element_matches_readings(
         || pattern.compiled_regexp.is_some()
         || pattern.compiled_regexp_fancy.is_some();
     let untagged = has_no_tag_reading(token);
+    let any_pos_ok = |readings: &[og_core::AnalyzedToken]| {
+        if readings.is_empty() {
+            pattern.postag.is_none()
+        } else {
+            readings
+                .iter()
+                .any(|r| reading_pos_ok(pattern, r, untagged))
+        }
+    };
     if !has_string {
         if pattern.match_no.is_some() {
-            return token
-                .readings()
-                .iter()
-                .any(|r| reading_pos_ok(pattern, r, untagged));
+            return any_pos_ok(token.readings());
         }
-        return !pattern.negate
-            && token
-                .readings()
-                .iter()
-                .any(|r| reading_pos_ok(pattern, r, untagged));
+        return !pattern.negate && any_pos_ok(token.readings());
     }
     if pattern.inflected {
         let surface = surface_text(token);
@@ -1559,16 +1564,9 @@ fn element_matches_readings(
         // Java leaves unsplittable compounds as lemma-less no-info readings, so its
         // inflected test falls back to the surface; our splitter gives them lemmas.
         return element_surface_text_matches(pattern, token) != pattern.negate
-            && token
-                .readings()
-                .iter()
-                .any(|r| reading_pos_ok(pattern, r, untagged));
+            && any_pos_ok(token.readings());
     }
-    element_surface_text_matches(pattern, token) != pattern.negate
-        && token
-            .readings()
-            .iter()
-            .any(|r| reading_pos_ok(pattern, r, untagged))
+    element_surface_text_matches(pattern, token) != pattern.negate && any_pos_ok(token.readings())
 }
 
 fn has_space_before(tokens: &[&AnalyzedTokenReadings], token_idx: usize) -> bool {
@@ -1721,7 +1719,7 @@ fn antipattern_unify_satisfied(
 }
 
 use og_xml::unifier::{
-    Unifier, UnifyElemPlan, UnifyReading, eval_unify_plans, has_no_tag_reading,
+    Unifier, UnifyElemPlan, UnifyReading, eq_ignore_case, eval_unify_plans, has_no_tag_reading,
     normalize_apostrophes, reading_matches_element, reading_pos_matches, surface_text,
 };
 
@@ -5744,6 +5742,125 @@ mod tests {
 }
 
 #[cfg(test)]
+mod gap_semantics_tests {
+    use super::*;
+    use og_core::{AnalyzedSentence, AnalyzedToken, AnalyzedTokenReadings};
+    use og_xml::compiler::XmlCompiler;
+
+    fn sentence(words: &[&str]) -> AnalyzedSentence {
+        sentence_with_untagged(words, &[])
+    }
+
+    fn sentence_with_untagged(words: &[&str], untagged: &[usize]) -> AnalyzedSentence {
+        let text = words.join(" ");
+        let mut tokens = vec![AnalyzedTokenReadings::new(
+            AnalyzedToken::new("<S>", 0, 0).with_pos_tags(vec!["SENT_START".to_string()]),
+        )];
+        let mut offset = 0;
+        for (i, w) in words.iter().enumerate() {
+            let atr = if untagged.contains(&i) {
+                AnalyzedTokenReadings::new(AnalyzedToken::new(*w, offset, offset + w.len()))
+            } else {
+                let reading = AnalyzedToken::new(*w, offset, offset + w.len())
+                    .with_lemma((*w).to_string())
+                    .with_pos_tags(vec!["NN".to_string()]);
+                let primary = AnalyzedToken::new(*w, offset, offset + w.len())
+                    .with_pos_tags(vec!["NN".to_string()]);
+                AnalyzedTokenReadings::new(primary).with_readings(vec![reading])
+            };
+            tokens.push(atr);
+            offset += w.len() + 1;
+        }
+        let mut s = AnalyzedSentence::new(&text, 0, text.len());
+        s.set_tokens(tokens);
+        s
+    }
+
+    fn count_matches(pattern: &str, words: &[&str]) -> usize {
+        let xml = format!(
+            r#"<rules lang="de"><rule id="GAP" name="gap"><pattern>{pattern}</pattern><message>m</message></rule></rules>"#
+        );
+        let rules = XmlCompiler::new().compile_file(&xml).expect("compile");
+        PatternRuleEngine::new()
+            .match_rule(&rules.rules[0], &sentence(words))
+            .len()
+    }
+
+    fn count_matches_untagged(pattern: &str, words: &[&str], untagged: &[usize]) -> usize {
+        let xml = format!(
+            r#"<rules lang="de"><rule id="GAP" name="gap"><pattern>{pattern}</pattern><message>m</message></rule></rules>"#
+        );
+        let rules = XmlCompiler::new().compile_file(&xml).expect("compile");
+        PatternRuleEngine::new()
+            .match_rule(&rules.rules[0], &sentence_with_untagged(words, untagged))
+            .len()
+    }
+
+    #[test]
+    fn untagged_token_matches_pos_free_elements_but_not_postag_elements() {
+        let words = ["Ich", "geb", "'", "mir"];
+        let string_pattern = r#"<token>geb</token><token>'</token><token>mir</token>"#;
+        assert_eq!(
+            count_matches_untagged(string_pattern, &words, &[2]),
+            1,
+            "Java tokens always carry a no-info reading, so POS-free string elements match"
+        );
+        let postag_pattern = r#"<token>geb</token><token postag="PKT"/><token>mir</token>"#;
+        assert_eq!(count_matches_untagged(postag_pattern, &words, &[2]), 0);
+        let wildcard = r#"<token>geb</token><token/><token>mir</token>"#;
+        assert_eq!(count_matches_untagged(wildcard, &words, &[2]), 1);
+    }
+
+    #[test]
+    fn greedy_gap_leaves_tokens_for_remaining_elements() {
+        let pattern = r#"<token>start</token><token min="0" max="6"/><token>end</token>"#;
+        assert_eq!(count_matches(pattern, &["start", "x", "y", "z", "end"]), 1);
+    }
+
+    #[test]
+    fn greedy_gap_may_swallow_required_token() {
+        let pattern = r#"<token>start</token><token min="0" max="6"/><token>end</token>"#;
+        assert_eq!(
+            count_matches(pattern, &["start", "x", "end", "y"]),
+            0,
+            "gap greedily consumes up to the tail bound, no backtracking"
+        );
+    }
+
+    #[test]
+    fn greedy_gap_then_optional_element_skips_in_place() {
+        let pattern = r#"<token>start</token><token min="0" max="6"/><token min="0">nicht</token><token>end</token>"#;
+        assert_eq!(
+            count_matches(pattern, &["start", "x", "nicht", "end"]),
+            1,
+            "optional element consumed when present"
+        );
+        assert_eq!(
+            count_matches(pattern, &["start", "x", "end"]),
+            1,
+            "optional element skipped when the next element matches in its place"
+        );
+        assert_eq!(
+            count_matches(pattern, &["start", "x", "y", "z", "end"]),
+            0,
+            "optional-element skip does not slide forward past the tail bound"
+        );
+    }
+
+    #[test]
+    fn german_auf_dem_punkt_shape_matches() {
+        let pattern = r#"<token>start</token><token min="0" max="6"/><token min="0">nicht</token><token>auf</token><token>dem</token><token>end</token>"#;
+        assert_eq!(
+            count_matches(
+                pattern,
+                &["start", "x", "y", "z", "w", "auf", "dem", "end", "!"]
+            ),
+            1
+        );
+    }
+}
+
+#[cfg(test)]
 mod unify_tests {
     use super::*;
     use og_core::{AnalyzedSentence, AnalyzedToken, AnalyzedTokenReadings};
@@ -6047,8 +6164,8 @@ mod unify_tests {
                     ("d", &["NN:sg:m"])
                 ]
             ),
-            1,
-            "a disagreeing middle token empties the branch so the negated group passes"
+            2,
+            "a disagreeing middle token empties the branch so the negated group passes; the tail bound leaves room for the last element, so both start positions match"
         );
         assert_eq!(
             run(

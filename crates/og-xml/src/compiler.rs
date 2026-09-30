@@ -1435,6 +1435,36 @@ mod tests {
     }
 
     #[test]
+    fn antipattern_examples_are_not_rule_examples() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="de">
+            <category id="GRAMMAR" name="Grammar">
+                <rule id="ANTI_EX" name="Antipattern examples">
+                    <antipattern>
+                        <token>für</token>
+                        <example correction="">Für die italienische Mafia ist das heiliges Gebiet.</example>
+                    </antipattern>
+                    <pattern>
+                        <token>das</token>
+                        <token postag="ADJ:NOM:SIN:NEU:IND" postag_regexp="yes"/>
+                    </pattern>
+                    <message>Msg</message>
+                    <example correction="X">Das <marker>heiliges</marker> Gebiet.</example>
+                </rule>
+            </category>
+        </rules>"#;
+
+        let compiler = XmlCompiler::new();
+        let result = compiler.compile_file(xml).unwrap();
+
+        assert_eq!(result.rules[0].examples.len(), 1);
+        assert_eq!(
+            result.rules[0].examples[0].text,
+            "Das <marker>heiliges</marker> Gebiet."
+        );
+    }
+
+    #[test]
     fn test_compile_self_closing_token() {
         let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
         <rules lang="en">
