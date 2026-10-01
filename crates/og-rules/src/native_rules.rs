@@ -7,6 +7,7 @@ use og_core::{
 pub struct WordRepeatRule {
     id: String,
     category: Category,
+    ignored_words: Vec<String>,
 }
 
 impl WordRepeatRule {
@@ -14,7 +15,18 @@ impl WordRepeatRule {
         Self {
             id: "WORD_REPEAT_RULE".to_string(),
             category: Category::new("MISC", "Miscellaneous"),
+            ignored_words: Vec::new(),
         }
+    }
+
+    pub fn with_id(mut self, id: impl Into<String>) -> Self {
+        self.id = id.into();
+        self
+    }
+
+    pub fn with_ignored_words(mut self, words: &[&str]) -> Self {
+        self.ignored_words = words.iter().map(|w| w.to_string()).collect();
+        self
     }
 }
 
@@ -56,6 +68,7 @@ impl Rule for WordRepeatRule {
                 && !prev.is_whitespace()
                 && !curr.is_whitespace()
                 && prev_text.chars().any(|c| c.is_alphabetic())
+                && !self.ignored_words.contains(&prev_text)
             {
                 let start = curr.token().start();
                 let end = curr.token().end();
@@ -124,6 +137,11 @@ impl DoublePunctuationRule {
         self
     }
 
+    pub fn with_comma_character(mut self, comma: char) -> Self {
+        self.comma_character = comma;
+        self
+    }
+
     pub fn with_messages(
         mut self,
         dot: impl Into<String>,
@@ -167,7 +185,6 @@ impl Rule for DoublePunctuationRule {
         let tokens = sentence.non_whitespace_tokens();
         let comma = self.comma_character.to_string();
 
-        let mut start_pos = 0usize;
         let mut dot_count = 0u32;
         let mut comma_count = 0u32;
         for i in 1..tokens.len() {
@@ -181,11 +198,9 @@ impl Rule for DoublePunctuationRule {
             if token == "." {
                 dot_count += 1;
                 comma_count = 0;
-                start_pos = tokens[i].token().start();
             } else if token == comma {
                 comma_count += 1;
                 dot_count = 0;
-                start_pos = tokens[i].token().start();
             }
 
             if dot_count == 2
@@ -200,8 +215,8 @@ impl Rule for DoublePunctuationRule {
                 && prev_prev_token != Some("\u{2026}")
                 && prev_prev_token != Some(".")
             {
-                let from_pos = start_pos.saturating_sub(1);
-                let to_pos = start_pos + 1;
+                let from_pos = tokens[i - 1].token().start();
+                let to_pos = tokens[i].token().end();
                 let context_start = from_pos.saturating_sub(20);
                 let context_end = std::cmp::min(to_pos + 20, sentence.text().len());
                 let context_text = sentence
@@ -233,8 +248,8 @@ impl Rule for DoublePunctuationRule {
                 );
                 dot_count = 0;
             } else if comma_count == 2 && next_token != Some(comma.as_str()) {
-                let from_pos = start_pos.saturating_sub(1);
-                let to_pos = start_pos + 1;
+                let from_pos = tokens[i - 1].token().start();
+                let to_pos = tokens[i].token().end();
                 let context_start = from_pos.saturating_sub(20);
                 let context_end = std::cmp::min(to_pos + 20, sentence.text().len());
                 let context_text = sentence
@@ -450,6 +465,7 @@ pub struct CommaWhitespaceRule {
     id: String,
     category: Category,
     domain_after_dot_exception: bool,
+    comma_character: char,
 }
 
 impl CommaWhitespaceRule {
@@ -458,7 +474,18 @@ impl CommaWhitespaceRule {
             id: "COMMA_PARENTHESIS_WHITESPACE".to_string(),
             category: Category::new("TYPOGRAPHY", "Typography"),
             domain_after_dot_exception: false,
+            comma_character: ',',
         }
+    }
+
+    pub fn with_id(mut self, id: impl Into<String>) -> Self {
+        self.id = id.into();
+        self
+    }
+
+    pub fn with_comma_character(mut self, comma: char) -> Self {
+        self.comma_character = comma;
+        self
     }
 
     pub fn with_domain_after_dot_exception(mut self) -> Self {
@@ -524,29 +551,31 @@ impl Rule for CommaWhitespaceRule {
                 suggestion = Some(prev_token.to_string());
             } else if !is_whitespace
                 && !prev_was_whitespace
-                && prev_token == ","
+                && prev_token == self.comma_character.to_string()
                 && !is_quote_char(token)
                 && !is_hyphen_or_comma(token)
                 && !contains_digit(prev_prev_token)
                 && !contains_digit(token)
-                && prev_prev_token != ","
+                && prev_prev_token != self.comma_character.to_string()
             {
                 msg = Some("Put a space after a comma.".to_string());
-                suggestion = Some(format!(", {}", token));
+                suggestion = Some(format!("{} {}", self.comma_character, token));
             } else if prev_was_whitespace {
                 if is_right_bracket(token) {
                     msg = Some("Don't put a space before a closing bracket.".to_string());
                     suggestion = Some(token.to_string());
-                } else if token == "," {
-                    if i + 1 < tokens.len() && tokens[i + 1].token().token() == "," {
+                } else if token == self.comma_character.to_string() {
+                    if i + 1 < tokens.len()
+                        && tokens[i + 1].token().token() == self.comma_character.to_string()
+                    {
                     } else {
                         msg = Some("Don't put a space before a comma.".to_string());
                         let next_space = if i + 1 < tokens.len() && !tokens[i + 1].is_whitespace() {
-                            ", "
+                            format!("{} ", self.comma_character)
                         } else {
-                            ","
+                            self.comma_character.to_string()
                         };
-                        suggestion = Some(next_space.to_string());
+                        suggestion = Some(next_space);
                     }
                 } else if token == "." {
                     let next_is_digit_or_dot =

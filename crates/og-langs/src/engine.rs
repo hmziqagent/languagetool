@@ -859,6 +859,21 @@ impl LanguageEngine {
                 engine.add_rule(Arc::new(crate::sv::swedish_compound_rule()) as Arc<dyn Rule>);
                 engine.add_text_level_rule(Arc::new(crate::sv::swedish_word_coherency_rule()));
             }
+            "ar" => {
+                engine.add_rules([
+                    Arc::new(crate::ar::arabic_double_punctuation_rule()) as Arc<dyn Rule>,
+                    Arc::new(crate::ar::arabic_comma_whitespace_rule()),
+                    Arc::new(crate::ar::arabic_question_mark_whitespace_rule()),
+                    Arc::new(crate::ar::arabic_semicolon_whitespace_rule()),
+                    Arc::new(crate::ar::arabic_word_repeat_rule()),
+                    Arc::new(crate::ar::arabic_darja_rule()),
+                    Arc::new(crate::ar::arabic_diacritics_rule()),
+                    Arc::new(crate::ar::arabic_simple_replace_rule()),
+                    Arc::new(crate::ar::arabic_homophones_rule()),
+                    Arc::new(crate::ar::arabic_redundancy_rule()),
+                    Arc::new(crate::ar::arabic_wordiness_rule()),
+                ]);
+            }
             _ => {}
         }
 
@@ -1546,6 +1561,48 @@ mod tests {
         assert!(
             !ids.contains(&"ITALIAN_WORD_REPEAT_RULE"),
             "'via via' must be ignored, got {ids:?}"
+        );
+    }
+
+    #[test]
+    fn arabic_engine_wires_java_relevant_natives() {
+        let engine =
+            LanguageEngine::for_code("ar").expect("Arabic engine must be registered via for_code");
+        let ids = engine.rule_ids();
+        for expected in [
+            "ARABIC_DOUBLE_PUNCTUATION",
+            "ARABIC_COMMA_PARENTHESIS_WHITESPACE",
+            "ARABIC_QM_WHITESPACE",
+            "ARABIC_SC_WHITESPACE",
+            "ARABIC_WORD_REPEAT_RULE",
+            "AR_DARJA_REPLACE",
+            "AR_DIACRITICS_REPLACE",
+        ] {
+            assert!(
+                ids.contains(&expected),
+                "expected {expected} in Arabic natives, got {ids:?}"
+            );
+        }
+
+        let result = engine.check("لقد.. نجحنا.");
+        let ids: Vec<&str> = result.matches.iter().map(|m| m.rule().id()).collect();
+        assert!(
+            ids.contains(&"ARABIC_DOUBLE_PUNCTUATION"),
+            "expected ARABIC_DOUBLE_PUNCTUATION on '..', got {ids:?}"
+        );
+
+        let result = engine.check("نعم ؟ لقد نجحنا.");
+        let ids: Vec<&str> = result.matches.iter().map(|m| m.rule().id()).collect();
+        assert!(
+            ids.contains(&"ARABIC_QM_WHITESPACE"),
+            "expected ARABIC_QM_WHITESPACE on space before '؟', got {ids:?}"
+        );
+
+        let result = engine.check("نفذت التعليمات خطوة خطوة.");
+        let ids: Vec<&str> = result.matches.iter().map(|m| m.rule().id()).collect();
+        assert!(
+            !ids.contains(&"ARABIC_WORD_REPEAT_RULE"),
+            "'خطوة خطوة' must be ignored, got {ids:?}"
         );
     }
 
