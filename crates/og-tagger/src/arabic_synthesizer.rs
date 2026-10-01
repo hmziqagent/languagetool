@@ -4,9 +4,8 @@ use std::path::Path;
 use og_core::{AnalyzedToken, AnalyzedTokenReadings};
 
 use crate::arabic_tagger::{
-    ArabicTagger, get_conjunction_prefix, get_definite_prefix, get_flag, get_jar_prefix,
-    has_conjunction, has_jar, has_pronoun, is_attached, is_definite, merge_pos_tag, set_flag,
-    set_procletic_flags,
+    ArabicTagger, get_conjunction_prefix, get_definite_prefix, get_jar_prefix, has_conjunction,
+    has_jar, has_pronoun, is_attached, is_definite, merge_pos_tag, set_flag, set_procletic_flags,
 };
 use crate::morfologik::{SynthDictionary, shared_synth_dictionary};
 

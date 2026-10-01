@@ -1164,6 +1164,146 @@ fn is_paragraph_end(sentences: &[AnalyzedSentence], index: usize) -> bool {
     next.starts_with('\n') || next.starts_with("\r\n")
 }
 
+static NON_WORD_REGEX: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    regex::Regex::new(r#"[.?!…:;,~’'\"„“”»«‚‘›‹()\[\]\-–—*×∗·+÷/=]"#).expect("valid regex")
+});
+
+fn is_non_word_token(token: &str) -> bool {
+    NON_WORD_REGEX.is_match(token)
+}
+
+pub struct LongParagraphRule {
+    category: Category,
+    max_words: usize,
+    description: String,
+    message: String,
+}
+
+impl LongParagraphRule {
+    pub fn new(max_words: usize) -> Self {
+        Self {
+            category: Category::new("STYLE", "Style"),
+            max_words,
+            description: format!("Readability: paragraph over {max_words} words"),
+            message: format!(
+                "This paragraph is over {max_words} words long here, consider revising it."
+            ),
+        }
+    }
+
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = description.into();
+        self
+    }
+
+    pub fn with_message(mut self, message: impl Into<String>) -> Self {
+        self.message = message.into();
+        self
+    }
+}
+
+impl Default for LongParagraphRule {
+    fn default() -> Self {
+        Self::new(220)
+    }
+}
+
+impl TextLevelRule for LongParagraphRule {
+    fn id(&self) -> &str {
+        "TOO_LONG_PARAGRAPH"
+    }
+
+    fn is_default_on(&self) -> bool {
+        false
+    }
+
+    fn is_picky(&self) -> bool {
+        true
+    }
+
+    fn description(&self) -> &str {
+        &self.description
+    }
+
+    fn category(&self) -> Category {
+        self.category.clone()
+    }
+
+    fn issue_type(&self) -> IssueType {
+        IssueType::Style
+    }
+
+    fn match_text(&self, _text: &str, sentences: &[AnalyzedSentence]) -> Vec<RuleMatch> {
+        let mut rule_matches = Vec::new();
+        let mut start_pos = 0usize;
+        let mut end_pos = 0usize;
+        let mut word_count = 0usize;
+        let mut para_has_linebreaks = false;
+        for (n, sentence) in sentences.iter().enumerate() {
+            let paragraph_end = is_paragraph_end(sentences, n);
+            if !paragraph_end && sentence.text().trim_start_matches('\n').contains('\n') {
+                para_has_linebreaks = true;
+            }
+            for token in sentence.non_whitespace_tokens() {
+                if !token.is_sentence_start() && !is_non_word_token(token.token().token()) {
+                    word_count += 1;
+                    if word_count == self.max_words {
+                        end_pos = token.token().end();
+                    } else if word_count == self.max_words - 1 {
+                        start_pos = token.token().start();
+                    }
+                }
+            }
+            if paragraph_end {
+                if word_count > self.max_words + 5 && !para_has_linebreaks {
+                    self.push_match(sentence, start_pos, end_pos, &mut rule_matches);
+                }
+                word_count = 0;
+                para_has_linebreaks = false;
+            }
+        }
+        if word_count > self.max_words
+            && let Some(last) = sentences.last()
+        {
+            self.push_match(last, start_pos, end_pos, &mut rule_matches);
+        }
+        rule_matches
+    }
+}
+
+impl LongParagraphRule {
+    fn push_match(
+        &self,
+        sentence: &AnalyzedSentence,
+        start: usize,
+        end: usize,
+        rule_matches: &mut Vec<RuleMatch>,
+    ) {
+        if end <= start {
+            return;
+        }
+        let rel_start = start.saturating_sub(sentence.start());
+        let rel_end = end.saturating_sub(sentence.start());
+        let context_start = rel_start.saturating_sub(30);
+        let context_end = std::cmp::min(rel_end + 30, sentence.text().len());
+        let context_text = sentence.text()[context_start..context_end].to_string();
+        let rm_rule = RuleMatchRule::new(self.id(), self.description())
+            .with_picky(true)
+            .with_category(self.category.clone())
+            .with_issue_type(IssueType::Style.as_str());
+        rule_matches.push(
+            RuleMatch::new(
+                &self.message,
+                start,
+                end - start,
+                rm_rule,
+                RuleMatchContext::new(context_text, context_start, context_end - context_start),
+            )
+            .with_sentence(sentence.text().to_string()),
+        );
+    }
+}
+
 pub struct WhiteSpaceBeforeParagraphEndRule {
     category: Category,
 }

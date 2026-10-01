@@ -12,5 +12,6 @@ pub mod detection;
 pub mod it;
 pub mod match_priority;
 pub mod ro;
+pub mod ru;
 pub mod sv;
 pub mod upper_case_ngram;

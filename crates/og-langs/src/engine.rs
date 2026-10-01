@@ -862,6 +862,31 @@ impl LanguageEngine {
                         as Arc<dyn Rule>,
                 );
             }
+            "ru" => {
+                engine.add_rules([
+                    Arc::new(og_rules::native_rules::UppercaseSentenceStartRule::new())
+                        as Arc<dyn Rule>,
+                    Arc::new(crate::ru::russian_simple_word_repeat_rule()),
+                    Arc::new(crate::ru::RussianWordRepeatRule::new()),
+                    Arc::new(crate::ru::russian_simple_replace_rule()),
+                    Arc::new(crate::ru::russian_compound_rule()),
+                    Arc::new(crate::ru::RussianVerbConjugationRule::new()),
+                    Arc::new(crate::ru::RussianSpecificCaseRule::new()),
+                    Arc::new(crate::ru::RussianDashRule::new()),
+                ]);
+                engine.add_text_level_rules([
+                    Arc::new(crate::ru::russian_unpaired_brackets_rule()) as Arc<dyn TextLevelRule>,
+                    Arc::new(crate::ru::russian_word_coherency_rule()),
+                    Arc::new(crate::ru::russian_word_root_repeat_rule()),
+                    Arc::new(crate::ru::RussianFillerWordsRule::new()),
+                    Arc::new(og_rules::text_level_rules::LongSentenceRule::new(50)),
+                    Arc::new(og_rules::text_level_rules::LongParagraphRule::new(220)),
+                    Arc::new(og_rules::text_level_rules::WhiteSpaceBeforeParagraphEndRule::new()),
+                ]);
+                engine.add_rule(Arc::new(
+                    og_rules::text_level_rules::WhiteSpaceAtBeginOfParagraphRule::new(),
+                ) as Arc<dyn Rule>);
+            }
             "ro" => {
                 engine.add_rules([
                     Arc::new(crate::ro::romanian_replace_rule()) as Arc<dyn Rule>,

@@ -9,6 +9,7 @@ pub struct WordCoherencyRule {
     description: String,
     message_template: String,
     word_map: HashMap<String, HashSet<String>>,
+    default_on: bool,
 }
 
 impl WordCoherencyRule {
@@ -28,6 +29,7 @@ impl WordCoherencyRule {
             description: description.to_string(),
             message_template: "Do not mix variants of the same word ('{word1}' and '{word2}') within a single text.".to_string(),
             word_map: HashMap::new(),
+            default_on: true,
         };
         rule.load_data(data);
         rule
@@ -35,6 +37,11 @@ impl WordCoherencyRule {
 
     pub fn with_message_template(mut self, template: &str) -> Self {
         self.message_template = template.to_string();
+        self
+    }
+
+    pub fn with_default_off(mut self) -> Self {
+        self.default_on = false;
         self
     }
 
@@ -75,7 +82,7 @@ impl TextLevelRule for WordCoherencyRule {
     }
 
     fn is_default_on(&self) -> bool {
-        true
+        self.default_on
     }
 
     fn category(&self) -> Category {

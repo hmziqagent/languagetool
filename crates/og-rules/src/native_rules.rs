@@ -8,6 +8,7 @@ pub struct WordRepeatRule {
     id: String,
     category: Category,
     ignored_words: Vec<String>,
+    ignore_single_letter_repeats: bool,
 }
 
 impl WordRepeatRule {
@@ -16,6 +17,7 @@ impl WordRepeatRule {
             id: "WORD_REPEAT_RULE".to_string(),
             category: Category::new("MISC", "Miscellaneous"),
             ignored_words: Vec::new(),
+            ignore_single_letter_repeats: false,
         }
     }
 
@@ -26,6 +28,11 @@ impl WordRepeatRule {
 
     pub fn with_ignored_words(mut self, words: &[&str]) -> Self {
         self.ignored_words = words.iter().map(|w| w.to_string()).collect();
+        self
+    }
+
+    pub fn with_ignore_single_letter_repeats(mut self) -> Self {
+        self.ignore_single_letter_repeats = true;
         self
     }
 }
@@ -69,6 +76,7 @@ impl Rule for WordRepeatRule {
                 && !curr.is_whitespace()
                 && prev_text.chars().any(|c| c.is_alphabetic())
                 && !self.ignored_words.contains(&prev_text)
+                && !(self.ignore_single_letter_repeats && prev_text.chars().count() == 1)
             {
                 let start = curr.token().start();
                 let end = curr.token().end();

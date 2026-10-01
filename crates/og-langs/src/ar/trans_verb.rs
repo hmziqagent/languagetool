@@ -6,11 +6,10 @@ use og_core::{
     RuleMatchRule, SuggestedReplacement, rule::Rule,
 };
 use og_tagger::arabic_synthesizer::ArabicSynthesizer;
-use og_tagger::arabic_tagger::{ArabicTagger, get_flag, set_flag};
+use og_tagger::arabic_tagger::{get_flag, set_flag};
 
 pub struct ArabicTransVerbRule {
     wrong_words: HashMap<String, Vec<String>>,
-    tagger: ArabicTagger,
     synthesizer: ArabicSynthesizer,
 }
 
@@ -45,7 +44,6 @@ impl ArabicTransVerbRule {
             wrong_words: load_wrong_words(include_str!(
                 "../../../../languagetool/languagetool-language-modules/ar/src/main/resources/org/languagetool/rules/ar/verb_trans_to_untrans2.txt"
             )),
-            tagger: ArabicTagger::from_resource_dir(resource_dir).with_new_style_pronoun_tag(),
             synthesizer: ArabicSynthesizer::from_resource_dir(resource_dir),
         }
     }
