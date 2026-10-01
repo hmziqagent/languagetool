@@ -501,6 +501,111 @@ fn compile_fancy(
 const BACKSLASH: u8 = 0x5C;
 const BACKSLASH_STR: &str = "\\";
 
+const MAX_LOOKBEHIND_ALTERNATIVES: usize = 64;
+const MAX_LOOKBEHIND_REPEAT: usize = 6;
+
+fn parse_lookbehind_atom(rest: &str) -> Option<(String, usize)> {
+    let bytes = rest.as_bytes();
+    let first = *bytes.first()?;
+    let body_len = if first == b'[' {
+        let mut k = 1;
+        while k < bytes.len() {
+            if bytes[k] == b'\\' {
+                k += 1;
+            } else if bytes[k] == b']' {
+                break;
+            }
+            k += 1;
+        }
+        if k >= bytes.len() {
+            return None;
+        }
+        k + 1
+    } else if first == b'\\' {
+        if bytes.len() < 2 {
+            return None;
+        }
+        2
+    } else if !matches!(
+        first,
+        b'(' | b')' | b'[' | b']' | b'{' | b'}' | b'*' | b'+' | b'.' | b'|' | b'^' | b'$'
+    ) {
+        rest.chars().next()?.len_utf8()
+    } else {
+        return None;
+    };
+    Some((rest[..body_len].to_string(), body_len))
+}
+
+fn expand_bounded_negative_lookbehind(inner: &str) -> Option<String> {
+    let mut atoms: Vec<(String, usize, usize)> = Vec::new();
+    let bytes = inner.as_bytes();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        let (body, len) = parse_lookbehind_atom(&inner[i..])?;
+        i += len;
+        let (min, max) = if i < bytes.len() && bytes[i] == b'?' {
+            i += 1;
+            (0, 1)
+        } else if i < bytes.len() && (bytes[i] == b'*' || bytes[i] == b'+') {
+            return None;
+        } else if i < bytes.len() && bytes[i] == b'{' {
+            let close = inner[i..].find('}')? + i;
+            let spec = &inner[i + 1..close];
+            let (lo, hi) = if let Some((l, r)) = spec.split_once(',') {
+                let lo: usize = l.parse().ok()?;
+                if r.is_empty() {
+                    return None;
+                }
+                (lo, r.parse().ok()?)
+            } else {
+                let v: usize = spec.parse().ok()?;
+                (v, v)
+            };
+            if hi < lo || hi > MAX_LOOKBEHIND_REPEAT {
+                return None;
+            }
+            i = close + 1;
+            (lo, hi)
+        } else {
+            (1, 1)
+        };
+        atoms.push((body, min, max));
+    }
+    if atoms.is_empty() {
+        return None;
+    }
+    let mut total = 1usize;
+    let mut has_empty = true;
+    for (_, min, max) in &atoms {
+        has_empty &= *min == 0;
+        if max != min {
+            total = total.saturating_mul(max - min + 1);
+        }
+    }
+    if has_empty || total < 2 || total > MAX_LOOKBEHIND_ALTERNATIVES {
+        return None;
+    }
+    let mut alternatives: Vec<String> = vec![String::new()];
+    for (body, min, max) in &atoms {
+        let mut next = Vec::with_capacity(alternatives.len() * (max - min + 1));
+        for alt in &alternatives {
+            for count in *min..=*max {
+                let mut candidate = alt.clone();
+                for _ in 0..count {
+                    candidate.push_str(body);
+                }
+                next.push(candidate);
+            }
+        }
+        alternatives = next;
+        if alternatives.len() > MAX_LOOKBEHIND_ALTERNATIVES {
+            return None;
+        }
+    }
+    Some(alternatives.join("|"))
+}
+
 fn split_variable_lookbehind(pattern: &str) -> String {
     let bytes = pattern.as_bytes();
     let mut out = String::with_capacity(pattern.len());
@@ -530,12 +635,20 @@ fn split_variable_lookbehind(pattern: &str) -> String {
                 j += 1;
             }
             let inner = &pattern[i + 4..j.saturating_sub(1)];
-            let (effective, wrapper_captures) =
+            let (effective_base, wrapper_captures) =
                 if inner.starts_with('(') && inner.ends_with(')') && group_spans_inner(inner) {
                     (&inner[1..inner.len() - 1], count_capturing_groups(inner))
                 } else {
                     (inner, 0)
                 };
+            let expanded_storage;
+            let effective: &str = match expand_bounded_negative_lookbehind(effective_base) {
+                Some(expanded) => {
+                    expanded_storage = expanded;
+                    expanded_storage.as_str()
+                }
+                None => effective_base,
+            };
             let parts = split_top_level_alternatives(effective);
             if parts.len() > 1 && wrapper_captures <= 1 {
                 let split_form: String = parts
@@ -870,6 +983,42 @@ pub struct CompiledSuggestion {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bounded_negative_lookbehind_expands_to_fixed_width_conjunction() {
+        let expanded = expand_bounded_negative_lookbehind("[A-Z\\$]-?[0-9\\.]{0,5}");
+        assert_eq!(
+            expanded.as_deref(),
+            Some(
+                "[A-Z\\$]|[A-Z\\$][0-9\\.]|[A-Z\\$][0-9\\.][0-9\\.]|[A-Z\\$][0-9\\.][0-9\\.][0-9\\.]|[A-Z\\$][0-9\\.][0-9\\.][0-9\\.][0-9\\.]|[A-Z\\$][0-9\\.][0-9\\.][0-9\\.][0-9\\.][0-9\\.]|[A-Z\\$]-|[A-Z\\$]-[0-9\\.]|[A-Z\\$]-[0-9\\.][0-9\\.]|[A-Z\\$]-[0-9\\.][0-9\\.][0-9\\.]|[A-Z\\$]-[0-9\\.][0-9\\.][0-9\\.][0-9\\.]|[A-Z\\$]-[0-9\\.][0-9\\.][0-9\\.][0-9\\.][0-9\\.]"
+            )
+        );
+        assert_eq!(expand_bounded_negative_lookbehind("[A-Z]{2}"), None);
+        assert_eq!(expand_bounded_negative_lookbehind("a*"), None);
+        assert_eq!(expand_bounded_negative_lookbehind("a|b"), None);
+        assert_eq!(expand_bounded_negative_lookbehind("a?"), None);
+    }
+
+    #[test]
+    fn lookbehind_rule_regexp_compiles_and_matches_like_java() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <rule id="LB" name="lb">
+                <regexp case_sensitive='yes'>(?&lt;![A-Z\$]-?[0-9\.]{0,5})[0-9]{1,5}m</regexp>
+                <message>m</message>
+            </rule>
+        </rules>"#;
+        let rule_set = XmlCompiler::new().compile_file(xml).unwrap();
+        let re = rule_set.rules[0].regexp.as_ref().unwrap();
+        assert!(re.regex.is_some() || re.fancy_regex.is_some());
+        let engine = re
+            .fancy_regex
+            .as_ref()
+            .or(re.regex.as_ref().map(|_| unreachable!()));
+        let f = engine.unwrap();
+        assert!(f.is_match("needs $350m now").is_ok_and(|m| !m));
+        assert!(f.is_match("about 350m users").is_ok_and(|m| m));
+    }
 
     #[test]
     fn test_compile_simple_rule() {

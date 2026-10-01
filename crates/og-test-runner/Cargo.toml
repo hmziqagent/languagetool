@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 rayon = { workspace = true }
+fancy-regex = "0.14"
 og-core = { workspace = true }
 og-xml = { workspace = true }
 og-rules = { workspace = true }
