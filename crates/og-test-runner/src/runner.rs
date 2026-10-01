@@ -256,32 +256,9 @@ impl TestRunner {
                         ),
                     )
                 } else if code == "de" && resource_dir.exists() && core_resource_dir.exists() {
-                    let dictionary = og_tagger::morfologik::MorfologikDictionary::load(
-                        &resource_dir.join("german.dict"),
-                        &resource_dir.join("german.info"),
-                    )
-                    .map(|dict| {
-                        let mut d = og_spell::Dictionary::new();
-                        for word in dict.word_list() {
-                            d.add_word(&word);
-                        }
-                        if let Ok(words) =
-                            std::fs::read_to_string(resource_dir.join("hunspell/spelling.txt"))
-                        {
-                            for line in words.lines() {
-                                for word in og_rules::spelling_support::prepare_line_for_speller(
-                                    og_rules::spelling_support::SpellerVariant::German,
-                                    line,
-                                ) {
-                                    d.add_word(&word);
-                                }
-                            }
-                        }
-                        d
-                    });
-                    dictionary.map(|dictionary| {
+                    shared_german_speller_dictionary(&resource_dir).map(|dictionary| {
                         og_rules::spelling_support::SpellingSupport::new_for_language(
-                            std::sync::Arc::new(dictionary),
+                            dictionary,
                             core_resource_dir,
                             &resource_dir,
                             "de",
@@ -799,6 +776,44 @@ pub mod test_support {
         guard.insert(code, compiled);
         compiled
     }
+}
+
+fn shared_german_speller_dictionary(
+    resource_dir: &Path,
+) -> Option<std::sync::Arc<og_spell::Dictionary>> {
+    static CACHE: std::sync::OnceLock<
+        std::sync::Mutex<
+            std::collections::HashMap<std::path::PathBuf, std::sync::Arc<og_spell::Dictionary>>,
+        >,
+    > = std::sync::OnceLock::new();
+    let cache = CACHE.get_or_init(Default::default);
+    let key = resource_dir.to_path_buf();
+    let mut guard = cache.lock().unwrap();
+    if let Some(dict) = guard.get(&key) {
+        return Some(dict.clone());
+    }
+    let dictionary = og_tagger::german_tagger::shared_german_dictionary(resource_dir).map(|dict| {
+        let mut d = og_spell::Dictionary::new();
+        for word in dict.keys() {
+            d.add_word(word);
+        }
+        if let Ok(words) = std::fs::read_to_string(resource_dir.join("hunspell/spelling.txt")) {
+            for line in words.lines() {
+                for word in og_rules::spelling_support::prepare_line_for_speller(
+                    og_rules::spelling_support::SpellerVariant::German,
+                    line,
+                ) {
+                    d.add_word(&word);
+                }
+            }
+        }
+        d
+    });
+    let dictionary = dictionary.map(std::sync::Arc::new);
+    if let Some(dict) = &dictionary {
+        guard.insert(key, dict.clone());
+    }
+    dictionary
 }
 
 #[cfg(test)]

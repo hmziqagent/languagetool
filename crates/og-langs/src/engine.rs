@@ -398,28 +398,8 @@ impl LanguageEngine {
                 engine.disambiguator = Some(Arc::new(disambiguator));
             }
 
-            let mut dict = og_spell::Dictionary::new();
-            if let Some(words) = load_german_wordlist(&resource_dir) {
-                for word in &words {
-                    dict.add_word(word);
-                }
-                eprintln!("Loaded {} German dictionary words", words.len());
-            }
-            if let Ok(extra) = std::fs::read_to_string(resource_dir.join("hunspell/spelling.txt")) {
-                for line in extra.lines() {
-                    for word in og_rules::spelling_support::prepare_line_for_speller(
-                        og_rules::spelling_support::SpellerVariant::German,
-                        line,
-                    ) {
-                        dict.add_word(&word);
-                    }
-                }
-            }
-            for word in og_rules::spelling_support::german_hunspell_words(&resource_dir) {
-                dict.add_word(&word);
-            }
-            if !dict.is_empty() {
-                let dict_arc = Arc::new(dict);
+            if let Some(dict_arc) = shared_german_speller_dictionary(&resource_dir) {
+                shared_dict = Some(dict_arc.clone());
                 if let Some(core_resource_dir) = find_lt_core_resource_dir() {
                     engine.spelling_support = Some(Arc::new(
                         og_rules::spelling_support::SpellingSupport::new_for_language(
@@ -430,7 +410,6 @@ impl LanguageEngine {
                         ),
                     ));
                 }
-                shared_dict = Some(dict_arc.clone());
                 let speller = Arc::new(og_spell::GermanSpeller::new(
                     dict_arc.clone(),
                     &resource_dir,
@@ -1238,6 +1217,42 @@ impl LanguageEngine {
 fn load_german_wordlist(resource_dir: &Path) -> Option<Vec<String>> {
     let dict = og_tagger::german_tagger::shared_german_dictionary(resource_dir)?;
     Some(dict.word_list())
+}
+
+fn shared_german_speller_dictionary(resource_dir: &Path) -> Option<Arc<og_spell::Dictionary>> {
+    static CACHE: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<PathBuf, Arc<og_spell::Dictionary>>>,
+    > = std::sync::OnceLock::new();
+    let cache = CACHE.get_or_init(Default::default);
+    let mut guard = cache.lock().unwrap();
+    if let Some(dict) = guard.get(resource_dir) {
+        return Some(dict.clone());
+    }
+    let mut dict = og_spell::Dictionary::new();
+    if let Some(words) = load_german_wordlist(resource_dir) {
+        for word in &words {
+            dict.add_word(word);
+        }
+    }
+    if let Ok(extra) = std::fs::read_to_string(resource_dir.join("hunspell/spelling.txt")) {
+        for line in extra.lines() {
+            for word in og_rules::spelling_support::prepare_line_for_speller(
+                og_rules::spelling_support::SpellerVariant::German,
+                line,
+            ) {
+                dict.add_word(&word);
+            }
+        }
+    }
+    for word in og_rules::spelling_support::german_hunspell_words(resource_dir) {
+        dict.add_word(&word);
+    }
+    if dict.is_empty() {
+        return None;
+    }
+    let dict = Arc::new(dict);
+    guard.insert(resource_dir.to_path_buf(), dict.clone());
+    Some(dict)
 }
 
 fn wordlist_dictionary(resource_dir: &Path, dict_stem: &str) -> og_spell::Dictionary {
