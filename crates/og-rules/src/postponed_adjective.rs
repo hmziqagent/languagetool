@@ -298,17 +298,62 @@ pub struct LangSynthesizer {
     manual: Vec<(Box<str>, Box<str>, Box<str>)>,
     removals: Vec<(Box<str>, Box<str>, Box<str>)>,
     french: bool,
+    german: bool,
     lemma_forms: OnceLock<HashMap<Box<str>, Vec<(Box<str>, Box<str>)>>>,
 }
 
+const GERMAN_REMOVE: &[&str] = &[
+    "unsren",
+    "unsrem",
+    "unsres",
+    "unsre",
+    "unsern",
+    "unserm",
+    "unsrer",
+    "angepaßt",
+    "beschloß",
+    "biß",
+    "entschloß",
+    "ergoß",
+    "faßt",
+    "genoß",
+    "paßt",
+    "paßte",
+    "preßt",
+    "preßte",
+    "riß",
+    "schloß",
+    "streßtest",
+    "vergißt",
+    "verlaß",
+    "verläßt",
+    "vermiß",
+    "vermißt",
+    "wißt",
+    "wußtest",
+    "wüßtest",
+];
+
 impl LangSynthesizer {
     pub fn for_language(resource_dir: &Path, code: &str) -> Option<Self> {
-        let (stem, french) = match code {
-            "es" => ("spanish", false),
-            "fr" => ("french", true),
+        let (dictionary, french, german) = match code {
+            "de" => (
+                og_tagger::german_tagger::shared_german_dictionary(resource_dir),
+                false,
+                true,
+            ),
+            "es" => (
+                og_tagger::generic_tagger::shared_dictionary(resource_dir, "spanish"),
+                false,
+                false,
+            ),
+            "fr" => (
+                og_tagger::generic_tagger::shared_dictionary(resource_dir, "french"),
+                true,
+                false,
+            ),
             _ => return None,
         };
-        let dictionary = og_tagger::generic_tagger::shared_dictionary(resource_dir, stem);
         let manual = std::fs::read_to_string(resource_dir.join("added.txt"))
             .map(|t| parse_manual(&t))
             .unwrap_or_default();
@@ -320,6 +365,7 @@ impl LangSynthesizer {
             manual,
             removals,
             french,
+            german,
             lemma_forms: OnceLock::new(),
         })
     }
@@ -343,16 +389,78 @@ impl LangSynthesizer {
     }
 
     pub fn synthesize(&self, lemma: &str, tag: &Regex) -> Vec<String> {
+        let mut results = self.lookup_forms(lemma, tag);
+        if self.german {
+            results.retain(|r| !GERMAN_REMOVE.contains(&r.as_str()));
+        }
+        results
+    }
+
+    fn german_lookup_ok(&self, lemma: &str, form: &str) -> bool {
+        if !self.german {
+            return true;
+        }
+        let lc_lemma = lemma.chars().next().is_some_and(|c| c.is_lowercase());
+        let lc_form = form.chars().next().is_some_and(|c| c.is_lowercase());
+        lc_lemma == lc_form || lemma == "mein" || lemma == "ich" && !GERMAN_REMOVE.contains(&form)
+    }
+
+    pub fn synthesize_full(&self, lemma: &str, target: &str) -> Vec<String> {
+        let Ok(re) = Regex::new(&format!("^(?:{target})$")) else {
+            return Vec::new();
+        };
+        let mut results = self.synthesize(lemma, &re);
+        if results.is_empty() && self.german {
+            results = self.compound_forms(lemma, &re);
+        }
+        results.sort();
+        results.dedup();
+        results
+    }
+
+    fn compound_forms(&self, lemma: &str, tag: &Regex) -> Vec<String> {
+        let mut parts = og_tagger::jwordsplitter::tokenize(lemma);
+        if parts.is_empty() {
+            return Vec::new();
+        }
+        let mut maybe_hyphen = "";
+        if parts.len() == 1 {
+            let hyphen_split: Vec<String> = lemma.split('-').map(str::to_string).collect();
+            if hyphen_split.len() > 1 {
+                maybe_hyphen = "-";
+                parts = hyphen_split;
+            }
+        }
+        let Some((last_raw, first_parts)) = parts.split_last() else {
+            return Vec::new();
+        };
+        let first_part = first_parts.join(maybe_hyphen);
+        let last_part = uppercase_first_char(last_raw);
+        let uppercase_last =
+            !maybe_hyphen.is_empty() && last_raw.chars().next().is_some_and(char::is_uppercase);
+        let mut results = Vec::new();
+        for form in self.lookup_forms(last_part.as_str(), tag) {
+            let tail = if uppercase_last {
+                form.clone()
+            } else {
+                lowercase_first_char(&form)
+            };
+            results.push(format!("{first_part}{maybe_hyphen}{tail}"));
+        }
+        results
+    }
+
+    fn lookup_forms(&self, lemma: &str, tag: &Regex) -> Vec<String> {
         let mut results = Vec::new();
         if let Some(entries) = self.forms().get(lemma) {
             for (t, form) in entries {
-                if tag.is_match(t) {
+                if tag.is_match(t) && self.german_lookup_ok(lemma, form) {
                     results.push(form.to_string());
                 }
             }
         }
         for (l, t, form) in &self.manual {
-            if l.as_ref() == lemma && tag.is_match(t) {
+            if l.as_ref() == lemma && tag.is_match(t) && self.german_lookup_ok(lemma, form) {
                 results.push(form.to_string());
             }
         }
@@ -365,6 +473,22 @@ impl LangSynthesizer {
             results.retain(|r| !is_exception_fr(r));
         }
         results
+    }
+}
+
+fn uppercase_first_char(text: &str) -> String {
+    let mut chars = text.chars();
+    match chars.next() {
+        Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
+}
+
+fn lowercase_first_char(text: &str) -> String {
+    let mut chars = text.chars();
+    match chars.next() {
+        Some(c) => c.to_lowercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
     }
 }
 

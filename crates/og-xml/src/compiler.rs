@@ -291,6 +291,7 @@ impl XmlCompiler {
                 .map(|s| CompiledSuggestion {
                     text: s.text.clone(),
                     parts: s.parts.clone(),
+                    suppress_misspelled: s.suppress_misspelled,
                 })
                 .collect(),
             examples: rule.examples.clone(),
@@ -304,6 +305,7 @@ impl XmlCompiler {
                 .clone()
                 .or_else(|| rule.category.issue_type.clone())
                 .unwrap_or_else(|| "grammar".to_string()),
+            suppress_misspelled: rule.suppress_misspelled,
         }
     }
 
@@ -787,6 +789,7 @@ pub struct CompiledRule {
     pub deprecated: bool,
     pub filter: Option<crate::types::XmlFilter>,
     pub issue_type: String,
+    pub suppress_misspelled: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -861,6 +864,7 @@ pub struct CompiledException {
 pub struct CompiledSuggestion {
     pub text: String,
     pub parts: Vec<SuggestionPart>,
+    pub suppress_misspelled: bool,
 }
 
 #[cfg(test)]

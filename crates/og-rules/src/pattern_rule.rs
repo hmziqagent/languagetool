@@ -34,6 +34,7 @@ pub struct PatternRuleEngine {
     catch_all_rule_indices: Vec<usize>,
     spelling: Option<std::sync::Arc<crate::spelling_support::SpellingSupport>>,
     synthesizer: Option<std::sync::Arc<crate::postponed_adjective::LangSynthesizer>>,
+    suggestion_synth: Option<std::sync::Arc<crate::postponed_adjective::LangSynthesizer>>,
 }
 
 impl PatternRuleEngine {
@@ -43,6 +44,7 @@ impl PatternRuleEngine {
             catch_all_rule_indices: Vec::new(),
             spelling: None,
             synthesizer: None,
+            suggestion_synth: None,
         }
     }
 
@@ -59,6 +61,14 @@ impl PatternRuleEngine {
         synthesizer: std::sync::Arc<crate::postponed_adjective::LangSynthesizer>,
     ) -> Self {
         self.synthesizer = Some(synthesizer);
+        self
+    }
+
+    pub fn with_suggestion_synthesizer(
+        mut self,
+        synthesizer: std::sync::Arc<crate::postponed_adjective::LangSynthesizer>,
+    ) -> Self {
+        self.suggestion_synth = Some(synthesizer);
         self
     }
 
@@ -470,57 +480,26 @@ impl PatternRuleEngine {
         };
         let context_text = text[context_start..context_end].to_string();
 
-        let replacements: Vec<SuggestedReplacement> = rule
-            .suggestions
-            .iter()
-            .map(|s| {
-                if !s.parts.is_empty() {
-                    let mut resolved = String::new();
-                    for part in &s.parts {
-                        match part {
-                            og_xml::types::SuggestionPart::Text(t) => {
-                                resolved.push_str(
-                                    &self.resolve_backreferences(t, &match_result.matched_texts),
-                                );
-                            }
-                            og_xml::types::SuggestionPart::Match(m) => {
-                                let token_idx = (m.no as usize).saturating_sub(1);
-                                if let Some(pos) = match_result.position_for_pattern(token_idx)
-                                    && let Some(token) = tokens.get(pos)
-                                {
-                                    let mut text = token.token().token().to_string();
-                                    if let Some(ref cc) = m.case_conversion {
-                                        text = apply_case_conversion(&text, cc);
-                                    }
-                                    if let Some(ref rm) = m.regexp_match
-                                        && let Ok(re) = regex::Regex::new(rm)
-                                    {
-                                        let replace = m.regexp_replace.as_deref().unwrap_or("");
-                                        text = re.replace_all(&text, replace).to_string();
-                                    }
-                                    if let Some(ref mode) = m.include_skipped
-                                        && mode != "none"
-                                    {
-                                        text.push_str(&skipped_suffix(
-                                            tokens,
-                                            &match_result.matched_positions,
-                                            token_idx,
-                                            mode == "following",
-                                        ));
-                                    }
-                                    resolved.push_str(&text);
-                                }
-                            }
-                        }
-                    }
-                    SuggestedReplacement::new(&resolved)
-                } else {
-                    let resolved =
-                        self.resolve_backreferences(&s.text, &match_result.matched_texts);
-                    SuggestedReplacement::new(&resolved)
-                }
-            })
-            .collect();
+        let mut replacements: Vec<SuggestedReplacement> = Vec::new();
+        for s in &rule.suggestions {
+            let alternatives = self.suggestion_alternatives(s, tokens, &match_result);
+            let strippable = rule.suppress_misspelled || s.suppress_misspelled;
+            let kept: Vec<String> = if strippable {
+                alternatives
+                    .into_iter()
+                    .filter(|a| !is_suppress_junk(a))
+                    .collect()
+            } else {
+                alternatives
+            };
+            replacements.extend(
+                kept.into_iter()
+                    .map(|text| SuggestedReplacement::new(&text)),
+            );
+        }
+        if rule.suppress_misspelled && replacements.is_empty() {
+            return None;
+        }
 
         let rm_rule = RuleMatchRule::new(&rule.id, &rule.name)
             .with_category(og_core::Category::new(
@@ -584,6 +563,185 @@ impl PatternRuleEngine {
         start_idx: usize,
     ) -> Option<PatternMatchResult> {
         self.match_pattern_recursive(pattern_tokens, tokens, start_idx, 0, &[])
+    }
+
+    fn suggestion_alternatives(
+        &self,
+        s: &og_xml::compiler::CompiledSuggestion,
+        tokens: &[&AnalyzedTokenReadings],
+        match_result: &PatternMatchResult,
+    ) -> Vec<String> {
+        if s.parts.is_empty() {
+            return vec![self.resolve_backreferences(&s.text, &match_result.matched_texts)];
+        }
+        let mut acc: Vec<String> = vec![String::new()];
+        for part in &s.parts {
+            let alternatives: Vec<String> = match part {
+                og_xml::types::SuggestionPart::Text(t) => {
+                    vec![self.resolve_backreferences(t, &match_result.matched_texts)]
+                }
+                og_xml::types::SuggestionPart::Match(m) => {
+                    self.match_alternatives(m, tokens, match_result)
+                }
+            };
+            if alternatives.is_empty() {
+                return Vec::new();
+            }
+            let mut next = Vec::with_capacity(acc.len() * alternatives.len());
+            for prefix in &acc {
+                for alt in &alternatives {
+                    next.push(format!("{prefix}{alt}"));
+                }
+            }
+            acc = next;
+        }
+        acc
+    }
+
+    fn match_alternatives(
+        &self,
+        m: &og_xml::types::XmlMatch,
+        tokens: &[&AnalyzedTokenReadings],
+        match_result: &PatternMatchResult,
+    ) -> Vec<String> {
+        let token_idx = (m.no as usize).saturating_sub(1);
+        let (Some(pos), true) = (
+            match_result.position_for_pattern(token_idx),
+            m.postag.is_some() && self.suggestion_synth.is_some(),
+        ) else {
+            return self.raw_match_alternatives(m, tokens, match_result, token_idx);
+        };
+        let Some(token) = tokens.get(pos) else {
+            return self.raw_match_alternatives(m, tokens, match_result, token_idx);
+        };
+        let mut forms = self.postag_forms(m, token);
+        if let Some(ref mode) = m.include_skipped
+            && mode != "none"
+        {
+            let suffix = skipped_suffix(
+                tokens,
+                &match_result.matched_positions,
+                token_idx,
+                mode == "following",
+            );
+            for form in &mut forms {
+                form.push_str(&suffix);
+            }
+        }
+        forms
+    }
+
+    fn raw_match_alternatives(
+        &self,
+        m: &og_xml::types::XmlMatch,
+        tokens: &[&AnalyzedTokenReadings],
+        match_result: &PatternMatchResult,
+        token_idx: usize,
+    ) -> Vec<String> {
+        let Some(pos) = match_result.position_for_pattern(token_idx) else {
+            return vec![String::new()];
+        };
+        let Some(token) = tokens.get(pos) else {
+            return vec![String::new()];
+        };
+        let mut text = token.token().token().to_string();
+        if let Some(ref cc) = m.case_conversion {
+            text = apply_case_conversion(&text, cc);
+        }
+        if let Some(ref rm) = m.regexp_match
+            && let Ok(re) = regex::Regex::new(rm)
+        {
+            let replace = m.regexp_replace.as_deref().unwrap_or("");
+            text = re.replace_all(&text, replace).to_string();
+        }
+        if let Some(ref mode) = m.include_skipped
+            && mode != "none"
+        {
+            text.push_str(&skipped_suffix(
+                tokens,
+                &match_result.matched_positions,
+                token_idx,
+                mode == "following",
+            ));
+        }
+        vec![text]
+    }
+
+    fn postag_forms(
+        &self,
+        m: &og_xml::types::XmlMatch,
+        token: &AnalyzedTokenReadings,
+    ) -> Vec<String> {
+        let Some(synth) = self.suggestion_synth.as_deref() else {
+            return Vec::new();
+        };
+        let token_str = token.token().token();
+        let Some(postag) = m.postag.as_deref() else {
+            return Vec::new();
+        };
+        let (Ok(re), Ok(re_full)) = (
+            regex::Regex::new(postag),
+            regex::Regex::new(&format!("^(?:{postag})$")),
+        ) else {
+            return vec![format!("({token_str})")];
+        };
+        let readings = token.readings();
+        let mut word_forms: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        let mut one_form = false;
+        for reading in readings {
+            if reading.lemma().is_some() {
+                continue;
+            }
+            let tags = reading.pos_tags();
+            if tags.is_empty() {
+                word_forms.insert(token_str.to_string());
+                one_form = true;
+            } else if tags
+                .iter()
+                .any(|t| t == "SENT_START" || t == "SENT_END" || t == "PARAGRAPH_END")
+            {
+                if !one_form {
+                    word_forms.insert(token_str.to_string());
+                }
+                one_form = true;
+            } else {
+                one_form = false;
+            }
+        }
+        let mut pos_tags: Vec<&str> = readings
+            .iter()
+            .flat_map(|r| r.pos_tags().iter().map(String::as_str))
+            .filter(|t| re_full.is_match(t))
+            .collect();
+        let mut target = pos_tags.last().copied().unwrap_or(postag).to_string();
+        if let Some(replace) = m.postag_replace.as_deref() {
+            if pos_tags.is_empty() {
+                pos_tags.push(postag);
+            }
+            target = pos_tags
+                .iter()
+                .map(|t| re.replace_all(t, replace).to_string())
+                .collect::<Vec<_>>()
+                .join("|");
+        }
+        if !one_form {
+            for reading in readings {
+                if let Some(lemma) = reading.lemma() {
+                    word_forms.extend(synth.synthesize_full(lemma, &target));
+                }
+            }
+        }
+        let mut forms: Vec<String> = if word_forms.is_empty() {
+            vec![format!("({token_str})")]
+        } else {
+            word_forms.into_iter().collect()
+        };
+        if let Some(ref cc) = m.case_conversion {
+            for form in &mut forms {
+                *form = apply_case_conversion(form, cc);
+            }
+        }
+        forms
     }
 
     fn match_pattern_elements(
@@ -1747,6 +1905,14 @@ impl PatternMatchResult {
             .rposition(|&p| p == pattern_idx)
             .and_then(|i| self.matched_positions.get(i).copied())
     }
+}
+
+fn is_suppress_junk(suggestion: &str) -> bool {
+    static JUNK: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    JUNK.get_or_init(|| {
+        regex::Regex::new(r"^[^<>()]*(?:\([^<>()]*\)|<mistake/>)[^<>()]*$").unwrap()
+    })
+    .is_match(suggestion)
 }
 
 fn comma_leading_suggestion(rule: &CompiledRule, matched_texts: &[String]) -> bool {

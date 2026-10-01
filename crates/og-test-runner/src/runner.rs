@@ -267,7 +267,7 @@ impl TestRunner {
                 } else {
                     None
                 };
-                match support {
+                let mut engine = match support {
                     Some(support) => {
                         let mut engine = PatternRuleEngine::new()
                             .with_spelling_support(std::sync::Arc::new(support));
@@ -290,7 +290,17 @@ impl TestRunner {
                         }
                         None => PatternRuleEngine::new(),
                     },
+                };
+                if code == "de"
+                    && let Some(synth) =
+                        og_rules::postponed_adjective::LangSynthesizer::for_language(
+                            &resource_dir,
+                            "de",
+                        )
+                {
+                    engine = engine.with_suggestion_synthesizer(std::sync::Arc::new(synth));
                 }
+                engine
             });
 
             (

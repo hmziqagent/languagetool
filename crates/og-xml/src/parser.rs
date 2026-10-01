@@ -57,6 +57,8 @@ impl XmlRuleParser {
         let mut suggestion_text = String::new();
         let mut suggestion_parts: Vec<SuggestionPart> = Vec::new();
         let mut message_text = String::new();
+        let mut message_suppress = false;
+        let mut suggestion_suppress = false;
         let mut in_example = false;
         let mut example_type = XmlExampleType::Correct;
         let mut example_text = String::new();
@@ -276,6 +278,14 @@ impl XmlRuleParser {
                         "message" => {
                             in_message = true;
                             message_text.clear();
+                            message_suppress = false;
+                            for attr in e.attributes().flatten() {
+                                let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
+                                if key == "suppress_misspelled" {
+                                    message_suppress = crate::decode_attr_value(&attr.value)
+                                        .eq_ignore_ascii_case("yes");
+                                }
+                            }
                         }
                         "short" => {
                             in_short = true;
@@ -289,6 +299,14 @@ impl XmlRuleParser {
                             in_suggestion = true;
                             suggestion_text.clear();
                             suggestion_parts.clear();
+                            suggestion_suppress = false;
+                            for attr in e.attributes().flatten() {
+                                let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
+                                if key == "suppress_misspelled" {
+                                    suggestion_suppress = crate::decode_attr_value(&attr.value)
+                                        .eq_ignore_ascii_case("yes");
+                                }
+                            }
                         }
                         "match" if in_suggestion => {
                             // <match no="1" case_conversion="startupper">text</match>
@@ -303,6 +321,9 @@ impl XmlRuleParser {
                                     "regexp_replace" => m.regexp_replace = Some(val),
                                     "include_inflected" => m.include_inflected = val == "yes",
                                     "include_skipped" => m.include_skipped = Some(val),
+                                    "postag" => m.postag = Some(val),
+                                    "postag_regexp" => m.postag_regexp = val == "yes",
+                                    "postag_replace" => m.postag_replace = Some(val),
                                     _ => {}
                                 }
                             }
@@ -585,6 +606,9 @@ impl XmlRuleParser {
                                     "regexp_replace" => m.regexp_replace = Some(val),
                                     "include_inflected" => m.include_inflected = val == "yes",
                                     "include_skipped" => m.include_skipped = Some(val),
+                                    "postag" => m.postag = Some(val),
+                                    "postag_regexp" => m.postag_regexp = val == "yes",
+                                    "postag_replace" => m.postag_replace = Some(val),
                                     _ => {}
                                 }
                             }
@@ -799,6 +823,7 @@ impl XmlRuleParser {
                             in_message = false;
                             if let Some(rule) = &mut current_rule {
                                 rule.message = message_text.trim().to_string();
+                                rule.suppress_misspelled = message_suppress;
                             }
                         }
                         "suggestion" => {
@@ -807,6 +832,7 @@ impl XmlRuleParser {
                                 rule.suggestions.push(XmlSuggestion {
                                     text: suggestion_text.trim().to_string(),
                                     parts: suggestion_parts.clone(),
+                                    suppress_misspelled: suggestion_suppress,
                                 });
                             }
                             suggestion_parts.clear();

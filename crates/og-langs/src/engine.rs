@@ -29,13 +29,14 @@ impl XmlPatternRule {
         compiled: CompiledRule,
         spelling: Option<Arc<og_rules::spelling_support::SpellingSupport>>,
     ) -> Self {
-        Self::with_resources(compiled, spelling, None)
+        Self::with_resources(compiled, spelling, None, None)
     }
 
     pub fn with_resources(
         compiled: CompiledRule,
         spelling: Option<Arc<og_rules::spelling_support::SpellingSupport>>,
         synthesizer: Option<Arc<og_rules::postponed_adjective::LangSynthesizer>>,
+        suggestion_synth: Option<Arc<og_rules::postponed_adjective::LangSynthesizer>>,
     ) -> Self {
         let category = Category::new(&compiled.category.id, &compiled.category.name);
         let mut engine = PatternRuleEngine::new();
@@ -44,6 +45,9 @@ impl XmlPatternRule {
         }
         if let Some(synthesizer) = synthesizer {
             engine = engine.with_synthesizer(synthesizer);
+        }
+        if let Some(suggestion_synth) = suggestion_synth {
+            engine = engine.with_suggestion_synthesizer(suggestion_synth);
         }
         Self {
             compiled,
@@ -90,6 +94,7 @@ pub struct LanguageEngine {
     spelling_support: Option<Arc<og_rules::spelling_support::SpellingSupport>>,
     german_speller: Option<Arc<og_spell::GermanSpeller>>,
     synthesizer: Option<Arc<og_rules::postponed_adjective::LangSynthesizer>>,
+    suggestion_synth: Option<Arc<og_rules::postponed_adjective::LangSynthesizer>>,
     checker: Checker,
     language_filter: Arc<dyn og_core::match_filters::LanguageMatchFilter>,
     l2_rules: std::sync::Mutex<HashMap<String, Vec<Arc<dyn Rule>>>>,
@@ -117,6 +122,7 @@ impl LanguageEngine {
             spelling_support: None,
             german_speller: None,
             synthesizer: None,
+            suggestion_synth: None,
             checker,
             language_filter,
             l2_rules: std::sync::Mutex::new(HashMap::new()),
@@ -169,6 +175,7 @@ impl LanguageEngine {
             spelling_support: None,
             german_speller: None,
             synthesizer: None,
+            suggestion_synth: None,
             checker: Checker::new()
                 .with_sentence_tokenizer(Arc::new(SentenceSplitterBridge("en".to_string())))
                 .with_word_tokenizer(Arc::new(WordTokenizerBridge::Default(true))),
@@ -377,6 +384,15 @@ impl LanguageEngine {
 
     pub fn german() -> Self {
         let mut engine = Self::new(Language::German);
+
+        if let Some(lt_root) = find_lt_resource_dir() {
+            let resource_dir = lt_root.join("de/src/main/resources/org/languagetool/resource/de");
+            if let Some(synth) =
+                og_rules::postponed_adjective::LangSynthesizer::for_language(&resource_dir, "de")
+            {
+                engine.suggestion_synth = Some(Arc::new(synth));
+            }
+        }
 
         let mut shared_dict: Option<Arc<og_spell::Dictionary>> = None;
         let mut german_resource_dir: Option<PathBuf> = None;
@@ -666,6 +682,7 @@ impl LanguageEngine {
         engine.spelling_support = self.spelling_support.clone();
         engine.german_speller = self.german_speller.clone();
         engine.synthesizer = self.synthesizer.clone();
+        engine.suggestion_synth = self.suggestion_synth.clone();
         engine.post_chunker = self.post_chunker.clone();
         engine.rebuild_checker();
         engine
@@ -965,6 +982,7 @@ impl LanguageEngine {
                 compiled_rule,
                 self.spelling_support.clone(),
                 self.synthesizer.clone(),
+                self.suggestion_synth.clone(),
             ));
             self.rules.push(rule);
         }

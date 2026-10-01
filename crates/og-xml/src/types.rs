@@ -40,6 +40,8 @@ pub struct XmlRule {
     pub filter: Option<XmlFilter>,
     #[serde(default)]
     pub issue_type: Option<String>,
+    #[serde(default)]
+    pub suppress_misspelled: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -174,6 +176,12 @@ pub struct XmlMatch {
     pub regexp_replace: Option<String>,
     pub include_inflected: bool,
     pub include_skipped: Option<String>,
+    #[serde(default)]
+    pub postag: Option<String>,
+    #[serde(default)]
+    pub postag_regexp: bool,
+    #[serde(default)]
+    pub postag_replace: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -187,6 +195,8 @@ pub struct XmlSuggestion {
     pub text: String,
     #[serde(default)]
     pub parts: Vec<SuggestionPart>,
+    #[serde(default)]
+    pub suppress_misspelled: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
