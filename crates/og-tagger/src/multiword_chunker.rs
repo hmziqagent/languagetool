@@ -630,7 +630,7 @@ const CA_SPELLING_GLOBAL: ChunkerParams = ChunkerParams {
     allow_first_capitalized: false,
     allow_all_uppercase: true,
     allow_titlecase: false,
-    default_tag: None,
+    default_tag: Some("NPCN000"),
     remove_previous_tags: false,
     add_ignore_spelling: false,
 };
