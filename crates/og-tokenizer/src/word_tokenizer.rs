@@ -9,6 +9,7 @@ enum HyphenMode {
 
 pub struct DefaultWordTokenizer {
     english_contractions: bool,
+    english_word_chars: bool,
     hyphens: HyphenMode,
 }
 
@@ -16,6 +17,7 @@ impl DefaultWordTokenizer {
     pub fn new() -> Self {
         Self {
             english_contractions: true,
+            english_word_chars: true,
             hyphens: HyphenMode::InnerOnly,
         }
     }
@@ -23,6 +25,7 @@ impl DefaultWordTokenizer {
     pub fn new_generic() -> Self {
         Self {
             english_contractions: false,
+            english_word_chars: false,
             hyphens: HyphenMode::InRuns,
         }
     }
@@ -30,12 +33,17 @@ impl DefaultWordTokenizer {
     pub fn new_splitting_hyphen() -> Self {
         Self {
             english_contractions: false,
+            english_word_chars: false,
             hyphens: HyphenMode::Delimiter,
         }
     }
 
     fn is_word_char(&self, c: char) -> bool {
-        c.is_alphanumeric() || c == '_' || c == '\'' || c == '\u{2019}'
+        c.is_alphanumeric()
+            || c == '_'
+            || c == '\''
+            || c == '\u{2019}'
+            || (self.english_word_chars && matches!(c, '\u{FF0C}' | '\u{FF1F}'))
     }
 
     fn starts_run(&self, c: char) -> bool {
@@ -1263,6 +1271,49 @@ mod tests {
         assert_eq!(token_texts(&tz, "well- known"), vec!["well-", " ", "known"]);
         assert_eq!(token_texts(&tz, " - "), vec![" ", "-", " "]);
         assert_eq!(token_texts(&tz, "a--b"), vec!["a--b"]);
+    }
+
+    #[test]
+    fn test_english_fullwidth_comma_and_question_mark_stay_in_word_runs() {
+        let tz = DefaultWordTokenizer::new();
+        assert_eq!(
+            token_texts(&tz, "Be careful\u{FF0C}this is not a standard comma."),
+            vec![
+                "Be",
+                " ",
+                "careful\u{FF0C}this",
+                " ",
+                "is",
+                " ",
+                "not",
+                " ",
+                "a",
+                " ",
+                "standard",
+                " ",
+                "comma",
+                "."
+            ]
+        );
+        assert_eq!(
+            token_texts(&tz, "Is he an average person\u{FF1F}"),
+            vec![
+                "Is",
+                " ",
+                "he",
+                " ",
+                "an",
+                " ",
+                "average",
+                " ",
+                "person\u{FF1F}"
+            ]
+        );
+        let generic = DefaultWordTokenizer::new_generic();
+        assert_eq!(
+            token_texts(&generic, "a\u{FF0C}b"),
+            vec!["a", "\u{FF0C}", "b"]
+        );
     }
 
     #[test]
