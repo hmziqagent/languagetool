@@ -1,3 +1,9 @@
+pub mod inflected_one_word;
+pub mod trans_verb;
+
+pub use inflected_one_word::ArabicInflectedOneWordReplaceRule;
+pub use trans_verb::ArabicTransVerbRule;
+
 use crate::en::{SimpleReplaceRule, WordCoherencyRule};
 use og_rules::native_rules::{CommaWhitespaceRule, DoublePunctuationRule, WordRepeatRule};
 

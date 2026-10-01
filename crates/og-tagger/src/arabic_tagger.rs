@@ -87,13 +87,13 @@ fn flag_pos(postag: &str, flag_type: &str) -> usize {
     }
 }
 
-fn get_flag(postag: &str, flag_type: &str) -> char {
+pub fn get_flag(postag: &str, flag_type: &str) -> char {
     let chars: Vec<char> = postag.chars().collect();
     let pos = flag_pos(postag, flag_type);
     if pos < chars.len() { chars[pos] } else { '-' }
 }
 
-fn set_flag(postag: &str, flag_type: &str, flag: char) -> String {
+pub fn set_flag(postag: &str, flag_type: &str, flag: char) -> String {
     let mut chars: Vec<char> = postag.chars().collect();
     let pos = flag_pos(postag, flag_type);
     if pos < chars.len() {
@@ -107,11 +107,179 @@ fn is_majrour(postag: &str) -> bool {
     flag == 'I' || flag == '-'
 }
 
+pub(crate) fn is_attached(postag: &str) -> bool {
+    (is_noun(postag) || is_verb(postag)) && get_flag(postag, "PRONOUN") == 'H'
+}
+
+pub(crate) fn is_definite(postag: &str) -> bool {
+    is_noun(postag) && get_flag(postag, "PRONOUN") == 'L'
+}
+
+pub(crate) fn has_jar(postag: &str) -> bool {
+    is_noun(postag) && get_flag(postag, "JAR") != '-'
+}
+
+pub(crate) fn has_pronoun(postag: &str) -> bool {
+    get_flag(postag, "PRONOUN") == 'H'
+}
+
+pub(crate) fn has_conjunction(postag: &str) -> bool {
+    let flag = get_flag(postag, "CONJ");
+    (is_noun(postag) && flag != '-')
+        || (is_verb(postag) && flag != '-')
+        || (is_stopword_tag(postag) && flag != 'W')
+}
+
+pub(crate) fn get_definite_prefix(postag: &str) -> String {
+    if postag.is_empty() {
+        return String::new();
+    }
+    if is_noun(postag) && get_flag(postag, "PRONOUN") == 'L' {
+        if has_jar(postag) && get_jar_prefix(postag) == "ل" {
+            return "ل".to_string();
+        }
+        return "ال".to_string();
+    }
+    String::new()
+}
+
+pub(crate) fn get_jar_prefix(postag: &str) -> String {
+    if postag.is_empty() {
+        return String::new();
+    }
+    if is_noun(postag) {
+        return match get_flag(postag, "JAR") {
+            'L' => "ل".to_string(),
+            'K' => "ك".to_string(),
+            'B' => "ب".to_string(),
+            _ => String::new(),
+        };
+    }
+    String::new()
+}
+
+pub(crate) fn get_conjunction_prefix(postag: &str) -> String {
+    match get_flag(postag, "CONJ") {
+        'F' => "ف".to_string(),
+        'W' => "و".to_string(),
+        _ => String::new(),
+    }
+}
+
+pub(crate) fn get_pronoun_suffix(postag: &str) -> String {
+    if postag.is_empty() {
+        return String::new();
+    }
+    match get_flag(postag, "PRONOUN") {
+        'b' => "ني",
+        'c' => "نا",
+        'd' => "ك",
+        'e' => "كما",
+        'f' => "كم",
+        'g' => "كن",
+        'H' => "ه",
+        'i' => "ها",
+        'j' => "هما",
+        'k' => "هم",
+        'n' => "هن",
+        _ => "",
+    }
+    .to_string()
+}
+
+pub(crate) fn unify_pronoun_tag(postag: String) -> String {
+    if is_attached(&postag) {
+        set_flag(&postag, "PRONOUN", 'H')
+    } else {
+        postag
+    }
+}
+
+pub(crate) fn set_conjunction(postag: &str, flag: &str) -> String {
+    let myflag = match flag {
+        "و" | "W" | "ف" | "F" => 'W',
+        "-" | "" => '-',
+        _ => return postag.to_string(),
+    };
+    if is_noun(postag) || is_verb(postag) {
+        set_flag(postag, "CONJ", myflag)
+    } else {
+        postag.to_string()
+    }
+}
+
+pub(crate) fn set_procletic_flags(postag: &str) -> String {
+    if postag.is_empty() {
+        return String::new();
+    }
+    if is_verb(postag) {
+        let tag = set_flag(postag, "CONJ", '-');
+        set_flag(&tag, "ISTIQBAL", '-')
+    } else if is_noun(postag) {
+        let mut tag = set_flag(postag, "CONJ", '-');
+        tag = set_flag(&tag, "JAR", '-');
+        if is_definite(&tag) {
+            tag = set_flag(&tag, "PRONOUN", '-');
+        }
+        tag
+    } else if is_stopword_tag(postag) {
+        let tag = set_flag(postag, "CONJ", '-');
+        set_flag(&tag, "JAR", '-')
+    } else {
+        postag.to_string()
+    }
+}
+
+pub(crate) fn merge_pos_tag(source: &str, target: &str) -> String {
+    if source.is_empty() {
+        return target.to_string();
+    }
+    if target.is_empty() {
+        return source.to_string();
+    }
+    if is_noun(source) && is_noun(target) {
+        if source.chars().count() != target.chars().count() {
+            return source.to_string();
+        }
+        return set_flag(source, "CATEGORY", get_flag(target, "CATEGORY"));
+    }
+    if is_verb(source) && is_verb(target) {
+        if source.chars().count() != target.chars().count() {
+            return source.to_string();
+        }
+        let tag = set_flag(source, "CATEGORY", get_flag(target, "CATEGORY"));
+        return set_flag(&tag, "TRANS", get_flag(target, "TRANS"));
+    }
+    if is_stopword_tag(source) && is_stopword_tag(target) {
+        if source.chars().count() != target.chars().count() {
+            return source.to_string();
+        }
+        let tag = set_flag(source, "CATEGORY", get_flag(target, "CATEGORY"));
+        return set_flag(&tag, "OPTION", get_flag(target, "OPTION"));
+    }
+    if is_stopword_tag(source) && (is_verb(target) || is_noun(target))
+        || (is_verb(source) || is_noun(source)) && is_stopword_tag(target)
+    {
+        if has_pronoun(source) {
+            return set_flag(target, "PRONOUN", get_flag(source, "PRONOUN"));
+        }
+        return target.to_string();
+    }
+    if is_verb(source) && is_noun(target) || is_noun(source) && is_verb(target) {
+        let mut tag = target.to_string();
+        if has_pronoun(source) {
+            tag = set_flag(&tag, "PRONOUN", get_flag(source, "PRONOUN"));
+        }
+        return set_flag(&tag, "CONJ", get_flag(source, "CONJ"));
+    }
+    target.to_string()
+}
+
 fn is_future_tense(postag: &str) -> bool {
     is_verb(postag) && get_flag(postag, "TENSE") == 'f'
 }
 
-fn is_unattached_noun(postag: &str) -> bool {
+pub(crate) fn is_unattached_noun(postag: &str) -> bool {
     is_noun(postag) && get_flag(postag, "PRONOUN") != 'H' && !postag.ends_with('X')
 }
 
@@ -185,17 +353,134 @@ fn add_tag(postag: &str, flag_string: &str) -> Option<String> {
 
 pub struct ArabicTagger {
     inner: GenericTagger,
+    new_style_pronoun_tag: bool,
 }
 
 impl ArabicTagger {
     pub fn from_resource_dir(resource_dir: &Path) -> Self {
         Self {
             inner: GenericTagger::from_resource_dir(resource_dir, "arabic"),
+            new_style_pronoun_tag: false,
         }
+    }
+
+    pub fn with_new_style_pronoun_tag(mut self) -> Self {
+        self.new_style_pronoun_tag = true;
+        self
     }
 
     pub fn has_dictionary(&self) -> bool {
         self.inner.has_dictionary()
+    }
+
+    pub fn tag_word(&self, word: &str) -> AnalyzedTokenReadings {
+        let readings = self.tag_readings(word, 0, word.len());
+        if readings.is_empty() {
+            return AnalyzedTokenReadings::new(AnalyzedToken::new(word, 0, word.len()));
+        }
+        let all_tags: Vec<String> = readings
+            .iter()
+            .flat_map(|r| r.pos_tags().to_vec())
+            .collect();
+        let lemma = readings
+            .first()
+            .and_then(|r| r.lemma().map(str::to_string))
+            .unwrap_or_else(|| word.to_string());
+        let primary = AnalyzedToken::new(word, 0, word.len())
+            .with_pos_tags(all_tags)
+            .with_lemma(lemma);
+        AnalyzedTokenReadings::new(primary).with_readings(readings)
+    }
+
+    fn tag_readings(&self, word: &str, start: usize, end: usize) -> Vec<AnalyzedToken> {
+        let striped = Self::remove_tashkeel(word);
+        let mut readings: Vec<AnalyzedToken> = self
+            .inner
+            .lookup(&striped)
+            .into_iter()
+            .map(|(lemma, tag)| {
+                AnalyzedToken::new(word, start, end)
+                    .with_lemma(lemma.to_string())
+                    .with_pos_tags(vec![tag.to_string()])
+            })
+            .collect();
+
+        let is_stop = readings
+            .iter()
+            .any(|r| r.pos_tags().iter().any(|t| t.starts_with('P')));
+        if !is_stop {
+            readings.extend(self.additional_tags(word, &striped, start, end));
+        }
+        readings
+    }
+
+    pub fn get_proclitic(&self, token: &AnalyzedToken) -> String {
+        let postag = token.pos_tags().first().map(String::as_str).unwrap_or("");
+        let word = token.token();
+        if postag.is_empty() {
+            return String::new();
+        }
+        let chars: Vec<char> = word.chars().collect();
+        let prefix_len_chars = if is_verb(postag) {
+            let mut len = 0;
+            if get_flag(postag, "CONJ") == 'W' {
+                len += 1;
+            }
+            if get_flag(postag, "ISTIQBAL") == 'S' {
+                len += 1;
+            }
+            len
+        } else if is_noun(postag) {
+            let mut len = 0;
+            if get_flag(postag, "CONJ") != '-' {
+                len += 1;
+            }
+            if get_flag(postag, "JAR") != '-' {
+                len += 1;
+            }
+            if is_definite(postag) {
+                if get_flag(postag, "JAR") == 'L' {
+                    len += 1;
+                } else {
+                    len += 2;
+                }
+            }
+            len
+        } else {
+            return String::new();
+        };
+        chars[..prefix_len_chars.min(chars.len())].iter().collect()
+    }
+
+    pub fn get_enclitic(&self, token: &AnalyzedToken) -> String {
+        let postag = token.pos_tags().first().map(String::as_str).unwrap_or("");
+        let word = token.token();
+        if postag.is_empty() {
+            return String::new();
+        }
+        let flag = get_flag(postag, "PRONOUN");
+        if flag == '-' {
+            return get_pronoun_suffix(postag);
+        }
+        let suffixes = [
+            "\u{647}\u{645}\u{627}",
+            "\u{643}\u{645}\u{627}",
+            "\u{647}\u{627}",
+            "\u{647}\u{645}",
+            "\u{647}\u{646}",
+            "\u{643}\u{645}",
+            "\u{643}\u{646}",
+            "\u{646}\u{64a}",
+            "\u{646}\u{627}",
+            "\u{643}",
+            "\u{647}",
+        ];
+        for suffix in suffixes {
+            if word.ends_with(suffix) {
+                return suffix.to_string();
+            }
+        }
+        String::new()
     }
 
     fn remove_tashkeel(word: &str) -> String {
@@ -208,26 +493,8 @@ impl ArabicTagger {
         let surface = atr.token().token();
         let start = atr.token().start();
         let end = atr.token().end();
-        let striped = Self::remove_tashkeel(surface);
 
-        let mut readings: Vec<AnalyzedToken> = self
-            .inner
-            .lookup(&striped)
-            .into_iter()
-            .map(|(lemma, tag)| {
-                AnalyzedToken::new(surface, start, end)
-                    .with_lemma(lemma.to_string())
-                    .with_pos_tags(vec![tag.to_string()])
-            })
-            .collect();
-
-        let is_stop = readings
-            .iter()
-            .any(|r| r.pos_tags().iter().any(|t| t.starts_with('P')));
-        if !is_stop {
-            readings.extend(self.additional_tags(surface, &striped, start, end));
-        }
-
+        let readings = self.tag_readings(surface, start, end);
         if readings.is_empty() {
             return atr.clone();
         }
@@ -260,7 +527,7 @@ impl ArabicTagger {
                 if i == 0 && j == chars.len() {
                     continue;
                 }
-                let tags = get_tags(&chars, i, j);
+                let tags = get_tags(&chars, i, j, self.new_style_pronoun_tag);
                 for stem in get_stem(&chars, i, j) {
                     for (lemma, postag) in self.inner.lookup(&stem) {
                         if let Some(modified) = modify_pos_tag(postag, &tags) {
@@ -361,7 +628,7 @@ fn suffix_index_list(chars: &[char]) -> Vec<usize> {
     indexes
 }
 
-fn get_tags(chars: &[char], pos_start: usize, pos_end: usize) -> Vec<String> {
+fn get_tags(chars: &[char], pos_start: usize, pos_end: usize, new_style: bool) -> Vec<String> {
     let mut tags = Vec::new();
     let mut prefix: String = chars[..pos_start].iter().collect();
     let suffix: String = chars[pos_end..].iter().collect();
@@ -385,21 +652,39 @@ fn get_tags(chars: &[char], pos_start: usize, pos_end: usize) -> Vec<String> {
         tags.push("PRONOUN;D".to_string());
     }
 
-    match suffix.as_str() {
-        "\u{646}\u{64a}"
-        | "\u{646}\u{627}"
-        | "\u{643}"
-        | "\u{643}\u{645}\u{627}"
-        | "\u{643}\u{645}"
-        | "\u{643}\u{646}"
-        | "\u{647}"
-        | "\u{647}\u{627}"
-        | "\u{647}\u{645}\u{627}"
-        | "\u{647}\u{645}"
-        | "\u{647}\u{646}" => {
-            tags.push("PRONOUN;H".to_string());
+    let pronoun_flag = if new_style {
+        match suffix.as_str() {
+            "\u{646}\u{64a}" => 'b',
+            "\u{646}\u{627}" => 'c',
+            "\u{643}" => 'd',
+            "\u{643}\u{645}\u{627}" => 'e',
+            "\u{643}\u{645}" => 'f',
+            "\u{643}\u{646}" => 'g',
+            "\u{647}" => 'H',
+            "\u{647}\u{627}" => 'i',
+            "\u{647}\u{645}\u{627}" => 'j',
+            "\u{647}\u{645}" => 'k',
+            "\u{647}\u{646}" => 'n',
+            _ => '\0',
         }
-        _ => {}
+    } else {
+        match suffix.as_str() {
+            "\u{646}\u{64a}"
+            | "\u{646}\u{627}"
+            | "\u{643}"
+            | "\u{643}\u{645}\u{627}"
+            | "\u{643}\u{645}"
+            | "\u{643}\u{646}"
+            | "\u{647}"
+            | "\u{647}\u{627}"
+            | "\u{647}\u{645}\u{627}"
+            | "\u{647}\u{645}"
+            | "\u{647}\u{646}" => 'H',
+            _ => '\0',
+        }
+    };
+    if pronoun_flag != '\0' {
+        tags.push(format!("PRONOUN;{pronoun_flag}"));
     }
 
     tags
@@ -434,26 +719,8 @@ impl crate::Tagger for ArabicTagger {
         for token_text in tokens {
             let start = byte_offset;
             let end = start + token_text.len();
-            let striped = Self::remove_tashkeel(token_text);
 
-            let mut readings: Vec<AnalyzedToken> = self
-                .inner
-                .lookup(&striped)
-                .into_iter()
-                .map(|(lemma, tag)| {
-                    AnalyzedToken::new(*token_text, start, end)
-                        .with_lemma(lemma.to_string())
-                        .with_pos_tags(vec![tag.to_string()])
-                })
-                .collect();
-
-            let is_stop = readings
-                .iter()
-                .any(|r| r.pos_tags().iter().any(|t| t.starts_with('P')));
-            if !is_stop {
-                readings.extend(self.additional_tags(token_text, &striped, start, end));
-            }
-
+            let readings = self.tag_readings(token_text, start, end);
             if readings.is_empty() {
                 results.push(AnalyzedTokenReadings::new(AnalyzedToken::new(
                     *token_text,

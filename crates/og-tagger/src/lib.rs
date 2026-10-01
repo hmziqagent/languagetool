@@ -1,3 +1,4 @@
+pub mod arabic_synthesizer;
 pub mod arabic_tagger;
 pub mod chunker;
 pub mod disambiguator;

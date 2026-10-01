@@ -351,6 +351,30 @@ impl Cfsa2 {
         self.destination(self.first_arc(0))
     }
 
+    fn is_arc_final(&self, arc: usize) -> bool {
+        self.arcs[arc] & 0x20 != 0
+    }
+
+    fn seek(&self, node: usize, key: &[u8]) -> Option<usize> {
+        let mut node = node;
+        for &byte in key {
+            let mut arc = Some(self.first_arc(node));
+            let mut next = None;
+            while let Some(current) = arc {
+                if self.arc_label(current) == byte {
+                    next = Some(self.destination(current));
+                    break;
+                }
+                arc = self.next_arc(current);
+            }
+            node = match next {
+                Some(dest) if dest != 0 => dest,
+                _ => return None,
+            };
+        }
+        Some(node)
+    }
+
     fn sequences(&self) -> Vec<Vec<u8>> {
         let mut out = Vec::new();
         let mut sequence: Vec<u8> = Vec::new();
@@ -363,7 +387,7 @@ impl Cfsa2 {
         while let Some(current) = arc {
             let label = self.arc_label(current);
             sequence.push(label);
-            if self.arcs[current] & 0x20 != 0 {
+            if self.is_arc_final(current) {
                 out.push(sequence.clone());
             }
             let dest = self.destination(current);
@@ -582,8 +606,100 @@ impl MorfologikDictionary {
     }
 }
 
+pub struct SynthDictionary {
+    fsa: Cfsa2,
+    separator: u8,
+}
+
+impl SynthDictionary {
+    pub fn load(dict_path: &Path, info_path: &Path) -> Option<Self> {
+        let data = std::fs::read(dict_path).ok()?;
+        let fsa = Cfsa2::from_bytes(&data)?;
+        let info = std::fs::read_to_string(info_path).ok()?;
+        let separator = info
+            .lines()
+            .find_map(|l| l.trim().strip_prefix("fsa.dict.separator="))?
+            .trim()
+            .as_bytes()
+            .first()
+            .copied()?;
+        Some(Self { fsa, separator })
+    }
+
+    pub fn lookup(&self, key: &str) -> Vec<String> {
+        let Some(node) = self.fsa.seek(self.fsa.root(), key.as_bytes()) else {
+            return Vec::new();
+        };
+        let mut encoded = Vec::new();
+        let mut arc = Some(self.fsa.first_arc(node));
+        while let Some(current) = arc {
+            if self.fsa.arc_label(current) == self.separator {
+                let dest = self.fsa.destination(current);
+                if dest != 0 {
+                    let mut sequence = Vec::new();
+                    self.fsa.walk(dest, &mut sequence, &mut encoded);
+                }
+            }
+            arc = self.fsa.next_arc(current);
+        }
+        encoded
+            .iter()
+            .filter_map(|bytes| {
+                let field = match bytes.iter().position(|b| *b == self.separator) {
+                    Some(pos) => &bytes[..pos],
+                    None => bytes.as_slice(),
+                };
+                decode_suffix(key.as_bytes(), field).and_then(|v| String::from_utf8(v).ok())
+            })
+            .collect()
+    }
+}
+
+pub fn shared_synth_dictionary(
+    resource_dir: &Path,
+    dict_stem: &str,
+) -> Option<std::sync::Arc<SynthDictionary>> {
+    static CACHE: std::sync::OnceLock<
+        std::sync::Mutex<
+            std::collections::HashMap<std::path::PathBuf, std::sync::Weak<SynthDictionary>>,
+        >,
+    > = std::sync::OnceLock::new();
+    let cache = CACHE.get_or_init(Default::default);
+    let key = resource_dir.join(format!("{dict_stem}.dict"));
+    let mut guard = cache.lock().unwrap();
+    if let Some(dict) = guard.get(&key).and_then(std::sync::Weak::upgrade) {
+        return Some(dict);
+    }
+    let dictionary = std::sync::Arc::new(SynthDictionary::load(
+        &key,
+        &resource_dir.join(format!("{dict_stem}.info")),
+    )?);
+    guard.insert(key, std::sync::Arc::downgrade(&dictionary));
+    Some(dictionary)
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn arabic_synth_lookup_decodes_suffix_encoded_forms() {
+        let dir = std::path::PathBuf::from(
+            "/home/agent/opengrammar-rs/languagetool/languagetool-language-modules/ar/src/main/resources/org/languagetool/resource/ar",
+        );
+        let Some(dict) = SynthDictionary::load(
+            &dir.join("arabic_synth.dict"),
+            &dir.join("arabic_synth.info"),
+        ) else {
+            return;
+        };
+        let forms = dict.lookup("آب|NJ-;F1--;---");
+        assert_eq!(
+            forms,
+            vec!["آبة".to_string()],
+            "synth lookup must decode the suffix-encoded form"
+        );
+        assert!(dict.lookup("آب|NONEXISTENT-TAG").is_empty());
+    }
+
     #[test]
     fn dump_obdachloser_sequences() {
         let dir = dict_path().expect("dict");

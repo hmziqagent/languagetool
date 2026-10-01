@@ -880,6 +880,14 @@ impl LanguageEngine {
                     Arc::new(crate::ar::arabic_redundancy_rule()),
                     Arc::new(crate::ar::arabic_wordiness_rule()),
                     Arc::new(crate::ar::arabic_wrong_word_in_context_rule()),
+                    Arc::new(crate::ar::trans_verb::ArabicTransVerbRule::from_resource_dir(
+                        &resource_dir,
+                    )),
+                    Arc::new(
+                        crate::ar::inflected_one_word::ArabicInflectedOneWordReplaceRule::from_resource_dir(
+                            &resource_dir,
+                        ),
+                    ),
                 ]);
                 engine.add_text_level_rules([
                     Arc::new(og_rules::text_level_rules::LongSentenceRule::new(50))
@@ -1184,6 +1192,10 @@ impl LanguageEngine {
 
     pub fn rule_ids(&self) -> Vec<&str> {
         self.rules.iter().map(|r| r.id()).collect()
+    }
+
+    pub fn text_level_rule_ids(&self) -> Vec<&str> {
+        self.text_level_rules.iter().map(|r| r.id()).collect()
     }
 
     pub fn language(&self) -> &Language {
@@ -1590,10 +1602,24 @@ mod tests {
             "ARABIC_WORD_REPEAT_RULE",
             "AR_DARJA_REPLACE",
             "AR_DIACRITICS_REPLACE",
+            "AR_SIMPLE_REPLACE",
+            "AR_HOMOPHONES_REPLACE",
+            "AR_REDUNDANCY_REPLACE",
+            "AR_WORDINESS_REPLACE",
+            "ARABIC_WRONG_WORD_IN_CONTEXT",
+            "AR_VERB_TRANSITIVE_IINDIRECT",
+            "AR_INFLECTED_ONE_WORD",
         ] {
             assert!(
                 ids.contains(&expected),
                 "expected {expected} in Arabic natives, got {ids:?}"
+            );
+        }
+        let text_level_ids = engine.text_level_rule_ids();
+        for expected in ["AR_WORD_COHERENCY", "TOO_LONG_SENTENCE"] {
+            assert!(
+                text_level_ids.contains(&expected),
+                "expected {expected} in Arabic text-level rules, got {text_level_ids:?}"
             );
         }
 
@@ -1616,6 +1642,13 @@ mod tests {
         assert!(
             !ids.contains(&"ARABIC_WORD_REPEAT_RULE"),
             "'خطوة خطوة' must be ignored, got {ids:?}"
+        );
+
+        let result = engine.check("قال « ثم أغلق القوس");
+        let ids: Vec<&str> = result.matches.iter().map(|m| m.rule().id()).collect();
+        assert!(
+            ids.contains(&"UNPAIRED_BRACKETS"),
+            "unpaired Arabic guillemet must be flagged, got {ids:?}"
         );
     }
 
