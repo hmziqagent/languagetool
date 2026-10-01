@@ -856,6 +856,12 @@ impl LanguageEngine {
                     Arc::new(crate::it::ItalianWordRepeatRule::new()),
                 ]);
             }
+            "ast" => {
+                engine.add_rule(
+                    Arc::new(og_rules::native_rules::UppercaseSentenceStartRule::new())
+                        as Arc<dyn Rule>,
+                );
+            }
             "ro" => {
                 engine.add_rules([
                     Arc::new(crate::ro::romanian_replace_rule()) as Arc<dyn Rule>,
@@ -1586,6 +1592,36 @@ mod tests {
         assert!(
             !ids.contains(&"ITALIAN_WORD_REPEAT_RULE"),
             "'via via' must be ignored, got {ids:?}"
+        );
+    }
+
+    #[test]
+    fn asturian_engine_wires_java_relevant_natives() {
+        let engine = LanguageEngine::for_code("ast")
+            .expect("Asturian engine must be registered via for_code");
+        let ids = engine.rule_ids();
+        for expected in [
+            "UPPERCASE_SENTENCE_START",
+            "DOUBLE_PUNCTUATION",
+            "COMMA_PARENTHESIS_WHITESPACE",
+        ] {
+            assert!(
+                ids.contains(&expected),
+                "expected {expected} in Asturian natives, got {ids:?}"
+            );
+        }
+        let text_level_ids = engine.text_level_rule_ids();
+        assert!(
+            text_level_ids.contains(&"UNPAIRED_BRACKETS")
+                && text_level_ids.contains(&"WHITESPACE_RULE"),
+            "expected brackets and whitespace text rules, got {text_level_ids:?}"
+        );
+
+        let result = engine.check("la casa ye grande.");
+        let ids: Vec<&str> = result.matches.iter().map(|m| m.rule().id()).collect();
+        assert!(
+            ids.contains(&"UPPERCASE_SENTENCE_START"),
+            "expected UPPERCASE_SENTENCE_START on lowercase start, got {ids:?}"
         );
     }
 
