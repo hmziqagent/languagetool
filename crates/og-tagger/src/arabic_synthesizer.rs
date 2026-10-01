@@ -179,6 +179,7 @@ fn set_definite(postag: &str, flag: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::arabic_tagger::get_flag;
 
     fn resource_dir() -> std::path::PathBuf {
         std::path::PathBuf::from(

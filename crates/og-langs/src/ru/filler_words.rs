@@ -111,7 +111,7 @@ impl TextLevelRule for RussianFillerWordsRule {
                         .with_issue_type(self.issue_type().as_str());
                     rule_matches.push(
                         RuleMatch::new(
-                            "The word is classified as filler word. Delete it if possible.",
+                            "Это — слово-паразит. Удалите его, если это возможно.",
                             start,
                             end - start,
                             rm_rule,

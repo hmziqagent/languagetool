@@ -859,10 +859,22 @@ impl LanguageEngine {
                     Arc::new(crate::ru::russian_word_root_repeat_rule()),
                     Arc::new(crate::ru::RussianFillerWordsRule::new()),
                     Arc::new(og_rules::text_level_rules::LongSentenceRule::new(50)),
-                    Arc::new(og_rules::text_level_rules::LongParagraphRule::new(220)),
-                    Arc::new(og_rules::text_level_rules::PunctuationMarkAtParagraphEnd2Rule::new()),
+                    Arc::new(
+                        og_rules::text_level_rules::LongParagraphRule::new(220)
+                            .with_description("Удобочитаемость: абзац длиной 220 слов")
+                            .with_message("Абзац длиной 220 слов, разбейте его на части."),
+                    ),
+                    Arc::new(
+                        og_rules::text_level_rules::PunctuationMarkAtParagraphEnd2Rule::new()
+                            .with_message("Добавьте знак пунктуации в конце абзаца."),
+                    ),
                     Arc::new(og_rules::text_level_rules::WhiteSpaceBeforeParagraphEndRule::new()),
+                    Arc::new(crate::ru::RussianParagraphRepeatBeginningRule),
                 ]);
+                if let Some(yo) = crate::ru::RussianYoSpellerRule::from_resource_dir(&resource_dir)
+                {
+                    engine.add_rule(Arc::new(yo) as Arc<dyn Rule>);
+                }
                 engine.add_rule(Arc::new(
                     og_rules::text_level_rules::WhiteSpaceAtBeginOfParagraphRule::new(),
                 ) as Arc<dyn Rule>);

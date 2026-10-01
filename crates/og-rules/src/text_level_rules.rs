@@ -1328,6 +1328,7 @@ impl LongParagraphRule {
 pub struct PunctuationMarkAtParagraphEnd2Rule {
     category: Category,
     token_threshold: usize,
+    message: String,
 }
 
 impl PunctuationMarkAtParagraphEnd2Rule {
@@ -1335,7 +1336,13 @@ impl PunctuationMarkAtParagraphEnd2Rule {
         Self {
             category: Category::new("PUNCTUATION", "Punctuation"),
             token_threshold: 10,
+            message: "Please add a punctuation mark at the end of paragraph.".to_string(),
         }
+    }
+
+    pub fn with_message(mut self, message: impl Into<String>) -> Self {
+        self.message = message.into();
+        self
     }
 }
 
@@ -1395,7 +1402,7 @@ impl TextLevelRule for PunctuationMarkAtParagraphEnd2Rule {
                         .with_issue_type(IssueType::Grammar.as_str());
                     rule_matches.push(
                         RuleMatch::new(
-                            "Please add a punctuation mark at the end of paragraph.",
+                            &self.message,
                             start,
                             end - start,
                             rm_rule,

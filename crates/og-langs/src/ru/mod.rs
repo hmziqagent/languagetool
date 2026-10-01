@@ -1,14 +1,18 @@
 pub mod advanced_word_repeat;
 pub mod dash;
 pub mod filler_words;
+pub mod paragraph_repeat_beginning;
 pub mod specific_case;
 pub mod verb_conjugation;
+pub mod yo_speller;
 
 pub use advanced_word_repeat::RussianWordRepeatRule;
 pub use dash::RussianDashRule;
 pub use filler_words::RussianFillerWordsRule;
+pub use paragraph_repeat_beginning::RussianParagraphRepeatBeginningRule;
 pub use specific_case::RussianSpecificCaseRule;
 pub use verb_conjugation::RussianVerbConjugationRule;
+pub use yo_speller::RussianYoSpellerRule;
 
 use crate::en::{CompoundRule, SimpleReplaceRule, WordCoherencyRule};
 use og_rules::native_rules::WordRepeatRule;

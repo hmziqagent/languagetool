@@ -436,6 +436,70 @@ enum LemmaEncoder {
     PrefixAndSuffix,
 }
 
+fn decode_bytes(encoding: &str, bytes: &[u8]) -> String {
+    match encoding {
+        "koi8-r" => encoding_rs::KOI8_R.decode(bytes).0.into_owned(),
+        "windows-1251" | "cp1251" => encoding_rs::WINDOWS_1251.decode(bytes).0.into_owned(),
+        "iso-8859-1" | "iso8859-1" => encoding_rs::WINDOWS_1252.decode(bytes).0.into_owned(),
+        "iso-8859-15" | "iso8859-15" => {
+            let latin = encoding_rs::WINDOWS_1252.decode(bytes).0;
+            latin
+                .chars()
+                .map(|c| match c {
+                    '¤' => '€',
+                    '¦' => 'Š',
+                    '¨' => 'š',
+                    '´' => 'Ž',
+                    '¸' => 'ž',
+                    '¼' => 'Œ',
+                    '½' => 'œ',
+                    '¾' => 'Ÿ',
+                    other => other,
+                })
+                .collect()
+        }
+        _ => String::from_utf8_lossy(bytes).into_owned(),
+    }
+}
+
+fn fsa_sequences(data: &[u8]) -> Option<Vec<Vec<u8>>> {
+    if let Some(f) = Cfsa2::from_bytes(data) {
+        return Some(f.sequences());
+    }
+    if let Some(f) = Fsa5::from_bytes(data) {
+        return Some(f.sequences());
+    }
+    if let Some(f) = Cfsa1::from_bytes(data) {
+        return Some(f.sequences());
+    }
+    None
+}
+
+fn info_value(info: &str, key: &str) -> Option<String> {
+    info.lines()
+        .find_map(|l| l.trim().strip_prefix(key))
+        .map(str::trim)
+        .map(str::to_string)
+}
+
+pub fn load_fsa_word_list(dict_path: &Path, info_path: &Path) -> Option<Vec<String>> {
+    let data = std::fs::read(dict_path).ok()?;
+    let info = std::fs::read_to_string(info_path).ok()?;
+    let separator = info_value(&info, "fsa.dict.separator=")?.chars().next()?;
+    let encoding = info_value(&info, "fsa.dict.encoding=").unwrap_or_else(|| "utf8".into());
+    let sep = separator as u8;
+    let sequences = fsa_sequences(&data)?;
+    let mut seen: HashSet<String> = HashSet::with_capacity(sequences.len());
+    for sequence in &sequences {
+        let word = sequence.split(|b| *b == sep).next().unwrap_or(&[]);
+        if word.is_empty() {
+            continue;
+        }
+        seen.insert(decode_bytes(&encoding, word));
+    }
+    Some(seen.into_iter().collect())
+}
+
 impl MorfologikDictionary {
     pub fn load(dict_path: &Path, info_path: &Path) -> Option<Self> {
         let data = std::fs::read(dict_path).ok()?;
@@ -461,59 +525,12 @@ impl MorfologikDictionary {
             .map(str::trim)
             .unwrap_or("utf8")
             .to_string();
-        let decode = |bytes: &[u8]| -> String {
-            match encoding.as_str() {
-                "koi8-r" => encoding_rs::KOI8_R.decode(bytes).0.into_owned(),
-                "windows-1251" | "cp1251" => encoding_rs::WINDOWS_1251.decode(bytes).0.into_owned(),
-                "iso-8859-1" | "iso8859-1" => {
-                    encoding_rs::WINDOWS_1252.decode(bytes).0.into_owned()
-                }
-                "iso-8859-15" | "iso8859-15" => {
-                    let latin = encoding_rs::WINDOWS_1252.decode(bytes).0;
-                    latin
-                        .chars()
-                        .map(|c| match c {
-                            '¤' => '€',
-                            '¦' => 'Š',
-                            '¨' => 'š',
-                            '´' => 'Ž',
-                            '¸' => 'ž',
-                            '¼' => 'Œ',
-                            '½' => 'œ',
-                            '¾' => 'Ÿ',
-                            other => other,
-                        })
-                        .collect()
-                }
-                _ => String::from_utf8_lossy(bytes).into_owned(),
-            }
-        };
+        let decode = |bytes: &[u8]| -> String { decode_bytes(encoding.as_str(), bytes) };
 
-        enum AnyFsa {
-            Cfsa2(Cfsa2),
-            Fsa5(Fsa5),
-            Cfsa1(Cfsa1),
-        }
-        let fsa = match Cfsa2::from_bytes(&data) {
-            Some(f) => AnyFsa::Cfsa2(f),
-            None => match Fsa5::from_bytes(&data) {
-                Some(f) => AnyFsa::Fsa5(f),
-                None => match Cfsa1::from_bytes(&data) {
-                    Some(f) => AnyFsa::Cfsa1(f),
-                    None => {
-                        return None;
-                    }
-                },
-            },
-        };
         let sep = separator as u8;
         let mut interned: HashSet<&'static str> = HashSet::new();
         let mut map: HashMap<Box<str>, ReadingList> = HashMap::new();
-        let sequences = match &fsa {
-            AnyFsa::Cfsa2(f) => f.sequences(),
-            AnyFsa::Fsa5(f) => f.sequences(),
-            AnyFsa::Cfsa1(f) => f.sequences(),
-        };
+        let sequences = fsa_sequences(&data)?;
         for sequence in sequences {
             let mut fields = sequence.split(|b| *b == sep);
             let (Some(word_raw), Some(second), Some(tag_raw)) =
