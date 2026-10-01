@@ -24,6 +24,17 @@ fn main() {
     let mut sentence = AnalyzedSentence::new(&text, 0, text.len());
     sentence.set_tokens(tokens);
     tagger.tag(sentence.tokens_mut());
+    {
+        let toks = sentence.tokens_mut();
+        for t in toks.iter_mut().rev() {
+            if !t.is_whitespace() && !t.token().pos_tags().contains(&"SENT_START".to_string()) {
+                if !t.has_pos_tag("SENT_END") {
+                    t.add_sent_end();
+                }
+                break;
+            }
+        }
+    }
     println!("--- after tagger:");
     for t in sentence.tokens() {
         if t.is_whitespace() {
