@@ -618,6 +618,22 @@ const ES_MULTIWORDS: ChunkerParams = ChunkerParams {
     remove_previous_tags: true,
     add_ignore_spelling: false,
 };
+const CA_MULTIWORDS: ChunkerParams = ChunkerParams {
+    allow_first_capitalized: true,
+    allow_all_uppercase: true,
+    allow_titlecase: false,
+    default_tag: None,
+    remove_previous_tags: true,
+    add_ignore_spelling: false,
+};
+const CA_SPELLING_GLOBAL: ChunkerParams = ChunkerParams {
+    allow_first_capitalized: false,
+    allow_all_uppercase: true,
+    allow_titlecase: false,
+    default_tag: None,
+    remove_previous_tags: false,
+    add_ignore_spelling: false,
+};
 const ES_SPELLING_GLOBAL: ChunkerParams = ChunkerParams {
     allow_first_capitalized: false,
     allow_all_uppercase: true,
@@ -676,6 +692,7 @@ pub fn hybrid_disambiguator(
     let (multiwords, global, xml_first) = match code {
         "fr" => (Some(FR_MULTIWORDS), Some(FR_SPELLING_GLOBAL), false),
         "es" => (Some(ES_MULTIWORDS), Some(ES_SPELLING_GLOBAL), false),
+        "ca" => (Some(CA_MULTIWORDS), Some(CA_SPELLING_GLOBAL), false),
         "pt" => (Some(PT_MULTIWORDS), Some(PT_SPELLING_GLOBAL), false),
         "nl" => (Some(NL_MULTIWORDS), Some(NL_SPELLING_GLOBAL), false),
         "ru" => (Some(BARE_MULTIWORDS), None, false),

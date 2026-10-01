@@ -138,6 +138,7 @@ impl TestRunner {
                     ("ar", "arabic"),
                     ("ast", "asturian"),
                     ("br", "breton"),
+                    ("ca", "catalan"),
                     ("el", "greek"),
                     ("gl", "galician"),
                     ("ro", "romanian"),
@@ -2083,6 +2084,12 @@ fn test_real_arabic_grammar_examples() {
 #[ignore]
 fn test_real_asturian_grammar_examples() {
     run_generic_example_suite("ast");
+}
+
+#[test]
+#[ignore]
+fn test_real_catalan_grammar_examples() {
+    run_generic_example_suite("ca");
 }
 
 #[test]
