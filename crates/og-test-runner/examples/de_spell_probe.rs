@@ -1,5 +1,5 @@
-use og_spell::german::GermanSpeller;
 use og_spell::dictionary::Dictionary;
+use og_spell::german::GermanSpeller;
 use std::path::PathBuf;
 use std::sync::Arc;
 

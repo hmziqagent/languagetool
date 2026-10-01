@@ -41,7 +41,10 @@ fn main() {
         no_filter.antipatterns = Vec::new();
         no_filter.filter = None;
         let matches_no_filter = runner.match_rule_on_text(&no_filter, &text).2;
-        println!("   without antipatterns+filter: {}", matches_no_filter.len());
+        println!(
+            "   without antipatterns+filter: {}",
+            matches_no_filter.len()
+        );
         if matches.len() != matches_no_anti.len() {
             for (ai, anti) in rule.antipatterns.iter().enumerate() {
                 let mut one = rule.clone();
