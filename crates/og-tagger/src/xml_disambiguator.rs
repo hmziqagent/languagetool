@@ -465,9 +465,19 @@ impl Disambiguator for XmlDisambiguator {
                         match_pattern(effective_pattern, &tokens, start_idx)
                     };
                     if let Some(match_result) = mp_result {
+                        let rule_first = match_result
+                            .matched_positions
+                            .first()
+                            .copied()
+                            .unwrap_or(usize::MAX);
+                        let rule_last = match_result
+                            .matched_positions
+                            .last()
+                            .copied()
+                            .unwrap_or(0);
                         let mut blocked = false;
                         for ap in &rule.antipatterns {
-                            if antipattern_matches(ap, &tokens, start_idx) {
+                            if antipattern_matches(ap, &tokens, rule_first, rule_last) {
                                 blocked = true;
                                 break;
                             }
@@ -1281,11 +1291,16 @@ fn token_matches(
 fn antipattern_matches(
     antipattern: &CompiledPattern,
     tokens: &[&AnalyzedTokenReadings],
-    _rule_start: usize,
+    rule_first: usize,
+    rule_last: usize,
 ) -> bool {
     for start in 0..tokens.len() {
-        if match_pattern(antipattern, tokens, start).is_some() {
-            return true;
+        if let Some(result) = match_pattern(antipattern, tokens, start) {
+            let anti_first = result.matched_positions.first().copied().unwrap_or(usize::MAX);
+            let anti_last = result.matched_positions.last().copied().unwrap_or(0);
+            if anti_first <= rule_last && anti_last >= rule_first {
+                return true;
+            }
         }
     }
     false
@@ -2052,6 +2067,18 @@ mod tests {
         </pattern>
         <disambig postag="NN"/>
     </rule>
+    <rule id="ANTI2" name="With overlapping antipattern">
+        <antipattern>
+            <token regexp="yes">pro.+</token>
+        </antipattern>
+        <pattern>
+            <marker>
+                <token>probe</token>
+            </marker>
+            <token>nope</token>
+        </pattern>
+        <disambig action="remove"><wd pos="VB"/></disambig>
+    </rule>
 </rules>"#;
 
         let disambig = XmlDisambiguator::from_xml(xml).unwrap();
@@ -2064,7 +2091,11 @@ mod tests {
         let mut sentence2 = make_sentence(vec![("nope", vec!["RB"]), ("test", vec!["NN", "VB"])]);
         disambig.disambiguate(&mut sentence2);
         assert!(sentence2.tokens()[1].has_pos_tag("NN"));
-        assert!(sentence2.tokens()[1].has_pos_tag("VB"));
+        assert!(!sentence2.tokens()[1].has_pos_tag("VB"));
+
+        let mut sentence3 = make_sentence(vec![("probe", vec!["NN", "VB"]), ("nope", vec!["RB"])]);
+        disambig.disambiguate(&mut sentence3);
+        assert!(sentence3.tokens()[0].has_pos_tag("VB"));
     }
 
     #[test]
@@ -2155,6 +2186,68 @@ mod tests {
         assert!(
             !ritrovo.has_pos_tag("NOUN-M:s"),
             "unify must drop the featureless noun reading like Java checkNext"
+        );
+    }
+
+    #[test]
+    fn antipattern_veto_requires_span_overlap_like_keep_by_disambig() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<rules lang="de">
+    <unification feature="number">
+        <equivalence type="sg"><token postag=".*:SIN:.*" postag_regexp="yes"/></equivalence>
+        <equivalence type="pl"><token postag=".*:PLU:.*" postag_regexp="yes"/></equivalence>
+    </unification>
+    <unification feature="case">
+        <equivalence type="nom"><token postag=".*:NOM:.*" postag_regexp="yes"/></equivalence>
+        <equivalence type="akk"><token postag=".*:AKK:.*" postag_regexp="yes"/></equivalence>
+    </unification>
+    <unification feature="gender">
+        <equivalence type="mas"><token postag=".*:MAS.*" postag_regexp="yes"/></equivalence>
+        <equivalence type="fem"><token postag=".*:FEM.*" postag_regexp="yes"/></equivalence>
+    </unification>
+    <rule id="UNIFY_ADJ_SUB" name="NP unify 3b">
+        <antipattern>
+            <token postag="ART:.*" postag_regexp="yes"/>
+            <token postag="ADJ:.*" postag_regexp="yes"/>
+            <token postag="SUB:.*" postag_regexp="yes"/>
+        </antipattern>
+        <pattern>
+            <unify>
+                <feature id="number"/><feature id="case"/><feature id="gender"/>
+                <token postag="ADJ:.*" postag_regexp="yes"/>
+                <token postag="SUB:.*" postag_regexp="yes"/>
+            </unify>
+        </pattern>
+        <disambig action="unify"/>
+    </rule>
+</rules>"#;
+
+        let disambiguator = XmlDisambiguator::from_xml(xml).unwrap();
+        let mut sentence = make_sentence(vec![
+            ("Herzliche", vec!["SUB:NOM:SIN:MAS:ADJ", "ADJ:NOM:SIN:MAS:GRU:DEF", "ADJ:NOM:SIN:FEM:GRU:DEF"]),
+            ("Dank", vec!["SUB:NOM:SIN:MAS", "SUB:AKK:SIN:MAS"]),
+            ("die", vec!["ART:NOM:SIN:FEM"]),
+            ("schnelle", vec!["ADJ:NOM:SIN:FEM:GRU:DEF", "ADJ:NOM:PLU:FEM:GRU:SOL"]),
+            ("Hilfe", vec!["SUB:NOM:SIN:FEM", "SUB:AKK:SIN:FEM"]),
+        ]);
+        disambiguator.disambiguate(&mut sentence);
+        let herzliche = &sentence.tokens()[0];
+        assert!(
+            !herzliche.has_pos_tag("SUB:NOM:SIN:MAS:ADJ"),
+            "antipattern matching only 'die schnelle Hilfe' must not block unify on 'Herzliche Dank'"
+        );
+        assert!(
+            herzliche.has_pos_tag("ADJ:NOM:SIN:MAS:GRU:DEF"),
+            "unified ADJ reading must survive"
+        );
+        assert!(
+            !herzliche.has_pos_tag("ADJ:NOM:SIN:FEM:GRU:DEF"),
+            "non-unifying ADJ reading must be dropped"
+        );
+        let schnelle = &sentence.tokens()[3];
+        assert!(
+            schnelle.has_pos_tag("ADJ:NOM:PLU:FEM:GRU:SOL"),
+            "overlapping antipattern must still block unify on 'schnelle Hilfe'"
         );
     }
 
