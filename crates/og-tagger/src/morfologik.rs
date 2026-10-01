@@ -810,6 +810,19 @@ mod tests {
     }
 
     #[test]
+    fn from_decoded_text_builds_lemma_inversion() {
+        let data = "friend\tfriend\tNN\nfriends\tfriend\tNNS\nfriendly\tfriendly\tJJ\n";
+        let dict = MorfologikDictionary::from_decoded_text(data);
+        assert_eq!(dict.lookup("friends").len(), 1);
+        let forms = dict.forms_by_lemma();
+        let friend = forms.get("friend").expect("lemma inversion");
+        assert_eq!(friend.len(), 2);
+        let joined: Vec<&str> = friend.iter().map(|(t, _)| *t).collect();
+        assert!(joined.contains(&"NN") && joined.contains(&"NNS"));
+        assert!(friend.iter().any(|(_, f)| *f == "friends"));
+    }
+
+    #[test]
     fn final_arcs_keep_their_continuations() {
         let _guard = DICT_TEST_LOCK.lock().unwrap();
         let dir = match dict_path() {
