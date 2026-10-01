@@ -1,4 +1,5 @@
 pub mod de_comma_tagger;
+pub mod en_article;
 pub mod native_rules;
 pub mod pattern_rule;
 pub mod postponed_adjective;

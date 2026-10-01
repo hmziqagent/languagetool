@@ -292,13 +292,10 @@ impl TestRunner {
                         None => PatternRuleEngine::new(),
                     },
                 };
-                if code == "de"
-                    && let Some(synth) =
-                        og_rules::postponed_adjective::LangSynthesizer::for_language(
-                            &resource_dir,
-                            "de",
-                        )
-                {
+                if let Some(synth) = og_rules::postponed_adjective::LangSynthesizer::for_language(
+                    &resource_dir,
+                    code,
+                ) {
                     engine = engine.with_suggestion_synthesizer(std::sync::Arc::new(synth));
                 }
                 engine

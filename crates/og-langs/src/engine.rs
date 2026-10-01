@@ -188,6 +188,11 @@ impl LanguageEngine {
         if let Some(lt_root) = find_lt_resource_dir() {
             let resource_dir = lt_root.join("en/src/main/resources/org/languagetool/resource/en");
             og_tagger::chunker::load_opennlp_chunker(&resource_dir);
+            if let Some(synth) =
+                og_rules::postponed_adjective::LangSynthesizer::for_language(&resource_dir, "en")
+            {
+                engine.suggestion_synth = Some(Arc::new(synth));
+            }
             if let Some(support) = find_lt_core_resource_dir().and_then(|core_resource_dir| {
                 og_rules::spelling_support::SpellingSupport::dictionary_from_dir(&resource_dir).map(
                     |dict| {
@@ -801,6 +806,7 @@ impl LanguageEngine {
         engine.synthesizer =
             og_rules::postponed_adjective::LangSynthesizer::for_language(&resource_dir, &short)
                 .map(Arc::new);
+        engine.suggestion_synth = engine.synthesizer.clone();
 
         let rules_dir = lt_root.join(format!(
             "{short}/src/main/resources/org/languagetool/rules/{short}"

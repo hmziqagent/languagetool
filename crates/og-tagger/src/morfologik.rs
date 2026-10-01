@@ -566,6 +566,42 @@ impl MorfologikDictionary {
         })
     }
 
+    pub fn from_decoded_text(data: &str) -> Self {
+        let mut interned: HashSet<&'static str> = HashSet::new();
+        let mut map: HashMap<Box<str>, ReadingList> = HashMap::new();
+        for line in data.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let mut parts = line.splitn(3, '\t');
+            let (Some(form), Some(lemma), Some(tag)) = (parts.next(), parts.next(), parts.next())
+            else {
+                continue;
+            };
+            let tag = tag.trim();
+            if form.is_empty() || tag.is_empty() {
+                continue;
+            }
+            let lemma: Box<str> = if lemma.is_empty() {
+                form.into()
+            } else {
+                lemma.into()
+            };
+            let tag = intern(&mut interned, tag.to_string());
+            let lemma = intern(&mut interned, lemma.to_string());
+            map.entry(form.into()).or_default().push((lemma, tag));
+        }
+        Self {
+            entries: map
+                .into_iter()
+                .map(|(word, readings)| (word, readings.into_boxed_slice()))
+                .collect(),
+            verb_forms: std::sync::OnceLock::new(),
+            forms_by_lemma: std::sync::OnceLock::new(),
+        }
+    }
+
     pub fn word_list(&self) -> Vec<String> {
         self.entries.keys().map(|k| k.to_string()).collect()
     }

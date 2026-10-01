@@ -293,12 +293,22 @@ fn is_exception_fr(word: &str) -> bool {
     false
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SynthLang {
+    German,
+    Spanish,
+    French,
+    English,
+    Portuguese,
+}
+
 pub struct LangSynthesizer {
     dictionary: Option<Arc<MorfologikDictionary>>,
     manual: Vec<(Box<str>, Box<str>, Box<str>)>,
     removals: Vec<(Box<str>, Box<str>, Box<str>)>,
-    french: bool,
-    german: bool,
+    removals2: Vec<(Box<str>, Box<str>, Box<str>)>,
+    lang: SynthLang,
+    article: crate::en_article::ArticleData,
     lemma_forms: OnceLock<HashMap<Box<str>, Vec<(Box<str>, Box<str>)>>>,
 }
 
@@ -336,22 +346,29 @@ const GERMAN_REMOVE: &[&str] = &[
 
 impl LangSynthesizer {
     pub fn for_language(resource_dir: &Path, code: &str) -> Option<Self> {
-        let (dictionary, french, german) = match code {
+        let (dictionary, lang): (Option<Arc<MorfologikDictionary>>, SynthLang) = match code {
             "de" => (
                 og_tagger::german_tagger::shared_german_dictionary(resource_dir),
-                false,
-                true,
+                SynthLang::German,
             ),
             "es" => (
                 og_tagger::generic_tagger::shared_dictionary(resource_dir, "spanish"),
-                false,
-                false,
+                SynthLang::Spanish,
             ),
             "fr" => (
                 og_tagger::generic_tagger::shared_dictionary(resource_dir, "french"),
-                true,
-                false,
+                SynthLang::French,
             ),
+            "pt" => (
+                og_tagger::generic_tagger::shared_dictionary(resource_dir, "portuguese"),
+                SynthLang::Portuguese,
+            ),
+            "en" => {
+                let dict = std::fs::read_to_string(resource_dir.join("dict_decoded.txt"))
+                    .ok()
+                    .map(|data| Arc::new(MorfologikDictionary::from_decoded_text(&data)));
+                (dict, SynthLang::English)
+            }
             _ => return None,
         };
         let manual = std::fs::read_to_string(resource_dir.join("added.txt"))
@@ -360,14 +377,44 @@ impl LangSynthesizer {
         let removals = std::fs::read_to_string(resource_dir.join("removed.txt"))
             .map(|t| parse_manual(&t))
             .unwrap_or_default();
+        let removals2 = std::fs::read_to_string(resource_dir.join("do-not-synthesize.txt"))
+            .map(|t| parse_manual(&t))
+            .unwrap_or_default();
+        let article = if lang == SynthLang::English {
+            let rules_dir = resource_dir.join("../../rules/en");
+            if rules_dir.join("det_a.txt").is_file() {
+                crate::en_article::ArticleData::from_rules_dir(&rules_dir)
+            } else {
+                crate::en_article::ArticleData::empty()
+            }
+        } else {
+            crate::en_article::ArticleData::empty()
+        };
         Some(Self {
             dictionary,
             manual,
             removals,
-            french,
-            german,
+            removals2,
+            lang,
+            article,
             lemma_forms: OnceLock::new(),
         })
+    }
+
+    fn is_german(&self) -> bool {
+        self.lang == SynthLang::German
+    }
+
+    fn is_french(&self) -> bool {
+        self.lang == SynthLang::French
+    }
+
+    fn is_english(&self) -> bool {
+        self.lang == SynthLang::English
+    }
+
+    fn is_spanish(&self) -> bool {
+        self.lang == SynthLang::Spanish
     }
 
     fn forms(&self) -> &HashMap<Box<str>, Vec<(Box<str>, Box<str>)>> {
@@ -390,14 +437,14 @@ impl LangSynthesizer {
 
     pub fn synthesize(&self, lemma: &str, tag: &Regex) -> Vec<String> {
         let mut results = self.lookup_forms(lemma, tag);
-        if self.german {
+        if self.is_german() {
             results.retain(|r| !GERMAN_REMOVE.contains(&r.as_str()));
         }
         results
     }
 
     fn german_lookup_ok(&self, lemma: &str, form: &str) -> bool {
-        if !self.german {
+        if !self.is_german() {
             return true;
         }
         let lc_lemma = lemma.chars().next().is_some_and(|c| c.is_lowercase());
@@ -405,23 +452,103 @@ impl LangSynthesizer {
         lc_lemma == lc_form || lemma == "mein" || lemma == "ich" && !GERMAN_REMOVE.contains(&form)
     }
 
+    fn keep_form(&self, form: &str) -> bool {
+        if self.is_french() {
+            return !is_exception_fr(form);
+        }
+        if self.is_english() {
+            return !is_exception_en(form);
+        }
+        true
+    }
+
+    fn split_es_lemma<'a>(&self, lemma: &'a str, postag: &str) -> (&'a str, &'a str) {
+        if self.is_spanish()
+            && postag.starts_with('V')
+            && let Some((head, tail)) = lemma.split_once(' ')
+        {
+            (head, tail)
+        } else {
+            (lemma, "")
+        }
+    }
+
+    pub fn is_determiner_tag(&self, postag: &str) -> bool {
+        self.is_english() && (postag == "+DT" || postag == "+INDT")
+    }
+
+    pub fn determiner_forms(&self, token: &str, postag: &str) -> Vec<String> {
+        if postag == "+DT" {
+            return vec![
+                self.article.suggest_a_or_an(token),
+                format!(
+                    "the {}",
+                    crate::en_article::lowercase_first_char_if_capitalized(token)
+                ),
+            ];
+        }
+        vec![self.article.suggest_a_or_an(token)]
+    }
+
+    pub fn synthesize_exact(&self, lemma: &str, postag: &str) -> Vec<String> {
+        let (head, tail) = self.split_es_lemma(lemma, postag);
+        let mut results = self.lookup_exact(head, postag);
+        if results.is_empty() && self.is_german() {
+            results = self.compound_forms_matching(head, |t| t == postag);
+        } else if self.is_german() {
+            results.retain(|r| !GERMAN_REMOVE.contains(&r.as_str()));
+        }
+        if !tail.is_empty() {
+            for form in &mut results {
+                *form = format!("{form} {tail}");
+            }
+        }
+        results
+    }
+
+    pub fn target_postag<'a>(&self, pos_tags: &[&'a str]) -> Option<&'a str> {
+        if pos_tags.is_empty() {
+            return None;
+        }
+        if !self.is_spanish() {
+            return pos_tags.last().copied();
+        }
+        let mut sorted: Vec<&str> = pos_tags.to_vec();
+        sorted.sort_by(|a, b| {
+            if *a == "VMIP3S0" && *b == "VMM02S0" {
+                std::cmp::Ordering::Greater
+            } else if *a == "VMM02S0" && *b == "VMIP3S0" {
+                std::cmp::Ordering::Less
+            } else {
+                std::cmp::Ordering::Equal
+            }
+        });
+        sorted.pop()
+    }
+
     pub fn synthesize_full(&self, lemma: &str, target: &str) -> Vec<String> {
         let Ok(re) = Regex::new(&format!("^(?:{target})$")) else {
             return Vec::new();
         };
-        let mut results = self.synthesize(lemma, &re);
-        if results.is_empty() && self.german {
-            results = self.compound_forms(lemma, &re);
+        let (head, tail) = self.split_es_lemma(lemma, target);
+        let mut results = self.synthesize(head, &re);
+        if results.is_empty() && self.is_german() {
+            results = self.compound_forms_matching(head, |t| re.is_match(t));
+        }
+        if !tail.is_empty() {
+            for form in &mut results {
+                *form = format!("{form} {tail}");
+            }
         }
         results.sort();
         results.dedup();
         results
     }
 
-    fn compound_forms(&self, lemma: &str, tag: &Regex) -> Vec<String> {
+    fn compound_parts(&self, lemma: &str) -> Option<(String, String, &'static str, bool)> {
         let mut parts = og_tagger::jwordsplitter::tokenize(lemma);
         if parts.is_empty() {
-            return Vec::new();
+            return None;
         }
         let mut maybe_hyphen = "";
         if parts.len() == 1 {
@@ -431,17 +558,28 @@ impl LangSynthesizer {
                 parts = hyphen_split;
             }
         }
-        let Some((last_raw, first_parts)) = parts.split_last() else {
-            return Vec::new();
-        };
+        let (last_raw, first_parts) = parts.split_last()?;
         let first_part = first_parts.join(maybe_hyphen);
         let last_part = uppercase_first_char(last_raw);
         let uppercase_last =
             !maybe_hyphen.is_empty() && last_raw.chars().next().is_some_and(char::is_uppercase);
+        Some((last_part, first_part, maybe_hyphen, uppercase_last))
+    }
+
+    fn compound_forms_matching(
+        &self,
+        lemma: &str,
+        matches_tag: impl Fn(&str) -> bool,
+    ) -> Vec<String> {
+        let Some((last_part, first_part, maybe_hyphen, uppercase_last)) =
+            self.compound_parts(lemma)
+        else {
+            return Vec::new();
+        };
         let mut results = Vec::new();
-        for form in self.lookup_forms(last_part.as_str(), tag) {
+        for form in self.lookup_matching(&last_part, &matches_tag) {
             let tail = if uppercase_last {
-                form.clone()
+                form
             } else {
                 lowercase_first_char(&form)
             };
@@ -450,30 +588,68 @@ impl LangSynthesizer {
         results
     }
 
-    fn lookup_forms(&self, lemma: &str, tag: &Regex) -> Vec<String> {
+    fn lookup_matching(&self, lemma: &str, matches_tag: &impl Fn(&str) -> bool) -> Vec<String> {
         let mut results = Vec::new();
         if let Some(entries) = self.forms().get(lemma) {
             for (t, form) in entries {
-                if tag.is_match(t) && self.german_lookup_ok(lemma, form) {
+                if matches_tag(t) && self.german_lookup_ok(lemma, form) {
                     results.push(form.to_string());
                 }
             }
         }
+        self.extend_manual(lemma, &mut results, matches_tag);
+        self.apply_removals(lemma, &mut results, matches_tag);
+        results.retain(|r| self.keep_form(r));
+        results
+    }
+
+    fn lookup_forms(&self, lemma: &str, tag: &Regex) -> Vec<String> {
+        self.lookup_matching(lemma, &|t| tag.is_match(t))
+    }
+
+    fn lookup_exact(&self, lemma: &str, postag: &str) -> Vec<String> {
+        self.lookup_matching(lemma, &|t| t == postag)
+    }
+
+    fn extend_manual(
+        &self,
+        lemma: &str,
+        results: &mut Vec<String>,
+        matches_tag: &impl Fn(&str) -> bool,
+    ) {
         for (l, t, form) in &self.manual {
-            if l.as_ref() == lemma && tag.is_match(t) && self.german_lookup_ok(lemma, form) {
+            if l.as_ref() == lemma && matches_tag(t) && self.german_lookup_ok(lemma, form) {
                 results.push(form.to_string());
             }
         }
-        for (l, t, form) in &self.removals {
-            if l.as_ref() == lemma && tag.is_match(t) {
+    }
+
+    fn apply_removals(
+        &self,
+        lemma: &str,
+        results: &mut Vec<String>,
+        matches_tag: &impl Fn(&str) -> bool,
+    ) {
+        for (l, t, form) in self.removals.iter().chain(self.removals2.iter()) {
+            if l.as_ref() == lemma && matches_tag(t) {
                 results.retain(|r| r.as_str() != form.as_ref());
             }
         }
-        if self.french {
-            results.retain(|r| !is_exception_fr(r));
-        }
-        results
     }
+}
+
+const EN_EXCEPTIONS: &[&str] = &[
+    "ne'er",
+    "e'er",
+    "o'er",
+    "ol'",
+    "ma'am",
+    "n't",
+    "informations",
+];
+
+fn is_exception_en(word: &str) -> bool {
+    word.starts_with('\'') || EN_EXCEPTIONS.contains(&word)
 }
 
 fn uppercase_first_char(text: &str) -> String {

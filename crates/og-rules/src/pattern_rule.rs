@@ -3,10 +3,50 @@ use og_core::{
     RuleMatchRule, SuggestedReplacement,
 };
 use og_xml::compiler::CompiledRule;
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 
 /// Java LT normalizes these, so "it\u{2019}s" should match pattern token "'s".
+fn java_replacement(repl: &str) -> Cow<'_, str> {
+    if !repl.contains('$') {
+        return Cow::Borrowed(repl);
+    }
+    let mut out = String::with_capacity(repl.len() + 4);
+    let mut chars = repl.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '$' {
+            out.push(c);
+            continue;
+        }
+        let mut digits = String::new();
+        while let Some(&d) = chars.peek() {
+            if d.is_ascii_digit() {
+                digits.push(d);
+                chars.next();
+            } else {
+                break;
+            }
+        }
+        if digits.is_empty() {
+            out.push('$');
+            continue;
+        }
+        match chars.peek() {
+            Some(&n) if n.is_alphanumeric() || n == '_' => {
+                out.push_str("${");
+                out.push_str(&digits);
+                out.push('}');
+            }
+            _ => {
+                out.push('$');
+                out.push_str(&digits);
+            }
+        }
+    }
+    Cow::Owned(out)
+}
+
 fn apply_case_conversion(text: &str, conversion: &str) -> String {
     match conversion {
         "startlower" => {
@@ -313,7 +353,9 @@ impl PatternRuleEngine {
                                         && let Ok(re) = regex::Regex::new(rm)
                                     {
                                         let replace = m.regexp_replace.as_deref().unwrap_or("");
-                                        value = re.replace_all(&value, replace).into_owned();
+                                        value = re
+                                            .replace_all(&value, java_replacement(replace).as_ref())
+                                            .into_owned();
                                     }
                                     resolved.push_str(&value);
                                 }
@@ -652,7 +694,9 @@ impl PatternRuleEngine {
             && let Ok(re) = regex::Regex::new(rm)
         {
             let replace = m.regexp_replace.as_deref().unwrap_or("");
-            text = re.replace_all(&text, replace).to_string();
+            text = re
+                .replace_all(&text, java_replacement(replace).as_ref())
+                .to_string();
         }
         if let Some(ref mode) = m.include_skipped
             && mode != "none"
@@ -679,6 +723,30 @@ impl PatternRuleEngine {
         let Some(postag) = m.postag.as_deref() else {
             return Vec::new();
         };
+        if !m.postag_regexp {
+            let mut word_forms: std::collections::BTreeSet<String> =
+                std::collections::BTreeSet::new();
+            if synth.is_determiner_tag(postag) {
+                word_forms.extend(synth.determiner_forms(token_str, postag));
+            } else {
+                for reading in token.readings() {
+                    if let Some(lemma) = reading.lemma() {
+                        word_forms.extend(synth.synthesize_exact(lemma, postag));
+                    }
+                }
+            }
+            let mut forms: Vec<String> = if word_forms.is_empty() {
+                vec![format!("({token_str})")]
+            } else {
+                word_forms.into_iter().collect()
+            };
+            if let Some(ref cc) = m.case_conversion {
+                for form in &mut forms {
+                    *form = apply_case_conversion(form, cc);
+                }
+            }
+            return forms;
+        }
         let (Ok(re), Ok(re_full)) = (
             regex::Regex::new(postag),
             regex::Regex::new(&format!("^(?:{postag})$")),
@@ -713,14 +781,17 @@ impl PatternRuleEngine {
             .flat_map(|r| r.pos_tags().iter().map(String::as_str))
             .filter(|t| re_full.is_match(t))
             .collect();
-        let mut target = pos_tags.last().copied().unwrap_or(postag).to_string();
+        let mut target = synth.target_postag(&pos_tags).unwrap_or(postag).to_string();
         if let Some(replace) = m.postag_replace.as_deref() {
             if pos_tags.is_empty() {
                 pos_tags.push(postag);
             }
             target = pos_tags
                 .iter()
-                .map(|t| re.replace_all(t, replace).to_string())
+                .map(|t| {
+                    re.replace_all(t, java_replacement(replace).as_ref())
+                        .to_string()
+                })
                 .collect::<Vec<_>>()
                 .join("|");
         }
@@ -4897,6 +4968,20 @@ fn is_numeric_str(s: &str) -> bool {
 mod tests {
     use super::*;
     use og_xml::compiler::XmlCompiler;
+
+    #[test]
+    fn java_replacement_disambiguates_group_ref_from_literal() {
+        assert_eq!(java_replacement("$1P$2").as_ref(), "${1}P$2");
+        assert_eq!(java_replacement("$1").as_ref(), "$1");
+        assert_eq!(java_replacement("no refs").as_ref(), "no refs");
+        assert_eq!(java_replacement("$12x").as_ref(), "${12}x");
+        let re = regex::Regex::new("(A...|NC.|V.P..)S(.*)").unwrap();
+        assert_eq!(
+            re.replace_all("NCFS000", java_replacement("$1P$2").as_ref())
+                .as_ref(),
+            "NCFP000"
+        );
+    }
 
     fn compile_and_match(xml: &str, sentence_text: &str) -> Vec<RuleMatch> {
         let compiler = XmlCompiler::new();
