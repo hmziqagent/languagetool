@@ -1,7 +1,8 @@
 use og_core::analyzed::{AnalyzedSentence, AnalyzedToken, AnalyzedTokenReadings};
 use og_core::checker::Disambiguator;
 use og_xml::compiler::{
-    CompiledPattern, CompiledPatternElement, CompiledPatternToken, PosMatcher, XmlCompiler,
+    CompiledException, CompiledPattern, CompiledPatternElement, CompiledPatternToken, PosMatcher,
+    XmlCompiler,
 };
 use og_xml::disambig_parser::DisambigXmlParser;
 use og_xml::disambig_types::{CompiledDisambigRule, DisambigAction, DisambigRule};
@@ -470,11 +471,7 @@ impl Disambiguator for XmlDisambiguator {
                             .first()
                             .copied()
                             .unwrap_or(usize::MAX);
-                        let rule_last = match_result
-                            .matched_positions
-                            .last()
-                            .copied()
-                            .unwrap_or(0);
+                        let rule_last = match_result.matched_positions.last().copied().unwrap_or(0);
                         let mut blocked = false;
                         for ap in &rule.antipatterns {
                             if antipattern_matches(ap, &tokens, rule_first, rule_last) {
@@ -901,18 +898,33 @@ fn match_tokens_recursive(
     };
 
     if first_matched {
+        let scope_next: Vec<&CompiledException> = pt
+            .exceptions
+            .iter()
+            .filter(|exc| exc.scope.as_deref() == Some("next"))
+            .collect();
+        let scope_next_vetoes = |next_token: usize| {
+            !scope_next.is_empty()
+                && ((token_idx + 1)..=next_token.min(tokens.len().saturating_sub(1))).any(|q| {
+                    scope_next
+                        .iter()
+                        .any(|exc| exception_matches(exc, tokens[q], space_before_at(tokens, q)))
+                })
+        };
         if pt.skip < 0 {
             let mut next_token = token_idx + 1;
             while next_token <= tokens.len() {
-                if let Some(mut result) = match_tokens_recursive(
-                    pattern_tokens,
-                    tokens,
-                    next_token,
-                    pattern_idx + 1,
-                    false,
-                ) {
-                    result.matched_positions.insert(0, token_idx);
-                    return Some(result);
+                if !scope_next_vetoes(next_token) {
+                    if let Some(mut result) = match_tokens_recursive(
+                        pattern_tokens,
+                        tokens,
+                        next_token,
+                        pattern_idx + 1,
+                        false,
+                    ) {
+                        result.matched_positions.insert(0, token_idx);
+                        return Some(result);
+                    }
                 }
                 next_token += 1;
             }
@@ -922,6 +934,9 @@ fn match_tokens_recursive(
                 let next_token = token_idx + 1 + dist;
                 if next_token > tokens.len() {
                     break;
+                }
+                if scope_next_vetoes(next_token) {
+                    continue;
                 }
                 if let Some(mut result) = match_tokens_recursive(
                     pattern_tokens,
@@ -977,7 +992,6 @@ fn token_matches_text_verified(
     token_matches_tail(
         pt,
         token,
-        token.token().token(),
         token_idx > 0 && {
             let prev = tokens[token_idx - 1];
             token.token().start() != prev.token().end()
@@ -988,7 +1002,6 @@ fn token_matches_text_verified(
 fn token_matches_tail(
     pt: &CompiledPatternToken,
     token: &AnalyzedTokenReadings,
-    text: &str,
     token_space_before: bool,
 ) -> bool {
     let pos_matches = if let Some(ref postag) = pt.postag {
@@ -1031,71 +1044,78 @@ fn token_matches_tail(
     }
 
     for exc in &pt.exceptions {
-        if exc
-            .space_before
-            .is_some_and(|required| required != token_space_before)
-        {
+        if exc.scope.as_deref() == Some("next") || exc.scope.as_deref() == Some("previous") {
             continue;
         }
-        let text_exc = if let Some(ref exc_text) = exc.text {
-            if let Some(ref re) = exc.compiled_regexp {
-                re.is_match(text)
-            } else {
-                og_xml::unifier::eq_ignore_case(text, exc_text)
-            }
-        } else {
-            false
-        };
-        let reading_matches = |r: &og_core::AnalyzedToken| {
-            if let Some(ref postag) = exc.postag {
-                if exc.compiled_postag_regexp.is_some()
-                    || exc.compiled_postag_regexp_fancy.is_some()
-                {
-                    let plain = exc
-                        .compiled_postag_regexp
-                        .as_ref()
-                        .is_some_and(|re| r.pos_tags().iter().any(|t| re.is_match(t)));
-                    let fancy = exc.compiled_postag_regexp_fancy.as_ref().is_some_and(|re| {
-                        r.pos_tags().iter().any(|t| re.is_match(t).unwrap_or(false))
-                    });
-                    plain || fancy
-                } else {
-                    r.pos_tags().iter().any(|t| t == postag)
-                }
-            } else {
-                false
-            }
-        };
-        let pos_exc = token.readings().iter().any(|r| reading_matches(r));
-
-        let has_text_constraint = exc.text.is_some();
-        let has_pos_constraint = exc.postag.is_some();
-        let pos_ok = if exc.negate_pos {
-            token.readings().iter().any(|r| !reading_matches(r))
-        } else {
-            pos_exc
-        };
-        let exc_matches = if has_text_constraint && has_pos_constraint {
-            text_exc && pos_ok
-        } else if has_text_constraint {
-            text_exc
-        } else if has_pos_constraint {
-            pos_ok
-        } else {
-            false
-        };
-
-        let exc_active = if exc.negate {
-            !exc_matches
-        } else {
-            exc_matches
-        };
-        if exc_active {
+        if exception_matches(exc, token, token_space_before) {
             return false;
         }
     }
 
     true
+}
+
+fn exception_matches(
+    exc: &CompiledException,
+    token: &AnalyzedTokenReadings,
+    token_space_before: bool,
+) -> bool {
+    if exc
+        .space_before
+        .is_some_and(|required| required != token_space_before)
+    {
+        return false;
+    }
+    let text = token.token().token();
+    let text_exc = if let Some(ref exc_text) = exc.text {
+        if let Some(ref re) = exc.compiled_regexp {
+            re.is_match(text)
+        } else {
+            og_xml::unifier::eq_ignore_case(text, exc_text)
+        }
+    } else {
+        false
+    };
+    let reading_matches = |r: &og_core::AnalyzedToken| {
+        if let Some(ref postag) = exc.postag {
+            if exc.compiled_postag_regexp.is_some() || exc.compiled_postag_regexp_fancy.is_some() {
+                let plain = exc
+                    .compiled_postag_regexp
+                    .as_ref()
+                    .is_some_and(|re| r.pos_tags().iter().any(|t| re.is_match(t)));
+                let fancy = exc
+                    .compiled_postag_regexp_fancy
+                    .as_ref()
+                    .is_some_and(|re| r.pos_tags().iter().any(|t| re.is_match(t).unwrap_or(false)));
+                plain || fancy
+            } else {
+                r.pos_tags().iter().any(|t| t == postag)
+            }
+        } else {
+            false
+        }
+    };
+    let has_text_constraint = exc.text.is_some();
+    let has_pos_constraint = exc.postag.is_some();
+    let pos_ok = if exc.negate_pos {
+        token.readings().iter().any(|r| !reading_matches(r))
+    } else {
+        token.readings().iter().any(reading_matches)
+    };
+    let exc_matches = if has_text_constraint && has_pos_constraint {
+        text_exc && pos_ok
+    } else if has_text_constraint {
+        text_exc
+    } else if has_pos_constraint {
+        pos_ok
+    } else {
+        false
+    };
+    if exc.negate {
+        !exc_matches
+    } else {
+        exc_matches
+    }
 }
 
 fn match_elements(
@@ -1111,89 +1131,89 @@ fn match_elements(
             return None;
         }
 
-        match elem {
-            CompiledPatternElement::Token(pt) => {
-                if pt.skip != 0 && token_matches(pt, tokens, token_idx, token_idx > start_idx) {
-                    if pt.skip < 0 {
-                        let mut next = token_idx + 1;
-                        while next <= tokens.len() {
-                            if let Some(rest) =
-                                match_elements(&elements[elem_idx + 1..], tokens, next)
-                            {
-                                let mut result = MatchResult {
-                                    matched_positions: positions.clone(),
-                                };
-                                result.matched_positions.push(token_idx);
-                                result.matched_positions.extend(rest.matched_positions);
-                                return Some(result);
-                            }
-                            next += 1;
-                        }
-                    } else {
-                        let mut off = 0usize;
-                        while off <= pt.skip as usize {
-                            let next = token_idx + 1 + off;
-                            if next > tokens.len() {
-                                break;
-                            }
-                            if let Some(rest) =
-                                match_elements(&elements[elem_idx + 1..], tokens, next)
-                            {
-                                let mut result = MatchResult {
-                                    matched_positions: positions.clone(),
-                                };
-                                result.matched_positions.push(token_idx);
-                                result.matched_positions.extend(rest.matched_positions);
-                                return Some(result);
-                            }
-                            off += 1;
-                        }
-                    }
-                    return None;
-                } else if token_matches(pt, tokens, token_idx, token_idx > start_idx) {
-                    positions.push(token_idx);
-                    token_idx += 1;
-                } else if pt.min.unwrap_or(1) == 0 {
-                    positions.push(token_idx);
-                } else {
-                    return None;
-                }
+        let has_previous = token_idx > start_idx;
+        let (matched, rep, min) = match elem {
+            CompiledPatternElement::Token(pt) => (
+                token_matches(pt, tokens, token_idx, has_previous),
+                Some(pt.as_ref()),
+                pt.min,
+            ),
+            CompiledPatternElement::OrGroup(alternatives) => (
+                alternatives
+                    .iter()
+                    .any(|alt| token_matches(alt, tokens, token_idx, has_previous)),
+                alternatives.first(),
+                alternatives.first().and_then(|a| a.min),
+            ),
+            CompiledPatternElement::AndGroup(constraints) => (
+                constraints
+                    .iter()
+                    .all(|c| token_matches(c, tokens, token_idx, has_previous)),
+                constraints.first(),
+                constraints.first().and_then(|c| c.min),
+            ),
+        };
+        if !matched {
+            if min.unwrap_or(1) == 0 {
+                positions.push(token_idx);
+                continue;
             }
-            CompiledPatternElement::OrGroup(alternatives) => {
-                let mut matched = false;
-                for alt in alternatives {
-                    if token_matches(alt, tokens, token_idx, token_idx > start_idx) {
-                        positions.push(token_idx);
-                        token_idx += 1;
-                        matched = true;
-                        break;
-                    }
-                }
-                if !matched {
-                    return None;
-                }
+            return None;
+        }
+        let rep = rep.unwrap_or_else(|| unreachable!("matched element has a representative"));
+        let scope_next: Vec<&CompiledException> = rep
+            .exceptions
+            .iter()
+            .filter(|exc| exc.scope.as_deref() == Some("next"))
+            .collect();
+        if rep.skip == 0 && scope_next.is_empty() {
+            positions.push(token_idx);
+            token_idx += 1;
+            continue;
+        }
+        let max_skip = if rep.skip < 0 {
+            tokens.len()
+        } else {
+            rep.skip as usize
+        };
+        for off in 0..=max_skip {
+            let next = token_idx + 1 + off;
+            if next > tokens.len() {
+                break;
             }
-            CompiledPatternElement::AndGroup(constraints) => {
-                let mut all_match = true;
-                for c in constraints {
-                    if !token_matches(c, tokens, token_idx, token_idx > start_idx) {
-                        all_match = false;
-                        break;
-                    }
-                }
-                if all_match {
-                    positions.push(token_idx);
-                    token_idx += 1;
-                } else {
-                    return None;
-                }
+            if !scope_next.is_empty()
+                && ((token_idx + 1)..=next.min(tokens.len().saturating_sub(1))).any(|q| {
+                    scope_next
+                        .iter()
+                        .any(|exc| exception_matches(exc, tokens[q], space_before_at(tokens, q)))
+                })
+            {
+                continue;
+            }
+            if let Some(rest) = match_elements(&elements[elem_idx + 1..], tokens, next) {
+                let mut result = MatchResult {
+                    matched_positions: positions.clone(),
+                };
+                result.matched_positions.push(token_idx);
+                result.matched_positions.extend(rest.matched_positions);
+                return Some(result);
             }
         }
+        return None;
     }
 
     Some(MatchResult {
         matched_positions: positions,
     })
+}
+
+fn space_before_at(tokens: &[&AnalyzedTokenReadings], idx: usize) -> bool {
+    match (idx.checked_sub(1), tokens.get(idx)) {
+        (Some(prev), Some(tok)) if prev < tokens.len() => {
+            tok.token().start() != tokens[prev].token().end()
+        }
+        _ => false,
+    }
 }
 
 fn token_matches(
@@ -1277,10 +1297,20 @@ fn token_matches(
         return false;
     }
 
+    if token_idx > 0 {
+        let prev = tokens[token_idx - 1];
+        for exc in &pt.exceptions {
+            if exc.scope.as_deref() == Some("previous")
+                && exception_matches(exc, prev, space_before_at(tokens, token_idx - 1))
+            {
+                return false;
+            }
+        }
+    }
+
     token_matches_tail(
         pt,
         token,
-        text,
         has_previous && token_idx > 0 && {
             let prev = tokens[token_idx - 1];
             token.token().start() != prev.token().end()
@@ -1296,7 +1326,11 @@ fn antipattern_matches(
 ) -> bool {
     for start in 0..tokens.len() {
         if let Some(result) = match_pattern(antipattern, tokens, start) {
-            let anti_first = result.matched_positions.first().copied().unwrap_or(usize::MAX);
+            let anti_first = result
+                .matched_positions
+                .first()
+                .copied()
+                .unwrap_or(usize::MAX);
             let anti_last = result.matched_positions.last().copied().unwrap_or(0);
             if anti_first <= rule_last && anti_last >= rule_first {
                 return true;
@@ -2224,10 +2258,20 @@ mod tests {
 
         let disambiguator = XmlDisambiguator::from_xml(xml).unwrap();
         let mut sentence = make_sentence(vec![
-            ("Herzliche", vec!["SUB:NOM:SIN:MAS:ADJ", "ADJ:NOM:SIN:MAS:GRU:DEF", "ADJ:NOM:SIN:FEM:GRU:DEF"]),
+            (
+                "Herzliche",
+                vec![
+                    "SUB:NOM:SIN:MAS:ADJ",
+                    "ADJ:NOM:SIN:MAS:GRU:DEF",
+                    "ADJ:NOM:SIN:FEM:GRU:DEF",
+                ],
+            ),
             ("Dank", vec!["SUB:NOM:SIN:MAS", "SUB:AKK:SIN:MAS"]),
             ("die", vec!["ART:NOM:SIN:FEM"]),
-            ("schnelle", vec!["ADJ:NOM:SIN:FEM:GRU:DEF", "ADJ:NOM:PLU:FEM:GRU:SOL"]),
+            (
+                "schnelle",
+                vec!["ADJ:NOM:SIN:FEM:GRU:DEF", "ADJ:NOM:PLU:FEM:GRU:SOL"],
+            ),
             ("Hilfe", vec!["SUB:NOM:SIN:FEM", "SUB:AKK:SIN:FEM"]),
         ]);
         disambiguator.disambiguate(&mut sentence);
@@ -2248,6 +2292,65 @@ mod tests {
         assert!(
             schnelle.has_pos_tag("ADJ:NOM:PLU:FEM:GRU:SOL"),
             "overlapping antipattern must still block unify on 'schnelle Hilfe'"
+        );
+    }
+
+    #[test]
+    fn and_group_skip_gives_next_element_window_and_scope_next_vetoes() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<rules lang="de">
+    <rule id="KEIN_1_SIN_PRAE" name="Entferne 1:SIN:PRÄ ohne ich">
+        <pattern>
+            <token skip="-1" postag_regexp="yes" postag="(PKT|SENT_START)">
+                <exception scope="next">ich</exception>
+            </token>
+            <marker>
+                <and>
+                    <token skip="-1" postag_regexp="yes" postag="VER:1:SIN:PRÄ.*">
+                        <exception scope="next">ich</exception>
+                    </token>
+                    <token postag_regexp="yes" postag="VER:IMP:SIN.*"/>
+                </and>
+            </marker>
+            <token postag="(PKT|SENT_END)" postag_regexp="yes"/>
+        </pattern>
+        <disambig action="remove" postag="VER:1:SIN:PRÄ.+"/>
+    </rule>
+</rules>"#;
+
+        let disambiguator = XmlDisambiguator::from_xml(xml).unwrap();
+        let mut removed = make_sentence(vec![
+            ("<S>", vec!["SENT_START"]),
+            ("Stimmt", vec!["VER:3:SIN:PRÄ:SFT"]),
+            ("es", vec!["PRO:PER:NOM:SIN:ALG:3"]),
+            ("dass", vec!["KON:NEB"]),
+            ("du", vec!["PRO:PER:NOM:SIN:ALG:2"]),
+            ("das", vec!["ART:DEF:AKK:SIN:NEU"]),
+            ("Auto", vec!["SUB:AKK:SIN:NEU"]),
+            ("reparier", vec!["VER:IMP:SIN:SFT", "VER:1:SIN:PRÄ:SFT"]),
+            ("hast", vec!["VER:AUX:2:SIN:PRÄ"]),
+            ("?", vec!["SENT_END"]),
+        ]);
+        disambiguator.disambiguate(&mut removed);
+        let reparier = &removed.tokens()[7];
+        assert!(
+            !reparier.has_pos_tag("VER:1:SIN:PRÄ:SFT"),
+            "and-group skip must let the final SENT_END element match past 'hast'"
+        );
+        assert!(reparier.has_pos_tag("VER:IMP:SIN:SFT"));
+
+        let mut untouched = make_sentence(vec![
+            ("<S>", vec!["SENT_START"]),
+            ("Später", vec!["ADV"]),
+            ("gehe", vec!["VER:1:SIN:PRÄ:NON", "VER:IMP:SIN"]),
+            ("ich", vec!["PRO:PER:NOM:SIN:ALG:1"]),
+            ("essen", vec!["VER:INF"]),
+            (".", vec!["SENT_END"]),
+        ]);
+        disambiguator.disambiguate(&mut untouched);
+        assert!(
+            untouched.tokens()[2].has_pos_tag("VER:1:SIN:PRÄ:NON"),
+            "scope=next exception on 'ich' must veto the removal"
         );
     }
 

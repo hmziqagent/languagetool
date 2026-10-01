@@ -95,6 +95,7 @@ impl DisambigXmlParser {
 
         let mut rule_set = DisambigRuleSet::default();
         let mut current_rule: Option<DisambigRule> = None;
+        let mut group_antipatterns: Vec<XmlPattern> = Vec::new();
         let mut current_pattern: Option<XmlPattern> = None;
         let mut current_token: Option<XmlPatternToken> = None;
         let mut current_group_id: Option<String> = None;
@@ -533,6 +534,8 @@ impl DisambigXmlParser {
                                 }
                                 rule.filter_class = pending_filter_class.take();
                                 rule.filter_args = pending_filter_args.take();
+                                rule.antipatterns
+                                    .splice(0..0, group_antipatterns.iter().cloned());
                                 rule_set.rules.push(rule);
                             }
                             disambig_wds.clear();
@@ -540,6 +543,7 @@ impl DisambigXmlParser {
                         "rulegroup" => {
                             current_group_id = None;
                             current_group_name = None;
+                            group_antipatterns.clear();
                         }
                         "pattern" => {
                             if let Some(pattern) = current_pattern.take()
@@ -551,10 +555,12 @@ impl DisambigXmlParser {
                             pattern_marker_start = None;
                         }
                         "antipattern" => {
-                            if let Some(ap) = current_antipattern.take()
-                                && let Some(ref mut rule) = current_rule
-                            {
-                                rule.antipatterns.push(ap);
+                            if let Some(ap) = current_antipattern.take() {
+                                if let Some(ref mut rule) = current_rule {
+                                    rule.antipatterns.push(ap);
+                                } else {
+                                    group_antipatterns.push(ap);
+                                }
                             }
                             in_antipattern = false;
                         }
