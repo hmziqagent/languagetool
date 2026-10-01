@@ -1145,6 +1145,27 @@ mod tests {
         let matches = rule.match_text(text, &[s1, s2]);
         assert!(matches.is_empty(), "Only 2 repeats, need 3");
     }
+
+    #[test]
+    fn punctuation_paragraph_end2_requires_threshold_and_missing_mark() {
+        let rule = PunctuationMarkAtParagraphEnd2Rule::new();
+        let words = "one two three four five six seven eight nine ten eleven";
+        let mut s1 = AnalyzedSentence::new(words, 0, words.len());
+        s1_clone_tokens_for_test(&mut s1, words, 0);
+        let matches = rule.match_text(words, &[s1]);
+        assert_eq!(matches.len(), 1, "11 tokens without final punctuation");
+        assert_eq!(matches[0].replacements()[0].value(), "eleven.");
+    }
+
+    #[test]
+    fn punctuation_paragraph_end2_allows_terminal_punctuation() {
+        let rule = PunctuationMarkAtParagraphEnd2Rule::new();
+        let words = "one two three four five six seven eight nine ten eleven .";
+        let mut s1 = AnalyzedSentence::new(words, 0, words.len());
+        s1_clone_tokens_for_test(&mut s1, words, 0);
+        let matches = rule.match_text(words, &[s1]);
+        assert!(matches.is_empty(), "paragraph ends in a period");
+    }
 }
 
 fn is_linebreak_token(token: &AnalyzedTokenReadings) -> bool {
@@ -1169,7 +1190,7 @@ static NON_WORD_REGEX: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::
 });
 
 fn is_non_word_token(token: &str) -> bool {
-    NON_WORD_REGEX.is_match(token)
+    token.chars().count() == 1 && NON_WORD_REGEX.is_match(token)
 }
 
 pub struct LongParagraphRule {
@@ -1301,6 +1322,97 @@ impl LongParagraphRule {
             )
             .with_sentence(sentence.text().to_string()),
         );
+    }
+}
+
+pub struct PunctuationMarkAtParagraphEnd2Rule {
+    category: Category,
+    token_threshold: usize,
+}
+
+impl PunctuationMarkAtParagraphEnd2Rule {
+    pub fn new() -> Self {
+        Self {
+            category: Category::new("PUNCTUATION", "Punctuation"),
+            token_threshold: 10,
+        }
+    }
+}
+
+impl Default for PunctuationMarkAtParagraphEnd2Rule {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl TextLevelRule for PunctuationMarkAtParagraphEnd2Rule {
+    fn id(&self) -> &str {
+        "PUNCTUATION_PARAGRAPH_END2"
+    }
+
+    fn description(&self) -> &str {
+        "No punctuation mark at the end of paragraph"
+    }
+
+    fn is_default_on(&self) -> bool {
+        false
+    }
+
+    fn category(&self) -> Category {
+        self.category.clone()
+    }
+
+    fn issue_type(&self) -> IssueType {
+        IssueType::Grammar
+    }
+
+    fn match_text(&self, _text: &str, sentences: &[AnalyzedSentence]) -> Vec<RuleMatch> {
+        let mut rule_matches = Vec::new();
+        let mut token_count = 0usize;
+        for (sent_pos, sentence) in sentences.iter().enumerate() {
+            for token in sentence.tokens() {
+                if !token.is_whitespace() && !is_non_word_token(token.token().token()) {
+                    token_count += 1;
+                }
+            }
+            let last_non_space = sentence.tokens().iter().rev().find(|t| !t.is_whitespace());
+            let para_end = is_paragraph_end(sentences, sent_pos);
+            if para_end
+                && token_count > self.token_threshold
+                && let Some(last) = last_non_space
+            {
+                let token_text = last.token().token();
+                if !matches!(token_text, ":" | "." | "?" | "!" | "…")
+                    && !is_non_word_token(token_text)
+                {
+                    let start = last.token().start();
+                    let end = last.token().end();
+                    let ctx_start = start.saturating_sub(30);
+                    let ctx_end = std::cmp::min(end + 30, sentence.text().len());
+                    let context_text = sentence.text()[ctx_start..ctx_end].to_string();
+                    let rm_rule = RuleMatchRule::new(self.id(), self.description())
+                        .with_category(self.category.clone())
+                        .with_issue_type(IssueType::Grammar.as_str());
+                    rule_matches.push(
+                        RuleMatch::new(
+                            "Please add a punctuation mark at the end of paragraph.",
+                            start,
+                            end - start,
+                            rm_rule,
+                            RuleMatchContext::new(context_text, ctx_start, ctx_end - ctx_start),
+                        )
+                        .with_replacements(vec![SuggestedReplacement::new(format!(
+                            "{token_text}."
+                        ))])
+                        .with_sentence(sentence.text().to_string()),
+                    );
+                }
+            }
+            if para_end {
+                token_count = 0;
+            }
+        }
+        rule_matches
     }
 }
 

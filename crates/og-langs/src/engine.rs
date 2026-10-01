@@ -881,6 +881,7 @@ impl LanguageEngine {
                     Arc::new(crate::ru::RussianFillerWordsRule::new()),
                     Arc::new(og_rules::text_level_rules::LongSentenceRule::new(50)),
                     Arc::new(og_rules::text_level_rules::LongParagraphRule::new(220)),
+                    Arc::new(og_rules::text_level_rules::PunctuationMarkAtParagraphEnd2Rule::new()),
                     Arc::new(og_rules::text_level_rules::WhiteSpaceBeforeParagraphEndRule::new()),
                 ]);
                 engine.add_rule(Arc::new(
