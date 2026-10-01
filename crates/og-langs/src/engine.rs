@@ -830,6 +830,13 @@ impl LanguageEngine {
                     vec!["]", ")", "}", "\u{ab}", "\u{bb}"],
                 ),
             )
+        } else if short == "ar" {
+            Arc::new(
+                og_rules::text_level_rules::GenericUnpairedBracketsRule::new().with_symbols(
+                    vec!["[", "(", "{", "«", "﴾", "\"", "'"],
+                    vec!["]", ")", "}", "»", "﴿", "\"", "'"],
+                ),
+            )
         } else {
             Arc::new(og_rules::text_level_rules::GenericUnpairedBracketsRule::new())
         };
@@ -872,6 +879,12 @@ impl LanguageEngine {
                     Arc::new(crate::ar::arabic_homophones_rule()),
                     Arc::new(crate::ar::arabic_redundancy_rule()),
                     Arc::new(crate::ar::arabic_wordiness_rule()),
+                    Arc::new(crate::ar::arabic_wrong_word_in_context_rule()),
+                ]);
+                engine.add_text_level_rules([
+                    Arc::new(og_rules::text_level_rules::LongSentenceRule::new(50))
+                        as Arc<dyn TextLevelRule>,
+                    Arc::new(crate::ar::arabic_word_coherency_rule()),
                 ]);
             }
             _ => {}

@@ -19,14 +19,59 @@ struct ContextWordEntry {
 
 pub struct WrongWordInContextRule {
     entries: Vec<ContextWordEntry>,
+    id: String,
+    description: String,
+    short_message: String,
+    long_message: String,
 }
 
 impl WrongWordInContextRule {
     pub fn new() -> Self {
-        let entries = Self::load_data(include_str!(
-            "../../../../languagetool/languagetool-language-modules/en/src/main/resources/org/languagetool/rules/en/wrongWordInContext.txt"
-        ));
-        Self { entries }
+        Self::for_language(
+            "ENGLISH_WRONG_WORD_IN_CONTEXT",
+            "Commonly confused words",
+            include_str!(
+                "../../../../languagetool/languagetool-language-modules/en/src/main/resources/org/languagetool/rules/en/wrongWordInContext.txt"
+            ),
+            "Possibly confused word: Did you mean '$SUGGESTION'?",
+            "Possibly confused word: Did you mean '$SUGGESTION' (= $EXPLANATION_SUGGESTION) instead of '$WRONGWORD' (= $EXPLANATION_WRONGWORD)?",
+        )
+    }
+
+    pub fn for_language(
+        id: &str,
+        description: &str,
+        data: &str,
+        short_message: &str,
+        long_message: &str,
+    ) -> Self {
+        let entries = Self::load_data(data);
+        Self {
+            entries,
+            id: id.to_string(),
+            description: description.to_string(),
+            short_message: short_message.to_string(),
+            long_message: long_message.to_string(),
+        }
+    }
+
+    fn render_message(
+        &self,
+        suggestion: &str,
+        wrong_word: &str,
+        explanation_suggestion: &str,
+        explanation_wrong_word: &str,
+    ) -> String {
+        let template = if explanation_suggestion.is_empty() || explanation_wrong_word.is_empty() {
+            &self.short_message
+        } else {
+            &self.long_message
+        };
+        template
+            .replace("$EXPLANATION_SUGGESTION", explanation_suggestion)
+            .replace("$EXPLANATION_WRONGWORD", explanation_wrong_word)
+            .replace("$SUGGESTION", suggestion)
+            .replace("$WRONGWORD", wrong_word)
     }
 
     fn load_data(data: &str) -> Vec<ContextWordEntry> {
@@ -106,11 +151,11 @@ impl Default for WrongWordInContextRule {
 
 impl Rule for WrongWordInContextRule {
     fn id(&self) -> &str {
-        "ENGLISH_WRONG_WORD_IN_CONTEXT"
+        &self.id
     }
 
     fn description(&self) -> &str {
-        "Commonly confused words"
+        &self.description
     }
 
     fn is_default_on(&self) -> bool {
@@ -210,14 +255,8 @@ impl Rule for WrongWordInContextRule {
                 let start = tokens[found_idx].token().start();
                 let end = tokens[found_idx].token().end();
 
-                let message = if found_expl.is_empty() {
-                    format!("Possibly confused word: Did you mean '{}'?", replacement)
-                } else {
-                    format!(
-                        "Possibly confused word: Did you mean '{}' (= {}) instead of '{}' (= {})?",
-                        replacement, not_found_expl, found_word, found_expl
-                    )
-                };
+                let message =
+                    self.render_message(&replacement, found_word, not_found_expl, found_expl);
 
                 let rm_rule = RuleMatchRule::new(self.id(), self.description())
                     .with_category(self.category())
