@@ -32,6 +32,8 @@ const GERMAN_SENTENCES: &[&str] = &[
     "Der Zug fährt an jedem Werktag um halb neun Uhr morgens ab.",
 ];
 
+const BENCH_FILE: &str = "/tmp/bench_engine.txt";
+
 fn build_english() -> Arc<og_langs::engine::LanguageEngine> {
     Arc::new(og_langs::engine::LanguageEngine::english())
 }
@@ -40,12 +42,17 @@ fn build_german() -> Arc<og_langs::engine::LanguageEngine> {
     Arc::new(og_langs::engine::LanguageEngine::german())
 }
 
+struct Sample {
+    ms_per_sentence: f64,
+    matches: usize,
+}
+
 fn measure(
     engine: &og_langs::engine::LanguageEngine,
     label: &str,
     iterations: usize,
     sentences: &[&str],
-) {
+) -> Sample {
     let mut total_matches = 0usize;
     let start = Instant::now();
     for _ in 0..iterations {
@@ -55,14 +62,26 @@ fn measure(
         }
     }
     let elapsed = start.elapsed();
-    let sentences_run = SENTENCES.len() * iterations;
+    let sentences_run = sentences.len() * iterations;
+    let ms_per_sentence = elapsed.as_secs_f64() * 1000.0 / sentences_run as f64;
     eprintln!(
-        "{label}: {} sentences in {:?} => {:.3} ms/sentence ({} matches)",
-        sentences_run,
-        elapsed,
-        elapsed.as_secs_f64() * 1000.0 / sentences_run as f64,
-        total_matches
+        "{label}: {sentences_run} sentences in {elapsed:?} => {ms_per_sentence:.3} ms/sentence ({total_matches} matches)"
     );
+    Sample {
+        ms_per_sentence,
+        matches: total_matches,
+    }
+}
+
+fn persist(summary: &str) {
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(BENCH_FILE)
+    {
+        use std::io::Write;
+        let _ = writeln!(file, "{summary}");
+    }
 }
 
 #[test]
@@ -77,15 +96,31 @@ fn bench_engine_check_latency() {
     let german_build = build_start.elapsed();
 
     eprintln!(
-        "engine build: english {:?} ({} rules), german {:?} ({} rules)",
-        english_build,
+        "engine build: english {english_build:?} ({} rules), german {german_build:?} ({} rules)",
         english.rule_count(),
-        german_build,
         german.rule_count()
     );
 
-    measure(&english, "english cold", 1, SENTENCES);
-    measure(&english, "english warm", 2, SENTENCES);
-    measure(&german, "german cold", 1, GERMAN_SENTENCES);
-    measure(&german, "german warm", 1, GERMAN_SENTENCES);
+    let en_cold = measure(&english, "english cold", 1, SENTENCES);
+    let en_warm = measure(&english, "english warm", 2, SENTENCES);
+    let de_cold = measure(&german, "german cold", 1, GERMAN_SENTENCES);
+    let de_warm = measure(&german, "german warm", 1, GERMAN_SENTENCES);
+
+    let summary = format!(
+        "en_build_ms={:.1} en_rules={} de_build_ms={:.1} de_rules={} en_cold_ms={:.3} en_warm_ms={:.3} de_cold_ms={:.3} de_warm_ms={:.3} de_over_en_cold={:.2}x de_over_en_warm={:.2}x en_matches={} de_matches={}",
+        english_build.as_secs_f64() * 1000.0,
+        english.rule_count(),
+        german_build.as_secs_f64() * 1000.0,
+        german.rule_count(),
+        en_cold.ms_per_sentence,
+        en_warm.ms_per_sentence,
+        de_cold.ms_per_sentence,
+        de_warm.ms_per_sentence,
+        de_cold.ms_per_sentence / en_cold.ms_per_sentence,
+        de_warm.ms_per_sentence / en_warm.ms_per_sentence,
+        en_cold.matches + en_warm.matches,
+        de_cold.matches + de_warm.matches,
+    );
+    eprintln!("persisted: {summary}");
+    persist(&summary);
 }
