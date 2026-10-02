@@ -133,6 +133,10 @@ impl DisambigXmlParser {
         let mut current_wd: DisambigWord = DisambigWord::default();
         let mut current_disambig: Option<DisambigAction> = None;
         let mut disambig_wds: Vec<DisambigWord> = Vec::new();
+        let mut in_disambig_element = false;
+        let mut disambig_match: Option<DisambigMatch> = None;
+        let mut in_disambig_match = false;
+        let mut disambig_match_text = String::new();
         let mut in_example = false;
         let mut example_kind = String::new();
         let mut example_input: Option<String> = None;
@@ -386,6 +390,9 @@ impl DisambigXmlParser {
                                 }
                             }
                             disambig_wds.clear();
+                            in_disambig_element = true;
+                            disambig_match = None;
+                            disambig_match_text.clear();
                             current_disambig = match action.as_deref() {
                                 Some("replace") => {
                                     if let Some(postag) = postag {
@@ -415,6 +422,22 @@ impl DisambigXmlParser {
                                 }
                                 _ => None,
                             };
+                        }
+                        "match" if in_disambig_element => {
+                            in_disambig_match = true;
+                            disambig_match_text.clear();
+                            let mut m = DisambigMatch::default();
+                            for attr in e.attributes().flatten() {
+                                let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
+                                let val = crate::decode_attr_value(&attr.value);
+                                match key.as_str() {
+                                    "postag" => m.postag = Some(val),
+                                    "postag_regexp" => m.postag_regexp = val == "yes",
+                                    "postag_replace" => m.postag_replace = Some(val),
+                                    _ => {}
+                                }
+                            }
+                            disambig_match = Some(m);
                         }
                         "wd" => {
                             in_wd = true;
@@ -446,10 +469,24 @@ impl DisambigXmlParser {
                                 }
                             }
                         }
-                        "match" if current_token.is_some() || antipattern_token.is_some() => {
+                        "match"
+                            if current_token.is_some()
+                                || antipattern_token.is_some()
+                                || in_disambig_element =>
+                        {
+                            let mut m = DisambigMatch::default();
                             for attr in e.attributes().flatten() {
                                 let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
                                 let val = crate::decode_attr_value(&attr.value);
+                                if in_disambig_element {
+                                    match key.as_str() {
+                                        "postag" => m.postag = Some(val),
+                                        "postag_regexp" => m.postag_regexp = val == "yes",
+                                        "postag_replace" => m.postag_replace = Some(val),
+                                        _ => {}
+                                    }
+                                    continue;
+                                }
                                 if key == "no" {
                                     let no = val.parse::<i32>().ok();
                                     if let Some(ref mut token) = current_token {
@@ -463,6 +500,9 @@ impl DisambigXmlParser {
                                 {
                                     token.match_no_postag = Some(val);
                                 }
+                            }
+                            if in_disambig_element {
+                                disambig_match = Some(m);
                             }
                         }
                         "exception" => {
@@ -618,6 +658,8 @@ impl DisambigXmlParser {
                         .unwrap_or_else(|_| String::from_utf8_lossy(e.as_ref()).to_string());
                     if in_example {
                         example_raw.push_str(&text);
+                    } else if in_disambig_match {
+                        disambig_match_text.push_str(&text);
                     } else if in_wd {
                         current_wd_text.push_str(&text);
                     }
@@ -817,7 +859,18 @@ impl DisambigXmlParser {
                             }
                             in_and_group = false;
                         }
+                        "match" if in_disambig_match => {
+                            in_disambig_match = false;
+                            let lemma = disambig_match_text.trim().to_string();
+                            if !lemma.is_empty()
+                                && let Some(ref mut m) = disambig_match
+                            {
+                                m.lemma = Some(lemma);
+                                m.postag_regexp = true;
+                            }
+                        }
                         "disambig" => {
+                            in_disambig_element = false;
                             if let Some(
                                 DisambigAction::Replace(wds)
                                 | DisambigAction::Remove(wds)
@@ -827,6 +880,29 @@ impl DisambigXmlParser {
                                 wds.append(&mut disambig_wds);
                             }
                             disambig_wds.clear();
+                            let has_wds = match current_disambig.as_ref() {
+                                Some(
+                                    DisambigAction::Replace(w)
+                                    | DisambigAction::Remove(w)
+                                    | DisambigAction::Add(w),
+                                ) => !w.is_empty(),
+                                _ => false,
+                            };
+                            let reaches_match_element = matches!(
+                                current_disambig,
+                                Some(DisambigAction::Filter { .. })
+                                    | Some(DisambigAction::Replace(_))
+                                    | Some(DisambigAction::Remove(_))
+                                    | Some(DisambigAction::RemovePostag(_))
+                                    | Some(DisambigAction::Add(_))
+                                    | Some(DisambigAction::SetPos(_))
+                            );
+                            if let Some(m) = disambig_match.take()
+                                && reaches_match_element
+                                && !has_wds
+                            {
+                                current_disambig = Some(DisambigAction::Match(m));
+                            }
                         }
                         "wd" if in_wd => {
                             in_wd = false;

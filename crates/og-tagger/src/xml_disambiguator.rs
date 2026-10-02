@@ -51,6 +51,12 @@ enum DisambigActionRegex {
     Remove(Vec<RemoveWordMatcher>),
     RemovePostag(Option<regex::Regex>, Option<fancy_regex::Regex>),
     Filter(Option<regex::Regex>, Option<fancy_regex::Regex>),
+    Match {
+        anchored: Option<regex::Regex>,
+        anchored_fancy: Option<fancy_regex::Regex>,
+        raw: Option<regex::Regex>,
+        raw_fancy: Option<fancy_regex::Regex>,
+    },
     None,
 }
 
@@ -130,6 +136,18 @@ impl XmlDisambiguator {
                         regex::Regex::new(&anchored).ok(),
                         fancy_regex::Regex::new(&anchored).ok(),
                     )
+                }
+                DisambigAction::Match(m) => {
+                    let Some(postag) = m.postag.as_deref() else {
+                        return DisambigActionRegex::None;
+                    };
+                    let anchored = format!("^(?:{postag})$");
+                    DisambigActionRegex::Match {
+                        anchored: regex::Regex::new(&anchored).ok(),
+                        anchored_fancy: fancy_regex::Regex::new(&anchored).ok(),
+                        raw: regex::Regex::new(postag).ok(),
+                        raw_fancy: fancy_regex::Regex::new(postag).ok(),
+                    }
                 }
                 _ => DisambigActionRegex::None,
             })
@@ -797,6 +815,14 @@ impl XmlDisambiguator {
                         } else if matches!(rule.disambig, DisambigAction::Immunize) {
                             pending_immunize.extend(match_result.matched_positions.iter().copied());
                         } else if matches!(rule.disambig, DisambigAction::RemovePostag(_)) {
+                            if let Some(&first) = target_indices.first() {
+                                pending_actions.push((
+                                    first,
+                                    &rule.disambig,
+                                    &self.action_regexes[rule_idx],
+                                ));
+                            }
+                        } else if matches!(rule.disambig, DisambigAction::Match(_)) {
                             if let Some(&first) = target_indices.first() {
                                 pending_actions.push((
                                     first,
@@ -2022,6 +2048,36 @@ fn restore_sent_end_if_lost(updated: &mut AnalyzedTokenReadings, had_sent_end: b
     }
 }
 
+fn match_new_token(
+    readings: &[AnalyzedToken],
+    token: &str,
+    pos_tag: &str,
+    base: &og_core::AnalyzedToken,
+) -> Vec<AnalyzedToken> {
+    let mut lemma: Option<String> = None;
+    for r in readings {
+        let Some(tag) = r.pos_tags().first() else {
+            continue;
+        };
+        if tag == pos_tag && r.lemma().is_some() {
+            lemma = r.lemma().map(str::to_string);
+        }
+        if lemma.is_none() {
+            lemma = readings.first().and_then(|f| f.lemma()).map(str::to_string);
+        }
+    }
+    readings
+        .iter()
+        .filter(|r| r.pos_tags().first().is_some())
+        .map(|_| {
+            let mut at = AnalyzedToken::new(token, base.start(), base.end());
+            at.set_pos_tags(vec![pos_tag.to_string()]);
+            at.set_lemma(lemma.clone());
+            at
+        })
+        .collect()
+}
+
 fn non_ws_to_real(tokens: &[AnalyzedTokenReadings], token_idx: usize) -> Option<usize> {
     let mut non_ws_count = 0;
     for (i, t) in tokens.iter().enumerate() {
@@ -2379,6 +2435,117 @@ fn apply_disambiguation(
             let had_sent_end = current_had_sent_end(&filtered, &tokens[real_idx]);
             if !filtered.is_empty() {
                 let mut updated = AnalyzedTokenReadings::new(base).with_readings(filtered);
+                restore_sent_end_if_lost(&mut updated, had_sent_end);
+                updated.set_chunks(prior_chunks.clone());
+                if ignored_by_speller {
+                    updated.ignore_spelling();
+                }
+                if was_immunized {
+                    updated.immunize();
+                }
+                tokens[real_idx] = updated;
+            }
+        }
+        DisambigAction::Match(spec) => {
+            let DisambigActionRegex::Match {
+                anchored,
+                anchored_fancy,
+                raw,
+                raw_fancy,
+            } = matcher
+            else {
+                return;
+            };
+            let atr = &tokens[real_idx];
+            let base = atr.token().clone();
+            let had_sent_end = current_had_sent_end(&[], atr);
+            let probe_token = atr
+                .readings()
+                .first()
+                .map(|r| r.token().to_string())
+                .unwrap_or_else(|| base.token().to_string());
+            let working: Option<Vec<AnalyzedToken>> = spec.lemma.as_deref().map(|lemma| {
+                let survivors: Vec<AnalyzedToken> = atr
+                    .readings()
+                    .iter()
+                    .filter(|r| {
+                        let lemma_ok = r.lemma().is_none_or(|l| l == lemma);
+                        let pos_ok = match spec.postag.as_deref() {
+                            Some(probe_pos) => r.pos_tags().first().is_some_and(|t| t == probe_pos),
+                            None => true,
+                        };
+                        r.token() == probe_token && lemma_ok && pos_ok
+                    })
+                    .cloned()
+                    .collect();
+                if survivors.is_empty() {
+                    vec![AnalyzedToken::new(base.token(), base.start(), base.end())]
+                } else {
+                    survivors
+                }
+            });
+            if let Some(postag) = spec.postag.as_deref() {
+                let source: &[AnalyzedToken] = working
+                    .as_ref()
+                    .map(|w| w.as_slice())
+                    .unwrap_or_else(|| atr.readings());
+                let Some(first) = source.first() else {
+                    return;
+                };
+                let token_text = first.token().to_string();
+                let whole_match = |tag: &str| -> bool {
+                    anchored.as_ref().is_some_and(|re| re.is_match(tag))
+                        || anchored_fancy
+                            .as_ref()
+                            .is_some_and(|re| re.is_match(tag).unwrap_or(false))
+                };
+                let rewrite = |tag: &str| -> String {
+                    match spec.postag_replace.as_deref() {
+                        Some(rep) => {
+                            if let Some(re) = raw.as_ref() {
+                                re.replace_all(tag, rep).into_owned()
+                            } else if let Some(re) = raw_fancy.as_ref() {
+                                re.replace_all(tag, rep).into_owned()
+                            } else {
+                                tag.to_string()
+                            }
+                        }
+                        None => tag.to_string(),
+                    }
+                };
+                let mut kept: Vec<AnalyzedToken> = Vec::new();
+                if spec.postag_regexp {
+                    for r in source {
+                        let Some(tag) = r.pos_tags().first() else {
+                            continue;
+                        };
+                        if whole_match(tag) {
+                            let mut at = AnalyzedToken::new(&token_text, base.start(), base.end());
+                            at.set_pos_tags(vec![rewrite(tag)]);
+                            at.set_lemma(r.lemma().map(str::to_string));
+                            kept.push(at);
+                        }
+                    }
+                    if kept.is_empty() {
+                        kept = match_new_token(source, &token_text, postag, &base);
+                    }
+                } else {
+                    kept = match_new_token(source, &token_text, postag, &base);
+                }
+                if !kept.is_empty() {
+                    let mut updated = AnalyzedTokenReadings::new(base).with_readings(kept);
+                    restore_sent_end_if_lost(&mut updated, had_sent_end);
+                    updated.set_chunks(prior_chunks.clone());
+                    if ignored_by_speller {
+                        updated.ignore_spelling();
+                    }
+                    if was_immunized {
+                        updated.immunize();
+                    }
+                    tokens[real_idx] = updated;
+                }
+            } else if let Some(working) = working {
+                let mut updated = AnalyzedTokenReadings::new(base).with_readings(working);
                 restore_sent_end_if_lost(&mut updated, had_sent_end);
                 updated.set_chunks(prior_chunks.clone());
                 if ignored_by_speller {

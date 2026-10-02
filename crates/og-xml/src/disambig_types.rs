@@ -54,12 +54,21 @@ pub enum DisambigAction {
     Filter {
         postag: String,
     },
+    Match(DisambigMatch),
     #[default]
     FilterAll,
     IgnoreSpelling,
     Unify,
     Immunize,
     SetPos(String),
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct DisambigMatch {
+    pub postag: Option<String>,
+    pub postag_regexp: bool,
+    pub postag_replace: Option<String>,
+    pub lemma: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
