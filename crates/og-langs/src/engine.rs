@@ -388,6 +388,17 @@ impl LanguageEngine {
     }
 
     pub fn german() -> Self {
+        let profile = std::env::var("OG_ENGINE_PROFILE").is_ok();
+        let mut stage_ms: Vec<(&'static str, f64)> = Vec::new();
+        let mut mark = std::time::Instant::now();
+        let mut lap =
+            |profile: bool, stage_ms: &mut Vec<(&'static str, f64)>, name: &'static str| {
+                if profile {
+                    stage_ms.push((name, mark.elapsed().as_secs_f64() * 1e3));
+                }
+                mark = std::time::Instant::now();
+            };
+
         let mut engine = Self::new(Language::German);
 
         if let Some(lt_root) = find_lt_resource_dir() {
@@ -398,6 +409,7 @@ impl LanguageEngine {
                 engine.suggestion_synth = Some(Arc::new(synth));
             }
         }
+        lap(profile, &mut stage_ms, "synth");
 
         let mut shared_dict: Option<Arc<og_spell::Dictionary>> = None;
         let mut german_resource_dir: Option<PathBuf> = None;
@@ -418,6 +430,7 @@ impl LanguageEngine {
             {
                 engine.disambiguator = Some(Arc::new(disambiguator));
             }
+            lap(profile, &mut stage_ms, "tagger+disambig");
 
             if let Some(dict_arc) = shared_german_speller_dictionary(&resource_dir) {
                 shared_dict = Some(dict_arc.clone());
@@ -448,6 +461,7 @@ impl LanguageEngine {
                     dict_arc,
                 ))));
             }
+            lap(profile, &mut stage_ms, "speller_dict+support+speller_rules");
 
             let rules_dir = lt_root.join("de/src/main/resources/org/languagetool/rules/de");
             for file in ["grammar.xml", "style.xml", "grammar_custom.xml"] {
@@ -461,6 +475,7 @@ impl LanguageEngine {
                 }
             }
         }
+        lap(profile, &mut stage_ms, "xml_rule_loads");
 
         engine.add_rule(Arc::new(crate::de::SimpleReplaceRule::new()));
         engine.add_rule(Arc::new(
@@ -596,7 +611,17 @@ impl LanguageEngine {
             )));
         }
 
+        lap(profile, &mut stage_ms, "native_rules");
         engine.rebuild_checker();
+        lap(profile, &mut stage_ms, "rebuild_checker");
+        if profile {
+            let total: f64 = stage_ms.iter().map(|(_, ms)| *ms).sum();
+            let stages: Vec<String> = stage_ms
+                .iter()
+                .map(|(name, ms)| format!("{name}={ms:.0}"))
+                .collect();
+            eprintln!("german() build total_ms={total:.0} {}", stages.join(" "));
+        }
         engine
     }
 
