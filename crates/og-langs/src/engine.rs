@@ -709,6 +709,7 @@ impl LanguageEngine {
             "ar" => ("arabic", "HUNSPELL_RULE_AR"),
             "ast" => ("asturian", "MORFOLOGIK_RULE_AST"),
             "be" => ("", "MORFOLOGIK_RULE_BE_BY"),
+            "crh" => ("crimean_tatar", "MORFOLOGIK_RULE_CRH_UA"),
             "br" => ("breton", "MORFOLOGIK_RULE_BR_FR"),
             "el" => ("greek", "MORFOLOGIK_RULE_EL_GR"),
             "gl" => ("galician", "HUNSPELL_RULE"),
@@ -920,6 +921,18 @@ impl LanguageEngine {
                     Arc::new(crate::ro::romanian_replace_rule()) as Arc<dyn Rule>,
                     Arc::new(crate::ro::romanian_compound_rule()),
                 ]);
+            }
+            "crh" => {
+                engine.add_rule(
+                    Arc::new(og_rules::native_rules::UppercaseSentenceStartRule::new())
+                        as Arc<dyn Rule>,
+                );
+                engine.add_text_level_rule(Arc::new(
+                    og_rules::text_level_rules::WhiteSpaceBeforeParagraphEndRule::new(),
+                ));
+                engine.add_rule(Arc::new(
+                    og_rules::text_level_rules::WhiteSpaceAtBeginOfParagraphRule::new(),
+                ) as Arc<dyn Rule>);
             }
             "sv" => {
                 engine.add_rule(Arc::new(crate::sv::swedish_compound_rule()) as Arc<dyn Rule>);

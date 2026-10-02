@@ -159,6 +159,7 @@ impl TestRunner {
                     ("gl", "galician"),
                     ("ro", "romanian"),
                     ("sv", "swedish"),
+                    ("crh", "crimean_tatar"),
                 ];
                 if let Some((_, stem)) = generic_stems.iter().find(|(c, _)| *c == code)
                     && resource_dir.exists()
@@ -2110,6 +2111,12 @@ fn test_real_catalan_grammar_examples() {
 #[ignore]
 fn test_real_belarusian_grammar_examples() {
     run_generic_example_suite("be");
+}
+
+#[test]
+#[ignore]
+fn test_real_crimean_tatar_grammar_examples() {
+    run_generic_example_suite("crh");
 }
 
 #[test]
