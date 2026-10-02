@@ -531,12 +531,27 @@ impl Disambiguator for XmlDisambiguator {
                                     continue;
                                 }
                             } else {
+                                let (slot_start, slot_end) = slot_range_for_elements(
+                                    &match_result.element_counts,
+                                    start,
+                                    end,
+                                );
+                                let clipped_end =
+                                    slot_end.min(match_result.matched_positions.len());
+                                let clipped_start = slot_start.min(clipped_end);
                                 let indexed_unify: Vec<(usize, usize)> = match_result
-                                    .matched_positions
+                                    .matched_positions[clipped_start..clipped_end]
                                     .iter()
                                     .enumerate()
-                                    .filter(|(i, _)| *i >= start && *i < end)
-                                    .map(|(i, &p)| (p, i))
+                                    .map(|(slot, &p)| {
+                                        (
+                                            p,
+                                            element_for_slot(
+                                                &match_result.element_counts,
+                                                slot + clipped_start,
+                                            ),
+                                        )
+                                    })
                                     .collect();
                                 if indexed_unify.len() != end - start && !spec.negate {
                                     continue;
@@ -670,23 +685,26 @@ impl Disambiguator for XmlDisambiguator {
                         } else {
                             (rule.pattern.marker_start, rule.pattern.marker_end)
                         };
-                        let indexed_targets: Vec<(usize, usize)> =
-                            if let (Some(ms), Some(me)) = effective_marker {
-                                match_result
-                                    .matched_positions
-                                    .iter()
-                                    .enumerate()
-                                    .filter(|(i, _)| *i >= ms && *i < me)
-                                    .map(|(i, &pos)| (pos, i))
-                                    .collect()
-                            } else {
-                                match_result
-                                    .matched_positions
-                                    .iter()
-                                    .enumerate()
-                                    .map(|(i, &pos)| (pos, i))
-                                    .collect()
-                            };
+                        let counts = &match_result.element_counts;
+                        let indexed_targets: Vec<(usize, usize)> = if let (Some(ms), Some(me)) =
+                            effective_marker
+                        {
+                            let (slot_start, slot_end) = slot_range_for_elements(counts, ms, me);
+                            let end = slot_end.min(match_result.matched_positions.len());
+                            let start = slot_start.min(end);
+                            match_result.matched_positions[start..end]
+                                .iter()
+                                .enumerate()
+                                .map(|(slot, &pos)| (pos, element_for_slot(counts, slot + start)))
+                                .collect()
+                        } else {
+                            match_result
+                                .matched_positions
+                                .iter()
+                                .enumerate()
+                                .map(|(slot, &pos)| (pos, element_for_slot(counts, slot)))
+                                .collect()
+                        };
                         let target_indices: Vec<usize> = if has_marker {
                             indexed_targets.iter().map(|&(pos, _)| pos).collect()
                         } else {
@@ -799,6 +817,26 @@ impl Disambiguator for XmlDisambiguator {
 
 struct MatchResult {
     matched_positions: Vec<usize>,
+    element_counts: Vec<usize>,
+}
+
+fn element_for_slot(counts: &[usize], slot: usize) -> usize {
+    let mut acc = 0usize;
+    for (i, &c) in counts.iter().enumerate() {
+        if c == 0 {
+            continue;
+        }
+        if acc == slot {
+            return i;
+        }
+        acc += 1;
+    }
+    counts.len().saturating_sub(1)
+}
+
+fn slot_range_for_elements(counts: &[usize], start_elem: usize, end_elem: usize) -> (usize, usize) {
+    let sum_to = |n: usize| -> usize { counts.iter().take(n).sum() };
+    (sum_to(start_elem), sum_to(end_elem))
 }
 
 fn match_pattern(
@@ -868,6 +906,7 @@ fn match_tokens_recursive(
     if pattern_idx >= pattern_tokens.len() {
         return Some(MatchResult {
             matched_positions: Vec::new(),
+            element_counts: Vec::new(),
         });
     }
     if token_idx >= tokens.len() {
@@ -877,6 +916,7 @@ fn match_tokens_recursive(
         if all_optional {
             return Some(MatchResult {
                 matched_positions: Vec::new(),
+                element_counts: vec![0; pattern_tokens.len() - pattern_idx],
             });
         }
         return None;
@@ -917,6 +957,7 @@ fn match_tokens_recursive(
                         false,
                     ) {
                         result.matched_positions.insert(0, token_idx);
+                        result.element_counts.insert(0, 1);
                         return Some(result);
                     }
                 }
@@ -940,6 +981,7 @@ fn match_tokens_recursive(
                     false,
                 ) {
                     result.matched_positions.insert(0, token_idx);
+                    result.element_counts.insert(0, 1);
                     return Some(result);
                 }
             }
@@ -947,13 +989,15 @@ fn match_tokens_recursive(
     }
 
     if is_optional {
-        return match_tokens_recursive(
+        let mut result = match_tokens_recursive(
             pattern_tokens,
             tokens,
             token_idx,
             pattern_idx + 1,
             first_text_verified && pattern_idx == 0,
-        );
+        )?;
+        result.element_counts.insert(0, 0);
+        return Some(result);
     }
 
     None
@@ -1118,10 +1162,29 @@ fn match_elements(
     start_idx: usize,
 ) -> Option<MatchResult> {
     let mut positions = Vec::new();
+    let mut counts = Vec::new();
     let mut token_idx = start_idx;
 
     for (elem_idx, elem) in elements.iter().enumerate() {
         if token_idx >= tokens.len() {
+            let all_optional = elements[elem_idx..].iter().all(|e| match e {
+                CompiledPatternElement::Token(pt) => pt.min.unwrap_or(1) == 0,
+                CompiledPatternElement::OrGroup(alts) => {
+                    alts.first().is_some_and(|a| a.min.unwrap_or(1) == 0)
+                }
+                CompiledPatternElement::AndGroup(cs) => {
+                    cs.first().is_some_and(|c| c.min.unwrap_or(1) == 0)
+                }
+            });
+            if all_optional {
+                for _ in elem_idx..elements.len() {
+                    counts.push(0);
+                }
+                return Some(MatchResult {
+                    matched_positions: positions,
+                    element_counts: counts,
+                });
+            }
             return None;
         }
 
@@ -1149,7 +1212,7 @@ fn match_elements(
         };
         if !matched {
             if min.unwrap_or(1) == 0 {
-                positions.push(token_idx);
+                counts.push(0);
                 continue;
             }
             return None;
@@ -1162,6 +1225,7 @@ fn match_elements(
             .collect();
         if rep.skip == 0 && scope_next.is_empty() {
             positions.push(token_idx);
+            counts.push(1);
             token_idx += 1;
             continue;
         }
@@ -1187,9 +1251,12 @@ fn match_elements(
             if let Some(rest) = match_elements(&elements[elem_idx + 1..], tokens, next) {
                 let mut result = MatchResult {
                     matched_positions: positions.clone(),
+                    element_counts: counts.clone(),
                 };
                 result.matched_positions.push(token_idx);
+                result.element_counts.push(1);
                 result.matched_positions.extend(rest.matched_positions);
+                result.element_counts.extend(rest.element_counts);
                 return Some(result);
             }
         }
@@ -1198,6 +1265,7 @@ fn match_elements(
 
     Some(MatchResult {
         matched_positions: positions,
+        element_counts: counts,
     })
 }
 
@@ -1369,10 +1437,12 @@ impl XmlDisambiguator {
             let Ok(one_based) = pos_str.trim().parse::<usize>() else {
                 return false;
             };
-            let Some(&token_idx) = match_result
-                .matched_positions
-                .get(one_based.saturating_sub(1))
-            else {
+            let slot = match_result
+                .element_counts
+                .iter()
+                .take(one_based.saturating_sub(1))
+                .sum::<usize>();
+            let Some(&token_idx) = match_result.matched_positions.get(slot) else {
                 return false;
             };
             let Some(token) = tokens.get(token_idx) else {
