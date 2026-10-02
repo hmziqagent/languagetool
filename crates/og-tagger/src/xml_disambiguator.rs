@@ -422,16 +422,12 @@ impl Disambiguator for XmlDisambiguator {
                             og_xml::unifier::eq_ignore_case(t.token().token(), &f.text)
                         };
                         let ok = if f.inflected {
-                            surface
-                                || t.readings().iter().any(|r| {
-                                    r.lemma().is_some_and(|lemma| {
-                                        if f.case_sensitive {
-                                            lemma == f.text
-                                        } else {
-                                            og_xml::unifier::eq_ignore_case(lemma, &f.text)
-                                        }
-                                    })
-                                })
+                            inflected_text_matches(
+                                t.readings(),
+                                t.token().token(),
+                                &f.text,
+                                f.case_sensitive,
+                            )
                         } else {
                             surface
                         };
@@ -441,15 +437,13 @@ impl Disambiguator for XmlDisambiguator {
                     }
                     if let Some(f) = self.first_regex[rule_idx].as_ref() {
                         let tok = tokens[start_idx];
-                        let surface = f.re.is_match(tok.token().token());
                         let matched = if f.inflected {
-                            surface
-                                || tok
-                                    .readings()
-                                    .iter()
-                                    .any(|r| r.lemma().is_some_and(|lemma| f.re.is_match(lemma)))
+                            tok.readings()
+                                .iter()
+                                .any(|r| f.re.is_match(r.lemma().unwrap_or(tok.token().token())))
+                                || tok.readings().is_empty() && f.re.is_match(tok.token().token())
                         } else {
-                            surface
+                            f.re.is_match(tok.token().token())
                         };
                         if !matched {
                             continue;
@@ -1216,6 +1210,29 @@ fn space_before_at(tokens: &[&AnalyzedTokenReadings], idx: usize) -> bool {
     }
 }
 
+fn inflected_text_matches(
+    readings: &[og_core::AnalyzedToken],
+    surface: &str,
+    pattern_text: &str,
+    case_sensitive: bool,
+) -> bool {
+    if readings.is_empty() {
+        return if case_sensitive {
+            surface == pattern_text
+        } else {
+            og_xml::unifier::eq_ignore_case(surface, pattern_text)
+        };
+    }
+    readings.iter().any(|r| {
+        let test = r.lemma().unwrap_or(surface);
+        if case_sensitive {
+            test == pattern_text
+        } else {
+            og_xml::unifier::eq_ignore_case(test, pattern_text)
+        }
+    })
+}
+
 fn token_matches(
     pt: &CompiledPatternToken,
     tokens: &[&AnalyzedTokenReadings],
@@ -1246,18 +1263,8 @@ fn token_matches(
         };
 
         if pt.inflected {
-            let lemma_matches = surface_matches
-                || token.readings().iter().any(|r| {
-                    if let Some(lemma) = r.lemma() {
-                        if pt.case_sensitive {
-                            lemma == pattern_text
-                        } else {
-                            og_xml::unifier::eq_ignore_case(lemma, pattern_text)
-                        }
-                    } else {
-                        false
-                    }
-                });
+            let lemma_matches =
+                inflected_text_matches(token.readings(), text, pattern_text, pt.case_sensitive);
             if pt.negate {
                 !lemma_matches
             } else {
@@ -1276,15 +1283,14 @@ fn token_matches(
         } else {
             re
         };
-        let surface_match = re_to_use.is_match(text);
         let matched = if pt.inflected {
-            surface_match
-                || token
-                    .readings()
-                    .iter()
-                    .any(|r| r.lemma().is_some_and(|lemma| re_to_use.is_match(lemma)))
+            token
+                .readings()
+                .iter()
+                .any(|r| re_to_use.is_match(r.lemma().unwrap_or(text)))
+                || token.readings().is_empty() && re_to_use.is_match(text)
         } else {
-            surface_match
+            re_to_use.is_match(text)
         };
         if pt.negate { !matched } else { matched }
     } else if pt.is_regexp {
