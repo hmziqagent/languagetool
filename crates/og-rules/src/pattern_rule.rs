@@ -931,6 +931,12 @@ impl PatternRuleEngine {
         }
 
         if token_idx >= tokens.len() {
+            crate::pattern_trace::record(
+                element_idx,
+                usize::MAX,
+                "<EOS>",
+                "ran-out-of-tokens".to_string(),
+            );
             return None;
         }
 
@@ -1003,6 +1009,18 @@ impl PatternRuleEngine {
                         return None;
                     }
                 }
+                if crate::pattern_trace::enabled()
+                    && let Some(first) = alternatives.first()
+                {
+                    self.trace_element_failure(
+                        first,
+                        tokens[token_idx],
+                        token_idx,
+                        tokens,
+                        matched,
+                        element_idx,
+                    );
+                }
                 None
             }
             og_xml::compiler::CompiledPatternElement::AndGroup(constraints) => {
@@ -1062,6 +1080,25 @@ impl PatternRuleEngine {
                         return None;
                     }
                 }
+                if crate::pattern_trace::enabled()
+                    && !all_match
+                    && let Some(failed) = constraints.iter().find(|c| {
+                        let br_failed = matches!(
+                            self.backreference_matches(c, tokens[token_idx], matched, tokens),
+                            Some(false)
+                        );
+                        br_failed || !self.token_matches(c, tokens[token_idx], token_idx, tokens)
+                    })
+                {
+                    self.trace_element_failure(
+                        failed,
+                        tokens[token_idx],
+                        token_idx,
+                        tokens,
+                        matched,
+                        element_idx,
+                    );
+                }
                 None
             }
         }
@@ -1109,6 +1146,16 @@ impl PatternRuleEngine {
 
         if min.is_some() || max.is_some() {
             if !token_ok(token_idx, matched) {
+                if crate::pattern_trace::enabled() {
+                    self.trace_element_failure(
+                        pattern_token,
+                        tokens[token_idx],
+                        token_idx,
+                        tokens,
+                        matched,
+                        element_idx,
+                    );
+                }
                 return None;
             }
             let min_count = min.unwrap_or(1) as usize;
@@ -1128,6 +1175,12 @@ impl PatternRuleEngine {
             }
             let count_start = if min_count == 0 { 1 } else { min_count };
             if matched_count < count_start {
+                crate::pattern_trace::record(
+                    element_idx,
+                    token_idx,
+                    tokens[token_idx].token().token(),
+                    "min-count-not-reached".to_string(),
+                );
                 return None;
             }
             let count = matched_count;
@@ -1233,6 +1286,16 @@ impl PatternRuleEngine {
                 return None;
             }
         }
+        if crate::pattern_trace::enabled() {
+            self.trace_element_failure(
+                pattern_token,
+                tokens[token_idx],
+                token_idx,
+                tokens,
+                matched,
+                element_idx,
+            );
+        }
         None
     }
 
@@ -1249,6 +1312,12 @@ impl PatternRuleEngine {
         }
 
         if token_idx >= tokens.len() {
+            crate::pattern_trace::record(
+                pattern_idx,
+                usize::MAX,
+                "<EOS>",
+                "ran-out-of-tokens".to_string(),
+            );
             return None;
         }
 
@@ -1276,6 +1345,17 @@ impl PatternRuleEngine {
         } else {
             self.token_matches(pattern_token, text_token, token_idx, tokens)
         };
+
+        if !matches && crate::pattern_trace::enabled() {
+            self.trace_element_failure(
+                pattern_token,
+                text_token,
+                token_idx,
+                tokens,
+                matched,
+                pattern_idx,
+            );
+        }
 
         if matches {
             let token_start = text_token.token().start();
@@ -1320,6 +1400,12 @@ impl PatternRuleEngine {
             }
 
             if repeat_count < min_count {
+                crate::pattern_trace::record(
+                    pattern_idx,
+                    token_idx,
+                    text_token.token().token(),
+                    "min-count-not-reached".to_string(),
+                );
                 return None;
             }
 
@@ -1647,7 +1733,19 @@ impl PatternRuleEngine {
         {
             return true;
         }
-        self.pattern_token_matches_at(pattern_token, token, token_idx, tokens, matched)
+        let commits =
+            self.pattern_token_matches_at(pattern_token, token, token_idx, tokens, matched);
+        if !commits && crate::pattern_trace::enabled() {
+            self.trace_element_failure(
+                pattern_token,
+                token,
+                token_idx,
+                tokens,
+                matched,
+                pattern_idx,
+            );
+        }
+        commits
     }
 
     fn next_element_commits_at(
@@ -1670,7 +1768,14 @@ impl PatternRuleEngine {
         {
             return true;
         }
-        self.element_matches_at(element, token, token_idx, tokens, matched)
+        let commits = self.element_matches_at(element, token, token_idx, tokens, matched);
+        if !commits
+            && crate::pattern_trace::enabled()
+            && let og_xml::compiler::CompiledPatternElement::Token(t) = element
+        {
+            self.trace_element_failure(t, token, token_idx, tokens, matched, element_idx);
+        }
+        commits
     }
 
     fn element_matches_at(
@@ -1735,6 +1840,85 @@ impl PatternRuleEngine {
             }
         }
         false
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn trace_element_failure(
+        &self,
+        pattern: &og_xml::compiler::CompiledPatternToken,
+        token: &AnalyzedTokenReadings,
+        token_idx: usize,
+        tokens: &[&AnalyzedTokenReadings],
+        matched: &[MatchedTraceEntry],
+        pattern_idx: usize,
+    ) {
+        let surface = token.token().token();
+        let cause = if token.is_immunized() {
+            "immunized".to_string()
+        } else if pattern.match_no.is_some()
+            && self
+                .backreference_matches(pattern, token, matched, tokens)
+                .is_some_and(|br| !br)
+        {
+            format!("backref-no={:?} mismatch", pattern.match_no)
+        } else {
+            let has_string = pattern.text.is_some()
+                || pattern.compiled_regexp.is_some()
+                || pattern.compiled_regexp_fancy.is_some();
+            if has_string && !element_surface_text_matches(pattern, token) {
+                format!("surface!={:?}", requirement_text(pattern))
+            } else if !element_matches_readings(pattern, token) {
+                if pattern.negate && pattern.postag.is_none() {
+                    format!("negated token matched surface {surface:?}")
+                } else {
+                    format!(
+                        "postag={}{:?} got=[{}]",
+                        if pattern.negate_pos { "!" } else { "" },
+                        pattern.postag.as_deref().unwrap_or(""),
+                        token
+                            .readings()
+                            .iter()
+                            .take(4)
+                            .map(|r| {
+                                format!("{}:{}", r.lemma().unwrap_or(""), r.pos_tags().join("|"))
+                            })
+                            .collect::<Vec<_>>()
+                            .join("; ")
+                    )
+                }
+            } else if let Some(ref chunk) = pattern.chunk {
+                format!("chunk!={chunk:?}")
+            } else if pattern.chunk_re.is_some() {
+                "chunk_re mismatch".to_string()
+            } else if let Some(ref sb) = pattern.space_before {
+                format!("space_before={sb}")
+            } else if let Some(vetoed) = pattern.exceptions.iter().find_map(|exc| {
+                let exc_matches = match exc.scope.as_deref() {
+                    Some("next") if pattern.skip == 0 => tokens
+                        .get(token_idx + 1)
+                        .is_some_and(|next| self.exception_matches(exc, next, true)),
+                    Some("previous") => token_idx
+                        .checked_sub(1)
+                        .and_then(|prev| tokens.get(prev))
+                        .is_some_and(|prev| self.exception_matches(exc, prev, true)),
+                    _ => self.exception_matches(exc, token, has_space_before(tokens, token_idx)),
+                };
+                exc_matches.then(|| {
+                    format!(
+                        "exception scope={:?} text={:?} postag={:?} negate={}",
+                        exc.scope,
+                        exc.text.as_deref().unwrap_or(""),
+                        exc.postag.as_deref().unwrap_or(""),
+                        exc.negate
+                    )
+                })
+            }) {
+                vetoed
+            } else {
+                "unclassified".to_string()
+            }
+        };
+        crate::pattern_trace::record(pattern_idx, token_idx, surface, cause);
     }
 
     fn token_matches(
@@ -1914,6 +2098,18 @@ fn reading_pos_ok(
             ) != pattern.negate_pos
         }
         None => true,
+    }
+}
+
+fn requirement_text(pattern: &og_xml::compiler::CompiledPatternToken) -> String {
+    if let Some(ref t) = pattern.text {
+        t.clone()
+    } else if let Some(ref re) = pattern.compiled_regexp {
+        re.as_str().to_string()
+    } else if let Some(ref re) = pattern.compiled_regexp_fancy {
+        re.as_str().to_string()
+    } else {
+        String::new()
     }
 }
 
