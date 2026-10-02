@@ -2,7 +2,7 @@ use og_core::{AnalyzedToken, AnalyzedTokenReadings, RuleMatch, SuggestedReplacem
 use og_tagger::morfologik::MorfologikDictionary;
 use regex::Regex;
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
 const MAX_LEVELS: usize = 4;
@@ -344,6 +344,21 @@ const GERMAN_REMOVE: &[&str] = &[
     "wüßtest",
 ];
 
+fn shared_decoded_dictionary(path: &Path) -> Option<Arc<MorfologikDictionary>> {
+    static CACHE: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<PathBuf, std::sync::Weak<MorfologikDictionary>>>,
+    > = std::sync::OnceLock::new();
+    let cache = CACHE.get_or_init(Default::default);
+    let mut guard = cache.lock().unwrap();
+    if let Some(dict) = guard.get(path).and_then(std::sync::Weak::upgrade) {
+        return Some(dict);
+    }
+    let data = std::fs::read_to_string(path).ok()?;
+    let dictionary = Arc::new(MorfologikDictionary::from_decoded_text(&data));
+    guard.insert(path.to_path_buf(), std::sync::Arc::downgrade(&dictionary));
+    Some(dictionary)
+}
+
 impl LangSynthesizer {
     pub fn for_language(resource_dir: &Path, code: &str) -> Option<Self> {
         let (dictionary, lang): (Option<Arc<MorfologikDictionary>>, SynthLang) = match code {
@@ -364,9 +379,7 @@ impl LangSynthesizer {
                 SynthLang::Portuguese,
             ),
             "en" => {
-                let dict = std::fs::read_to_string(resource_dir.join("dict_decoded.txt"))
-                    .ok()
-                    .map(|data| Arc::new(MorfologikDictionary::from_decoded_text(&data)));
+                let dict = shared_decoded_dictionary(&resource_dir.join("dict_decoded.txt"));
                 (dict, SynthLang::English)
             }
             _ => return None,
