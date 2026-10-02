@@ -34,6 +34,7 @@ enum TestWordTokenizer {
     German,
     French(Arc<og_tokenizer::FrenchWordTokenizer>),
     Arabic,
+    Dutch,
 }
 
 impl WordTokenizer for TestWordTokenizer {
@@ -63,6 +64,9 @@ impl WordTokenizer for TestWordTokenizer {
             TestWordTokenizer::French(fr) => fr.tokenize(text),
             TestWordTokenizer::Arabic => {
                 og_tokenizer::DefaultWordTokenizer::new_splitting_hyphen().tokenize(text)
+            }
+            TestWordTokenizer::Dutch => {
+                og_tokenizer::DefaultWordTokenizer::new_dutch().tokenize(text)
             }
         };
         tokens
@@ -349,6 +353,7 @@ impl TestRunner {
             Some(fr) => TestWordTokenizer::French(fr.clone()),
             None if self.language == "de" => TestWordTokenizer::German,
             None if self.language == "ar" => TestWordTokenizer::Arabic,
+            None if self.language == "nl" => TestWordTokenizer::Dutch,
             None => TestWordTokenizer::Default(self.language == "en"),
         };
         let mut sentence = AnalyzedSentence::new(text, 0, text.len());

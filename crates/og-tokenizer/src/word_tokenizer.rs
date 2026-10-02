@@ -12,6 +12,7 @@ pub struct DefaultWordTokenizer {
     english_contractions: bool,
     english_word_chars: bool,
     hyphens: HyphenMode,
+    dutch: bool,
     en_word_tagged: Option<Arc<dyn Fn(&str) -> bool + Send + Sync>>,
 }
 
@@ -21,6 +22,7 @@ impl DefaultWordTokenizer {
             english_contractions: true,
             english_word_chars: true,
             hyphens: HyphenMode::InnerOnly,
+            dutch: false,
             en_word_tagged: None,
         }
     }
@@ -30,6 +32,7 @@ impl DefaultWordTokenizer {
             english_contractions: true,
             english_word_chars: true,
             hyphens: HyphenMode::InnerOnly,
+            dutch: false,
             en_word_tagged: Some(en_word_tagged),
         }
     }
@@ -39,6 +42,7 @@ impl DefaultWordTokenizer {
             english_contractions: false,
             english_word_chars: false,
             hyphens: HyphenMode::InRuns,
+            dutch: false,
             en_word_tagged: None,
         }
     }
@@ -48,11 +52,25 @@ impl DefaultWordTokenizer {
             english_contractions: false,
             english_word_chars: false,
             hyphens: HyphenMode::Delimiter,
+            dutch: false,
+            en_word_tagged: None,
+        }
+    }
+
+    pub fn new_dutch() -> Self {
+        Self {
+            english_contractions: false,
+            english_word_chars: false,
+            hyphens: HyphenMode::InRuns,
+            dutch: true,
             en_word_tagged: None,
         }
     }
 
     fn is_word_char(&self, c: char) -> bool {
+        if self.dutch {
+            return c.is_alphanumeric() || c == '-' || is_dutch_quote(c);
+        }
         c.is_alphanumeric()
             || c == '_'
             || c == '\''
@@ -143,6 +161,15 @@ impl DefaultWordTokenizer {
         for token in tokens {
             let text = token.text();
             let start = token.start();
+
+            if self.dutch {
+                for (from, to) in dutch_quote_pieces(text) {
+                    if to > from {
+                        result.push(Token::new(&text[from..to], start + from, start + to));
+                    }
+                }
+                continue;
+            }
 
             if !text.contains('\'') && !text.contains('\u{2019}') {
                 result.push(token);
@@ -338,6 +365,59 @@ fn apostrophe_len(bytes: &[u8]) -> Option<usize> {
         Some(0xE2) if bytes.starts_with("\u{2019}".as_bytes()) => Some(3),
         _ => None,
     }
+}
+
+fn is_dutch_quote(c: char) -> bool {
+    matches!(c, '\'' | '`' | '\u{2019}' | '\u{2018}' | '\u{00B4}')
+}
+
+fn dutch_quote_pieces(text: &str) -> Vec<(usize, usize)> {
+    let char_indices: Vec<(usize, char)> = text.char_indices().collect();
+    if char_indices.len() <= 1 {
+        return vec![(0, text.len())];
+    }
+    let n = char_indices.len();
+    let starts_with_quote = is_dutch_quote(char_indices[0].1);
+    let ends_with_quote = is_dutch_quote(char_indices[n - 1].1);
+    let piece = |from: usize, to: usize| {
+        (
+            char_indices[from].0,
+            char_indices[to].0 + char_indices[to].1.len_utf8(),
+        )
+    };
+
+    if starts_with_quote && ends_with_quote && n > 2 {
+        return vec![piece(0, 0), piece(1, n - 2), piece(n - 1, n - 1)];
+    }
+    if ends_with_quote {
+        let mut stem_end = n;
+        while stem_end > 0 && is_dutch_quote(char_indices[stem_end - 1].1) {
+            stem_end -= 1;
+        }
+        let mut pieces = Vec::with_capacity(n - stem_end + 1);
+        if stem_end > 0 {
+            pieces.push(piece(0, stem_end - 1));
+        }
+        for i in stem_end..n {
+            pieces.push(piece(i, i));
+        }
+        return pieces;
+    }
+    if starts_with_quote {
+        let mut quote_end = 0usize;
+        while quote_end < n && is_dutch_quote(char_indices[quote_end].1) {
+            quote_end += 1;
+        }
+        let mut pieces = Vec::with_capacity(quote_end + 1);
+        for i in 0..quote_end {
+            pieces.push(piece(i, i));
+        }
+        if quote_end < n {
+            pieces.push(piece(quote_end, n - 1));
+        }
+        return pieces;
+    }
+    vec![(0, text.len())]
 }
 
 fn starts_with_ascii_ci(hay: &str, needle: &str) -> bool {
@@ -1354,6 +1434,33 @@ mod tests {
         assert_eq!(tokens[1].text(), "hello");
         assert_eq!(tokens[2].text(), "'");
         assert_offsets_valid(&tokens);
+    }
+
+    #[test]
+    fn test_dutch_tokenizer_matches_java() {
+        let tz = DefaultWordTokenizer::new_dutch();
+        assert_eq!(
+            token_texts(&tz, "De oma's fiets."),
+            vec!["De", " ", "oma's", " ", "fiets", "."]
+        );
+        assert_eq!(
+            token_texts(&tz, "'s ochtends"),
+            vec!["'", "s", " ", "ochtends"]
+        );
+        assert_eq!(token_texts(&tz, "oma's'"), vec!["oma's", "'"]);
+        assert_eq!(token_texts(&tz, "zo\u{2019}n"), vec!["zo\u{2019}n"]);
+        assert_eq!(
+            token_texts(&tz, "e-mail adres"),
+            vec!["e-mail", " ", "adres"]
+        );
+        assert_eq!(
+            token_texts(&tz, "REMOTE_USER en naam@bedrijf.nl"),
+            vec!["REMOTE", "_", "USER", " ", "en", " ", "naam@bedrijf.nl"]
+        );
+        assert_eq!(token_texts(&tz, "'oma's'"), vec!["'", "oma's", "'"]);
+        let tokens = tz.tokenize("De oma's fiets.");
+        assert_offsets_valid(&tokens);
+        assert_reconstruction(&tokens, "De oma's fiets.");
     }
 
     #[test]
