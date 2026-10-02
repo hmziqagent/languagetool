@@ -1371,6 +1371,7 @@ enum WordTokenizerBridge {
     French(Arc<og_tokenizer::FrenchWordTokenizer>),
     Arabic,
     Dutch,
+    CrimeanTatar,
 }
 
 impl WordTokenizerBridge {
@@ -1386,6 +1387,9 @@ impl WordTokenizerBridge {
         }
         if code == "nl" {
             return Self::Dutch;
+        }
+        if code == "crh" {
+            return Self::CrimeanTatar;
         }
         if code != "fr" {
             return Self::Default(false);
@@ -1437,6 +1441,10 @@ impl WordTokenizer for WordTokenizerBridge {
                 og_tokenizer::DefaultWordTokenizer::new_splitting_hyphen().tokenize(text)
             }
             Self::Dutch => og_tokenizer::DefaultWordTokenizer::new_dutch().tokenize(text),
+            Self::CrimeanTatar => {
+                let tz = og_tokenizer::DefaultWordTokenizer::new_generic();
+                tz.split_trailing_hyphens(tz.tokenize(text))
+            }
         };
         tokens
             .into_iter()

@@ -292,6 +292,22 @@ impl DefaultWordTokenizer {
         }
     }
 
+    pub fn split_trailing_hyphens(&self, tokens: Vec<Token>) -> Vec<Token> {
+        let mut result = Vec::with_capacity(tokens.len());
+        for token in tokens {
+            let text = token.text();
+            if text.len() > 1 && text.ends_with('-') {
+                let start = token.start();
+                let hyphen_at = start + text.len() - 1;
+                result.push(Token::new(&text[..text.len() - 1], start, hyphen_at));
+                result.push(Token::new("-", hyphen_at, hyphen_at + 1));
+            } else {
+                result.push(token);
+            }
+        }
+        result
+    }
+
     pub fn split_underscores(&self, tokens: Vec<Token>) -> Vec<Token> {
         let mut result = Vec::with_capacity(tokens.len());
         for token in tokens {
@@ -1649,6 +1665,24 @@ mod tests {
             vec!["25", "-", "03", "-", "2022"]
         );
         assert_eq!(token_texts(&tz, "قال،أحمد؟"), vec!["قال", "،", "أحمد", "؟"]);
+    }
+
+    #[test]
+    fn test_crimean_tatar_trailing_hyphen_split() {
+        let tz = DefaultWordTokenizer::new_generic();
+        let split = |text: &str| -> Vec<String> {
+            tz.split_trailing_hyphens(tz.tokenize(text))
+                .iter()
+                .map(|t| t.text().to_string())
+                .collect()
+        };
+        assert_eq!(split("abc-"), vec!["abc", "-"]);
+        assert_eq!(split("-abc"), vec!["-abc"]);
+        assert_eq!(split("abc-def"), vec!["abc-def"]);
+        assert_eq!(split("a-b-"), vec!["a-b", "-"]);
+        assert_eq!(split("--"), vec!["-", "-"]);
+        assert_eq!(split(" - "), vec![" ", "-", " "]);
+        assert_eq!(split("ab- def"), vec!["ab", "-", " ", "def"]);
     }
 
     #[test]
