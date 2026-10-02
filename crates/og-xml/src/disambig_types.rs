@@ -10,6 +10,15 @@ pub struct DisambigRule {
     pub unify: Option<UnifySpec>,
     pub filter_class: Option<String>,
     pub filter_args: Option<String>,
+    pub untouched_examples: Vec<String>,
+    pub examples: Vec<DisambigExample>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct DisambigExample {
+    pub text: String,
+    pub input_form: Option<String>,
+    pub output_form: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -76,4 +85,6 @@ pub struct CompiledDisambigRule {
     pub unify: Option<UnifySpec>,
     pub filter_class: Option<String>,
     pub filter_args: Option<String>,
+    pub untouched_examples: Vec<String>,
+    pub examples: Vec<DisambigExample>,
 }

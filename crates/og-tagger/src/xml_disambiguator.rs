@@ -287,6 +287,7 @@ fn build_first_token_gate(rule: &CompiledDisambigRule) -> FirstTokenGate {
         && first.compiled_postag_regexp.is_none()
         && first.text.is_none()
         && first.compiled_regexp.is_none()
+        && postag != "UNKNOWN"
     {
         return FirstTokenGate::PostagPlain {
             tag: postag.clone(),
@@ -298,9 +299,45 @@ fn build_first_token_gate(rule: &CompiledDisambigRule) -> FirstTokenGate {
 
 impl Disambiguator for XmlDisambiguator {
     fn disambiguate(&self, sentence: &mut AnalyzedSentence) {
-        for (rule_idx, rule) in self.rules.iter().enumerate() {
+        self.apply_rules_through(sentence, self.rules.len());
+    }
+}
+
+impl XmlDisambiguator {
+    pub fn rule_id(&self, rule_idx: usize) -> Option<&str> {
+        self.rules.get(rule_idx).and_then(|r| r.id.as_deref())
+    }
+
+    pub fn rule_examples(
+        &self,
+        rule_idx: usize,
+    ) -> (&[String], &[og_xml::disambig_types::DisambigExample]) {
+        match self.rules.get(rule_idx) {
+            Some(rule) => (&rule.untouched_examples, &rule.examples),
+            None => (&[], &[]),
+        }
+    }
+
+    pub fn apply_rules_through(&self, sentence: &mut AnalyzedSentence, through: usize) {
+        for rule_idx in 0..through.min(self.rules.len()) {
+            self.apply_rule(sentence, rule_idx);
+        }
+    }
+
+    pub fn first_index_of_rule_id(&self, rule_id: &str) -> Option<usize> {
+        self.rules
+            .iter()
+            .position(|r| r.id.as_deref() == Some(rule_id))
+    }
+
+    pub fn apply_rule(&self, sentence: &mut AnalyzedSentence, rule_idx: usize) {
+        let rule = match self.rules.get(rule_idx) {
+            Some(rule) => rule,
+            None => return,
+        };
+        {
             if rule.pattern.tokens.is_empty() && rule.pattern.elements.is_empty() {
-                continue;
+                return;
             }
             let mut pending_ignore_spelling: Vec<(usize, usize)> = Vec::new();
             let mut pending_actions: Vec<(usize, &DisambigAction, &DisambigActionRegex)> =
@@ -333,7 +370,7 @@ impl Disambiguator for XmlDisambiguator {
                     .collect();
 
                 let Some(first) = first_element_token(rule) else {
-                    continue;
+                    return;
                 };
                 match &self.gates[rule_idx] {
                     FirstTokenGate::Text {
@@ -346,7 +383,7 @@ impl Disambiguator for XmlDisambiguator {
                             lower_texts.contains(text.as_str()) || raw_texts.contains(text.as_str())
                         };
                         if !can_match {
-                            continue;
+                            return;
                         }
                     }
                     FirstTokenGate::LiteralSet(set) => {
@@ -356,18 +393,18 @@ impl Disambiguator for XmlDisambiguator {
                             lower_texts.iter().any(|l| set.contains(l))
                         };
                         if !any {
-                            continue;
+                            return;
                         }
                     }
                     FirstTokenGate::OrLiteralSet(set) => {
                         if !lower_texts.iter().any(|l| set.contains(l)) {
-                            continue;
+                            return;
                         }
                     }
                     FirstTokenGate::PostagPlain { tag, negate_pos } => {
                         let any = pos_tags.iter().any(|set| set.contains(tag.as_str()));
                         if any == *negate_pos {
-                            continue;
+                            return;
                         }
                     }
                     FirstTokenGate::None => {}
@@ -393,10 +430,11 @@ impl Disambiguator for XmlDisambiguator {
                             if results.len() < tokens.len() {
                                 results.resize(tokens.len(), false);
                             }
-                            results[start_idx] = tokens[start_idx]
-                                .readings()
-                                .iter()
-                                .any(|r| r.pos_tags().iter().any(|t| re.is_match(t)));
+                            let unknown_ok = re.is_match("UNKNOWN");
+                            results[start_idx] = tokens[start_idx].readings().iter().any(|r| {
+                                r.pos_tags().iter().any(|t| re.is_match(t))
+                                    || (unknown_ok && r.pos_tags().is_empty())
+                            });
                             evaluated[start_idx] = true;
                         }
                         if !postag_cache[key][start_idx] && !first.negate_pos {
@@ -1149,7 +1187,17 @@ fn token_matches_tail(
                     .compiled_postag_regexp_fancy
                     .as_ref()
                     .is_some_and(|re| r.pos_tags().iter().any(|t| re.is_match(t).unwrap_or(false)));
-                plain || fancy
+                let unknown = pt
+                    .compiled_postag_regexp
+                    .as_ref()
+                    .is_some_and(|re| re.is_match("UNKNOWN"))
+                    || pt
+                        .compiled_postag_regexp_fancy
+                        .as_ref()
+                        .is_some_and(|re| re.is_match("UNKNOWN").unwrap_or(false));
+                plain || fancy || (unknown && r.pos_tags().is_empty())
+            } else if postag == "UNKNOWN" {
+                r.pos_tags().is_empty()
             } else {
                 r.pos_tags().iter().any(|t| t == postag)
             }
@@ -1231,7 +1279,17 @@ fn exception_matches(
                     .compiled_postag_regexp_fancy
                     .as_ref()
                     .is_some_and(|re| r.pos_tags().iter().any(|t| re.is_match(t).unwrap_or(false)));
-                plain || fancy
+                let unknown = exc
+                    .compiled_postag_regexp
+                    .as_ref()
+                    .is_some_and(|re| re.is_match("UNKNOWN"))
+                    || exc
+                        .compiled_postag_regexp_fancy
+                        .as_ref()
+                        .is_some_and(|re| re.is_match("UNKNOWN").unwrap_or(false));
+                plain || fancy || (unknown && r.pos_tags().is_empty())
+            } else if postag == "UNKNOWN" {
+                r.pos_tags().is_empty()
             } else {
                 r.pos_tags().iter().any(|t| t == postag)
             }
@@ -1997,6 +2055,8 @@ fn compile_disambig_rule(compiler: &XmlCompiler, rule: DisambigRule) -> Compiled
         name: rule.name,
         filter_class: rule.filter_class,
         filter_args: rule.filter_args,
+        untouched_examples: rule.untouched_examples,
+        examples: rule.examples,
         pattern: CompiledPattern {
             marker_elem_start: rule.pattern.marker_elem_start,
             marker_elem_end: rule.pattern.marker_elem_end,

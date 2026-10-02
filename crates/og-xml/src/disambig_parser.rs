@@ -133,6 +133,11 @@ impl DisambigXmlParser {
         let mut current_wd: DisambigWord = DisambigWord::default();
         let mut current_disambig: Option<DisambigAction> = None;
         let mut disambig_wds: Vec<DisambigWord> = Vec::new();
+        let mut in_example = false;
+        let mut example_kind = String::new();
+        let mut example_input: Option<String> = None;
+        let mut example_output: Option<String> = None;
+        let mut example_raw = String::new();
 
         loop {
             match reader.read_event_into(&mut buf) {
@@ -150,10 +155,10 @@ impl DisambigXmlParser {
                                     _ => {}
                                 }
                             }
-                            if let Some(id) = current_group_id.take() {
+                            if let Some(id) = current_group_id.clone() {
                                 rule.id = rule.id.or(Some(id));
                             }
-                            if let Some(name) = current_group_name.take() {
+                            if let Some(name) = current_group_name.clone() {
                                 rule.name = rule.name.or(Some(name));
                             }
                             current_rule = Some(rule);
@@ -266,6 +271,26 @@ impl DisambigXmlParser {
                         "antipattern" => {
                             in_antipattern = true;
                             current_antipattern = Some(XmlPattern::default());
+                        }
+                        "example" if !in_antipattern && current_unification.is_none() => {
+                            in_example = true;
+                            example_kind.clear();
+                            example_input = None;
+                            example_output = None;
+                            example_raw.clear();
+                            for attr in e.attributes().flatten() {
+                                let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
+                                let val = crate::decode_attr_value(&attr.value);
+                                match key.as_str() {
+                                    "type" => example_kind = val,
+                                    "inputform" => example_input = Some(val),
+                                    "outputform" => example_output = Some(val),
+                                    _ => {}
+                                }
+                            }
+                        }
+                        "marker" if in_example => {
+                            example_raw.push_str("<marker>");
                         }
                         "marker" if current_pattern.is_some() => {
                             in_pattern_marker = true;
@@ -560,7 +585,9 @@ impl DisambigXmlParser {
                         .unescape()
                         .map(|c| c.to_string())
                         .unwrap_or_else(|_| String::from_utf8_lossy(e.as_ref()).to_string());
-                    if in_wd {
+                    if in_example {
+                        example_raw.push_str(&text);
+                    } else if in_wd {
                         current_wd_text.push_str(&text);
                     }
                     if in_wd {
@@ -644,6 +671,29 @@ impl DisambigXmlParser {
                             if let Some(uni) = current_unification.take() {
                                 rule_set.unifications.push(uni);
                             }
+                        }
+                        "marker" if in_example => {
+                            example_raw.push_str("</marker>");
+                        }
+                        "example" if in_example => {
+                            in_example = false;
+                            if let Some(rule) = current_rule.as_mut() {
+                                match example_kind.as_str() {
+                                    "untouched" => {
+                                        rule.untouched_examples
+                                            .push(example_raw.trim().to_string());
+                                    }
+                                    "ambiguous" => {
+                                        rule.examples.push(DisambigExample {
+                                            text: example_raw.trim().to_string(),
+                                            input_form: example_input.take(),
+                                            output_form: example_output.take(),
+                                        });
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            example_raw.clear();
                         }
                         "marker" if current_pattern.is_some() && in_pattern_marker => {
                             in_pattern_marker = false;
