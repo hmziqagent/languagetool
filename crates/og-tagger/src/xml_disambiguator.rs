@@ -22,7 +22,18 @@ pub struct XmlDisambiguator {
     gates: Vec<FirstTokenGate>,
     first_literal: Vec<Option<FirstLiteralFilter>>,
     first_regex: Vec<Option<FirstRegexFilter>>,
+    partial_postag: Vec<Option<PartialPosTagFilterSpec>>,
     english_tagger: Option<std::sync::Arc<crate::english_tagger::EnglishTagger>>,
+}
+
+struct PartialPosTagFilterSpec {
+    no: usize,
+    token_re: regex::Regex,
+    postag_re: regex::Regex,
+    negate_pos: bool,
+    two_groups: bool,
+    prefix: String,
+    suffix: String,
 }
 
 struct FirstRegexFilter {
@@ -174,6 +185,25 @@ impl XmlDisambiguator {
                 .collect()
         };
 
+        let partial_postag = compiled_rules
+            .iter()
+            .map(|rule| {
+                if rule.filter_class.as_deref() != Some(EN_PARTIAL_POSTAG_FILTER_CLASS) {
+                    return None;
+                }
+                compile_partial_postag_filter(rule.filter_args.as_deref().unwrap_or(""))
+            })
+            .collect();
+
+        let english_tagger = if english_tagger.is_none()
+            && compiled_rules.iter().any(|rule| {
+                rule.filter_class.as_deref() == Some("org.languagetool.rules.IsEnglishWordFilter")
+            }) {
+            crate::english_tagger::shared_english_tagger()
+        } else {
+            english_tagger
+        };
+
         Ok(Self {
             rules: compiled_rules,
             unifications,
@@ -181,6 +211,7 @@ impl XmlDisambiguator {
             gates,
             first_literal,
             first_regex,
+            partial_postag,
             english_tagger,
         })
     }
@@ -514,6 +545,12 @@ impl XmlDisambiguator {
                         if rule.filter_class.as_deref()
                             == Some("org.languagetool.rules.IsEnglishWordFilter")
                             && !self.passes_english_word_filter(rule, &tokens, &match_result)
+                        {
+                            continue;
+                        }
+
+                        if rule.filter_class.as_deref() == Some(EN_PARTIAL_POSTAG_FILTER_CLASS)
+                            && !self.passes_partial_postag_filter(rule_idx, &tokens, &match_result)
                         {
                             continue;
                         }
@@ -1805,6 +1842,102 @@ impl XmlDisambiguator {
         }
         true
     }
+
+    fn passes_partial_postag_filter(
+        &self,
+        rule_idx: usize,
+        tokens: &[&AnalyzedTokenReadings],
+        match_result: &MatchResult,
+    ) -> bool {
+        let Some(spec) = self.partial_postag[rule_idx].as_ref() else {
+            return false;
+        };
+        let Some(tagger) = self.english_tagger.as_ref() else {
+            return false;
+        };
+        let expected_groups = if spec.two_groups { 2 } else { 1 };
+        if spec.token_re.captures_len() - 1 != expected_groups {
+            return false;
+        }
+        let Some(&first) = match_result.matched_positions.first() else {
+            return false;
+        };
+        let last = match_result
+            .matched_positions
+            .last()
+            .copied()
+            .unwrap_or(first);
+        let Some(token) = tokens
+            .get(first..=last)
+            .and_then(|slice| slice.get(spec.no.checked_sub(1)?))
+        else {
+            return false;
+        };
+        let token_text = format!("{}{}{}", spec.prefix, token.token().token(), spec.suffix);
+        let Some(captures) = spec.token_re.captures(&token_text) else {
+            return false;
+        };
+        let mut partial_token = captures
+            .get(1)
+            .map_or(String::new(), |m| m.as_str().to_string());
+        if expected_groups == 2 {
+            partial_token.push_str(captures.get(2).map_or("", |m| m.as_str()));
+        }
+        let readings = tagger.tag_word(&partial_token, 0, 0);
+        let mut postag_count = 0usize;
+        for reading in &readings {
+            for pos in reading.pos_tags() {
+                if spec.negate_pos {
+                    postag_count += 1;
+                    if spec.postag_re.is_match(pos) {
+                        return false;
+                    }
+                } else if spec.postag_re.is_match(pos) {
+                    return true;
+                }
+            }
+        }
+        postag_count > 0 && spec.negate_pos
+    }
+}
+
+const EN_PARTIAL_POSTAG_FILTER_CLASS: &str =
+    "org.languagetool.rules.en.NoDisambiguationEnglishPartialPosTagFilter";
+
+fn compile_partial_postag_filter(args: &str) -> Option<PartialPosTagFilterSpec> {
+    let mut no: Option<usize> = None;
+    let mut regexp: Option<&str> = None;
+    let mut postag_regexp: Option<&str> = None;
+    let mut negate_pos = false;
+    let mut two_groups = false;
+    let mut prefix = String::new();
+    let mut suffix = String::new();
+    for part in args.split_whitespace() {
+        let Some((key, val)) = part.split_once(':') else {
+            continue;
+        };
+        match key {
+            "no" => no = val.parse::<usize>().ok(),
+            "regexp" => regexp = Some(val),
+            "postag_regexp" => postag_regexp = Some(val),
+            "negate_pos" => negate_pos = true,
+            "two_groups_regexp" => two_groups = true,
+            "prefix" => prefix = val.to_string(),
+            "suffix" => suffix = val.to_string(),
+            _ => {}
+        }
+    }
+    let token_re = regex::Regex::new(&format!("^(?:{})$", regexp?)).ok()?;
+    let postag_re = regex::Regex::new(&format!("^(?:{})$", postag_regexp?)).ok()?;
+    Some(PartialPosTagFilterSpec {
+        no: no?,
+        token_re,
+        postag_re,
+        negate_pos,
+        two_groups,
+        prefix,
+        suffix,
+    })
 }
 
 fn apply_filterall(
@@ -3720,6 +3853,75 @@ mod tests {
         assert!(
             bicycle.has_pos_tag("NN"),
             "bicycle must keep its NN reading"
+        );
+    }
+
+    fn digit_hyphenated_xml() -> &'static str {
+        r#"<?xml version="1.0" encoding="utf-8"?>
+<rules lang="en">
+    <rule id="DIGIT_HYPHENATED_ADJECTIVES" name="hyphenated adjectives">
+        <pattern>
+            <token regexp="yes">[0-9]+-[a-z]+<exception postag="JJ"/></token>
+        </pattern>
+        <filter class="org.languagetool.rules.en.NoDisambiguationEnglishPartialPosTagFilter"
+            args="no:1 regexp:[0-9]+-([a-z]+|[A-Z]+) postag_regexp:NN(:UN?)?"/>
+        <disambig action="add"><wd pos="JJ"/></disambig>
+    </rule>
+</rules>"#
+    }
+
+    fn en_resource_dir() -> Option<std::sync::Arc<crate::english_tagger::EnglishTagger>> {
+        let dir = std::path::Path::new(
+            "/home/agent/opengrammar-rs/languagetool/languagetool-language-modules/en/src/main/resources/org/languagetool/resource/en",
+        );
+        if !dir.exists() {
+            return None;
+        }
+        Some(std::sync::Arc::new(
+            crate::english_tagger::EnglishTagger::from_resource_dir(dir),
+        ))
+    }
+
+    #[test]
+    fn partial_postag_filter_blocks_mixed_case_and_plural_stems() {
+        let Some(tagger) = en_resource_dir() else {
+            return;
+        };
+        let disambig =
+            XmlDisambiguator::from_xml_with_english(digit_hyphenated_xml(), Some(tagger)).unwrap();
+        for token in ["4-Hour", "500-pages"] {
+            let mut sentence = make_sentence(vec![(token, vec!["CD"])]);
+            disambig.disambiguate(&mut sentence);
+            assert!(
+                !sentence.tokens()[0].has_pos_tag("JJ"),
+                "{token} must stay untouched: the case-sensitive filter regexp cannot match the mixed-case stem, and a plural stem is NNS"
+            );
+        }
+    }
+
+    #[test]
+    fn partial_postag_filter_admits_singular_noun_stems() {
+        let Some(tagger) = en_resource_dir() else {
+            return;
+        };
+        let disambig =
+            XmlDisambiguator::from_xml_with_english(digit_hyphenated_xml(), Some(tagger)).unwrap();
+        let mut sentence = make_sentence(vec![("500-page", vec!["CD"])]);
+        disambig.disambiguate(&mut sentence);
+        assert!(
+            sentence.tokens()[0].has_pos_tag("JJ"),
+            "the 'page' stem tags NN so the JJ reading must be added"
+        );
+    }
+
+    #[test]
+    fn partial_postag_filter_without_tagger_never_fires() {
+        let disambig = XmlDisambiguator::from_xml(digit_hyphenated_xml()).unwrap();
+        let mut sentence = make_sentence(vec![("500-page", vec!["CD"])]);
+        disambig.disambiguate(&mut sentence);
+        assert!(
+            !sentence.tokens()[0].has_pos_tag("JJ"),
+            "no tagger wired means the filter cannot confirm the stem postag, so the rule must not fire"
         );
     }
 }
