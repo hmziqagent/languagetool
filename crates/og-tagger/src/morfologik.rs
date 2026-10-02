@@ -1,20 +1,79 @@
-use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-type DictionaryEntries = HashMap<Box<str>, Box<[(&'static str, &'static str)]>>;
 type ReadingList = Vec<(&'static str, &'static str)>;
+type EntriesMap = FxHashMap<&'static str, Box<[(&'static str, &'static str)]>>;
+pub type FormsByLemma = FxHashMap<&'static str, Vec<(&'static str, &'static str)>>;
+type SynthByLemma = FormsByLemma;
+type VerbForms = std::collections::HashMap<String, Vec<String>>;
 
-fn intern<'a>(cache: &mut HashSet<&'a str>, owned: String) -> &'a str {
-    let leaked: &'a str = Box::leak(owned.into_boxed_str());
-    if let Some(existing) = cache.get(leaked) {
+#[derive(Default)]
+pub struct FxHasher {
+    hash: u64,
+}
+
+const FX_SEED: u64 = 0x51_7c_c1_b7_27_22_0a_95;
+
+impl FxHasher {
+    #[inline]
+    fn add(&mut self, word: u64) {
+        self.hash = (self.hash.rotate_left(5) ^ word).wrapping_mul(FX_SEED);
+    }
+}
+
+impl std::hash::Hasher for FxHasher {
+    fn finish(&self) -> u64 {
+        self.hash
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        let mut chunks = bytes.chunks_exact(8);
+        for chunk in &mut chunks {
+            self.add(u64::from_le_bytes(chunk.try_into().unwrap()));
+        }
+        let rest = chunks.remainder();
+        if !rest.is_empty() {
+            let mut buf = [0u8; 8];
+            buf[..rest.len()].copy_from_slice(rest);
+            self.add(u64::from_le_bytes(buf));
+        }
+    }
+
+    fn write_u8(&mut self, i: u8) {
+        self.add(i as u64)
+    }
+
+    fn write_u16(&mut self, i: u16) {
+        self.add(i as u64)
+    }
+
+    fn write_u32(&mut self, i: u32) {
+        self.add(i as u64)
+    }
+
+    fn write_u64(&mut self, i: u64) {
+        self.add(i)
+    }
+
+    fn write_usize(&mut self, i: usize) {
+        self.add(i as u64)
+    }
+}
+
+pub type FxBuildHasher = std::hash::BuildHasherDefault<FxHasher>;
+pub type FxHashMap<K, V> = std::collections::HashMap<K, V, FxBuildHasher>;
+pub type FxHashSet<T> = std::collections::HashSet<T, FxBuildHasher>;
+
+fn intern<'a>(cache: &mut FxHashSet<&'a str>, owned: String) -> &'a str {
+    if let Some(existing) = cache.get(owned.as_str()) {
         return existing;
     }
+    let leaked: &'a str = Box::leak(owned.into_boxed_str());
     cache.insert(leaked);
     leaked
 }
 
 struct Fsa5 {
-    arcs: Vec<u8>,
+    arcs: &'static [u8],
     node_data_length: usize,
     gtl: usize,
 }
@@ -25,7 +84,7 @@ const FSA5_BIT_TARGET_NEXT: u8 = 1 << 2;
 const FSA5_ADDRESS_OFFSET: usize = 1;
 
 impl Fsa5 {
-    fn from_bytes(data: &[u8]) -> Option<Self> {
+    fn from_bytes(data: &'static [u8]) -> Option<Self> {
         if data.len() < 8 || &data[0..4] != b"\\fsa" || data[4] != 0x05 {
             return None;
         }
@@ -36,7 +95,7 @@ impl Fsa5 {
             return None;
         }
         Some(Self {
-            arcs: data[8..].to_vec(),
+            arcs: data.get(8..)?,
             node_data_length,
             gtl,
         })
@@ -88,16 +147,7 @@ impl Fsa5 {
         self.destination(eps_first)
     }
 
-    fn sequences(&self) -> Vec<Vec<u8>> {
-        let mut out = Vec::new();
-        if let Some(root) = self.root_node() {
-            let mut sequence: Vec<u8> = Vec::new();
-            self.walk(root, &mut sequence, &mut out);
-        }
-        out
-    }
-
-    fn walk(&self, node: usize, sequence: &mut Vec<u8>, out: &mut Vec<Vec<u8>>) {
+    fn walk(&self, node: usize, sequence: &mut Vec<u8>, out: &mut dyn FnMut(&[u8])) {
         let mut arc = Some(self.node_data_length + node);
         while let Some(current) = arc {
             let Some(&label) = self.arcs.get(current) else {
@@ -105,7 +155,7 @@ impl Fsa5 {
             };
             sequence.push(label);
             if self.is_arc_final(current) {
-                out.push(sequence.clone());
+                out(sequence);
             }
             if let Some(dest) = self.destination(current)
                 && dest != 0
@@ -119,23 +169,39 @@ impl Fsa5 {
             arc = self.skip_arc(current);
         }
     }
-}
 
-pub struct MorfologikDictionary {
-    entries: DictionaryEntries,
-    verb_forms: std::sync::OnceLock<std::collections::HashMap<String, Vec<String>>>,
-    forms_by_lemma: std::sync::OnceLock<
-        std::collections::HashMap<&'static str, Vec<(&'static str, &'static str)>>,
-    >,
-    synth_by_lemma:
-        Option<std::collections::HashMap<&'static str, Vec<(&'static str, &'static str)>>>,
+    fn seek(&self, node: usize, key: &[u8]) -> Option<usize> {
+        let mut node = node;
+        for &byte in key {
+            let mut arc = Some(self.node_data_length + node);
+            let mut next = None;
+            while let Some(current) = arc {
+                let Some(&label) = self.arcs.get(current) else {
+                    break;
+                };
+                if label == byte {
+                    next = self.destination(current);
+                    break;
+                }
+                if self.is_arc_last(current) {
+                    break;
+                }
+                arc = self.skip_arc(current);
+            }
+            node = match next {
+                Some(dest) if dest != 0 => dest,
+                _ => return None,
+            };
+        }
+        Some(node)
+    }
 }
 
 struct Cfsa1 {
-    arcs: Vec<u8>,
+    arcs: &'static [u8],
     node_data_length: usize,
     gtl: usize,
-    label_mapping: Vec<u8>,
+    label_mapping: &'static [u8],
 }
 
 const CFSA1_BIT_FINAL_ARC: u8 = 1 << 0;
@@ -143,7 +209,7 @@ const CFSA1_BIT_LAST_ARC: u8 = 1 << 1;
 const CFSA1_BIT_TARGET_NEXT: u8 = 1 << 2;
 
 impl Cfsa1 {
-    fn from_bytes(data: &[u8]) -> Option<Self> {
+    fn from_bytes(data: &'static [u8]) -> Option<Self> {
         if data.len() < 44 || &data[0..4] != b"\\fsa" || data[4] != 0xc5 {
             return None;
         }
@@ -158,10 +224,10 @@ impl Cfsa1 {
             return None;
         }
         Some(Self {
-            arcs: data[40..].to_vec(),
+            arcs: data.get(40..)?,
             node_data_length,
             gtl,
-            label_mapping: data.get(8..40)?.to_vec(),
+            label_mapping: data.get(8..40)?,
         })
     }
 
@@ -214,16 +280,7 @@ impl Cfsa1 {
         self.destination(epsilon + self.node_data_length)
     }
 
-    fn sequences(&self) -> Vec<Vec<u8>> {
-        let mut out = Vec::new();
-        if let Some(root) = self.root_node() {
-            let mut sequence: Vec<u8> = Vec::new();
-            self.walk(root, &mut sequence, &mut out);
-        }
-        out
-    }
-
-    fn walk(&self, node: usize, sequence: &mut Vec<u8>, out: &mut Vec<Vec<u8>>) {
+    fn walk(&self, node: usize, sequence: &mut Vec<u8>, out: &mut dyn FnMut(&[u8])) {
         let mut arc = Some(self.node_data_length + node);
         while let Some(current) = arc {
             let Some(&flag) = self.arcs.get(current) else {
@@ -232,7 +289,7 @@ impl Cfsa1 {
             let label = self.arc_label(current);
             sequence.push(label);
             if flag & CFSA1_BIT_FINAL_ARC != 0 {
-                out.push(sequence.clone());
+                out(sequence);
             }
             if let Some(dest) = self.destination(current)
                 && dest != 0
@@ -246,11 +303,37 @@ impl Cfsa1 {
             arc = self.skip_arc(current);
         }
     }
+
+    fn seek(&self, node: usize, key: &[u8]) -> Option<usize> {
+        let mut node = node;
+        for &byte in key {
+            let mut arc = Some(self.node_data_length + node);
+            let mut next = None;
+            while let Some(current) = arc {
+                let Some(&flag) = self.arcs.get(current) else {
+                    break;
+                };
+                if self.arc_label(current) == byte {
+                    next = self.destination(current);
+                    break;
+                }
+                if flag & CFSA1_BIT_LAST_ARC != 0 {
+                    break;
+                }
+                arc = self.skip_arc(current);
+            }
+            node = match next {
+                Some(dest) if dest != 0 => dest,
+                _ => return None,
+            };
+        }
+        Some(node)
+    }
 }
 
 struct Cfsa2 {
-    arcs: Vec<u8>,
-    label_mapping: Vec<u8>,
+    arcs: &'static [u8],
+    label_mapping: &'static [u8],
     has_numbers: bool,
 }
 
@@ -270,7 +353,7 @@ fn read_vint(data: &[u8], offset: usize) -> Option<(usize, usize)> {
 }
 
 impl Cfsa2 {
-    fn from_bytes(data: &[u8]) -> Option<Self> {
+    fn from_bytes(data: &'static [u8]) -> Option<Self> {
         if data.len() < 8 || &data[0..4] != b"\\fsa" || data[4] != 0xc6 {
             return None;
         }
@@ -280,10 +363,10 @@ impl Cfsa2 {
         let has_numbers = flag_bits & (1 << 8) != 0;
         let label_mapping_size = *data.get(pos)? as usize;
         pos += 1;
-        let label_mapping = data.get(pos..pos + label_mapping_size)?.to_vec();
+        let label_mapping = data.get(pos..pos + label_mapping_size)?;
         pos += label_mapping_size;
         Some(Self {
-            arcs: data[pos..].to_vec(),
+            arcs: data.get(pos..)?,
             label_mapping,
             has_numbers,
         })
@@ -291,7 +374,7 @@ impl Cfsa2 {
 
     fn first_arc(&self, node: usize) -> usize {
         if self.has_numbers {
-            read_vint(&self.arcs, node).map_or(node, |(_, next)| next)
+            read_vint(self.arcs, node).map_or(node, |(_, next)| next)
         } else {
             node
         }
@@ -345,7 +428,7 @@ impl Cfsa2 {
             self.skip_arc(current)
         } else {
             let start = arc + if self.arcs[arc] & 0x1f == 0 { 2 } else { 1 };
-            read_vint(&self.arcs, start).map_or(0, |(value, _)| value)
+            read_vint(self.arcs, start).map_or(0, |(value, _)| value)
         }
     }
 
@@ -377,20 +460,13 @@ impl Cfsa2 {
         Some(node)
     }
 
-    fn sequences(&self) -> Vec<Vec<u8>> {
-        let mut out = Vec::new();
-        let mut sequence: Vec<u8> = Vec::new();
-        self.walk(self.root(), &mut sequence, &mut out);
-        out
-    }
-
-    fn walk(&self, node: usize, sequence: &mut Vec<u8>, out: &mut Vec<Vec<u8>>) {
+    fn walk(&self, node: usize, sequence: &mut Vec<u8>, out: &mut dyn FnMut(&[u8])) {
         let mut arc = Some(self.first_arc(node));
         while let Some(current) = arc {
             let label = self.arc_label(current);
             sequence.push(label);
             if self.is_arc_final(current) {
-                out.push(sequence.clone());
+                out(sequence);
             }
             let dest = self.destination(current);
             if dest != 0 {
@@ -398,6 +474,108 @@ impl Cfsa2 {
             }
             sequence.pop();
             arc = self.next_arc(current);
+        }
+    }
+}
+
+enum Fsa {
+    V5(Fsa5),
+    C1(Cfsa1),
+    C2(Cfsa2),
+}
+
+impl Fsa {
+    fn from_static(data: &'static [u8]) -> Option<Self> {
+        if let Some(f) = Cfsa2::from_bytes(data) {
+            return Some(Self::C2(f));
+        }
+        if let Some(f) = Fsa5::from_bytes(data) {
+            return Some(Self::V5(f));
+        }
+        if let Some(f) = Cfsa1::from_bytes(data) {
+            return Some(Self::C1(f));
+        }
+        None
+    }
+
+    fn for_each_sequence(&self, out: &mut dyn FnMut(&[u8])) {
+        let mut sequence: Vec<u8> = Vec::new();
+        match self {
+            Self::V5(f) => {
+                if let Some(root) = f.root_node() {
+                    f.walk(root, &mut sequence, out);
+                }
+            }
+            Self::C1(f) => {
+                if let Some(root) = f.root_node() {
+                    f.walk(root, &mut sequence, out);
+                }
+            }
+            Self::C2(f) => f.walk(f.root(), &mut sequence, out),
+        }
+    }
+
+    fn seek(&self, key: &[u8]) -> Option<usize> {
+        match self {
+            Self::V5(f) => f.root_node().and_then(|root| f.seek(root, key)),
+            Self::C1(f) => f.root_node().and_then(|root| f.seek(root, key)),
+            Self::C2(f) => f.seek(f.root(), key),
+        }
+    }
+
+    fn separator_suffixes(&self, node: usize, separator: u8, out: &mut dyn FnMut(&[u8])) {
+        match self {
+            Self::V5(f) => {
+                let mut arc = Some(f.node_data_length + node);
+                while let Some(current) = arc {
+                    let Some(&label) = f.arcs.get(current) else {
+                        break;
+                    };
+                    if label == separator
+                        && let Some(dest) = f.destination(current)
+                        && dest != 0
+                    {
+                        let mut sequence: Vec<u8> = Vec::new();
+                        f.walk(dest, &mut sequence, out);
+                    }
+                    if f.is_arc_last(current) {
+                        break;
+                    }
+                    arc = f.skip_arc(current);
+                }
+            }
+            Self::C1(f) => {
+                let mut arc = Some(f.node_data_length + node);
+                while let Some(current) = arc {
+                    let Some(&flag) = f.arcs.get(current) else {
+                        break;
+                    };
+                    if f.arc_label(current) == separator
+                        && let Some(dest) = f.destination(current)
+                        && dest != 0
+                    {
+                        let mut sequence: Vec<u8> = Vec::new();
+                        f.walk(dest, &mut sequence, out);
+                    }
+                    if flag & CFSA1_BIT_LAST_ARC != 0 {
+                        break;
+                    }
+                    arc = f.skip_arc(current);
+                }
+            }
+            Self::C2(f) => {
+                let mut arc = Some(f.first_arc(node));
+                while let Some(current) = arc {
+                    if f.arc_label(current) == separator {
+                        let dest = f.destination(current);
+                        if dest != 0 {
+                            let mut sequence: Vec<u8> = Vec::new();
+                            f.walk(dest, &mut sequence, out);
+                        }
+                    }
+                    arc = f.next_arc(current);
+                }
+            }
         }
     }
 }
@@ -438,43 +616,89 @@ enum LemmaEncoder {
     PrefixAndSuffix,
 }
 
-fn decode_bytes(encoding: &str, bytes: &[u8]) -> String {
-    match encoding {
-        "koi8-r" => encoding_rs::KOI8_R.decode(bytes).0.into_owned(),
-        "windows-1251" | "cp1251" => encoding_rs::WINDOWS_1251.decode(bytes).0.into_owned(),
-        "iso-8859-1" | "iso8859-1" => encoding_rs::WINDOWS_1252.decode(bytes).0.into_owned(),
-        "iso-8859-15" | "iso8859-15" => {
-            let latin = encoding_rs::WINDOWS_1252.decode(bytes).0;
-            latin
-                .chars()
-                .map(|c| match c {
-                    '¤' => '€',
-                    '¦' => 'Š',
-                    '¨' => 'š',
-                    '´' => 'Ž',
-                    '¸' => 'ž',
-                    '¼' => 'Œ',
-                    '½' => 'œ',
-                    '¾' => 'Ÿ',
-                    other => other,
-                })
-                .collect()
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DictEncoding {
+    Utf8,
+    Koi8R,
+    Windows1251,
+    Latin1,
+    Latin15,
+}
+
+impl DictEncoding {
+    fn parse(value: &str) -> Self {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "koi8-r" => Self::Koi8R,
+            "windows-1251" | "cp1251" => Self::Windows1251,
+            "iso-8859-1" | "iso8859-1" => Self::Latin1,
+            "iso-8859-15" | "iso8859-15" => Self::Latin15,
+            _ => Self::Utf8,
         }
-        _ => String::from_utf8_lossy(bytes).into_owned(),
+    }
+
+    fn decode(&self, bytes: &[u8]) -> String {
+        match self {
+            Self::Koi8R => encoding_rs::KOI8_R.decode(bytes).0.into_owned(),
+            Self::Windows1251 => encoding_rs::WINDOWS_1251.decode(bytes).0.into_owned(),
+            Self::Latin1 => encoding_rs::WINDOWS_1252.decode(bytes).0.into_owned(),
+            Self::Latin15 => {
+                let latin = encoding_rs::WINDOWS_1252.decode(bytes).0;
+                latin
+                    .chars()
+                    .map(|c| match c {
+                        '¤' => '€',
+                        '¦' => 'Š',
+                        '¨' => 'š',
+                        '´' => 'Ž',
+                        '¸' => 'ž',
+                        '¼' => 'Œ',
+                        '½' => 'œ',
+                        '¾' => 'Ÿ',
+                        other => other,
+                    })
+                    .collect()
+            }
+            Self::Utf8 => String::from_utf8_lossy(bytes).into_owned(),
+        }
+    }
+
+    fn encode(&self, text: &str) -> Option<Vec<u8>> {
+        match self {
+            Self::Utf8 => Some(text.as_bytes().to_vec()),
+            Self::Koi8R => encode_single_byte(text, encoding_rs::KOI8_R),
+            Self::Windows1251 => encode_single_byte(text, encoding_rs::WINDOWS_1251),
+            Self::Latin1 => encode_single_byte(text, encoding_rs::WINDOWS_1252),
+            Self::Latin15 => {
+                let mapped: String = text
+                    .chars()
+                    .map(|c| match c {
+                        '€' => '¤',
+                        'Š' => '¦',
+                        'š' => '¨',
+                        'Ž' => '´',
+                        'ž' => '¸',
+                        'Œ' => '¼',
+                        'œ' => '½',
+                        'Ÿ' => '¾',
+                        other => other,
+                    })
+                    .collect();
+                encode_single_byte(&mapped, encoding_rs::WINDOWS_1252)
+            }
+        }
     }
 }
 
-fn fsa_sequences(data: &[u8]) -> Option<Vec<Vec<u8>>> {
-    if let Some(f) = Cfsa2::from_bytes(data) {
-        return Some(f.sequences());
+fn encode_single_byte(text: &str, encoding: &'static encoding_rs::Encoding) -> Option<Vec<u8>> {
+    let (bytes, _, had_errors) = encoding.encode(text);
+    if had_errors {
+        return None;
     }
-    if let Some(f) = Fsa5::from_bytes(data) {
-        return Some(f.sequences());
-    }
-    if let Some(f) = Cfsa1::from_bytes(data) {
-        return Some(f.sequences());
-    }
-    None
+    Some(bytes.into_owned())
+}
+
+fn decode_bytes(encoding: &str, bytes: &[u8]) -> String {
+    DictEncoding::parse(encoding).decode(bytes)
 }
 
 fn info_value(info: &str, key: &str) -> Option<String> {
@@ -485,33 +709,153 @@ fn info_value(info: &str, key: &str) -> Option<String> {
 }
 
 pub fn load_fsa_word_list(dict_path: &Path, info_path: &Path) -> Option<Vec<String>> {
-    let data = std::fs::read(dict_path).ok()?;
+    let data: &'static [u8] = Box::leak(std::fs::read(dict_path).ok()?.into_boxed_slice());
     let info = std::fs::read_to_string(info_path).ok()?;
     let separator = info_value(&info, "fsa.dict.separator=")?.chars().next()?;
     let encoding = info_value(&info, "fsa.dict.encoding=").unwrap_or_else(|| "utf8".into());
     let sep = separator as u8;
-    let sequences = fsa_sequences(&data)?;
-    let mut seen: HashSet<String> = HashSet::with_capacity(sequences.len());
-    for sequence in &sequences {
+    let fsa = Fsa::from_static(data)?;
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    fsa.for_each_sequence(&mut |sequence: &[u8]| {
         let word = sequence.split(|b| *b == sep).next().unwrap_or(&[]);
         if word.is_empty() {
-            continue;
+            return;
         }
         seen.insert(decode_bytes(&encoding, word));
-    }
+    });
     Some(seen.into_iter().collect())
+}
+
+struct FsaDict {
+    fsa: Fsa,
+    separator: u8,
+    encoder: LemmaEncoder,
+    encoding: DictEncoding,
+    cache: std::sync::RwLock<FxHashMap<&'static str, &'static [(&'static str, &'static str)]>>,
+    interner: std::sync::Mutex<FxHashSet<&'static str>>,
+}
+
+struct Materialized {
+    entries: EntriesMap,
+    synth_by_lemma: Option<SynthByLemma>,
+    forms_by_lemma: std::sync::OnceLock<FormsByLemma>,
+    verb_forms: std::sync::OnceLock<VerbForms>,
+}
+
+enum Source {
+    Fsa {
+        dict: FsaDict,
+        materialized: std::sync::OnceLock<Materialized>,
+    },
+    Decoded(Materialized),
+}
+
+pub struct MorfologikDictionary {
+    source: Source,
+}
+
+impl FsaDict {
+    fn decode_lemma(&self, word_bytes: &[u8], second: &[u8]) -> Option<Vec<u8>> {
+        match self.encoder {
+            LemmaEncoder::Raw => Some(second.to_vec()),
+            LemmaEncoder::Suffix => decode_suffix(word_bytes, second),
+            LemmaEncoder::PrefixAndSuffix => decode_prefix_and_suffix(word_bytes, second),
+        }
+    }
+
+    fn lookup_uncached(&self, word: &str) -> ReadingList {
+        let Some(word_bytes) = self.encoding.encode(word) else {
+            return Vec::new();
+        };
+        let Some(node) = self.fsa.seek(&word_bytes) else {
+            return Vec::new();
+        };
+        let mut readings: ReadingList = Vec::new();
+        {
+            let mut interner = self.interner.lock().unwrap();
+            self.fsa
+                .separator_suffixes(node, self.separator, &mut |suffix: &[u8]| {
+                    let mut fields = suffix.split(|b| *b == self.separator);
+                    let (Some(second), Some(tag_raw)) = (fields.next(), fields.next()) else {
+                        return;
+                    };
+                    let Some(lemma_bytes) = self.decode_lemma(&word_bytes, second) else {
+                        return;
+                    };
+                    let tag = intern(&mut interner, self.encoding.decode(tag_raw));
+                    let lemma = intern(&mut interner, self.encoding.decode(&lemma_bytes));
+                    readings.push((lemma, tag));
+                });
+        }
+        readings
+    }
+
+    fn materialize(&self) -> Materialized {
+        let mut interner = self.interner.lock().unwrap();
+        let mut entries: FxHashMap<&'static str, ReadingList> = FxHashMap::default();
+        let mut synth_map: SynthByLemma = FxHashMap::default();
+        let mut forms: FormsByLemma = FxHashMap::default();
+        let mut verb_forms: VerbForms = std::collections::HashMap::new();
+        self.fsa.for_each_sequence(&mut |sequence: &[u8]| {
+            let mut fields = sequence.split(|b| *b == self.separator);
+            let (word_raw, second, tag_raw) = match (fields.next(), fields.next(), fields.next()) {
+                (Some(w), Some(s), Some(t)) => (w, s, Some(t)),
+                (Some(w), Some(s), None) => (w, s, None),
+                _ => return,
+            };
+            let Some(lemma_bytes) = self.decode_lemma(word_raw, second) else {
+                return;
+            };
+            let word = self.encoding.decode(word_raw);
+            match tag_raw {
+                None => {
+                    let Some((lemma, tag)) = word.split_once('|') else {
+                        return;
+                    };
+                    let lemma_id = intern(&mut interner, lemma.to_string());
+                    let tag_id = intern(&mut interner, tag.to_string());
+                    let form_id = intern(&mut interner, self.encoding.decode(&lemma_bytes));
+                    synth_map
+                        .entry(lemma_id)
+                        .or_default()
+                        .push((tag_id, form_id));
+                }
+                Some(tag_raw) => {
+                    let tag = intern(&mut interner, self.encoding.decode(tag_raw));
+                    let lemma = intern(&mut interner, self.encoding.decode(&lemma_bytes));
+                    let word_id = intern(&mut interner, word);
+                    entries.entry(word_id).or_default().push((lemma, tag));
+                    forms.entry(lemma).or_default().push((tag, word_id));
+                    if tag.starts_with("VER:") {
+                        let entry = verb_forms.entry(lemma.to_string()).or_default();
+                        if !entry.iter().any(|w| w.as_str() == word_id) {
+                            entry.push(word_id.to_string());
+                        }
+                    }
+                }
+            }
+        });
+        Materialized {
+            entries: entries
+                .into_iter()
+                .map(|(word, readings)| (word, readings.into_boxed_slice()))
+                .collect(),
+            synth_by_lemma: if synth_map.is_empty() {
+                None
+            } else {
+                Some(synth_map)
+            },
+            forms_by_lemma: std::sync::OnceLock::from(forms),
+            verb_forms: std::sync::OnceLock::from(verb_forms),
+        }
+    }
 }
 
 impl MorfologikDictionary {
     pub fn load(dict_path: &Path, info_path: &Path) -> Option<Self> {
-        let data = std::fs::read(dict_path).ok()?;
+        let data: &'static [u8] = Box::leak(std::fs::read(dict_path).ok()?.into_boxed_slice());
         let info = std::fs::read_to_string(info_path).ok()?;
-        let separator = info
-            .lines()
-            .find_map(|l| l.trim().strip_prefix("fsa.dict.separator="))?
-            .trim()
-            .chars()
-            .next()?;
+        let separator = info_value(&info, "fsa.dict.separator=")?.chars().next()?;
         let encoder = info
             .lines()
             .find_map(|l| l.trim().strip_prefix("fsa.dict.encoder="))
@@ -521,81 +865,30 @@ impl MorfologikDictionary {
                 _ => LemmaEncoder::Raw,
             })
             .unwrap_or(LemmaEncoder::Raw);
-        let encoding = info
-            .lines()
-            .find_map(|l| l.trim().strip_prefix("fsa.dict.encoding="))
-            .map(str::trim)
-            .unwrap_or("utf8")
-            .to_string();
-        let decode = |bytes: &[u8]| -> String { decode_bytes(encoding.as_str(), bytes) };
-
-        let sep = separator as u8;
-        let mut interned: HashSet<&'static str> = HashSet::new();
-        let mut map: HashMap<Box<str>, ReadingList> = HashMap::new();
-        let mut synth_map: std::collections::HashMap<
-            &'static str,
-            Vec<(&'static str, &'static str)>,
-        > = std::collections::HashMap::new();
-        let sequences = fsa_sequences(&data)?;
-        for sequence in sequences {
-            let mut fields = sequence.split(|b| *b == sep);
-            let (word_raw, second, tag_raw) = match (fields.next(), fields.next(), fields.next()) {
-                (Some(w), Some(s), Some(t)) => (w, s, Some(t)),
-                (Some(w), Some(s), None) => (w, s, None),
-                _ => continue,
-            };
-            let lemma_bytes = match encoder {
-                LemmaEncoder::Raw => second.to_vec(),
-                LemmaEncoder::Suffix => match decode_suffix(word_raw, second) {
-                    Some(decoded) => decoded,
-                    None => continue,
-                },
-                LemmaEncoder::PrefixAndSuffix => match decode_prefix_and_suffix(word_raw, second) {
-                    Some(decoded) => decoded,
-                    None => continue,
-                },
-            };
-            let word = decode(word_raw);
-            match tag_raw {
-                None => {
-                    let Some((lemma, tag)) = word.split_once('|') else {
-                        continue;
-                    };
-                    let lemma_id = intern(&mut interned, lemma.to_string());
-                    let tag_id = intern(&mut interned, tag.to_string());
-                    let form_id = intern(&mut interned, decode(&lemma_bytes));
-                    synth_map
-                        .entry(lemma_id)
-                        .or_default()
-                        .push((tag_id, form_id));
-                }
-                Some(tag_raw) => {
-                    let tag = intern(&mut interned, decode(tag_raw));
-                    let lemma = intern(&mut interned, decode(&lemma_bytes));
-                    map.entry(word.into_boxed_str())
-                        .or_default()
-                        .push((lemma, tag));
-                }
-            }
-        }
+        let encoding = DictEncoding::parse(
+            &info_value(&info, "fsa.dict.encoding=").unwrap_or_else(|| "utf8".into()),
+        );
+        let fsa = Fsa::from_static(data)?;
         Some(Self {
-            entries: map
-                .into_iter()
-                .map(|(word, readings)| (word, readings.into_boxed_slice()))
-                .collect(),
-            verb_forms: std::sync::OnceLock::new(),
-            forms_by_lemma: std::sync::OnceLock::new(),
-            synth_by_lemma: if synth_map.is_empty() {
-                None
-            } else {
-                Some(synth_map)
+            source: Source::Fsa {
+                dict: FsaDict {
+                    fsa,
+                    separator: separator as u8,
+                    encoder,
+                    encoding,
+                    cache: std::sync::RwLock::new(FxHashMap::default()),
+                    interner: std::sync::Mutex::new(FxHashSet::default()),
+                },
+                materialized: std::sync::OnceLock::new(),
             },
         })
     }
 
     pub fn from_decoded_text(data: &str) -> Self {
-        let mut interned: HashSet<&'static str> = HashSet::new();
-        let mut map: HashMap<Box<str>, ReadingList> = HashMap::new();
+        let mut interned: FxHashSet<&'static str> = FxHashSet::default();
+        let mut map: FxHashMap<&'static str, ReadingList> = FxHashMap::default();
+        let mut forms: FormsByLemma = FxHashMap::default();
+        let mut verb_forms: VerbForms = std::collections::HashMap::new();
         for line in data.lines() {
             let line = line.trim();
             if line.is_empty() || line.starts_with('#') {
@@ -610,67 +903,77 @@ impl MorfologikDictionary {
             if form.is_empty() || tag.is_empty() {
                 continue;
             }
-            let lemma: Box<str> = if lemma.is_empty() {
-                form.into()
-            } else {
-                lemma.into()
-            };
+            let lemma: &str = if lemma.is_empty() { form } else { lemma };
             let tag = intern(&mut interned, tag.to_string());
             let lemma = intern(&mut interned, lemma.to_string());
-            map.entry(form.into()).or_default().push((lemma, tag));
+            let form_id = intern(&mut interned, form.to_string());
+            map.entry(form_id).or_default().push((lemma, tag));
+            forms.entry(lemma).or_default().push((tag, form_id));
+            if tag.starts_with("VER:") {
+                let entry = verb_forms.entry(lemma.to_string()).or_default();
+                if !entry.iter().any(|w| w.as_str() == form_id) {
+                    entry.push(form_id.to_string());
+                }
+            }
         }
         Self {
-            entries: map
-                .into_iter()
-                .map(|(word, readings)| (word, readings.into_boxed_slice()))
-                .collect(),
-            verb_forms: std::sync::OnceLock::new(),
-            forms_by_lemma: std::sync::OnceLock::new(),
-            synth_by_lemma: None,
+            source: Source::Decoded(Materialized {
+                entries: map
+                    .into_iter()
+                    .map(|(word, readings)| (word, readings.into_boxed_slice()))
+                    .collect(),
+                synth_by_lemma: None,
+                forms_by_lemma: std::sync::OnceLock::from(forms),
+                verb_forms: std::sync::OnceLock::from(verb_forms),
+            }),
         }
     }
 
-    pub fn synth_forms_by_lemma(
-        &self,
-    ) -> Option<&std::collections::HashMap<&'static str, Vec<(&'static str, &'static str)>>> {
-        self.synth_by_lemma.as_ref()
+    fn materialized(&self) -> &Materialized {
+        match &self.source {
+            Source::Fsa { dict, materialized } => materialized.get_or_init(|| dict.materialize()),
+            Source::Decoded(m) => m,
+        }
+    }
+
+    pub fn synth_forms_by_lemma(&self) -> Option<&SynthByLemma> {
+        self.materialized().synth_by_lemma.as_ref()
     }
 
     pub fn word_list(&self) -> Vec<String> {
-        self.entries.keys().map(|k| k.to_string()).collect()
+        self.materialized()
+            .entries
+            .keys()
+            .map(|k| k.to_string())
+            .collect()
     }
 
-    pub fn keys(&self) -> impl Iterator<Item = &str> {
-        self.entries.keys().map(|k| &**k)
+    pub fn keys(&self) -> impl Iterator<Item = &str> + '_ {
+        self.materialized().entries.keys().copied()
     }
 
-    pub fn forms_by_lemma(
-        &self,
-    ) -> &std::collections::HashMap<&'static str, Vec<(&'static str, &'static str)>> {
-        self.forms_by_lemma.get_or_init(|| {
-            let mut reverse: std::collections::HashMap<
-                &'static str,
-                Vec<(&'static str, &'static str)>,
-            > = std::collections::HashMap::new();
-            for (word, readings) in self.entries.iter() {
+    pub fn forms_by_lemma(&self) -> &FormsByLemma {
+        self.materialized().forms_by_lemma.get_or_init(|| {
+            let mut reverse: FormsByLemma = FxHashMap::default();
+            let m = self.materialized();
+            for (word, readings) in m.entries.iter() {
                 for (lemma, tag) in readings.iter() {
-                    let leaked: &'static str = Box::leak(word.clone());
-                    reverse.entry(*lemma).or_default().push((*tag, leaked));
+                    reverse.entry(*lemma).or_default().push((*tag, word));
                 }
             }
             reverse
         })
     }
 
-    pub fn verb_forms_by_lemma(&self) -> &std::collections::HashMap<String, Vec<String>> {
-        self.verb_forms.get_or_init(|| {
-            let mut reverse: std::collections::HashMap<String, Vec<String>> =
-                std::collections::HashMap::new();
-            for (word, readings) in self.entries.iter() {
+    pub fn verb_forms_by_lemma(&self) -> &VerbForms {
+        self.materialized().verb_forms.get_or_init(|| {
+            let mut reverse: VerbForms = std::collections::HashMap::new();
+            let m = self.materialized();
+            for (word, readings) in m.entries.iter() {
                 for (lemma, tag) in readings.iter() {
                     if tag.starts_with("VER:") {
                         let entry = reverse.entry(lemma.to_string()).or_default();
-                        if !entry.iter().any(|w| w.as_str() == &**word) {
+                        if !entry.iter().any(|w| w == *word) {
                             entry.push(word.to_string());
                         }
                     }
@@ -681,15 +984,37 @@ impl MorfologikDictionary {
     }
 
     pub fn lookup(&self, word: &str) -> &[(&'static str, &'static str)] {
-        self.entries.get(word).map(|v| &**v).unwrap_or(&[])
+        let Source::Fsa { dict, .. } = &self.source else {
+            return self
+                .materialized()
+                .entries
+                .get(word)
+                .map(|v| &**v)
+                .unwrap_or(&[]);
+        };
+        {
+            let cache = dict.cache.read().unwrap();
+            if let Some(hit) = cache.get(word) {
+                return hit;
+            }
+        }
+        let readings = dict.lookup_uncached(word);
+        let leaked: &'static [(&'static str, &'static str)] = if readings.is_empty() {
+            &[]
+        } else {
+            Box::leak(readings.into_boxed_slice())
+        };
+        let key: &'static str = Box::leak(word.to_string().into_boxed_str());
+        let mut cache = dict.cache.write().unwrap();
+        *cache.entry(key).or_insert(leaked)
     }
 
     pub fn len(&self) -> usize {
-        self.entries.len()
+        self.materialized().entries.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
+        self.materialized().entries.is_empty()
     }
 }
 
@@ -700,8 +1025,8 @@ pub struct SynthDictionary {
 
 impl SynthDictionary {
     pub fn load(dict_path: &Path, info_path: &Path) -> Option<Self> {
-        let data = std::fs::read(dict_path).ok()?;
-        let fsa = Cfsa2::from_bytes(&data)?;
+        let data: &'static [u8] = Box::leak(std::fs::read(dict_path).ok()?.into_boxed_slice());
+        let fsa = Cfsa2::from_bytes(data)?;
         let info = std::fs::read_to_string(info_path).ok()?;
         let separator = info
             .lines()
@@ -724,7 +1049,9 @@ impl SynthDictionary {
                 let dest = self.fsa.destination(current);
                 if dest != 0 {
                     let mut sequence = Vec::new();
-                    self.fsa.walk(dest, &mut sequence, &mut encoded);
+                    self.fsa.walk(dest, &mut sequence, &mut |seq: &[u8]| {
+                        encoded.push(seq.to_vec())
+                    });
                 }
             }
             arc = self.fsa.next_arc(current);
@@ -790,15 +1117,17 @@ mod tests {
     #[test]
     fn dump_obdachloser_sequences() {
         let dir = dict_path().expect("dict");
-        let data = std::fs::read(dir.join("german.dict")).unwrap();
-        let fsa = Cfsa2::from_bytes(&data).expect("cfsa2");
-        for s in fsa
-            .sequences()
-            .iter()
-            .filter(|s| s.starts_with(b"Obdachlos"))
-        {
-            eprintln!("RAW: {}", String::from_utf8_lossy(s));
-        }
+        let data: &'static [u8] = Box::leak(
+            std::fs::read(dir.join("german.dict"))
+                .unwrap()
+                .into_boxed_slice(),
+        );
+        let fsa = Fsa::from_static(data).expect("fsa");
+        fsa.for_each_sequence(&mut |seq: &[u8]| {
+            if seq.starts_with(b"Obdachlos") {
+                eprintln!("RAW: {}", String::from_utf8_lossy(seq));
+            }
+        });
     }
 
     use super::*;
@@ -811,6 +1140,37 @@ mod tests {
         .iter()
         .map(std::path::PathBuf::from)
         .find(|p| p.join("german.dict").exists())
+    }
+
+    fn lang_dir(lang: &str, file: &str) -> Option<std::path::PathBuf> {
+        [
+            format!("/home/agent/opengrammar-rs/languagetool/languagetool-language-modules/{lang}/src/main/resources/org/languagetool/resource/{lang}"),
+            format!("languagetool/languagetool-language-modules/{lang}/src/main/resources/org/languagetool/resource/{lang}"),
+        ]
+        .iter()
+        .map(std::path::PathBuf::from)
+        .find(|p| p.join(file).exists())
+    }
+
+    fn cross_check_lazy_lookup_matches_enumeration(dir: &std::path::Path, stem: &str) {
+        let dict = MorfologikDictionary::load(
+            &dir.join(format!("{stem}.dict")),
+            &dir.join(format!("{stem}.info")),
+        )
+        .unwrap_or_else(|| panic!("load {stem} dict"));
+        let materialized = dict.materialized();
+        assert!(
+            !materialized.entries.is_empty(),
+            "{stem} dictionary must enumerate"
+        );
+        for (word, readings) in materialized.entries.iter() {
+            let lazy = dict.lookup(word);
+            assert_eq!(
+                lazy, &**readings,
+                "{stem}: lazy lookup diverged for {word}: {lazy:?} vs {readings:?}"
+            );
+        }
+        assert!(dict.lookup("__no_such_word_zq__").is_empty());
     }
 
     static DICT_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -915,6 +1275,24 @@ mod tests {
     }
 
     #[test]
+    fn lazy_lookup_matches_eager_enumeration_german() {
+        let _guard = DICT_TEST_LOCK.lock().unwrap();
+        let Some(dir) = dict_path() else {
+            return;
+        };
+        cross_check_lazy_lookup_matches_enumeration(&dir, "german");
+    }
+
+    #[test]
+    fn lazy_lookup_matches_eager_enumeration_french_fsa5() {
+        let _guard = DICT_TEST_LOCK.lock().unwrap();
+        let Some(dir) = lang_dir("fr", "french.dict") else {
+            return;
+        };
+        cross_check_lazy_lookup_matches_enumeration(&dir, "french");
+    }
+
+    #[test]
     #[ignore]
     fn decodes_prefix_and_suffix_encoded_lemmas() {
         let _guard = DICT_TEST_LOCK.lock().unwrap();
@@ -989,6 +1367,36 @@ mod tests {
                 .any(|(lemma, tag)| lemma == &"караулить" && tag.starts_with("VB:Past")),
             "караулила readings: {kauril:?}"
         );
+    }
+
+    #[test]
+    #[ignore]
+    fn lazy_lookup_matches_eager_enumeration_russian_koi8r() {
+        let _guard = DICT_TEST_LOCK.lock().unwrap();
+        let Some(dir) = lang_dir("ru", "russian.dict") else {
+            return;
+        };
+        cross_check_lazy_lookup_matches_enumeration(&dir, "russian");
+    }
+
+    #[test]
+    #[ignore]
+    fn lazy_lookup_matches_eager_enumeration_italian_latin15() {
+        let _guard = DICT_TEST_LOCK.lock().unwrap();
+        let Some(dir) = lang_dir("it", "italian.dict") else {
+            return;
+        };
+        cross_check_lazy_lookup_matches_enumeration(&dir, "italian");
+    }
+
+    #[test]
+    #[ignore]
+    fn lazy_lookup_matches_eager_enumeration_asturian_cfsa1() {
+        let _guard = DICT_TEST_LOCK.lock().unwrap();
+        let Some(dir) = lang_dir("ast", "asturian.dict") else {
+            return;
+        };
+        cross_check_lazy_lookup_matches_enumeration(&dir, "asturian");
     }
 
     #[test]
