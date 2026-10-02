@@ -83,9 +83,14 @@ fn rewrite_class(cls: &mut ClassBracketed) -> Option<()> {
             }
         }
     };
-    for item in items.iter() {
+    for item in items.iter_mut() {
         if matches!(item, ClassSetItem::Bracketed(_)) {
             return None;
+        }
+        if let ClassSetItem::Literal(lit) = item
+            && lit.c == '-'
+        {
+            lit.kind = LiteralKind::Superfluous;
         }
     }
     let has_i = items_contain(items, 'i');
@@ -184,6 +189,18 @@ mod tests {
         assert!(lit.is_match("BIG"));
         assert!(lit.is_match("bıg"));
         assert!(lit.is_match("bİg"));
+    }
+
+    #[test]
+    fn trailing_hyphen_literal_in_class_stays_a_literal_after_rewrite() {
+        let re = ci("^(?:[a-zàâéèêîôûïëüçœ'-]+)$");
+        assert!(re.is_match("abçœ-"));
+        assert!(re.is_match("abıç"));
+        assert!(
+            !re.is_match("_"),
+            "'_' must not enter the class via a '-ı' range"
+        );
+        assert!(!re.is_match("="));
     }
 
     #[test]
