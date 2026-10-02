@@ -541,6 +541,10 @@ impl OpenNlpPosTagger {
         }
     }
 
+    pub fn outcome(&self, index: usize) -> &str {
+        self.model.outcome(index)
+    }
+
     pub fn tag(&self, tokens: &[&str]) -> Vec<usize> {
         let model = &self.model;
         let dict = &self.tag_dictionary;
@@ -814,7 +818,7 @@ pub struct OpenNlpEnglishChunker {
     chunker: OpenNlpChunker,
 }
 
-fn parse_tag_dictionary(xml: &str, model: &GisModel) -> HashMap<String, Vec<usize>> {
+pub fn parse_tag_dictionary(xml: &str, model: &GisModel) -> HashMap<String, Vec<usize>> {
     let mut dict: HashMap<String, Vec<usize>> = HashMap::new();
     let mut current_tags: Option<Vec<usize>> = None;
     let mut buffer = String::new();
