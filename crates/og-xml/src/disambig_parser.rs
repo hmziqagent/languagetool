@@ -315,6 +315,27 @@ impl DisambigXmlParser {
                             in_or_group = true;
                             current_or_group = Some(XmlOrGroup::default());
                         }
+                        "match" if current_token.is_some() || antipattern_token.is_some() => {
+                            for attr in e.attributes().flatten() {
+                                let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
+                                let val = crate::decode_attr_value(&attr.value);
+                                if key == "no" {
+                                    let no = val.parse::<i32>().ok();
+                                    if let Some(ref mut token) = current_token {
+                                        token.match_no = no;
+                                    } else if let Some(ref mut token) = antipattern_token {
+                                        token.match_no = no;
+                                    }
+                                }
+                                if key == "postag" {
+                                    if let Some(ref mut token) = current_token {
+                                        token.match_no_postag = Some(val);
+                                    } else if let Some(ref mut token) = antipattern_token {
+                                        token.match_no_postag = Some(val);
+                                    }
+                                }
+                            }
+                        }
                         "and" => {
                             in_and_group = true;
                             current_and_group = Some(XmlAndGroup::default());
@@ -375,6 +396,25 @@ impl DisambigXmlParser {
                 Ok(Event::Empty(e)) => {
                     let local_name = String::from_utf8_lossy(e.name().as_ref()).to_string();
                     match local_name.as_str() {
+                        "match" if current_token.is_some() || antipattern_token.is_some() => {
+                            for attr in e.attributes().flatten() {
+                                let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
+                                let val = crate::decode_attr_value(&attr.value);
+                                if key == "no" {
+                                    let no = val.parse::<i32>().ok();
+                                    if let Some(ref mut token) = current_token {
+                                        token.match_no = no;
+                                    } else if let Some(ref mut token) = antipattern_token {
+                                        token.match_no = no;
+                                    }
+                                }
+                                if key == "postag"
+                                    && let Some(ref mut token) = current_token
+                                {
+                                    token.match_no_postag = Some(val);
+                                }
+                            }
+                        }
                         "exception" => {
                             let exc = exception_from_attrs(&e);
                             attach_exception(

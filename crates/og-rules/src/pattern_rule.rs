@@ -836,11 +836,75 @@ impl PatternRuleEngine {
         &self,
         pattern_token: &og_xml::compiler::CompiledPatternToken,
         token: &AnalyzedTokenReadings,
-        matched_texts: &[String],
+        matched: &[MatchedTraceEntry],
+        tokens: &[&AnalyzedTokenReadings],
     ) -> Option<bool> {
         let match_no = pattern_token.match_no?;
         let ref_idx = match_no as usize;
-        let ref_text = normalize_apostrophes(matched_texts.get(ref_idx)?);
+        let entry = matched.get(ref_idx)?;
+        if let Some(postag) = pattern_token.match_no_postag.as_deref() {
+            let ref_token = tokens.get(entry.token_idx)?;
+            let synth = self
+                .synthesizer
+                .as_deref()
+                .or(self.suggestion_synth.as_deref());
+            let Some(synth) = synth else {
+                let ref_text = normalize_apostrophes(&entry.text);
+                let token_text = normalize_apostrophes(surface_text(token));
+                let matches = if pattern_token.case_sensitive {
+                    token_text == ref_text
+                } else {
+                    eq_ignore_case(&token_text, &ref_text)
+                };
+                return Some(if pattern_token.negate {
+                    !matches
+                } else {
+                    matches
+                });
+            };
+            let mut forms: Vec<String> = Vec::new();
+            for reading in ref_token.readings() {
+                if let Some(lemma) = reading.lemma() {
+                    for form in synth.synthesize_exact(lemma, postag) {
+                        if !forms.contains(&form) {
+                            forms.push(form);
+                        }
+                    }
+                }
+            }
+            if forms.is_empty() {
+                forms.push(entry.text.clone());
+            }
+            let matches = if pattern_token.inflected {
+                token.readings().iter().any(|r| {
+                    r.lemma().is_some_and(|lemma| {
+                        forms.iter().any(|f| {
+                            if pattern_token.case_sensitive {
+                                lemma == f.as_str()
+                            } else {
+                                eq_ignore_case(lemma, f)
+                            }
+                        })
+                    })
+                })
+            } else {
+                let token_text = normalize_apostrophes(surface_text(token));
+                forms.iter().any(|f| {
+                    let f = normalize_apostrophes(f);
+                    if pattern_token.case_sensitive {
+                        token_text == f
+                    } else {
+                        eq_ignore_case(&token_text, &f)
+                    }
+                })
+            };
+            return Some(if pattern_token.negate {
+                !matches
+            } else {
+                matches
+            });
+        }
+        let ref_text = normalize_apostrophes(&entry.text);
         let token_text = normalize_apostrophes(surface_text(token));
         let matches = if pattern_token.case_sensitive {
             token_text == ref_text
@@ -860,7 +924,7 @@ impl PatternRuleEngine {
         tokens: &[&AnalyzedTokenReadings],
         token_idx: usize,
         element_idx: usize,
-        matched_texts: &[String],
+        matched: &[MatchedTraceEntry],
     ) -> Option<PatternMatchResult> {
         if element_idx >= elements.len() {
             return Some(PatternMatchResult::new());
@@ -879,7 +943,7 @@ impl PatternRuleEngine {
                     tokens,
                     token_idx,
                     element_idx,
-                    matched_texts,
+                    matched,
                 ),
             og_xml::compiler::CompiledPatternElement::OrGroup(alternatives) => {
                 let group_skip = alternatives.first().map(|a| a.skip).unwrap_or(0);
@@ -890,15 +954,18 @@ impl PatternRuleEngine {
                 };
                 for alt in alternatives {
                     let matches = if let Some(br) =
-                        self.backreference_matches(alt, tokens[token_idx], matched_texts)
+                        self.backreference_matches(alt, tokens[token_idx], matched, tokens)
                     {
                         br
                     } else {
                         self.token_matches(alt, tokens[token_idx], token_idx, tokens)
                     };
                     if matches {
-                        let mut new_mt = matched_texts.to_vec();
-                        new_mt.push(tokens[token_idx].token().token().to_string());
+                        let mut new_mt = matched.to_vec();
+                        new_mt.push(MatchedTraceEntry {
+                            text: tokens[token_idx].token().token().to_string(),
+                            token_idx,
+                        });
                         for gap in 0..=max_group_skip {
                             let after = token_idx + 1 + gap;
                             if after > tokens.len() {
@@ -947,7 +1014,7 @@ impl PatternRuleEngine {
                 };
                 let all_match = constraints.iter().all(|c| {
                     if let Some(br) =
-                        self.backreference_matches(c, tokens[token_idx], matched_texts)
+                        self.backreference_matches(c, tokens[token_idx], matched, tokens)
                     {
                         br
                     } else {
@@ -955,8 +1022,11 @@ impl PatternRuleEngine {
                     }
                 });
                 if all_match {
-                    let mut new_mt = matched_texts.to_vec();
-                    new_mt.push(tokens[token_idx].token().token().to_string());
+                    let mut new_mt = matched.to_vec();
+                    new_mt.push(MatchedTraceEntry {
+                        text: tokens[token_idx].token().token().to_string(),
+                        token_idx,
+                    });
                     for gap in 0..=max_group_skip {
                         let after = token_idx + 1 + gap;
                         if after > tokens.len() {
@@ -1004,7 +1074,7 @@ impl PatternRuleEngine {
         tokens: &[&AnalyzedTokenReadings],
         token_idx: usize,
         element_idx: usize,
-        matched_texts: &[String],
+        matched: &[MatchedTraceEntry],
     ) -> Option<PatternMatchResult> {
         let skip = pattern_token.skip;
         let min = pattern_token.min;
@@ -1015,8 +1085,8 @@ impl PatternRuleEngine {
             skip as usize
         };
 
-        let token_ok = |pos: usize, mt: &[String]| -> bool {
-            if let Some(br) = self.backreference_matches(pattern_token, tokens[pos], mt) {
+        let token_ok = |pos: usize, mt: &[MatchedTraceEntry]| -> bool {
+            if let Some(br) = self.backreference_matches(pattern_token, tokens[pos], mt, tokens) {
                 br && self.token_matches(pattern_token, tokens[pos], pos, tokens)
             } else {
                 self.token_matches(pattern_token, tokens[pos], pos, tokens)
@@ -1024,27 +1094,21 @@ impl PatternRuleEngine {
         };
 
         if min == Some(0)
-            && self.later_element_matches_at(
-                elements,
-                tokens,
-                token_idx,
-                element_idx,
-                matched_texts,
-            )
+            && self.later_element_matches_at(elements, tokens, token_idx, element_idx, matched)
         {
             let mut result = self.match_elements_recursive(
                 elements,
                 tokens,
                 token_idx,
                 element_idx + 1,
-                matched_texts,
+                matched,
             )?;
             result.push_front(token_idx, element_idx, String::new());
             return Some(result);
         }
 
         if min.is_some() || max.is_some() {
-            if !token_ok(token_idx, matched_texts) {
+            if !token_ok(token_idx, matched) {
                 return None;
             }
             let min_count = min.unwrap_or(1) as usize;
@@ -1055,7 +1119,7 @@ impl PatternRuleEngine {
             let mut cur = token_idx;
             let remaining_elems = elements.len() - element_idx - 1;
             while matched_count < max_count && cur < tokens.len().saturating_sub(remaining_elems) {
-                if token_ok(cur, matched_texts) {
+                if token_ok(cur, matched) {
                     matched_count += 1;
                     cur += 1;
                 } else {
@@ -1067,9 +1131,17 @@ impl PatternRuleEngine {
                 return None;
             }
             let count = matched_count;
-            let mut new_mt = matched_texts.to_vec();
-            for t in tokens.iter().take(token_idx + count).skip(token_idx) {
-                new_mt.push(t.token().token().to_string());
+            let mut new_mt = matched.to_vec();
+            for (i, t) in tokens
+                .iter()
+                .enumerate()
+                .take(token_idx + count)
+                .skip(token_idx)
+            {
+                new_mt.push(MatchedTraceEntry {
+                    text: t.token().token().to_string(),
+                    token_idx: i,
+                });
             }
             let next_scope_exceptions: Vec<&og_xml::compiler::CompiledException> = pattern_token
                 .exceptions
@@ -1115,9 +1187,12 @@ impl PatternRuleEngine {
             return None;
         }
 
-        if token_ok(token_idx, matched_texts) {
-            let mut new_mt = matched_texts.to_vec();
-            new_mt.push(tokens[token_idx].token().token().to_string());
+        if token_ok(token_idx, matched) {
+            let mut new_mt = matched.to_vec();
+            new_mt.push(MatchedTraceEntry {
+                text: tokens[token_idx].token().token().to_string(),
+                token_idx,
+            });
             let next_scope_exceptions: Vec<&og_xml::compiler::CompiledException> = pattern_token
                 .exceptions
                 .iter()
@@ -1167,7 +1242,7 @@ impl PatternRuleEngine {
         tokens: &[&AnalyzedTokenReadings],
         token_idx: usize,
         pattern_idx: usize,
-        matched_texts: &[String],
+        matched: &[MatchedTraceEntry],
     ) -> Option<PatternMatchResult> {
         if pattern_idx >= pattern_tokens.len() {
             return Some(PatternMatchResult::new());
@@ -1181,27 +1256,21 @@ impl PatternRuleEngine {
         let text_token = tokens[token_idx];
 
         if pattern_token.min == Some(0)
-            && self.later_token_matches_at(
-                pattern_tokens,
-                tokens,
-                token_idx,
-                pattern_idx,
-                matched_texts,
-            )
+            && self.later_token_matches_at(pattern_tokens, tokens, token_idx, pattern_idx, matched)
         {
             let mut result = self.match_pattern_recursive(
                 pattern_tokens,
                 tokens,
                 token_idx,
                 pattern_idx + 1,
-                matched_texts,
+                matched,
             )?;
             result.push_front(token_idx, pattern_idx, String::new());
             return Some(result);
         }
 
         let matches = if let Some(br) =
-            self.backreference_matches(pattern_token, text_token, matched_texts)
+            self.backreference_matches(pattern_token, text_token, matched, tokens)
         {
             br && self.token_matches(pattern_token, text_token, token_idx, tokens)
         } else {
@@ -1225,7 +1294,8 @@ impl PatternRuleEngine {
                 let next_matches = if let Some(br) = self.backreference_matches(
                     pattern_token,
                     tokens[last_token_idx + 1],
-                    matched_texts,
+                    matched,
+                    tokens,
                 ) {
                     br && self.token_matches(
                         pattern_token,
@@ -1260,7 +1330,7 @@ impl PatternRuleEngine {
                 skip as usize
             };
 
-            let mut new_mt = matched_texts.to_vec();
+            let mut new_mt = matched.to_vec();
             for (i, t) in tokens
                 .iter()
                 .enumerate()
@@ -1268,9 +1338,15 @@ impl PatternRuleEngine {
                 .skip(token_idx)
             {
                 if i == token_idx {
-                    new_mt.push(token_text.clone());
+                    new_mt.push(MatchedTraceEntry {
+                        text: token_text.clone(),
+                        token_idx: i,
+                    });
                 } else {
-                    new_mt.push(t.token().token().to_string());
+                    new_mt.push(MatchedTraceEntry {
+                        text: t.token().token().to_string(),
+                        token_idx: i,
+                    });
                 }
             }
 
@@ -1543,9 +1619,9 @@ impl PatternRuleEngine {
         token: &AnalyzedTokenReadings,
         token_idx: usize,
         tokens: &[&AnalyzedTokenReadings],
-        matched_texts: &[String],
+        matched: &[MatchedTraceEntry],
     ) -> bool {
-        if let Some(br) = self.backreference_matches(pattern_token, token, matched_texts) {
+        if let Some(br) = self.backreference_matches(pattern_token, token, matched, tokens) {
             br && self.token_matches(pattern_token, token, token_idx, tokens)
         } else {
             self.token_matches(pattern_token, token, token_idx, tokens)
@@ -1558,7 +1634,7 @@ impl PatternRuleEngine {
         tokens: &[&AnalyzedTokenReadings],
         token_idx: usize,
         pattern_idx: usize,
-        matched_texts: &[String],
+        matched: &[MatchedTraceEntry],
     ) -> bool {
         let Some(pattern_token) = pattern_tokens.get(pattern_idx) else {
             return true;
@@ -1567,17 +1643,11 @@ impl PatternRuleEngine {
             return false;
         };
         if pattern_token.min == Some(0)
-            && self.later_token_matches_at(
-                pattern_tokens,
-                tokens,
-                token_idx,
-                pattern_idx,
-                matched_texts,
-            )
+            && self.later_token_matches_at(pattern_tokens, tokens, token_idx, pattern_idx, matched)
         {
             return true;
         }
-        self.pattern_token_matches_at(pattern_token, token, token_idx, tokens, matched_texts)
+        self.pattern_token_matches_at(pattern_token, token, token_idx, tokens, matched)
     }
 
     fn next_element_commits_at(
@@ -1586,7 +1656,7 @@ impl PatternRuleEngine {
         tokens: &[&AnalyzedTokenReadings],
         token_idx: usize,
         element_idx: usize,
-        matched_texts: &[String],
+        matched: &[MatchedTraceEntry],
     ) -> bool {
         let Some(element) = elements.get(element_idx) else {
             return true;
@@ -1596,17 +1666,11 @@ impl PatternRuleEngine {
         };
         if let og_xml::compiler::CompiledPatternElement::Token(t) = element
             && t.min == Some(0)
-            && self.later_element_matches_at(
-                elements,
-                tokens,
-                token_idx,
-                element_idx,
-                matched_texts,
-            )
+            && self.later_element_matches_at(elements, tokens, token_idx, element_idx, matched)
         {
             return true;
         }
-        self.element_matches_at(element, token, token_idx, tokens, matched_texts)
+        self.element_matches_at(element, token, token_idx, tokens, matched)
     }
 
     fn element_matches_at(
@@ -1615,18 +1679,18 @@ impl PatternRuleEngine {
         token: &AnalyzedTokenReadings,
         token_idx: usize,
         tokens: &[&AnalyzedTokenReadings],
-        matched_texts: &[String],
+        matched: &[MatchedTraceEntry],
     ) -> bool {
         match element {
             og_xml::compiler::CompiledPatternElement::Token(t) => {
-                self.pattern_token_matches_at(t, token, token_idx, tokens, matched_texts)
+                self.pattern_token_matches_at(t, token, token_idx, tokens, matched)
             }
             og_xml::compiler::CompiledPatternElement::OrGroup(alts) => alts
                 .iter()
-                .any(|a| self.pattern_token_matches_at(a, token, token_idx, tokens, matched_texts)),
+                .any(|a| self.pattern_token_matches_at(a, token, token_idx, tokens, matched)),
             og_xml::compiler::CompiledPatternElement::AndGroup(constraints) => constraints
                 .iter()
-                .all(|c| self.pattern_token_matches_at(c, token, token_idx, tokens, matched_texts)),
+                .all(|c| self.pattern_token_matches_at(c, token, token_idx, tokens, matched)),
         }
     }
 
@@ -1636,17 +1700,11 @@ impl PatternRuleEngine {
         tokens: &[&AnalyzedTokenReadings],
         token_idx: usize,
         pattern_idx: usize,
-        matched_texts: &[String],
+        matched: &[MatchedTraceEntry],
     ) -> bool {
         for k2 in pattern_idx + 1..pattern_tokens.len() {
             let tok = &pattern_tokens[k2];
-            if self.pattern_token_matches_at(
-                tok,
-                tokens[token_idx],
-                token_idx,
-                tokens,
-                matched_texts,
-            ) {
+            if self.pattern_token_matches_at(tok, tokens[token_idx], token_idx, tokens, matched) {
                 return true;
             }
             if tok.min.unwrap_or(1) > 0 {
@@ -1662,17 +1720,12 @@ impl PatternRuleEngine {
         tokens: &[&AnalyzedTokenReadings],
         token_idx: usize,
         element_idx: usize,
-        matched_texts: &[String],
+        matched: &[MatchedTraceEntry],
     ) -> bool {
         for k2 in element_idx + 1..elements.len() {
             let element = &elements[k2];
-            let matched = self.element_matches_at(
-                element,
-                tokens[token_idx],
-                token_idx,
-                tokens,
-                matched_texts,
-            );
+            let matched =
+                self.element_matches_at(element, tokens[token_idx], token_idx, tokens, matched);
             if matched {
                 return true;
             }
@@ -1933,6 +1986,12 @@ fn element_matches_readings(
 
 fn has_space_before(tokens: &[&AnalyzedTokenReadings], token_idx: usize) -> bool {
     token_idx > 0 && tokens[token_idx].token().start() != tokens[token_idx - 1].token().end()
+}
+
+#[derive(Clone)]
+struct MatchedTraceEntry {
+    text: String,
+    token_idx: usize,
 }
 
 struct PatternMatchResult {

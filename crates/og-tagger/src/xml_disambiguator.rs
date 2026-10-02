@@ -820,6 +820,33 @@ struct MatchResult {
     element_counts: Vec<usize>,
 }
 
+fn reference_text_matches(
+    pt: &og_xml::compiler::CompiledPatternToken,
+    tokens: &[&AnalyzedTokenReadings],
+    token_idx: usize,
+    matched_so_far: &[usize],
+) -> bool {
+    let Some(no) = pt.match_no else {
+        return true;
+    };
+    if no < 0 {
+        return false;
+    }
+    let Some(&ref_idx) = matched_so_far.get(no as usize) else {
+        return false;
+    };
+    let Some(ref_tok) = tokens.get(ref_idx) else {
+        return false;
+    };
+    let surface = tokens[token_idx].token().token();
+    let matches = if pt.case_sensitive {
+        surface == ref_tok.token().token()
+    } else {
+        og_xml::unifier::eq_ignore_case(surface, ref_tok.token().token())
+    };
+    if pt.negate { !matches } else { matches }
+}
+
 fn element_for_slot(counts: &[usize], slot: usize) -> usize {
     let mut acc = 0usize;
     for (i, &c) in counts.iter().enumerate() {
@@ -848,7 +875,7 @@ fn match_pattern(
     let has_structured = pattern.has_structured_elements;
 
     if has_structured {
-        match_elements(elements, tokens, start_idx)
+        match_elements(elements, tokens, start_idx, &[])
     } else {
         match_tokens(&pattern.tokens, tokens, start_idx)
     }
@@ -885,7 +912,7 @@ fn match_tokens(
     tokens: &[&AnalyzedTokenReadings],
     start_idx: usize,
 ) -> Option<MatchResult> {
-    match_tokens_recursive(pattern_tokens, tokens, start_idx, 0, false)
+    match_tokens_recursive(pattern_tokens, tokens, start_idx, 0, false, &[])
 }
 
 fn match_tokens_preverified(
@@ -893,7 +920,7 @@ fn match_tokens_preverified(
     tokens: &[&AnalyzedTokenReadings],
     start_idx: usize,
 ) -> Option<MatchResult> {
-    match_tokens_recursive(pattern_tokens, tokens, start_idx, 0, true)
+    match_tokens_recursive(pattern_tokens, tokens, start_idx, 0, true, &[])
 }
 
 fn match_tokens_recursive(
@@ -902,6 +929,7 @@ fn match_tokens_recursive(
     token_idx: usize,
     pattern_idx: usize,
     first_text_verified: bool,
+    matched_so_far: &[usize],
 ) -> Option<MatchResult> {
     if pattern_idx >= pattern_tokens.len() {
         return Some(MatchResult {
@@ -929,7 +957,7 @@ fn match_tokens_recursive(
         token_matches_text_verified(pt, tokens, token_idx, token_idx > 0)
     } else {
         token_matches(pt, tokens, token_idx, token_idx > 0)
-    };
+    } && reference_text_matches(pt, tokens, token_idx, matched_so_far);
 
     if first_matched {
         let scope_next: Vec<&CompiledException> = pt
@@ -949,12 +977,15 @@ fn match_tokens_recursive(
             let mut next_token = token_idx + 1;
             while next_token <= tokens.len() {
                 if !scope_next_vetoes(next_token) {
+                    let mut extended: Vec<usize> = matched_so_far.to_vec();
+                    extended.push(token_idx);
                     if let Some(mut result) = match_tokens_recursive(
                         pattern_tokens,
                         tokens,
                         next_token,
                         pattern_idx + 1,
                         false,
+                        &extended,
                     ) {
                         result.matched_positions.insert(0, token_idx);
                         result.element_counts.insert(0, 1);
@@ -973,12 +1004,15 @@ fn match_tokens_recursive(
                 if scope_next_vetoes(next_token) {
                     continue;
                 }
+                let mut extended: Vec<usize> = matched_so_far.to_vec();
+                extended.push(token_idx);
                 if let Some(mut result) = match_tokens_recursive(
                     pattern_tokens,
                     tokens,
                     next_token,
                     pattern_idx + 1,
                     false,
+                    &extended,
                 ) {
                     result.matched_positions.insert(0, token_idx);
                     result.element_counts.insert(0, 1);
@@ -995,6 +1029,7 @@ fn match_tokens_recursive(
             token_idx,
             pattern_idx + 1,
             first_text_verified && pattern_idx == 0,
+            matched_so_far,
         )?;
         result.element_counts.insert(0, 0);
         return Some(result);
@@ -1160,10 +1195,12 @@ fn match_elements(
     elements: &[CompiledPatternElement],
     tokens: &[&AnalyzedTokenReadings],
     start_idx: usize,
+    prior: &[usize],
 ) -> Option<MatchResult> {
-    let mut positions = Vec::new();
+    let mut positions: Vec<usize> = Vec::new();
     let mut counts = Vec::new();
     let mut token_idx = start_idx;
+    let matched_before = prior.to_vec();
 
     for (elem_idx, elem) in elements.iter().enumerate() {
         if token_idx >= tokens.len() {
@@ -1191,21 +1228,24 @@ fn match_elements(
         let has_previous = token_idx > start_idx;
         let (matched, rep, min) = match elem {
             CompiledPatternElement::Token(pt) => (
-                token_matches(pt, tokens, token_idx, has_previous),
+                token_matches(pt, tokens, token_idx, has_previous)
+                    && reference_text_matches(pt, tokens, token_idx, &matched_before),
                 Some(pt.as_ref()),
                 pt.min,
             ),
             CompiledPatternElement::OrGroup(alternatives) => (
-                alternatives
-                    .iter()
-                    .any(|alt| token_matches(alt, tokens, token_idx, has_previous)),
+                alternatives.iter().any(|alt| {
+                    token_matches(alt, tokens, token_idx, has_previous)
+                        && reference_text_matches(alt, tokens, token_idx, &matched_before)
+                }),
                 alternatives.first(),
                 alternatives.first().and_then(|a| a.min),
             ),
             CompiledPatternElement::AndGroup(constraints) => (
-                constraints
-                    .iter()
-                    .all(|c| token_matches(c, tokens, token_idx, has_previous)),
+                constraints.iter().all(|c| {
+                    token_matches(c, tokens, token_idx, has_previous)
+                        && reference_text_matches(c, tokens, token_idx, &matched_before)
+                }),
                 constraints.first(),
                 constraints.first().and_then(|c| c.min),
             ),
@@ -1248,7 +1288,11 @@ fn match_elements(
             {
                 continue;
             }
-            if let Some(rest) = match_elements(&elements[elem_idx + 1..], tokens, next) {
+            let mut next_prior = matched_before.clone();
+            next_prior.extend(positions.iter().copied());
+            next_prior.push(token_idx);
+            if let Some(rest) = match_elements(&elements[elem_idx + 1..], tokens, next, &next_prior)
+            {
                 let mut result = MatchResult {
                     matched_positions: positions.clone(),
                     element_counts: counts.clone(),
@@ -2780,6 +2824,46 @@ mod tests {
         ]);
         disambiguator.disambiguate(&mut split);
         assert!(split.tokens()[0].is_immunized());
+    }
+
+    #[test]
+    fn pattern_token_backreference_requires_same_surface() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<rules lang="en">
+    <rule id="STEP_X_STEP">
+        <pattern>
+            <marker>
+                <token postag="NN" regexp="yes">step|bit</token>
+                <token>by</token>
+                <token postag="NN"><match no="0"/></token>
+            </marker>
+        </pattern>
+        <disambig action="filterall"/>
+    </rule>
+</rules>"#;
+        let disambig = XmlDisambiguator::from_xml(xml).unwrap();
+        let mut same = make_sentence(vec![
+            ("step", vec!["NN", "VB"]),
+            ("by", vec!["IN"]),
+            ("step", vec!["NN", "VB"]),
+        ]);
+        disambig.disambiguate(&mut same);
+        assert_eq!(
+            same.tokens()[0].readings().len(),
+            1,
+            "filterall applies when the referenced surface matches"
+        );
+        let mut other = make_sentence(vec![
+            ("step", vec!["NN", "VB"]),
+            ("by", vec!["IN"]),
+            ("bit", vec!["NN", "VB"]),
+        ]);
+        disambig.disambiguate(&mut other);
+        assert_eq!(
+            other.tokens()[0].readings().len(),
+            2,
+            "a different surface must not match the backreference"
+        );
     }
 
     #[test]

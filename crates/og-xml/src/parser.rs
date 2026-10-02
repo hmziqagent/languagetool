@@ -339,6 +339,11 @@ impl XmlRuleParser {
                                 {
                                     token.match_no = val.parse().ok();
                                 }
+                                if key == "postag"
+                                    && let Some(ref mut token) = current_token
+                                {
+                                    token.match_no_postag = Some(val);
+                                }
                             }
                         }
                         "example" => {
@@ -623,6 +628,11 @@ impl XmlRuleParser {
                                     && let Some(ref mut token) = current_token
                                 {
                                     token.match_no = val.parse().ok();
+                                }
+                                if key == "postag"
+                                    && let Some(ref mut token) = current_token
+                                {
+                                    token.match_no_postag = Some(val);
                                 }
                             }
                         }

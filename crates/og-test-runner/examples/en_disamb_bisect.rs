@@ -53,7 +53,33 @@ fn main() {
     let before = readings_for(&base);
     println!("pre-disambig {target}: {before:?}");
 
-    let positions: Vec<usize> = xml.match_indices("<rule ").map(|(i, _)| i).collect();
+    let xml = {
+        let mut cleaned = String::with_capacity(xml.len());
+        let mut i = 0usize;
+        while i < xml.len() {
+            if xml.is_char_boundary(i) && xml[i..].starts_with("<!--") {
+                match xml[i + 4..].find("-->") {
+                    Some(rel) => i += 4 + rel + 3,
+                    None => i = xml.len(),
+                }
+            } else {
+                let step = xml[i..].chars().next().map(|c| c.len_utf8()).unwrap_or(1);
+                cleaned.push_str(&xml[i..i + step]);
+                i += step;
+            }
+        }
+        cleaned
+    };
+    let positions: Vec<usize> = xml
+        .match_indices("<rule")
+        .filter(|(i, _)| {
+            xml[*i + 5..]
+                .chars()
+                .next()
+                .is_some_and(|c| c == '>' || c.is_whitespace())
+        })
+        .map(|(i, _)| i)
+        .collect();
     let mut spans: Vec<(usize, usize)> = Vec::new();
     for i in positions {
         if let Some(rel) = xml[i..].find("</rule>") {
