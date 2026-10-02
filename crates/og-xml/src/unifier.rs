@@ -25,7 +25,8 @@ pub fn eq_ignore_case(a: &str, b: &str) -> bool {
             (Some(x), Some(y)) => {
                 if x != y
                     && java_simple_upper(x) != java_simple_upper(y)
-                    && java_simple_lower(x) != java_simple_lower(y)
+                    && java_simple_lower(java_simple_upper(x))
+                        != java_simple_lower(java_simple_upper(y))
                 {
                     return false;
                 }
@@ -533,6 +534,10 @@ mod tests {
         );
         assert!(eq_ignore_case("İ", "i"));
         assert!(eq_ignore_case("İ", "I"));
+        assert!(
+            eq_ignore_case("ı", "İ"),
+            "StringLatin1.regionMatchesCI compares toLower(toUpper(x)) so ı equals İ"
+        );
         assert!(eq_ignore_case("bıg", "BIG"));
         assert!(!eq_ignore_case("bıg", "beg"));
     }

@@ -47,7 +47,7 @@ fn rewrite_ast(ast: &mut Ast) -> Option<()> {
                 Some(())
             }
             'I' => {
-                *ast = bracketed(&lit.span, &['I', DOTLESS_I]);
+                *ast = bracketed(&lit.span, &['I', DOTLESS_I, DOTTED_CAPITAL_I]);
                 Some(())
             }
             _ => Some(()),
@@ -94,8 +94,11 @@ fn rewrite_class(cls: &mut ClassBracketed) -> Option<()> {
         }
     }
     let has_i = items_contain(items, 'i');
+    let has_literal_upper_i = items
+        .iter()
+        .any(|item| matches!(item, ClassSetItem::Literal(lit) if lit.c == 'I'));
     let has_upper_i = items_contain(items, 'I');
-    if has_i {
+    if has_i || has_literal_upper_i {
         items.push(literal_item(span, DOTLESS_I));
         items.push(literal_item(span, DOTTED_CAPITAL_I));
     } else if has_upper_i {
@@ -189,6 +192,28 @@ mod tests {
         assert!(lit.is_match("BIG"));
         assert!(lit.is_match("bıg"));
         assert!(lit.is_match("bİg"));
+    }
+
+    #[test]
+    fn literal_upper_i_also_matches_dotted_capital_i() {
+        let lit = ci("^(?:I)$");
+        assert!(lit.is_match("I"));
+        assert!(lit.is_match("i"));
+        assert!(lit.is_match("ı"));
+        assert!(
+            lit.is_match("İ"),
+            "Java compiles literal I to SingleU(i) which matches İ via toLower(toUpper)"
+        );
+        let class_lit = ci("^(?:[AI])$");
+        assert!(class_lit.is_match("İ"));
+        assert!(class_lit.is_match("ı"));
+        assert!(class_lit.is_match("a"));
+        let range_only = ci("^(?:[A-Z])$");
+        assert!(range_only.is_match("ı"));
+        assert!(
+            !range_only.is_match("İ"),
+            "range-covered I keeps the CIRangeU orbit: İ only folds into [a-z]"
+        );
     }
 
     #[test]
