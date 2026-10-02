@@ -43,7 +43,7 @@ impl DefaultWordTokenizer {
             || c == '_'
             || c == '\''
             || c == '\u{2019}'
-            || (self.english_word_chars && matches!(c, '\u{FF0C}' | '\u{FF1F}'))
+            || (self.english_word_chars && is_english_extra_word_char(c))
     }
 
     fn starts_run(&self, c: char) -> bool {
@@ -304,6 +304,29 @@ impl Default for DefaultWordTokenizer {
     fn default() -> Self {
         Self::new()
     }
+}
+
+fn is_english_extra_word_char(c: char) -> bool {
+    matches!(
+        c,
+        '±' | '§'
+            | '©'
+            | '@'
+            | '€'
+            | '£'
+            | '¥'
+            | '$'
+            | '°'
+            | '%'
+            | '‰'
+            | '‱'
+            | '&'
+            | '\u{FFFD}'
+            | '\u{00AD}'
+            | '\u{00AC}'
+            | '\u{FF0C}'
+            | '\u{FF1F}'
+    ) || ('\u{0300}'..='\u{036F}').contains(&c)
 }
 
 impl WordTokenizer for DefaultWordTokenizer {
@@ -812,8 +835,13 @@ mod tests {
     fn test_at_symbol() {
         let tz = DefaultWordTokenizer::new();
         let tokens = tz.tokenize("user@host");
-        assert_eq!(token_texts(&tz, "user@host"), vec!["user", "@", "host"]);
+        assert_eq!(token_texts(&tz, "user@host"), vec!["user@host"]);
         assert_offsets_valid(&tokens);
+        let generic = DefaultWordTokenizer::new_generic();
+        assert_eq!(
+            token_texts(&generic, "user@host"),
+            vec!["user", "@", "host"]
+        );
     }
 
     #[test]
@@ -828,24 +856,55 @@ mod tests {
     fn test_dollar_sign() {
         let tz = DefaultWordTokenizer::new();
         let tokens = tz.tokenize("$100");
-        assert_eq!(token_texts(&tz, "$100"), vec!["$", "100"]);
+        assert_eq!(token_texts(&tz, "$100"), vec!["$100"]);
         assert_offsets_valid(&tokens);
+        let generic = DefaultWordTokenizer::new_generic();
+        assert_eq!(token_texts(&generic, "$100"), vec!["$", "100"]);
     }
 
     #[test]
     fn test_percent_sign() {
         let tz = DefaultWordTokenizer::new();
         let tokens = tz.tokenize("100%");
-        assert_eq!(token_texts(&tz, "100%"), vec!["100", "%"]);
+        assert_eq!(token_texts(&tz, "100%"), vec!["100%"]);
         assert_offsets_valid(&tokens);
+        let generic = DefaultWordTokenizer::new_generic();
+        assert_eq!(token_texts(&generic, "100%"), vec!["100", "%"]);
     }
 
     #[test]
     fn test_ampersand() {
         let tz = DefaultWordTokenizer::new();
         let tokens = tz.tokenize("A&B");
-        assert_eq!(token_texts(&tz, "A&B"), vec!["A", "&", "B"]);
+        assert_eq!(token_texts(&tz, "A&B"), vec!["A&B"]);
         assert_offsets_valid(&tokens);
+        let generic = DefaultWordTokenizer::new_generic();
+        assert_eq!(token_texts(&generic, "A&B"), vec!["A", "&", "B"]);
+    }
+
+    #[test]
+    fn test_english_word_characters_from_java() {
+        let tz = DefaultWordTokenizer::new();
+        assert_eq!(token_texts(&tz, "40–45%"), vec!["40", "–", "45%"]);
+        assert_eq!(token_texts(&tz, "$12,50"), vec!["$12", ",", "50"]);
+        assert_eq!(
+            token_texts(&tz, "€5 and £3"),
+            vec!["€5", " ", "and", " ", "£3"]
+        );
+        assert_eq!(token_texts(&tz, "12‰"), vec!["12‰"]);
+        assert_eq!(token_texts(&tz, "90°"), vec!["90°"]);
+        assert_eq!(token_texts(&tz, "±2"), vec!["±2"]);
+        assert_eq!(token_texts(&tz, "§2"), vec!["§2"]);
+        assert_eq!(token_texts(&tz, "©2024"), vec!["©2024"]);
+        assert_eq!(token_texts(&tz, "Q&A's"), vec!["Q&A", "'s"]);
+        assert_eq!(token_texts(&tz, "cafe\u{0301}"), vec!["cafe\u{0301}"]);
+        assert_eq!(token_texts(&tz, "a\u{00AD}b"), vec!["a\u{00AD}b"]);
+        let generic = DefaultWordTokenizer::new_generic();
+        assert_eq!(token_texts(&generic, "90°"), vec!["90", "°"]);
+        assert_eq!(
+            token_texts(&generic, "cafe\u{0301}"),
+            vec!["cafe", "\u{0301}"]
+        );
     }
 
     #[test]
