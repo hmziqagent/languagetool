@@ -272,12 +272,21 @@ impl PatternRuleEngine {
                         tokens,
                     )
                 {
-                    let first = anti_result
+                    let whole_first = anti_result
                         .matched_positions
                         .first()
                         .copied()
                         .unwrap_or(pos);
-                    let last = anti_result.matched_positions.last().copied().unwrap_or(pos);
+                    let whole_last = anti_result.matched_positions.last().copied().unwrap_or(pos);
+                    let marker_span = (|| {
+                        let (ms, me) =
+                            (antipattern.marker_elem_start?, antipattern.marker_elem_end?);
+                        let first = anti_result.position_for_pattern(ms)?;
+                        let me_pat = if me > 0 { me - 1 } else { 0 };
+                        let last = anti_result.last_position_for_pattern(me_pat)?;
+                        Some((first, last))
+                    })();
+                    let (first, last) = marker_span.unwrap_or((whole_first, whole_last));
                     spans.push((first, last));
                 }
             }
