@@ -398,6 +398,7 @@ impl XmlCompiler {
                 self.cached_regex(&anchored)
             }),
             match_no: token.match_no,
+            match_no_postag: token.match_no_postag.clone(),
         }
     }
 
@@ -955,6 +956,7 @@ pub struct CompiledPatternToken {
     pub chunk: Option<String>,
     pub chunk_re: Option<regex::Regex>,
     pub match_no: Option<i32>,
+    pub match_no_postag: Option<String>,
 }
 
 #[derive(Debug, Clone)]
