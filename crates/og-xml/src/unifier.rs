@@ -15,9 +15,43 @@ pub fn normalize_apostrophes(text: &str) -> std::borrow::Cow<'_, str> {
 
 pub fn eq_ignore_case(a: &str, b: &str) -> bool {
     if a.is_ascii() && b.is_ascii() {
-        a.eq_ignore_ascii_case(b)
-    } else {
-        a.to_lowercase() == b.to_lowercase()
+        return a.eq_ignore_ascii_case(b);
+    }
+    let mut ia = a.chars();
+    let mut ib = b.chars();
+    loop {
+        match (ia.next(), ib.next()) {
+            (None, None) => return true,
+            (Some(x), Some(y)) => {
+                if x != y
+                    && java_simple_upper(x) != java_simple_upper(y)
+                    && java_simple_lower(x) != java_simple_lower(y)
+                {
+                    return false;
+                }
+            }
+            _ => return false,
+        }
+    }
+}
+
+fn java_simple_upper(c: char) -> char {
+    let mut it = c.to_uppercase();
+    match (it.next(), it.next()) {
+        (Some(u), None) => u,
+        _ => c,
+    }
+}
+
+fn java_simple_lower(c: char) -> char {
+    // Character.toLowerCase(İ) is 'i' (simple mapping); Rust's full mapping is two chars
+    if c == '\u{0130}' {
+        return 'i';
+    }
+    let mut it = c.to_lowercase();
+    match (it.next(), it.next()) {
+        (Some(l), None) => l,
+        _ => c,
     }
 }
 
@@ -478,4 +512,37 @@ pub fn eval_unify_plans(
         }
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn eq_ignore_case_matches_java_equalsignorecase_for_ascii() {
+        assert!(eq_ignore_case("Hello", "hello"));
+        assert!(!eq_ignore_case("Hello", "hell"));
+        assert!(eq_ignore_case("", ""));
+    }
+
+    #[test]
+    fn eq_ignore_case_folds_dotless_and_dotted_i_like_java() {
+        assert!(
+            eq_ignore_case("i", "ı"),
+            "String.equalsIgnoreCase folds i with ı via toUpperCase"
+        );
+        assert!(eq_ignore_case("İ", "i"));
+        assert!(eq_ignore_case("İ", "I"));
+        assert!(eq_ignore_case("bıg", "BIG"));
+        assert!(!eq_ignore_case("bıg", "beg"));
+    }
+
+    #[test]
+    fn eq_ignore_case_uses_per_char_mapping_not_full_lowercase() {
+        assert!(!eq_ignore_case("ß", "SS"));
+        assert!(eq_ignore_case("ß", "ß"));
+        assert!(eq_ignore_case("ſ", "s"));
+        assert!(eq_ignore_case("K", "k"));
+        assert!(!eq_ignore_case("ab", "abc"));
+    }
 }

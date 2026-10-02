@@ -9,5 +9,6 @@ serde = { workspace = true }
 quick-xml = { workspace = true }
 fancy-regex = "0.14"
 regex = { workspace = true }
+regex-syntax = "0.8"
 thiserror = { workspace = true }
 rayon = { workspace = true }

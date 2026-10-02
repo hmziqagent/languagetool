@@ -45,10 +45,7 @@ impl XmlCompiler {
         if let Some(hit) = shard.lock().unwrap().get(pattern) {
             return hit.clone();
         }
-        let built = regex::RegexBuilder::new(pattern)
-            .case_insensitive(true)
-            .build()
-            .ok();
+        let built = crate::java_case_fold::compile_java_ci(pattern);
         shard
             .lock()
             .unwrap()
@@ -270,10 +267,9 @@ impl XmlCompiler {
                     };
                     (plain, fancy)
                 } else {
-                    let pattern = format!("(?i){pattern}");
-                    let plain = regex::Regex::new(&pattern).ok();
+                    let plain = crate::java_case_fold::compile_java_ci(&pattern);
                     let fancy = if plain.is_none() {
-                        fancy_regex::Regex::new(&pattern).ok()
+                        fancy_regex::Regex::new(&format!("(?i){pattern}")).ok()
                     } else {
                         None
                     };
@@ -439,12 +435,11 @@ impl XmlCompiler {
         };
         let compiled_re = exception_regex_source.and_then(|t| {
             let anchored = Self::anchor_regex(t);
-            let final_pattern = if effective_case_sensitive || is_property_sequence(t) {
-                anchored
+            if effective_case_sensitive || is_property_sequence(t) {
+                self.cached_regex(&anchored)
             } else {
-                format!("(?i){anchored}")
-            };
-            self.cached_regex(&final_pattern)
+                self.cached_regex_ci(&anchored)
+            }
         });
         let compiled_postag_re = if exc.postag_regexp.as_deref() == Some("yes") {
             exc.postag
