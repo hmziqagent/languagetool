@@ -803,16 +803,32 @@ impl XmlDisambiguator {
                             }
                             _ => None,
                         } {
-                            let contiguous = match_result
-                                .matched_positions
-                                .windows(2)
-                                .all(|w| w[1] == w[0] + 1);
-                            let targets: Vec<usize> = if has_marker {
-                                target_indices.clone()
-                            } else {
-                                match_result.matched_positions.clone()
-                            };
-                            if contiguous && wds_len == targets.len() {
+                            let counts = &match_result.element_counts;
+                            let (span_start_elem, span_end_elem) =
+                                if let (Some(ms), Some(me)) = effective_marker {
+                                    (ms, me)
+                                } else {
+                                    (0, counts.len())
+                                };
+                            if span_end_elem > span_start_elem
+                                && counts[span_start_elem..span_end_elem]
+                                    .iter()
+                                    .all(|c| *c > 0)
+                                && wds_len == span_end_elem - span_start_elem
+                            {
+                                let start_pos = if has_marker {
+                                    let slot_start: usize = counts[..span_start_elem].iter().sum();
+                                    match_result.matched_positions
+                                        [slot_start + counts[span_start_elem] - 1]
+                                } else {
+                                    match_result
+                                        .matched_positions
+                                        .first()
+                                        .copied()
+                                        .unwrap_or(usize::MAX)
+                                };
+                                let targets: Vec<usize> =
+                                    (0..wds_len).map(|i| start_pos + i).collect();
                                 pending_wd_actions.push((
                                     targets,
                                     &rule.disambig,
