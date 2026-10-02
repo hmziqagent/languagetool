@@ -1703,10 +1703,13 @@ fn token_matches(
     }
     let text = token.token().token();
 
-    if pt.space_before.as_deref() == Some("no") && has_previous && token_idx > 0 {
+    if has_previous && token_idx > 0 {
         let prev = tokens[token_idx - 1];
-        if token.token().start() != prev.token().end() {
-            return false;
+        let spaced = token.token().start() != prev.token().end();
+        match pt.space_before.as_deref() {
+            Some("no") if spaced => return false,
+            Some("yes") if !spaced => return false,
+            _ => {}
         }
     }
 
@@ -3922,6 +3925,77 @@ mod tests {
         assert!(
             !sentence.tokens()[0].has_pos_tag("JJ"),
             "no tagger wired means the filter cannot confirm the stem postag, so the rule must not fire"
+        );
+    }
+
+    fn spaced_dots_sentence() -> AnalyzedSentence {
+        let spec = [
+            ("is", 0usize, 2usize),
+            (".", 2, 3),
+            (".", 4, 5),
+            (".", 6, 7),
+        ];
+        let analyzed = spec
+            .iter()
+            .map(|(text, start, end)| {
+                let base = AnalyzedToken::new(*text, *start, *end);
+                AnalyzedTokenReadings::new(base)
+                    .with_readings(vec![AnalyzedToken::new(*text, *start, *end)])
+            })
+            .collect();
+        let mut sentence = AnalyzedSentence::new("is. . .", 0, 7);
+        sentence.set_tokens(analyzed);
+        sentence
+    }
+
+    #[test]
+    fn spacebefore_yes_rejects_glued_leading_token() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<rules lang="en">
+    <rule id="IMMUNIZE_ELLIPSIS" name="immunize ellipsis">
+        <pattern>
+            <token spacebefore="yes">.</token>
+            <token spacebefore="yes">.</token>
+            <token spacebefore="yes">.</token>
+        </pattern>
+        <disambig action="immunize"/>
+    </rule>
+</rules>"#;
+        let disambig = XmlDisambiguator::from_xml(xml).unwrap();
+        let mut sentence = spaced_dots_sentence();
+        disambig.disambiguate(&mut sentence);
+        assert!(
+            !sentence.tokens()[1].is_immunized(),
+            "the first dot is glued to 'is' so spacebefore=yes must fail and the rule must not immunize"
+        );
+    }
+
+    #[test]
+    fn spacebefore_yes_immunizes_fully_spaced_dots() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<rules lang="en">
+    <rule id="IMMUNIZE_ELLIPSIS" name="immunize ellipsis">
+        <pattern>
+            <token spacebefore="yes">.</token>
+            <token spacebefore="yes">.</token>
+            <token spacebefore="yes">.</token>
+        </pattern>
+        <disambig action="immunize"/>
+    </rule>
+</rules>"#;
+        let disambig = XmlDisambiguator::from_xml(xml).unwrap();
+        let mut sentence = spaced_dots_sentence();
+        {
+            let tokens = sentence.tokens_mut();
+            tokens[1] = AnalyzedTokenReadings::new(AnalyzedToken::new(".", 8, 9))
+                .with_readings(vec![AnalyzedToken::new(".", 8, 9)]);
+        }
+        disambig.disambiguate(&mut sentence);
+        assert!(
+            sentence.tokens()[1].is_immunized()
+                && sentence.tokens()[2].is_immunized()
+                && sentence.tokens()[3].is_immunized(),
+            "three fully spaced dots must be immunized like Java's IMMUNIZE_ELLIPSIS"
         );
     }
 }
