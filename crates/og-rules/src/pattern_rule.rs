@@ -139,26 +139,45 @@ impl PatternRuleEngine {
         sentence: &AnalyzedSentence,
     ) -> Vec<RuleMatch> {
         let tokens = sentence.non_whitespace_tokens();
-        let mut all_matches = Vec::new();
 
-        for token_idx in 0..tokens.len() {
-            let token_lower = tokens[token_idx].token().token().to_lowercase();
-
+        let mut candidate = vec![false; rules.len()];
+        for token in &tokens {
+            let token_lower = token.token().token().to_lowercase();
             if let Some(rule_indices) = self.word_index.get(&token_lower) {
                 for &rule_idx in rule_indices {
-                    if let Some(rm) =
-                        self.try_match_at(rules[rule_idx], &tokens, token_idx, sentence)
-                    {
-                        all_matches.push(rm);
-                    }
+                    candidate[rule_idx] = true;
                 }
             }
+        }
+        for &rule_idx in &self.catch_all_rule_indices {
+            candidate[rule_idx] = true;
+        }
 
-            for &rule_idx in &self.catch_all_rule_indices {
-                if let Some(rm) = self.try_match_at(rules[rule_idx], &tokens, token_idx, sentence) {
-                    all_matches.push(rm);
+        let mut all_matches = Vec::new();
+        for (rule_idx, is_candidate) in candidate.iter().enumerate() {
+            if !is_candidate {
+                continue;
+            }
+            let rule = rules[rule_idx];
+            let index_key = rule
+                .pattern
+                .tokens
+                .first()
+                .filter(|t| !t.negate && t.compiled_regexp.is_none())
+                .and_then(|t| t.text.as_ref())
+                .map(|text| text.to_lowercase());
+            let mut matches = Vec::new();
+            for token_idx in 0..tokens.len() {
+                if let Some(ref key) = index_key
+                    && tokens[token_idx].token().token().to_lowercase() != *key
+                {
+                    continue;
+                }
+                if let Some(rm) = self.try_match_at(rule, &tokens, token_idx, sentence) {
+                    matches.push(rm);
                 }
             }
+            all_matches.extend(self.check_for_antipatterns(rule, &tokens, sentence, matches));
         }
 
         all_matches
@@ -184,6 +203,94 @@ impl PatternRuleEngine {
             return self.match_regexp_rule(rule, regexp, sentence);
         }
         let tokens = sentence.non_whitespace_tokens();
+        let matches = self.collect_rule_matches(rule, &tokens, sentence);
+        self.check_for_antipatterns(rule, &tokens, sentence, matches)
+    }
+
+    fn check_for_antipatterns(
+        &self,
+        rule: &CompiledRule,
+        tokens: &[&AnalyzedTokenReadings],
+        sentence: &AnalyzedSentence,
+        matches: Vec<RuleMatch>,
+    ) -> Vec<RuleMatch> {
+        if matches.is_empty() || rule.antipatterns.is_empty() {
+            return matches;
+        }
+        let spans = self.antipattern_immunize_spans(rule, tokens);
+        if spans.is_empty() {
+            return matches;
+        }
+        let mut immunized: Vec<AnalyzedTokenReadings> =
+            tokens.iter().map(|t| (*t).clone()).collect();
+        for &(first, last) in &spans {
+            let last = last.min(immunized.len().saturating_sub(1));
+            for token in &mut immunized[first..=last] {
+                token.immunize();
+            }
+        }
+        let refs: Vec<&AnalyzedTokenReadings> = immunized.iter().collect();
+        self.collect_rule_matches(rule, &refs, sentence)
+    }
+
+    fn antipattern_immunize_spans(
+        &self,
+        rule: &CompiledRule,
+        tokens: &[&AnalyzedTokenReadings],
+    ) -> Vec<(usize, usize)> {
+        let mut spans = Vec::new();
+        for antipattern in rule.antipatterns.iter() {
+            if antipattern.tokens.is_empty() && antipattern.elements.is_empty() {
+                continue;
+            }
+            let has_structured = antipattern.has_structured_elements;
+            let first_literal = self.antipattern_first_literal(antipattern);
+            for pos in 0..tokens.len() {
+                if let Some((lit, cs)) = &first_literal {
+                    let text = normalize_apostrophes(tokens[pos].token().token());
+                    let hit = if *cs {
+                        text == lit.as_str()
+                    } else {
+                        eq_ignore_case(&text, lit)
+                    };
+                    if !hit {
+                        continue;
+                    }
+                }
+                let result = if has_structured {
+                    self.match_pattern_elements(&antipattern.elements, tokens, pos)
+                } else {
+                    self.match_pattern_tokens(&antipattern.tokens, tokens, pos)
+                };
+                if let Some(anti_result) = result
+                    && antipattern_unify_satisfied(
+                        &rule.unifications,
+                        antipattern,
+                        &anti_result.matched_positions,
+                        &anti_result.pattern_indices,
+                        &anti_result.matched_texts,
+                        tokens,
+                    )
+                {
+                    let first = anti_result
+                        .matched_positions
+                        .first()
+                        .copied()
+                        .unwrap_or(pos);
+                    let last = anti_result.matched_positions.last().copied().unwrap_or(pos);
+                    spans.push((first, last));
+                }
+            }
+        }
+        spans
+    }
+
+    fn collect_rule_matches(
+        &self,
+        rule: &CompiledRule,
+        tokens: &[&AnalyzedTokenReadings],
+        sentence: &AnalyzedSentence,
+    ) -> Vec<RuleMatch> {
         let mut matches = Vec::new();
 
         if rule.pattern.tokens.is_empty() && rule.pattern.elements.is_empty() {
@@ -448,17 +555,6 @@ impl PatternRuleEngine {
         } else {
             self.match_pattern_tokens(pattern_tokens, tokens, start_idx)?
         };
-
-        for antipattern in rule.antipatterns.iter() {
-            if self.antipattern_matches_with_unification(
-                antipattern,
-                tokens,
-                &match_result.matched_positions,
-                &rule.unifications,
-            ) {
-                return None;
-            }
-        }
 
         if !rule.pattern.unify_groups.is_empty()
             && !unify_groups_satisfied(rule, &match_result, tokens)
@@ -1571,100 +1667,6 @@ impl PatternRuleEngine {
         let text = first.text.as_ref()?;
         let norm = normalize_apostrophes(text);
         Some((norm.into_owned(), first.case_sensitive))
-    }
-
-    fn antipattern_matches_with_unification(
-        &self,
-        antipattern: &og_xml::compiler::CompiledPattern,
-        tokens: &[&AnalyzedTokenReadings],
-        matched_positions: &[usize],
-        unifications: &[og_xml::compiler::CompiledUnification],
-    ) -> bool {
-        if antipattern.tokens.is_empty() && antipattern.elements.is_empty() {
-            return false;
-        }
-        if matched_positions.is_empty() {
-            let has_structured = antipattern.has_structured_elements;
-            let first_literal = self.antipattern_first_literal(antipattern);
-            for pos in 0..tokens.len() {
-                if let Some((lit, cs)) = &first_literal {
-                    let text = normalize_apostrophes(tokens[pos].token().token());
-                    let hit = if *cs {
-                        text == lit.as_str()
-                    } else {
-                        eq_ignore_case(&text, lit)
-                    };
-                    if !hit {
-                        continue;
-                    }
-                }
-                let result = if has_structured {
-                    self.match_pattern_elements(&antipattern.elements, tokens, pos)
-                } else {
-                    self.match_pattern_tokens(&antipattern.tokens, tokens, pos)
-                };
-                if let Some(anti_result) = result
-                    && antipattern_unify_satisfied(
-                        unifications,
-                        antipattern,
-                        &anti_result.matched_positions,
-                        &anti_result.pattern_indices,
-                        &anti_result.matched_texts,
-                        tokens,
-                    )
-                {
-                    return true;
-                }
-            }
-            return false;
-        }
-
-        let has_structured = antipattern.has_structured_elements;
-
-        let match_min = *matched_positions.iter().min().unwrap();
-        let match_max = *matched_positions.iter().max().unwrap();
-
-        let first_literal = self.antipattern_first_literal(antipattern);
-        for pos in 0..tokens.len() {
-            if let Some((lit, cs)) = &first_literal {
-                let text = normalize_apostrophes(tokens[pos].token().token());
-                let hit = if *cs {
-                    text == lit.as_str()
-                } else {
-                    eq_ignore_case(&text, lit)
-                };
-                if !hit {
-                    continue;
-                }
-            }
-            let result = if has_structured {
-                self.match_pattern_elements(&antipattern.elements, tokens, pos)
-            } else {
-                self.match_pattern_tokens(&antipattern.tokens, tokens, pos)
-            };
-            if let Some(anti_result) = result {
-                if !antipattern_unify_satisfied(
-                    unifications,
-                    antipattern,
-                    &anti_result.matched_positions,
-                    &anti_result.pattern_indices,
-                    &anti_result.matched_texts,
-                    tokens,
-                ) {
-                    continue;
-                }
-                let anti_min = anti_result
-                    .matched_positions
-                    .first()
-                    .copied()
-                    .unwrap_or(usize::MAX);
-                let anti_max = anti_result.matched_positions.last().copied().unwrap_or(0);
-                if anti_min <= match_max && anti_max >= match_min {
-                    return true;
-                }
-            }
-        }
-        false
     }
 
     fn resolve_backreferences(&self, text: &str, matched_texts: &[String]) -> String {
@@ -6372,6 +6374,79 @@ mod tests {
 
         let blocked2 = compile_and_match(xml, "water ski");
         assert!(blocked2.is_empty());
+    }
+
+    #[test]
+    fn test_antipattern_bridge_token_does_not_block() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <category id="GRAMMAR" name="Grammar">
+                <rule id="TEST" name="Test">
+                    <antipattern>
+                        <token>bridge</token>
+                    </antipattern>
+                    <pattern>
+                        <token skip="-1">alpha</token>
+                        <token>omega</token>
+                    </pattern>
+                    <message>Test</message>
+                </rule>
+            </category>
+        </rules>"#;
+
+        let matches = compile_and_match(xml, "alpha bridge omega");
+        assert_eq!(
+            matches.len(),
+            1,
+            "antipattern on a skip-bridged token must not block the rule match"
+        );
+    }
+
+    #[test]
+    fn test_antipattern_span_includes_bridged_tokens() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <category id="GRAMMAR" name="Grammar">
+                <rule id="TEST" name="Test">
+                    <antipattern>
+                        <token skip="-1">alpha</token>
+                        <token>omega</token>
+                    </antipattern>
+                    <pattern>
+                        <token>bridge</token>
+                    </pattern>
+                    <message>Test</message>
+                </rule>
+            </category>
+        </rules>"#;
+
+        let blocked = compile_and_match(xml, "alpha bridge omega");
+        assert!(
+            blocked.is_empty(),
+            "antipattern immunization spans the bridged tokens, so the rematch cannot match"
+        );
+    }
+
+    #[test]
+    fn test_antipattern_match_outside_rule_range_keeps_match() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <category id="GRAMMAR" name="Grammar">
+                <rule id="TEST" name="Test">
+                    <antipattern>
+                        <token>never</token>
+                        <token>happens</token>
+                    </antipattern>
+                    <pattern>
+                        <token>clean</token>
+                    </pattern>
+                    <message>Test</message>
+                </rule>
+            </category>
+        </rules>"#;
+
+        let matches = compile_and_match(xml, "clean the house");
+        assert_eq!(matches.len(), 1);
     }
 
     #[test]
