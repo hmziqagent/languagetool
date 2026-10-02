@@ -273,6 +273,7 @@ fn build_first_token_gate(rule: &CompiledDisambigRule) -> FirstTokenGate {
     }
     if let Some(text) = first.text.as_ref()
         && first.compiled_regexp.is_none()
+        && !first.inflected
     {
         return FirstTokenGate::Text {
             text: if first.case_sensitive {
@@ -343,6 +344,8 @@ impl XmlDisambiguator {
             let mut pending_actions: Vec<(usize, &DisambigAction, &DisambigActionRegex)> =
                 Vec::new();
             let mut pending_unify: Vec<(usize, AnalyzedToken, Vec<AnalyzedToken>)> = Vec::new();
+            let mut pending_wd_actions: Vec<(Vec<usize>, &DisambigAction, &DisambigActionRegex)> =
+                Vec::new();
             let mut pending_filterall: Vec<(usize, &CompiledPatternToken)> = Vec::new();
             let mut pending_immunize: Vec<usize> = Vec::new();
 
@@ -433,7 +436,7 @@ impl XmlDisambiguator {
                             let unknown_ok = re.is_match("UNKNOWN");
                             results[start_idx] = tokens[start_idx].readings().iter().any(|r| {
                                 r.pos_tags().iter().any(|t| re.is_match(t))
-                                    || (unknown_ok && r.pos_tags().is_empty())
+                                    || (unknown_ok && reading_tagless(r))
                             });
                             evaluated[start_idx] = true;
                         }
@@ -790,6 +793,32 @@ impl XmlDisambiguator {
                                 entries.push((*pos, base, kept));
                             }
                             pending_unify.extend(entries);
+                        } else if let Some(wds_len) = match &rule.disambig {
+                            DisambigAction::Replace(wds)
+                            | DisambigAction::Add(wds)
+                            | DisambigAction::Remove(wds)
+                                if !wds.is_empty() =>
+                            {
+                                Some(wds.len())
+                            }
+                            _ => None,
+                        } {
+                            let contiguous = match_result
+                                .matched_positions
+                                .windows(2)
+                                .all(|w| w[1] == w[0] + 1);
+                            let targets: Vec<usize> = if has_marker {
+                                target_indices.clone()
+                            } else {
+                                match_result.matched_positions.clone()
+                            };
+                            if contiguous && wds_len == targets.len() {
+                                pending_wd_actions.push((
+                                    targets,
+                                    &rule.disambig,
+                                    &self.action_regexes[rule_idx],
+                                ));
+                            }
                         } else {
                             for token_idx in target_indices {
                                 pending_actions.push((
@@ -805,6 +834,24 @@ impl XmlDisambiguator {
 
             for (non_ws_idx, action, matcher) in pending_actions {
                 apply_disambiguation(sentence.tokens_mut(), non_ws_idx, action, matcher);
+            }
+
+            for (targets, action, matcher) in pending_wd_actions {
+                match action {
+                    DisambigAction::Replace(wds) => {
+                        apply_replace_wds(sentence.tokens_mut(), &targets, wds);
+                    }
+                    DisambigAction::Add(wds) => {
+                        apply_add_wds(sentence.tokens_mut(), &targets, wds);
+                    }
+                    DisambigAction::Remove(_) => {
+                        let DisambigActionRegex::Remove(matchers) = matcher else {
+                            continue;
+                        };
+                        apply_remove_wds(sentence.tokens_mut(), &targets, matchers);
+                    }
+                    _ => {}
+                }
             }
 
             for (non_ws_idx, pattern_token) in pending_filterall {
@@ -1195,9 +1242,9 @@ fn token_matches_tail(
                         .compiled_postag_regexp_fancy
                         .as_ref()
                         .is_some_and(|re| re.is_match("UNKNOWN").unwrap_or(false));
-                plain || fancy || (unknown && r.pos_tags().is_empty())
+                plain || fancy || (unknown && reading_tagless(r))
             } else if postag == "UNKNOWN" {
-                r.pos_tags().is_empty()
+                reading_tagless(r)
             } else {
                 r.pos_tags().iter().any(|t| t == postag)
             }
@@ -1287,9 +1334,9 @@ fn exception_matches(
                         .compiled_postag_regexp_fancy
                         .as_ref()
                         .is_some_and(|re| re.is_match("UNKNOWN").unwrap_or(false));
-                plain || fancy || (unknown && r.pos_tags().is_empty())
+                plain || fancy || (unknown && reading_tagless(r))
             } else if postag == "UNKNOWN" {
-                r.pos_tags().is_empty()
+                reading_tagless(r)
             } else {
                 r.pos_tags().iter().any(|t| t == postag)
             }
@@ -1799,6 +1846,12 @@ fn apply_filterall(
     tokens[real_idx] = updated;
 }
 
+fn reading_tagless(r: &og_core::AnalyzedToken) -> bool {
+    r.pos_tags()
+        .iter()
+        .all(|t| t == "SENT_END" || t == "PARA_END")
+}
+
 fn current_had_sent_end(filtered: &[AnalyzedToken], token: &AnalyzedTokenReadings) -> bool {
     let still_present = filtered
         .iter()
@@ -1816,26 +1869,171 @@ fn restore_sent_end_if_lost(updated: &mut AnalyzedTokenReadings, had_sent_end: b
     }
 }
 
+fn non_ws_to_real(tokens: &[AnalyzedTokenReadings], token_idx: usize) -> Option<usize> {
+    let mut non_ws_count = 0;
+    for (i, t) in tokens.iter().enumerate() {
+        if !t.is_whitespace() {
+            if non_ws_count == token_idx {
+                return Some(i);
+            }
+            non_ws_count += 1;
+        }
+    }
+    None
+}
+
+fn apply_replace_wds(
+    tokens: &mut [AnalyzedTokenReadings],
+    targets: &[usize],
+    wds: &[og_xml::disambig_types::DisambigWord],
+) {
+    for (i, w) in wds.iter().enumerate() {
+        let Some(&non_ws) = targets.get(i) else {
+            return;
+        };
+        let Some(real_idx) = non_ws_to_real(tokens, non_ws) else {
+            return;
+        };
+        let prior_chunks = tokens[real_idx].chunks().to_vec();
+        let ignored_by_speller = tokens[real_idx].is_ignored_by_speller();
+        let was_immunized = tokens[real_idx].is_immunized();
+        let base = tokens[real_idx].token().clone();
+        let had_sent_end = current_had_sent_end(&[], &tokens[real_idx]);
+        let token_text = if w.text.is_empty() {
+            base.token().to_string()
+        } else {
+            w.text.clone()
+        };
+        let mut reading = AnalyzedToken::new(&token_text, base.start(), base.end());
+        if let Some(pos) = &w.pos {
+            reading.set_pos_tags(vec![pos.clone()]);
+        }
+        reading.set_lemma(w.lemma.clone().or(Some(token_text)));
+        let mut updated = AnalyzedTokenReadings::new(base).with_readings(vec![reading]);
+        restore_sent_end_if_lost(&mut updated, had_sent_end);
+        updated.set_chunks(prior_chunks);
+        if ignored_by_speller {
+            updated.ignore_spelling();
+        }
+        if was_immunized {
+            updated.immunize();
+        }
+        tokens[real_idx] = updated;
+    }
+}
+
+fn apply_add_wds(
+    tokens: &mut [AnalyzedTokenReadings],
+    targets: &[usize],
+    wds: &[og_xml::disambig_types::DisambigWord],
+) {
+    for (i, w) in wds.iter().enumerate() {
+        let Some(&non_ws) = targets.get(i) else {
+            return;
+        };
+        let Some(real_idx) = non_ws_to_real(tokens, non_ws) else {
+            return;
+        };
+        let prior_chunks = tokens[real_idx].chunks().to_vec();
+        let ignored_by_speller = tokens[real_idx].is_ignored_by_speller();
+        let was_immunized = tokens[real_idx].is_immunized();
+        let base = tokens[real_idx].token().clone();
+        let token_text = if w.text.is_empty() {
+            base.token().to_string()
+        } else {
+            w.text.clone()
+        };
+        let mut new_reading = AnalyzedToken::new(&token_text, base.start(), base.end());
+        if let Some(pos) = &w.pos {
+            new_reading.set_pos_tags(vec![pos.clone()]);
+        }
+        new_reading.set_lemma(w.lemma.clone().or(Some(token_text)));
+        let exists = tokens[real_idx].readings().iter().any(|r| {
+            r.token() == new_reading.token()
+                && r.pos_tags() == new_reading.pos_tags()
+                && r.lemma() == new_reading.lemma()
+        });
+        if exists {
+            continue;
+        }
+        let current_readings = tokens[real_idx].readings().to_vec();
+        let mut new_readings: Vec<AnalyzedToken> = Vec::with_capacity(current_readings.len() + 1);
+        if let Some((last, head)) = current_readings.split_last() {
+            new_readings.extend_from_slice(head);
+            if !last.pos_tags().is_empty() {
+                new_readings.push(last.clone());
+            }
+        }
+        new_readings.push(new_reading);
+        let mut updated = AnalyzedTokenReadings::new(base).with_readings(new_readings);
+        updated.set_chunks(prior_chunks);
+        if ignored_by_speller {
+            updated.ignore_spelling();
+        }
+        if was_immunized {
+            updated.immunize();
+        }
+        tokens[real_idx] = updated;
+    }
+}
+
+fn apply_remove_wds(
+    tokens: &mut [AnalyzedTokenReadings],
+    targets: &[usize],
+    matchers: &[RemoveWordMatcher],
+) {
+    for (i, w) in matchers.iter().enumerate() {
+        let Some(&non_ws) = targets.get(i) else {
+            return;
+        };
+        let Some(real_idx) = non_ws_to_real(tokens, non_ws) else {
+            return;
+        };
+        let prior_chunks = tokens[real_idx].chunks().to_vec();
+        let ignored_by_speller = tokens[real_idx].is_ignored_by_speller();
+        let was_immunized = tokens[real_idx].is_immunized();
+        let base = tokens[real_idx].token().clone();
+        let current_readings = tokens[real_idx].readings().to_vec();
+        let mut filtered: Vec<AnalyzedToken> = Vec::with_capacity(current_readings.len());
+        for r in &current_readings {
+            let pos_match = match (&w.regex, &w.literal) {
+                (Some(re), _) => r.pos_tags().iter().any(|t| re.is_match(t)),
+                (None, Some(pos)) => r.pos_tags().iter().any(|t| t == pos),
+                (None, None) => false,
+            };
+            let lemma_match = w
+                .lemma
+                .as_ref()
+                .is_none_or(|lemma| r.lemma() == Some(lemma.as_str()));
+            if !(pos_match && lemma_match) {
+                filtered.push(r.clone());
+            }
+        }
+        let had_sent_end = current_had_sent_end(&filtered, &tokens[real_idx]);
+        if filtered.is_empty() {
+            filtered.push(AnalyzedToken::new(base.token(), base.start(), base.end()));
+        }
+        let mut updated = AnalyzedTokenReadings::new(base).with_readings(filtered);
+        restore_sent_end_if_lost(&mut updated, had_sent_end);
+        updated.set_chunks(prior_chunks);
+        if ignored_by_speller {
+            updated.ignore_spelling();
+        }
+        if was_immunized {
+            updated.immunize();
+        }
+        tokens[real_idx] = updated;
+    }
+}
+
 fn apply_disambiguation(
     tokens: &mut [AnalyzedTokenReadings],
     token_idx: usize,
     action: &DisambigAction,
     matcher: &DisambigActionRegex,
 ) {
-    let mut real_idx: Option<usize> = None;
-    let mut non_ws_count = 0;
-    for (i, t) in tokens.iter().enumerate() {
-        if !t.is_whitespace() {
-            if non_ws_count == token_idx {
-                real_idx = Some(i);
-                break;
-            }
-            non_ws_count += 1;
-        }
-    }
-    let real_idx = match real_idx {
-        Some(idx) => idx,
-        None => return,
+    let Some(real_idx) = non_ws_to_real(tokens, token_idx) else {
+        return;
     };
     let prior_chunks = tokens[real_idx].chunks().to_vec();
     let ignored_by_speller = tokens[real_idx].is_ignored_by_speller();
@@ -1843,15 +2041,21 @@ fn apply_disambiguation(
     match action {
         DisambigAction::SetPos(pos) => {
             let base = tokens[real_idx].token().clone();
-            let surviving_lemma = tokens[real_idx]
-                .readings()
-                .iter()
-                .find(|r| r.pos_tags().iter().any(|t| t == pos))
-                .and_then(|r| r.lemma().map(str::to_string));
+            let had_sent_end = current_had_sent_end(&[], &tokens[real_idx]);
+            let mut surviving_lemma: Option<&str> = None;
+            for r in tokens[real_idx].readings().iter() {
+                if r.pos_tags().iter().any(|t| t == pos) && r.lemma().is_some() {
+                    surviving_lemma = r.lemma();
+                }
+            }
+            let lemma = surviving_lemma
+                .filter(|l| !l.is_empty())
+                .or_else(|| tokens[real_idx].readings().first().and_then(|r| r.lemma()));
             let mut new_reading = AnalyzedToken::new(base.token(), base.start(), base.end());
             new_reading.set_pos_tags(vec![pos.clone()]);
-            new_reading.set_lemma(surviving_lemma.or_else(|| base.lemma().map(|l| l.to_string())));
+            new_reading.set_lemma(lemma.map(str::to_string));
             let mut updated = AnalyzedTokenReadings::new(base).with_readings(vec![new_reading]);
+            restore_sent_end_if_lost(&mut updated, had_sent_end);
             updated.set_chunks(prior_chunks.clone());
             if ignored_by_speller {
                 updated.ignore_spelling();
@@ -1965,6 +2169,9 @@ fn apply_disambiguation(
             tokens[real_idx] = updated;
         }
         DisambigAction::Add(wds) => {
+            if wds.is_empty() {
+                return;
+            }
             let current_readings = tokens[real_idx].readings().to_vec();
             let base = tokens[real_idx].token().clone();
             let mut new_readings: Vec<AnalyzedToken> =
@@ -2145,6 +2352,160 @@ mod tests {
         sentence
     }
 
+    fn make_sentence_with_lemmas(tokens: Vec<(&str, &str, Vec<&str>)>) -> AnalyzedSentence {
+        let mut offset = 0;
+        let mut analyzed = Vec::new();
+        for (text, lemma, pos_tags) in tokens {
+            let start = offset;
+            let end = offset + text.len();
+            let base = AnalyzedToken::new(text, start, end);
+            let readings: Vec<AnalyzedToken> = pos_tags
+                .into_iter()
+                .map(|pos| {
+                    AnalyzedToken::new(text, start, end)
+                        .with_pos_tags(vec![pos.to_string()])
+                        .with_lemma(lemma)
+                })
+                .collect();
+            analyzed.push(AnalyzedTokenReadings::new(base).with_readings(readings));
+            offset = end + 1;
+        }
+        let total_len = offset.saturating_sub(1);
+        let mut sentence = AnalyzedSentence::new("test", 0, total_len);
+        sentence.set_tokens(analyzed);
+        sentence
+    }
+
+    #[test]
+    fn unknown_postag_matches_sent_end_reading() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<rules lang="en">
+    <rule id="SENT_END_UNSET" name="clear tagless final token">
+        <pattern>
+            <marker><token postag="UNKNOWN"/></marker>
+        </pattern>
+        <disambig postag="NN"/>
+    </rule>
+</rules>"#;
+        let disambig = XmlDisambiguator::from_xml(xml).unwrap();
+        let mut sentence = make_sentence(vec![("word", vec!["NN"])]);
+        sentence.tokens_mut().last_mut().unwrap().add_sent_end();
+        disambig.disambiguate(&mut sentence);
+        let last = sentence.tokens().last().unwrap();
+        let tags: Vec<String> = last
+            .readings()
+            .iter()
+            .map(|r| r.pos_tags().join("|"))
+            .collect();
+        assert_eq!(
+            tags,
+            vec!["NN".to_string(), "SENT_END".to_string()],
+            "UNKNOWN must match the SENT_END-tagged reading and the set-pos replace must keep the sentence end"
+        );
+    }
+
+    #[test]
+    fn set_pos_uses_last_matching_lemma_and_first_reading_fallback() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<rules lang="en">
+    <rule id="BEST_JJS" name="best as adjective">
+        <pattern>
+            <marker><token>best</token></marker>
+            <token postag="IN"/>
+        </pattern>
+        <disambig postag="JJS"/>
+    </rule>
+    <rule id="DT_VBN_JJ" name="DT + VBN + JJ">
+        <pattern>
+            <marker><token>known</token></marker>
+            <token postag="IN"/>
+        </pattern>
+        <disambig postag="JJ"/>
+    </rule>
+</rules>"#;
+        let readings_for = |word: &str, start: usize, specs: &[(&str, &str)]| {
+            specs
+                .iter()
+                .map(|&(lemma, pos)| {
+                    AnalyzedToken::new(word, start, start + word.len())
+                        .with_pos_tags(vec![pos.to_string()])
+                        .with_lemma(lemma)
+                })
+                .collect::<Vec<AnalyzedToken>>()
+        };
+        let disambig = XmlDisambiguator::from_xml(xml).unwrap();
+        let mut both = AnalyzedSentence::new("test", 0, 8);
+        both.set_tokens(vec![
+            AnalyzedTokenReadings::new(AnalyzedToken::new("best", 0, 4)).with_readings(
+                readings_for(
+                    "best",
+                    0,
+                    &[("best", "NN:U"), ("good", "JJS"), ("well", "JJS")],
+                ),
+            ),
+            AnalyzedTokenReadings::new(AnalyzedToken::new("for", 5, 8))
+                .with_readings(readings_for("for", 5, &[("for", "IN")])),
+        ]);
+        disambig.disambiguate(&mut both);
+        let best = &both.tokens()[0];
+        assert_eq!(
+            (
+                best.readings()[0].lemma(),
+                best.readings()[0].pos_tags().join("|")
+            ),
+            (Some("well"), "JJS".to_string()),
+            "the single-pos replace keeps the LAST matching reading's lemma"
+        );
+
+        let mut none = AnalyzedSentence::new("test", 0, 9);
+        none.set_tokens(vec![
+            AnalyzedTokenReadings::new(AnalyzedToken::new("known", 0, 5)).with_readings(
+                readings_for("known", 0, &[("know", "VBN"), ("known", "NN")]),
+            ),
+            AnalyzedTokenReadings::new(AnalyzedToken::new("for", 6, 9))
+                .with_readings(readings_for("for", 6, &[("for", "IN")])),
+        ]);
+        disambig.disambiguate(&mut none);
+        let known = &none.tokens()[0];
+        assert_eq!(
+            (
+                known.readings()[0].lemma(),
+                known.readings()[0].pos_tags().join("|")
+            ),
+            (Some("know"), "JJ".to_string()),
+            "with no matching reading the first reading's lemma is used"
+        );
+    }
+
+    #[test]
+    fn inflected_first_element_is_not_gated_on_surface_text() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<rules lang="en">
+    <rule id="GO_APE" name="go ape => NN:UN">
+      <pattern>
+      <token inflected="yes">go</token>
+      <marker><token>ape</token></marker>
+      </pattern>
+      <disambig postag="NN:UN"/>
+    </rule>
+</rules>"#;
+        let disambig = XmlDisambiguator::from_xml(xml).unwrap();
+        let mut sentence = make_sentence_with_lemmas(vec![
+            ("goes", "go", vec!["NNS", "VBZ"]),
+            ("ape", "ape", vec!["NN", "VB", "VBP"]),
+        ]);
+        disambig.disambiguate(&mut sentence);
+        let ape = &sentence.tokens()[1];
+        assert_eq!(
+            ape.readings()
+                .iter()
+                .map(|r| r.pos_tags().join("|"))
+                .collect::<Vec<_>>(),
+            vec!["NN:UN".to_string()],
+            "a rule led by an inflected element must fire on inflected surface forms"
+        );
+    }
+
     #[test]
     fn negate_pos_exception_fires_on_any_non_matching_reading() {
         let xml = r#"<?xml version="1.0" encoding="utf-8"?>
@@ -2223,6 +2584,63 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["VBZ"],
             "a pattern whose first element is an and-group must gate starts on the group's first member, not the following element"
+        );
+    }
+
+    #[test]
+    fn case_sensitive_antipattern_and_multi_wd_replace() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<rules lang="en">
+    <rule id="STATUS_QUO" name="status quo">
+        <antipattern case_sensitive="yes">
+            <token>Status</token>
+            <token>Quo</token>
+        </antipattern>
+        <pattern>
+            <token>status</token>
+            <token>quo</token>
+        </pattern>
+        <disambig action="replace"><wd pos="NN"/><wd pos="NN"/></disambig>
+    </rule>
+</rules>"#;
+        let disambig = XmlDisambiguator::from_xml(xml).unwrap();
+        let mut lower = make_sentence(vec![
+            ("the", vec!["DT"]),
+            ("status", vec!["NN", "NN:UN"]),
+            ("quo", vec![]),
+        ]);
+        disambig.disambiguate(&mut lower);
+        let tags = |s: &AnalyzedSentence, word: &str| {
+            s.tokens()
+                .iter()
+                .find(|t| t.token().token() == word)
+                .map(|t| {
+                    t.readings()
+                        .iter()
+                        .map(|r| r.pos_tags().join("|"))
+                        .collect::<Vec<_>>()
+                })
+        };
+        assert_eq!(
+            tags(&lower, "status"),
+            Some(vec!["NN".to_string()]),
+            "wd[0] replaces only the first matched token"
+        );
+        assert_eq!(
+            tags(&lower, "quo"),
+            Some(vec!["NN".to_string()]),
+            "wd[1] replaces only the second matched token, not both wds on one token"
+        );
+        let mut upper = make_sentence(vec![
+            ("the", vec!["DT"]),
+            ("Status", vec!["NN", "NN:UN"]),
+            ("Quo", vec![]),
+        ]);
+        disambig.disambiguate(&mut upper);
+        assert_eq!(
+            tags(&upper, "Status"),
+            Some(vec!["NN".to_string(), "NN:UN".to_string()]),
+            "a case_sensitive antipattern must block the mixed-case match"
         );
     }
 
