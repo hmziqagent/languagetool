@@ -198,6 +198,7 @@ impl XmlDisambiguator {
         let english_tagger = if english_tagger.is_none()
             && compiled_rules.iter().any(|rule| {
                 rule.filter_class.as_deref() == Some("org.languagetool.rules.IsEnglishWordFilter")
+                    || rule.filter_class.as_deref() == Some(EN_PARTIAL_POSTAG_FILTER_CLASS)
             }) {
             crate::english_tagger::shared_english_tagger()
         } else {
@@ -3918,13 +3919,16 @@ mod tests {
     }
 
     #[test]
-    fn partial_postag_filter_without_tagger_never_fires() {
+    fn partial_postag_filter_self_loads_tagger_from_xml() {
+        if en_resource_dir().is_none() {
+            return;
+        }
         let disambig = XmlDisambiguator::from_xml(digit_hyphenated_xml()).unwrap();
         let mut sentence = make_sentence(vec![("500-page", vec!["CD"])]);
         disambig.disambiguate(&mut sentence);
         assert!(
-            !sentence.tokens()[0].has_pos_tag("JJ"),
-            "no tagger wired means the filter cannot confirm the stem postag, so the rule must not fire"
+            sentence.tokens()[0].has_pos_tag("JJ"),
+            "from_xml resolves the shared English tagger for the filter like NoDisambiguationEnglishPartialPosTagFilter's constructor"
         );
     }
 
