@@ -237,6 +237,9 @@ impl DefaultWordTokenizer {
                     self.en_word_tagged
                         .as_ref()
                         .is_none_or(|tagged| tagged(&normalized))
+                        || CAMEL_CASE_HYPHEN_WORDS
+                            .iter()
+                            .any(|w| rest.eq_ignore_ascii_case(w))
                 };
             if keep_whole {
                 out.push(Token::new(
@@ -318,6 +321,31 @@ impl DefaultWordTokenizer {
         }
         result
     }
+
+    fn join_variation_selectors(&self, tokens: Vec<Token>) -> Vec<Token> {
+        if !self.english_word_chars {
+            return tokens;
+        }
+        let mut result: Vec<Token> = Vec::with_capacity(tokens.len());
+        for token in tokens {
+            let text = token.text();
+            if is_variation_selector(text)
+                && let Some(last) = result.last()
+            {
+                let merged = Token::new(
+                    format!("{}{}", last.text(), text),
+                    last.start(),
+                    last.end() + text.len(),
+                );
+                if let Some(slot) = result.last_mut() {
+                    *slot = merged;
+                }
+            } else {
+                result.push(token);
+            }
+        }
+        result
+    }
 }
 
 impl Default for DefaultWordTokenizer {
@@ -346,7 +374,12 @@ fn is_english_extra_word_char(c: char) -> bool {
             | '\u{00AC}'
             | '\u{FF0C}'
             | '\u{FF1F}'
+            | '\u{00A8}'
     ) || ('\u{0300}'..='\u{036F}').contains(&c)
+}
+
+fn is_variation_selector(text: &str) -> bool {
+    matches!(text.as_bytes(), [0xEF, 0xB8, b] if (0x80..=0x8F).contains(b))
 }
 
 const P0_WORDS: &[&str] = &[
@@ -357,6 +390,19 @@ const NT_STEMS: &[&str] = &[
     "are", "is", "were", "was", "do", "does", "did", "have", "has", "had", "wo", "would", "ca",
     "could", "sha", "should", "must", "ai", "ought", "might", "need", "may", "am", "dare", "das",
     "dass", "hai", "used", "use",
+];
+
+const CAMEL_CASE_HYPHEN_WORDS: &[&str] = &[
+    "mers-cov",
+    "mcgraw-hill",
+    "sars-cov-2",
+    "sars-cov",
+    "ph-metre",
+    "ph-metres",
+    "anti-ivg",
+    "anti-uv",
+    "anti-vih",
+    "al-qaida",
 ];
 
 fn apostrophe_len(bytes: &[u8]) -> Option<usize> {
@@ -429,8 +475,23 @@ fn starts_with_ascii_ci(hay: &str, needle: &str) -> bool {
     })
 }
 
+fn eq_ascii_ci_quote_normalized(hay: &str, word: &str) -> bool {
+    let mut word_chars = word.chars();
+    for hc in hay.chars() {
+        let hc = if hc == '\u{2019}' { '\'' } else { hc };
+        match word_chars.next() {
+            Some(wc) if hc.eq_ignore_ascii_case(&wc) => {}
+            _ => return false,
+        }
+    }
+    word_chars.next().is_none()
+}
+
 fn contraction_pieces(text: &str) -> Option<Vec<String>> {
-    if P0_WORDS.iter().any(|w| text.eq_ignore_ascii_case(w)) {
+    if P0_WORDS
+        .iter()
+        .any(|w| eq_ascii_ci_quote_normalized(text, w))
+    {
         return Some(vec![text.to_string()]);
     }
     if let Some(pieces) = nt_contraction_pieces(text) {
@@ -589,7 +650,7 @@ impl WordTokenizer for DefaultWordTokenizer {
             }
         }
 
-        self.split_contractions(tokens)
+        self.split_contractions(self.join_variation_selectors(tokens))
     }
 }
 
@@ -1652,5 +1713,48 @@ mod tests {
             vec!["This", " ", "is", " ", "great", " ", "-", "-", " ", "ok"]
         );
         assert_eq!(token_texts(&tz, "well-known"), vec!["well-known"]);
+    }
+
+    #[test]
+    fn test_diaeresis_is_en_word_char() {
+        let tz = DefaultWordTokenizer::new();
+        assert_eq!(token_texts(&tz, "a\u{00A8}b"), vec!["a\u{00A8}b"]);
+    }
+
+    #[test]
+    fn test_p0_curly_apostrophe_variants_stay_whole() {
+        let tz = en_tz();
+        assert_eq!(
+            token_texts(&tz, "fo\u{2019}c\u{2019}sle"),
+            vec!["fo\u{2019}c\u{2019}sle"]
+        );
+        assert_eq!(token_texts(&tz, "rsvp\u{2019}d"), vec!["rsvp\u{2019}d"]);
+    }
+
+    #[test]
+    fn test_camel_case_hyphen_words_stay_whole() {
+        let tz = en_tz();
+        assert_eq!(token_texts(&tz, "MERS-CoV"), vec!["MERS-CoV"]);
+        assert_eq!(token_texts(&tz, "McGraw-Hill"), vec!["McGraw-Hill"]);
+        assert_eq!(token_texts(&tz, "SARS-CoV-2"), vec!["SARS-CoV-2"]);
+        assert_eq!(token_texts(&tz, "pH-metres"), vec!["pH-metres"]);
+        assert_eq!(token_texts(&tz, "al-Qaida"), vec!["al-Qaida"]);
+    }
+
+    #[test]
+    fn test_variation_selectors_join_previous_token() {
+        let tz = DefaultWordTokenizer::new();
+        let tokens = tz.tokenize("word\u{26A0}\u{FE0F}!");
+        assert_eq!(
+            token_texts(&tz, "word\u{26A0}\u{FE0F}!"),
+            vec!["word", "\u{26A0}\u{FE0F}", "!"]
+        );
+        assert_offsets_valid(&tokens);
+        assert_reconstruction(&tokens, "word\u{26A0}\u{FE0F}!");
+        let generic = DefaultWordTokenizer::new_generic();
+        assert_eq!(
+            token_texts(&generic, "word\u{26A0}\u{FE0F}"),
+            vec!["word", "\u{26A0}", "\u{FE0F}"]
+        );
     }
 }
