@@ -435,6 +435,17 @@ impl DisambigXmlParser {
                 Ok(Event::Empty(e)) => {
                     let local_name = String::from_utf8_lossy(e.name().as_ref()).to_string();
                     match local_name.as_str() {
+                        "filter" => {
+                            for attr in e.attributes().flatten() {
+                                let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
+                                let val = crate::decode_attr_value(&attr.value);
+                                match key.as_str() {
+                                    "class" => pending_filter_class = Some(val),
+                                    "args" => pending_filter_args = Some(val),
+                                    _ => {}
+                                }
+                            }
+                        }
                         "match" if current_token.is_some() || antipattern_token.is_some() => {
                             for attr in e.attributes().flatten() {
                                 let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
