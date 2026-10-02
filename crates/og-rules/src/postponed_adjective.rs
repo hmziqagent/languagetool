@@ -293,6 +293,26 @@ fn is_exception_fr(word: &str) -> bool {
     false
 }
 
+fn occurs_after_start(haystack: &str, needle: &str) -> bool {
+    haystack
+        .match_indices(needle)
+        .any(|(i, _)| i > 0 && haystack.is_char_boundary(i))
+}
+
+fn pl_is_negated(source_postag: Option<&str>, pos_tag: &str) -> bool {
+    occurs_after_start(pos_tag, ":neg")
+        || source_postag.is_some_and(|p| occurs_after_start(p, ":neg"))
+            && !occurs_after_start(pos_tag, "com")
+            && !occurs_after_start(pos_tag, "sup")
+}
+
+fn replace_first_str(haystack: &str, from: &str, to: &str) -> String {
+    match haystack.find(from) {
+        Some(i) => format!("{}{}{}", &haystack[..i], to, &haystack[i + from.len()..]),
+        None => haystack.to_string(),
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum SynthLang {
     German,
@@ -300,6 +320,7 @@ enum SynthLang {
     French,
     English,
     Portuguese,
+    Polish,
 }
 
 pub struct LangSynthesizer {
@@ -309,6 +330,7 @@ pub struct LangSynthesizer {
     removals2: Vec<(Box<str>, Box<str>, Box<str>)>,
     lang: SynthLang,
     article: crate::en_article::ArticleData,
+    possible_tags: Vec<Box<str>>,
     lemma_forms: OnceLock<HashMap<Box<str>, Vec<(Box<str>, Box<str>)>>>,
 }
 
@@ -378,6 +400,10 @@ impl LangSynthesizer {
                 og_tagger::generic_tagger::shared_dictionary(resource_dir, "portuguese"),
                 SynthLang::Portuguese,
             ),
+            "pl" => (
+                og_tagger::generic_tagger::shared_dictionary(resource_dir, "polish_synth"),
+                SynthLang::Polish,
+            ),
             "en" => {
                 let dict = shared_decoded_dictionary(&resource_dir.join("dict_decoded.txt"));
                 (dict, SynthLang::English)
@@ -403,6 +429,19 @@ impl LangSynthesizer {
         } else {
             crate::en_article::ArticleData::empty()
         };
+        let possible_tags = if lang == SynthLang::Polish {
+            std::fs::read_to_string(resource_dir.join("polish_tags.txt"))
+                .map(|t| {
+                    t.lines()
+                        .map(str::trim)
+                        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+                        .map(Box::from)
+                        .collect()
+                })
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
         Some(Self {
             dictionary,
             manual,
@@ -410,6 +449,7 @@ impl LangSynthesizer {
             removals2,
             lang,
             article,
+            possible_tags,
             lemma_forms: OnceLock::new(),
         })
     }
@@ -434,10 +474,19 @@ impl LangSynthesizer {
         self.lemma_forms.get_or_init(|| {
             let mut map: HashMap<Box<str>, Vec<(Box<str>, Box<str>)>> = HashMap::new();
             if let Some(dict) = &self.dictionary {
-                for (lemma, entries) in dict.forms_by_lemma() {
-                    let list = map.entry(Box::from(*lemma)).or_default();
-                    for (tag, form) in entries {
-                        list.push((Box::from(*tag), Box::from(*form)));
+                if let Some(synth) = dict.synth_forms_by_lemma() {
+                    for (lemma, entries) in synth {
+                        let list = map.entry(Box::from(*lemma)).or_default();
+                        for (tag, form) in entries {
+                            list.push((Box::from(*tag), Box::from(*form)));
+                        }
+                    }
+                } else {
+                    for (lemma, entries) in dict.forms_by_lemma() {
+                        let list = map.entry(Box::from(*lemma)).or_default();
+                        for (tag, form) in entries {
+                            list.push((Box::from(*tag), Box::from(*form)));
+                        }
                     }
                 }
             }
@@ -504,6 +553,24 @@ impl LangSynthesizer {
     }
 
     pub fn synthesize_exact(&self, lemma: &str, postag: &str) -> Vec<String> {
+        self.synthesize_exact_for(lemma, None, postag)
+    }
+
+    pub fn synthesize_exact_for(
+        &self,
+        lemma: &str,
+        source_postag: Option<&str>,
+        postag: &str,
+    ) -> Vec<String> {
+        if self.lang == SynthLang::Polish {
+            if postag.find('+').is_some_and(|i| i > 0) {
+                return self.pl_synthesize_regexp(lemma, source_postag, postag);
+            }
+            let negated = pl_is_negated(source_postag, postag);
+            let mut results = Vec::new();
+            self.pl_word_forms(lemma, postag, negated, &mut results);
+            return results;
+        }
         let (head, tail) = self.split_es_lemma(lemma, postag);
         let mut results = self.lookup_exact(head, postag);
         if results.is_empty() && self.is_german() {
@@ -516,6 +583,43 @@ impl LangSynthesizer {
                 *form = format!("{form} {tail}");
             }
         }
+        results
+    }
+
+    fn pl_word_forms(&self, lemma: &str, postag: &str, negated: bool, out: &mut Vec<String>) {
+        if negated {
+            let replaced = replace_first_str(postag, ":neg", ":aff");
+            for form in self.lookup_exact(lemma, &replaced) {
+                out.push(format!("nie{form}"));
+            }
+        } else {
+            out.extend(self.lookup_exact(lemma, postag));
+        }
+    }
+
+    fn pl_synthesize_regexp(
+        &self,
+        lemma: &str,
+        source_postag: Option<&str>,
+        pos_tag: &str,
+    ) -> Vec<String> {
+        let negated = pl_is_negated(source_postag, pos_tag);
+        let mut pattern = pos_tag.to_string();
+        if negated {
+            pattern = pattern.replace(":neg", ":aff?");
+        }
+        pattern = pattern.replace('+', "|");
+        let Ok(re) = Regex::new(&format!("^(?:{pattern})$")) else {
+            return Vec::new();
+        };
+        let mut results = Vec::new();
+        for tag in &self.possible_tags {
+            if re.is_match(tag) {
+                self.pl_word_forms(lemma, tag, negated, &mut results);
+            }
+        }
+        results.sort();
+        results.dedup();
         results
     }
 
@@ -540,6 +644,18 @@ impl LangSynthesizer {
     }
 
     pub fn synthesize_full(&self, lemma: &str, target: &str) -> Vec<String> {
+        self.synthesize_full_for(lemma, None, target)
+    }
+
+    pub fn synthesize_full_for(
+        &self,
+        lemma: &str,
+        source_postag: Option<&str>,
+        target: &str,
+    ) -> Vec<String> {
+        if self.lang == SynthLang::Polish {
+            return self.pl_synthesize_regexp(lemma, source_postag, target);
+        }
         let Ok(re) = Regex::new(&format!("^(?:{target})$")) else {
             return Vec::new();
         };
@@ -1499,6 +1615,56 @@ fn update_apparitions_fr(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn pl_synth() -> Option<LangSynthesizer> {
+        let dir = std::path::Path::new(
+            "/home/agent/opengrammar-rs/languagetool/languagetool-language-modules/pl/src/main/resources/org/languagetool/resource/pl",
+        );
+        LangSynthesizer::for_language(dir, "pl")
+    }
+
+    #[test]
+    fn pl_synthesizes_forms_from_polish_synth_dict() {
+        let Some(synth) = pl_synth() else {
+            return;
+        };
+        assert_eq!(
+            synth.synthesize_exact_for("zrobić", None, "ger:sg:nom.acc:n2:perf:aff:refl.nonrefl"),
+            vec!["zrobienie".to_string()]
+        );
+        assert_eq!(
+            synth.synthesize_exact_for(
+                "zrobić",
+                Some("ger:sg:nom.acc:n2:perf:neg:refl.nonrefl"),
+                "ger:sg:nom.acc:n2:perf:neg:refl.nonrefl"
+            ),
+            vec!["niezrobienie".to_string()]
+        );
+        assert_eq!(
+            synth.synthesize_full_for("zrobić", None, "ger:sg:nom\\.acc:n2:perf:aff:refl.nonrefl"),
+            vec!["zrobienie".to_string()]
+        );
+        assert_eq!(
+            synth.synthesize_full_for(
+                "zrobić",
+                Some("ger:sg:nom.acc:n2:perf:neg:refl.nonrefl"),
+                "ger:sg:nom\\.acc:n2:perf:neg:refl.nonrefl"
+            ),
+            vec!["niezrobienie".to_string()]
+        );
+        assert_eq!(
+            synth.synthesize_exact_for("dobry", None, "adj:sg:acc:m3:com"),
+            vec!["lepszy".to_string()]
+        );
+        assert_eq!(
+            synth.synthesize_exact_for(
+                "dobry",
+                Some("adj:sg:nom:m3:pos"),
+                "adj:sg:nom:m3:pos+adj:sg:acc:m3:pos"
+            ),
+            vec!["dobry".to_string()]
+        );
+    }
 
     fn tag(text: &str, tags: &[&str]) -> AnalyzedTokenReadings {
         let readings = if tags.is_empty() {

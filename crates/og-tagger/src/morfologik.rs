@@ -127,6 +127,8 @@ pub struct MorfologikDictionary {
     forms_by_lemma: std::sync::OnceLock<
         std::collections::HashMap<&'static str, Vec<(&'static str, &'static str)>>,
     >,
+    synth_by_lemma:
+        Option<std::collections::HashMap<&'static str, Vec<(&'static str, &'static str)>>>,
 }
 
 struct Cfsa1 {
@@ -530,13 +532,17 @@ impl MorfologikDictionary {
         let sep = separator as u8;
         let mut interned: HashSet<&'static str> = HashSet::new();
         let mut map: HashMap<Box<str>, ReadingList> = HashMap::new();
+        let mut synth_map: std::collections::HashMap<
+            &'static str,
+            Vec<(&'static str, &'static str)>,
+        > = std::collections::HashMap::new();
         let sequences = fsa_sequences(&data)?;
         for sequence in sequences {
             let mut fields = sequence.split(|b| *b == sep);
-            let (Some(word_raw), Some(second), Some(tag_raw)) =
-                (fields.next(), fields.next(), fields.next())
-            else {
-                continue;
+            let (word_raw, second, tag_raw) = match (fields.next(), fields.next(), fields.next()) {
+                (Some(w), Some(s), Some(t)) => (w, s, Some(t)),
+                (Some(w), Some(s), None) => (w, s, None),
+                _ => continue,
             };
             let lemma_bytes = match encoder {
                 LemmaEncoder::Raw => second.to_vec(),
@@ -550,11 +556,27 @@ impl MorfologikDictionary {
                 },
             };
             let word = decode(word_raw);
-            let tag = intern(&mut interned, decode(tag_raw));
-            let lemma = intern(&mut interned, decode(&lemma_bytes));
-            map.entry(word.into_boxed_str())
-                .or_default()
-                .push((lemma, tag));
+            match tag_raw {
+                None => {
+                    let Some((lemma, tag)) = word.split_once('|') else {
+                        continue;
+                    };
+                    let lemma_id = intern(&mut interned, lemma.to_string());
+                    let tag_id = intern(&mut interned, tag.to_string());
+                    let form_id = intern(&mut interned, decode(&lemma_bytes));
+                    synth_map
+                        .entry(lemma_id)
+                        .or_default()
+                        .push((tag_id, form_id));
+                }
+                Some(tag_raw) => {
+                    let tag = intern(&mut interned, decode(tag_raw));
+                    let lemma = intern(&mut interned, decode(&lemma_bytes));
+                    map.entry(word.into_boxed_str())
+                        .or_default()
+                        .push((lemma, tag));
+                }
+            }
         }
         Some(Self {
             entries: map
@@ -563,6 +585,11 @@ impl MorfologikDictionary {
                 .collect(),
             verb_forms: std::sync::OnceLock::new(),
             forms_by_lemma: std::sync::OnceLock::new(),
+            synth_by_lemma: if synth_map.is_empty() {
+                None
+            } else {
+                Some(synth_map)
+            },
         })
     }
 
@@ -599,7 +626,14 @@ impl MorfologikDictionary {
                 .collect(),
             verb_forms: std::sync::OnceLock::new(),
             forms_by_lemma: std::sync::OnceLock::new(),
+            synth_by_lemma: None,
         }
+    }
+
+    pub fn synth_forms_by_lemma(
+        &self,
+    ) -> Option<&std::collections::HashMap<&'static str, Vec<(&'static str, &'static str)>>> {
+        self.synth_by_lemma.as_ref()
     }
 
     pub fn word_list(&self) -> Vec<String> {

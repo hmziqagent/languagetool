@@ -731,7 +731,11 @@ impl PatternRuleEngine {
             } else {
                 for reading in token.readings() {
                     if let Some(lemma) = reading.lemma() {
-                        word_forms.extend(synth.synthesize_exact(lemma, postag));
+                        word_forms.extend(synth.synthesize_exact_for(
+                            lemma,
+                            reading.pos_tags().first().map(String::as_str),
+                            postag,
+                        ));
                     }
                 }
             }
@@ -798,7 +802,11 @@ impl PatternRuleEngine {
         if !one_form {
             for reading in readings {
                 if let Some(lemma) = reading.lemma() {
-                    word_forms.extend(synth.synthesize_full(lemma, &target));
+                    word_forms.extend(synth.synthesize_full_for(
+                        lemma,
+                        reading.pos_tags().first().map(String::as_str),
+                        &target,
+                    ));
                 }
             }
         }
