@@ -270,7 +270,15 @@ impl DisambigXmlParser {
                         }
                         "antipattern" => {
                             in_antipattern = true;
-                            current_antipattern = Some(XmlPattern::default());
+                            let mut antipattern = XmlPattern::default();
+                            for attr in e.attributes().flatten() {
+                                let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
+                                let val = crate::decode_attr_value(&attr.value);
+                                if key == "case_sensitive" {
+                                    antipattern.case_sensitive = val == "yes";
+                                }
+                            }
+                            current_antipattern = Some(antipattern);
                         }
                         "example" if !in_antipattern && current_unification.is_none() => {
                             in_example = true;
@@ -379,7 +387,13 @@ impl DisambigXmlParser {
                             }
                             disambig_wds.clear();
                             current_disambig = match action.as_deref() {
-                                Some("replace") => Some(DisambigAction::Replace(Vec::new())),
+                                Some("replace") => {
+                                    if let Some(postag) = postag {
+                                        Some(DisambigAction::SetPos(postag))
+                                    } else {
+                                        Some(DisambigAction::Replace(Vec::new()))
+                                    }
+                                }
                                 Some("remove") => {
                                     if let Some(postag) = postag {
                                         Some(DisambigAction::RemovePostag(postag))
@@ -554,7 +568,13 @@ impl DisambigXmlParser {
                                 }
                             }
                             current_disambig = match action.as_deref() {
-                                Some("replace") => Some(DisambigAction::Replace(Vec::new())),
+                                Some("replace") => {
+                                    if let Some(postag) = postag {
+                                        Some(DisambigAction::SetPos(postag))
+                                    } else {
+                                        Some(DisambigAction::Replace(Vec::new()))
+                                    }
+                                }
                                 Some("remove") => {
                                     if let Some(postag) = postag {
                                         Some(DisambigAction::RemovePostag(postag))
