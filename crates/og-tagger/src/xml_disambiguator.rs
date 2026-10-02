@@ -965,20 +965,35 @@ fn match_tokens_recursive(
             .iter()
             .filter(|exc| exc.scope.as_deref() == Some("next"))
             .collect();
-        let scope_next_vetoes = |next_token: usize| {
+        let scope_next_vetoes = |next_token: usize, count: usize| {
             !scope_next.is_empty()
-                && ((token_idx + 1)..=next_token.min(tokens.len().saturating_sub(1))).any(|q| {
+                && ((token_idx + count)..=next_token.min(tokens.len().saturating_sub(1))).any(|q| {
                     scope_next
                         .iter()
                         .any(|exc| exception_matches(exc, tokens[q], space_before_at(tokens, q)))
                 })
         };
         if pt.skip < 0 {
-            let mut next_token = token_idx + 1;
+            let max_occurrences = match pt.max {
+                None | Some(1) | Some(0) => 1,
+                Some(-1) => usize::MAX,
+                Some(m) => m as usize,
+            };
+            let remaining = pattern_tokens.len() - pattern_idx - 1;
+            let guard = tokens.len() as isize - remaining as isize;
+            let mut count = 1usize;
+            while count < max_occurrences
+                && ((token_idx + count) as isize) < guard
+                && token_matches(pt, tokens, token_idx + count, true)
+                && reference_text_matches(pt, tokens, token_idx + count, matched_so_far)
+            {
+                count += 1;
+            }
+            let mut next_token = token_idx + count;
             while next_token <= tokens.len() {
-                if !scope_next_vetoes(next_token) {
+                if !scope_next_vetoes(next_token, count) {
                     let mut extended: Vec<usize> = matched_so_far.to_vec();
-                    extended.push(token_idx);
+                    extended.extend(token_idx..token_idx + count);
                     if let Some(mut result) = match_tokens_recursive(
                         pattern_tokens,
                         tokens,
@@ -987,8 +1002,10 @@ fn match_tokens_recursive(
                         false,
                         &extended,
                     ) {
-                        result.matched_positions.insert(0, token_idx);
-                        result.element_counts.insert(0, 1);
+                        for p in (token_idx..token_idx + count).rev() {
+                            result.matched_positions.insert(0, p);
+                        }
+                        result.element_counts.insert(0, count);
                         return Some(result);
                     }
                 }
@@ -996,16 +1013,31 @@ fn match_tokens_recursive(
             }
         } else {
             let skip = pt.skip as usize;
+            let max_occurrences = match pt.max {
+                None | Some(1) | Some(0) => 1,
+                Some(-1) => usize::MAX,
+                Some(m) => m as usize,
+            };
+            let remaining = pattern_tokens.len() - pattern_idx - 1;
+            let guard = tokens.len() as isize - remaining as isize;
+            let mut count = 1usize;
+            while count < max_occurrences
+                && ((token_idx + count) as isize) < guard
+                && token_matches(pt, tokens, token_idx + count, true)
+                && reference_text_matches(pt, tokens, token_idx + count, matched_so_far)
+            {
+                count += 1;
+            }
             for dist in 0..=skip {
-                let next_token = token_idx + 1 + dist;
+                let next_token = token_idx + count + dist;
                 if next_token > tokens.len() {
                     break;
                 }
-                if scope_next_vetoes(next_token) {
+                if scope_next_vetoes(next_token, count) {
                     continue;
                 }
                 let mut extended: Vec<usize> = matched_so_far.to_vec();
-                extended.push(token_idx);
+                extended.extend(token_idx..token_idx + count);
                 if let Some(mut result) = match_tokens_recursive(
                     pattern_tokens,
                     tokens,
@@ -1014,8 +1046,10 @@ fn match_tokens_recursive(
                     false,
                     &extended,
                 ) {
-                    result.matched_positions.insert(0, token_idx);
-                    result.element_counts.insert(0, 1);
+                    for p in (token_idx..token_idx + count).rev() {
+                        result.matched_positions.insert(0, p);
+                    }
+                    result.element_counts.insert(0, count);
                     return Some(result);
                 }
             }
@@ -1142,7 +1176,17 @@ fn exception_matches(
     let text = token.token().token();
     let text_exc = if let Some(ref exc_text) = exc.text {
         if let Some(ref re) = exc.compiled_regexp {
-            re.is_match(text)
+            if exc.inflected {
+                token
+                    .readings()
+                    .iter()
+                    .any(|r| re.is_match(r.lemma().unwrap_or(text)))
+                    || token.readings().is_empty() && re.is_match(text)
+            } else {
+                re.is_match(text)
+            }
+        } else if exc.inflected {
+            inflected_text_matches(token.readings(), text, exc_text, exc.case_sensitive)
         } else {
             og_xml::unifier::eq_ignore_case(text, exc_text)
         }
@@ -1263,10 +1307,38 @@ fn match_elements(
             .iter()
             .filter(|exc| exc.scope.as_deref() == Some("next"))
             .collect();
+        let max_occurrences = match rep.max {
+            None | Some(1) | Some(0) => 1,
+            Some(-1) => usize::MAX,
+            Some(m) => m as usize,
+        };
+        let remaining = elements.len() - elem_idx - 1;
+        let guard = tokens.len() as isize - remaining as isize;
+        let elem_matches_at = |e: usize, pos: usize| match &elements[e] {
+            CompiledPatternElement::Token(pt) => {
+                token_matches(pt, tokens, pos, pos > start_idx)
+                    && reference_text_matches(pt, tokens, pos, &matched_before)
+            }
+            CompiledPatternElement::OrGroup(alts) => alts.iter().any(|alt| {
+                token_matches(alt, tokens, pos, pos > start_idx)
+                    && reference_text_matches(alt, tokens, pos, &matched_before)
+            }),
+            CompiledPatternElement::AndGroup(cs) => cs.iter().all(|c| {
+                token_matches(c, tokens, pos, pos > start_idx)
+                    && reference_text_matches(c, tokens, pos, &matched_before)
+            }),
+        };
+        let mut count = 1usize;
+        while count < max_occurrences
+            && ((token_idx + count) as isize) < guard
+            && elem_matches_at(elem_idx, token_idx + count)
+        {
+            count += 1;
+        }
         if rep.skip == 0 && scope_next.is_empty() {
-            positions.push(token_idx);
-            counts.push(1);
-            token_idx += 1;
+            positions.extend(token_idx..token_idx + count);
+            counts.push(count);
+            token_idx += count;
             continue;
         }
         let max_skip = if rep.skip < 0 {
@@ -1275,12 +1347,12 @@ fn match_elements(
             rep.skip as usize
         };
         for off in 0..=max_skip {
-            let next = token_idx + 1 + off;
+            let next = token_idx + count + off;
             if next > tokens.len() {
                 break;
             }
             if !scope_next.is_empty()
-                && ((token_idx + 1)..=next.min(tokens.len().saturating_sub(1))).any(|q| {
+                && ((token_idx + count)..=next.min(tokens.len().saturating_sub(1))).any(|q| {
                     scope_next
                         .iter()
                         .any(|exc| exception_matches(exc, tokens[q], space_before_at(tokens, q)))
@@ -1290,15 +1362,17 @@ fn match_elements(
             }
             let mut next_prior = matched_before.clone();
             next_prior.extend(positions.iter().copied());
-            next_prior.push(token_idx);
+            next_prior.extend(token_idx..token_idx + count);
             if let Some(rest) = match_elements(&elements[elem_idx + 1..], tokens, next, &next_prior)
             {
                 let mut result = MatchResult {
                     matched_positions: positions.clone(),
                     element_counts: counts.clone(),
                 };
-                result.matched_positions.push(token_idx);
-                result.element_counts.push(1);
+                result
+                    .matched_positions
+                    .extend(token_idx..token_idx + count);
+                result.element_counts.push(count);
                 result.matched_positions.extend(rest.matched_positions);
                 result.element_counts.extend(rest.element_counts);
                 return Some(result);
@@ -1937,6 +2011,87 @@ mod tests {
         assert!(
             !pure.tokens()[1].has_pos_tag("SUB:NOM:SIN:NEU"),
             "a pure preposition still triggers the NOM removal"
+        );
+    }
+
+    #[test]
+    fn max_occurrence_element_matches_multiple_tokens() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<rules lang="en">
+    <rule id="VBN_VBD_LIKE" name="two middle tokens">
+        <pattern>
+            <token>has</token>
+            <token min="0" max="2" postag="PRP|NN.*|RB" postag_regexp="yes" />
+            <marker>
+                <and>
+                    <token postag="VBD"/>
+                    <token postag="VBN"/>
+                </and>
+            </marker>
+        </pattern>
+        <disambig postag="VBN"/>
+    </rule>
+</rules>"#;
+        let disambig = XmlDisambiguator::from_xml(xml).unwrap();
+        let mut sentence = make_sentence(vec![
+            ("She", vec!["PRP"]),
+            ("has", vec!["VBZ"]),
+            ("not", vec!["RB"]),
+            ("bee", vec!["NN"]),
+            ("injured", vec!["VBD", "VBN", "JJ"]),
+        ]);
+        disambig.disambiguate(&mut sentence);
+        let tok = sentence
+            .tokens()
+            .iter()
+            .find(|t| t.token().token() == "injured")
+            .unwrap();
+        assert_eq!(
+            tok.readings()
+                .iter()
+                .map(|r| r.pos_tags().join("|"))
+                .collect::<Vec<_>>(),
+            vec!["VBN"],
+            "an element with max=2 must match two consecutive tokens so the and-group on the next token applies"
+        );
+
+        let mut one = make_sentence(vec![
+            ("She", vec!["PRP"]),
+            ("has", vec!["VBZ"]),
+            ("not", vec!["RB"]),
+            ("injured", vec!["VBD", "VBN", "JJ"]),
+        ]);
+        disambig.disambiguate(&mut one);
+        let tok = one
+            .tokens()
+            .iter()
+            .find(|t| t.token().token() == "injured")
+            .unwrap();
+        assert_eq!(
+            tok.readings()
+                .iter()
+                .map(|r| r.pos_tags().join("|"))
+                .collect::<Vec<_>>(),
+            vec!["VBN"]
+        );
+
+        let mut zero = make_sentence(vec![
+            ("She", vec!["PRP"]),
+            ("has", vec!["VBZ"]),
+            ("injured", vec!["VBD", "VBN", "JJ"]),
+        ]);
+        disambig.disambiguate(&mut zero);
+        let tok = zero
+            .tokens()
+            .iter()
+            .find(|t| t.token().token() == "injured")
+            .unwrap();
+        assert_eq!(
+            tok.readings()
+                .iter()
+                .map(|r| r.pos_tags().join("|"))
+                .collect::<Vec<_>>(),
+            vec!["VBN"]
         );
     }
 
