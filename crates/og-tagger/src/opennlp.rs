@@ -1036,39 +1036,31 @@ fn map_tokens_to_readings(
     token_texts: &[&str],
     readings: &[og_core::AnalyzedTokenReadings],
 ) -> Vec<Option<usize>> {
-    let mut result: Vec<Option<usize>> = vec![None; token_texts.len()];
-    let mut opennlp_pos = 0usize;
+    let mut spans: std::collections::HashMap<(usize, usize), usize> =
+        std::collections::HashMap::with_capacity(readings.len());
     let mut reading_pos = 0usize;
-    let mut reading_idx = 0usize;
-    for (i, token) in token_texts.iter().enumerate() {
-        let start = opennlp_pos;
-        let end = start + token.len();
-        opennlp_pos = end;
-        while reading_idx < readings.len() {
-            let current = reading_idx;
-            let reading_token = readings[current].token().token();
-            let skip = is_sentence_start(&readings[current])
-                || reading_token.trim().is_empty()
-                || (reading_token.chars().count() == 1 && reading_token.starts_with('\u{a0}'));
-            if skip {
-                reading_idx += 1;
-                continue;
-            }
-            let normalized_len = reading_token.replace('\u{2019}', "'").len();
-            let r_start = reading_pos;
-            let r_end = r_start + normalized_len;
-            reading_pos = r_end;
-            reading_idx += 1;
-            if r_start == start && r_end == end {
-                result[i] = Some(current);
-                break;
-            }
-            if r_start > start {
-                break;
-            }
+    for (idx, reading) in readings.iter().enumerate() {
+        let reading_token = reading.token().token();
+        let skip = is_sentence_start(reading)
+            || reading_token.trim().is_empty()
+            || (reading_token.chars().count() == 1 && reading_token.starts_with('\u{a0}'));
+        if skip {
+            continue;
         }
+        let normalized_len = reading_token.replace('\u{2019}', "'").len();
+        spans.insert((reading_pos, reading_pos + normalized_len), idx);
+        reading_pos += normalized_len;
     }
-    result
+    let mut opennlp_pos = 0usize;
+    token_texts
+        .iter()
+        .map(|token| {
+            let start = opennlp_pos;
+            let end = start + token.len();
+            opennlp_pos = end;
+            spans.get(&(start, end)).copied()
+        })
+        .collect()
 }
 
 fn english_chunk_filter(
@@ -1468,5 +1460,44 @@ mod opennlp_docs_parity_tests {
                 .collect();
             assert_eq!(&got, expected, "input: {:?}", words);
         }
+    }
+
+    #[test]
+    fn mapping_resyncs_after_reading_covering_two_opennlp_tokens() {
+        let readings: Vec<og_core::AnalyzedTokenReadings> = ["jumped", "$9", "the", "day"]
+            .iter()
+            .scan(0usize, |pos, text| {
+                let start = *pos;
+                *pos += text.len();
+                Some(og_core::AnalyzedTokenReadings::new(
+                    og_core::AnalyzedToken::new(*text, start, *pos),
+                ))
+            })
+            .collect();
+        let token_texts: Vec<&str> = vec!["jumped", "$", "9", "the", "day"];
+        let mapped = map_tokens_to_readings(&token_texts, &readings);
+        assert_eq!(mapped[0], Some(0));
+        assert_eq!(mapped[1], None);
+        assert_eq!(mapped[2], None);
+        assert_eq!(mapped[3], Some(2));
+        assert_eq!(mapped[4], Some(3));
+    }
+
+    #[test]
+    fn mapping_skips_whitespace_between_readings() {
+        let mut readings: Vec<og_core::AnalyzedTokenReadings> = vec![];
+        readings.push(og_core::AnalyzedTokenReadings::new(
+            og_core::AnalyzedToken::new("a", 0, 1),
+        ));
+        readings.push(og_core::AnalyzedTokenReadings::new(
+            og_core::AnalyzedToken::new(" ", 1, 2),
+        ));
+        readings.push(og_core::AnalyzedTokenReadings::new(
+            og_core::AnalyzedToken::new("b", 2, 3),
+        ));
+        let token_texts: Vec<&str> = vec!["a", "b"];
+        let mapped = map_tokens_to_readings(&token_texts, &readings);
+        assert_eq!(mapped[0], Some(0));
+        assert_eq!(mapped[1], Some(2));
     }
 }
