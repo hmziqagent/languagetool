@@ -16,6 +16,10 @@ fn exception_from_attrs(e: &BytesStart<'_>) -> XmlException {
             "negate" => exc.negate = val == "yes",
             "negate_pos" => exc.negate_pos = val == "yes",
             "inflected" => exc.inflected = val == "yes",
+            "case_sensitive" => {
+                exc.case_sensitive = val == "yes";
+                exc.case_sensitive_set = true;
+            }
             "scope" => exc.scope = Some(val),
             "spacebefore" => {
                 if val != "ignore" {

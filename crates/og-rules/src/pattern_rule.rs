@@ -2475,11 +2475,7 @@ impl PatternRuleEngine {
                 self.apply_valid_word_filter(&filter.args, matched_texts, rm)
             }
             "org.languagetool.rules.en.EnglishSuppressMisspelledSuggestionsFilter" => {
-                if filter.args.contains("suppressMatch:true") {
-                    None
-                } else {
-                    Some(rm)
-                }
+                self.apply_suppress_misspelled_suggestions_filter(&filter.args, matched_texts, rm)
             }
             "org.languagetool.rules.en.EnglishNumberInWordFilter"
             | "org.languagetool.rules.de.GermanNumberInWordFilter" => {
@@ -3406,6 +3402,58 @@ impl PatternRuleEngine {
                     .collect(),
             ),
         )
+    }
+
+    fn apply_suppress_misspelled_suggestions_filter(
+        &self,
+        args: &str,
+        matched_texts: &[String],
+        mut rm: RuleMatch,
+    ) -> Option<RuleMatch> {
+        let parsed = self.parse_filter_args(args, matched_texts);
+        let suppress_match = parsed
+            .get("suppressMatch")
+            .is_none_or(|v| !v.eq_ignore_ascii_case("false"));
+        let suppress_postag = parsed.get("SuppressPostag").cloned();
+        let filter_postag = parsed.get("FilterPostag").cloned();
+        let postag_matches = |word: &str, pattern: &str| -> bool {
+            let atr = AnalyzedTokenReadings::new(og_core::AnalyzedToken::new(word, 0, 0))
+                .with_readings(
+                    self.spelling
+                        .as_ref()
+                        .map(|s| s.tag(word))
+                        .unwrap_or_default(),
+                );
+            atr.has_pos_tag_matching(pattern)
+        };
+        let mut kept: Vec<og_core::SuggestedReplacement> = Vec::new();
+        for repl in rm.replacements() {
+            let value = repl.value();
+            let misspelled = match self.spelling.as_ref() {
+                Some(spelling) => value.split_whitespace().any(|w| spelling.is_misspelled(w)),
+                None => false,
+            };
+            if misspelled {
+                continue;
+            }
+            if let Some(sp) = suppress_postag.as_deref()
+                && postag_matches(value, sp)
+            {
+                continue;
+            }
+            if let Some(fp) = filter_postag.as_deref()
+                && !postag_matches(value, fp)
+            {
+                continue;
+            }
+            kept.push(repl.clone());
+        }
+        if kept.is_empty() && suppress_match {
+            None
+        } else {
+            rm.set_replacements(kept);
+            Some(rm)
+        }
     }
 
     fn apply_multitoken_speller_filter(
