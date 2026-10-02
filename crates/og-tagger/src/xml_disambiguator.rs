@@ -944,112 +944,16 @@ fn match_tokens_recursive(
     }
 
     let pt = &pattern_tokens[pattern_idx];
-    let is_optional = pt.min.unwrap_or(1) == 0;
 
-    let first_matched = if pattern_idx == 0 && first_text_verified {
-        token_matches_text_verified(pt, tokens, token_idx, token_idx > 0)
-    } else {
-        token_matches(pt, tokens, token_idx, token_idx > 0)
-    } && reference_text_matches(pt, tokens, token_idx, matched_so_far);
-
-    if first_matched {
-        let scope_next: Vec<&CompiledException> = pt
-            .exceptions
-            .iter()
-            .filter(|exc| exc.scope.as_deref() == Some("next"))
-            .collect();
-        let scope_next_vetoes = |next_token: usize, count: usize| {
-            !scope_next.is_empty()
-                && ((token_idx + count)..=next_token.min(tokens.len().saturating_sub(1))).any(|q| {
-                    scope_next
-                        .iter()
-                        .any(|exc| exception_matches(exc, tokens[q], space_before_at(tokens, q)))
-                })
-        };
-        if pt.skip < 0 {
-            let max_occurrences = match pt.max {
-                None | Some(1) | Some(0) => 1,
-                Some(-1) => usize::MAX,
-                Some(m) => m as usize,
-            };
-            let remaining = pattern_tokens.len() - pattern_idx - 1;
-            let guard = tokens.len() as isize - remaining as isize;
-            let mut count = 1usize;
-            while count < max_occurrences
-                && ((token_idx + count) as isize) < guard
-                && token_matches(pt, tokens, token_idx + count, true)
-                && reference_text_matches(pt, tokens, token_idx + count, matched_so_far)
-            {
-                count += 1;
-            }
-            let mut next_token = token_idx + count;
-            while next_token <= tokens.len() {
-                if !scope_next_vetoes(next_token, count) {
-                    let mut extended: Vec<usize> = matched_so_far.to_vec();
-                    extended.extend(token_idx..token_idx + count);
-                    if let Some(mut result) = match_tokens_recursive(
-                        pattern_tokens,
-                        tokens,
-                        next_token,
-                        pattern_idx + 1,
-                        false,
-                        &extended,
-                    ) {
-                        for p in (token_idx..token_idx + count).rev() {
-                            result.matched_positions.insert(0, p);
-                        }
-                        result.element_counts.insert(0, count);
-                        return Some(result);
-                    }
-                }
-                next_token += 1;
-            }
-        } else {
-            let skip = pt.skip as usize;
-            let max_occurrences = match pt.max {
-                None | Some(1) | Some(0) => 1,
-                Some(-1) => usize::MAX,
-                Some(m) => m as usize,
-            };
-            let remaining = pattern_tokens.len() - pattern_idx - 1;
-            let guard = tokens.len() as isize - remaining as isize;
-            let mut count = 1usize;
-            while count < max_occurrences
-                && ((token_idx + count) as isize) < guard
-                && token_matches(pt, tokens, token_idx + count, true)
-                && reference_text_matches(pt, tokens, token_idx + count, matched_so_far)
-            {
-                count += 1;
-            }
-            for dist in 0..=skip {
-                let next_token = token_idx + count + dist;
-                if next_token > tokens.len() {
-                    break;
-                }
-                if scope_next_vetoes(next_token, count) {
-                    continue;
-                }
-                let mut extended: Vec<usize> = matched_so_far.to_vec();
-                extended.extend(token_idx..token_idx + count);
-                if let Some(mut result) = match_tokens_recursive(
-                    pattern_tokens,
-                    tokens,
-                    next_token,
-                    pattern_idx + 1,
-                    false,
-                    &extended,
-                ) {
-                    for p in (token_idx..token_idx + count).rev() {
-                        result.matched_positions.insert(0, p);
-                    }
-                    result.element_counts.insert(0, count);
-                    return Some(result);
-                }
-            }
-        }
-    }
-
-    if is_optional {
+    if pt.min.unwrap_or(1) == 0
+        && later_token_matches_at(
+            pattern_tokens,
+            tokens,
+            token_idx,
+            pattern_idx,
+            matched_so_far,
+        )
+    {
         let mut result = match_tokens_recursive(
             pattern_tokens,
             tokens,
@@ -1062,7 +966,137 @@ fn match_tokens_recursive(
         return Some(result);
     }
 
+    let first_matched = if pattern_idx == 0 && first_text_verified {
+        token_matches_text_verified(pt, tokens, token_idx, token_idx > 0)
+    } else {
+        token_matches(pt, tokens, token_idx, token_idx > 0)
+    } && reference_text_matches(pt, tokens, token_idx, matched_so_far);
+
+    if !first_matched {
+        return None;
+    }
+
+    let scope_next: Vec<&CompiledException> = pt
+        .exceptions
+        .iter()
+        .filter(|exc| exc.scope.as_deref() == Some("next"))
+        .collect();
+    let scope_next_vetoes = |next_token: usize, count: usize| {
+        !scope_next.is_empty()
+            && ((token_idx + count)..=next_token.min(tokens.len().saturating_sub(1))).any(|q| {
+                scope_next
+                    .iter()
+                    .any(|exc| exception_matches(exc, tokens[q], space_before_at(tokens, q)))
+            })
+    };
+    let max_occurrences = match pt.max {
+        None | Some(1) | Some(0) => 1,
+        Some(-1) => usize::MAX,
+        Some(m) => m as usize,
+    };
+    let remaining = pattern_tokens.len() - pattern_idx - 1;
+    let guard = tokens.len() as isize - remaining as isize;
+    let mut count = 1usize;
+    while count < max_occurrences
+        && ((token_idx + count) as isize) < guard
+        && token_matches(pt, tokens, token_idx + count, true)
+        && reference_text_matches(pt, tokens, token_idx + count, matched_so_far)
+    {
+        count += 1;
+    }
+    let scan_limit = if pt.skip < 0 {
+        tokens.len()
+    } else {
+        pt.skip as usize
+    };
+    for dist in 0..=scan_limit {
+        let next_token = token_idx + count + dist;
+        if next_token > tokens.len() {
+            break;
+        }
+        if scope_next_vetoes(next_token, count) {
+            continue;
+        }
+        let mut extended: Vec<usize> = matched_so_far.to_vec();
+        extended.extend(token_idx..token_idx + count);
+        if !next_token_commits_at(
+            pattern_tokens,
+            tokens,
+            next_token,
+            pattern_idx + 1,
+            &extended,
+        ) {
+            continue;
+        }
+        if let Some(mut result) = match_tokens_recursive(
+            pattern_tokens,
+            tokens,
+            next_token,
+            pattern_idx + 1,
+            false,
+            &extended,
+        ) {
+            for p in (token_idx..token_idx + count).rev() {
+                result.matched_positions.insert(0, p);
+            }
+            result.element_counts.insert(0, count);
+            return Some(result);
+        }
+        return None;
+    }
+
     None
+}
+
+fn later_token_matches_at(
+    pattern_tokens: &[CompiledPatternToken],
+    tokens: &[&AnalyzedTokenReadings],
+    token_idx: usize,
+    pattern_idx: usize,
+    matched_so_far: &[usize],
+) -> bool {
+    for k2 in pattern_idx + 1..pattern_tokens.len() {
+        let pt = &pattern_tokens[k2];
+        if token_matches(pt, tokens, token_idx, token_idx > 0)
+            && reference_text_matches(pt, tokens, token_idx, matched_so_far)
+        {
+            return true;
+        }
+        if pt.min.unwrap_or(1) > 0 {
+            return false;
+        }
+    }
+    false
+}
+
+fn next_token_commits_at(
+    pattern_tokens: &[CompiledPatternToken],
+    tokens: &[&AnalyzedTokenReadings],
+    token_idx: usize,
+    pattern_idx: usize,
+    matched_so_far: &[usize],
+) -> bool {
+    let Some(pt) = pattern_tokens.get(pattern_idx) else {
+        return true;
+    };
+    if token_idx >= tokens.len() {
+        return pattern_tokens[pattern_idx..]
+            .iter()
+            .all(|pt| pt.min.unwrap_or(1) == 0);
+    }
+    if pt.min.unwrap_or(1) == 0
+        && later_token_matches_at(
+            pattern_tokens,
+            tokens,
+            token_idx,
+            pattern_idx,
+            matched_so_far,
+        )
+    {
+        return true;
+    }
+    token_matches(pt, tokens, token_idx, token_idx > 0)
+        && reference_text_matches(pt, tokens, token_idx, matched_so_far)
 }
 
 fn token_matches_text_verified(
@@ -1263,6 +1297,19 @@ fn match_elements(
         }
 
         let has_previous = token_idx > start_idx;
+        if element_min(elem).unwrap_or(1) == 0
+            && later_element_matches_at(
+                elements,
+                tokens,
+                token_idx,
+                elem_idx,
+                has_previous,
+                &matched_before,
+            )
+        {
+            counts.push(0);
+            continue;
+        }
         let (matched, rep, min) = match elem {
             CompiledPatternElement::Token(pt) => (
                 token_matches(pt, tokens, token_idx, has_previous)
@@ -1307,24 +1354,10 @@ fn match_elements(
         };
         let remaining = elements.len() - elem_idx - 1;
         let guard = tokens.len() as isize - remaining as isize;
-        let elem_matches_at = |e: usize, pos: usize| match &elements[e] {
-            CompiledPatternElement::Token(pt) => {
-                token_matches(pt, tokens, pos, pos > start_idx)
-                    && reference_text_matches(pt, tokens, pos, &matched_before)
-            }
-            CompiledPatternElement::OrGroup(alts) => alts.iter().any(|alt| {
-                token_matches(alt, tokens, pos, pos > start_idx)
-                    && reference_text_matches(alt, tokens, pos, &matched_before)
-            }),
-            CompiledPatternElement::AndGroup(cs) => cs.iter().all(|c| {
-                token_matches(c, tokens, pos, pos > start_idx)
-                    && reference_text_matches(c, tokens, pos, &matched_before)
-            }),
-        };
         let mut count = 1usize;
         while count < max_occurrences
             && ((token_idx + count) as isize) < guard
-            && elem_matches_at(elem_idx, token_idx + count)
+            && element_matches_full(elem, tokens, token_idx + count, true, &matched_before)
         {
             count += 1;
         }
@@ -1356,6 +1389,16 @@ fn match_elements(
             let mut next_prior = matched_before.clone();
             next_prior.extend(positions.iter().copied());
             next_prior.extend(token_idx..token_idx + count);
+            if !element_commits_at(
+                &elements[elem_idx + 1..],
+                tokens,
+                next,
+                0,
+                false,
+                &next_prior,
+            ) {
+                continue;
+            }
             if let Some(rest) = match_elements(&elements[elem_idx + 1..], tokens, next, &next_prior)
             {
                 let mut result = MatchResult {
@@ -1370,6 +1413,7 @@ fn match_elements(
                 result.element_counts.extend(rest.element_counts);
                 return Some(result);
             }
+            return None;
         }
         return None;
     }
@@ -1378,6 +1422,80 @@ fn match_elements(
         matched_positions: positions,
         element_counts: counts,
     })
+}
+
+fn element_min(element: &CompiledPatternElement) -> Option<i32> {
+    match element {
+        CompiledPatternElement::Token(pt) => pt.min,
+        CompiledPatternElement::OrGroup(alts) => alts.first().and_then(|a| a.min),
+        CompiledPatternElement::AndGroup(cs) => cs.first().and_then(|c| c.min),
+    }
+}
+
+fn element_matches_full(
+    element: &CompiledPatternElement,
+    tokens: &[&AnalyzedTokenReadings],
+    pos: usize,
+    has_previous: bool,
+    prior: &[usize],
+) -> bool {
+    match element {
+        CompiledPatternElement::Token(pt) => {
+            token_matches(pt, tokens, pos, has_previous)
+                && reference_text_matches(pt, tokens, pos, prior)
+        }
+        CompiledPatternElement::OrGroup(alts) => alts.iter().any(|alt| {
+            token_matches(alt, tokens, pos, has_previous)
+                && reference_text_matches(alt, tokens, pos, prior)
+        }),
+        CompiledPatternElement::AndGroup(cs) => cs.iter().all(|c| {
+            token_matches(c, tokens, pos, has_previous)
+                && reference_text_matches(c, tokens, pos, prior)
+        }),
+    }
+}
+
+fn later_element_matches_at(
+    elements: &[CompiledPatternElement],
+    tokens: &[&AnalyzedTokenReadings],
+    pos: usize,
+    elem_idx: usize,
+    has_previous: bool,
+    prior: &[usize],
+) -> bool {
+    for k2 in elem_idx + 1..elements.len() {
+        if element_matches_full(&elements[k2], tokens, pos, has_previous, prior) {
+            return true;
+        }
+        if element_min(&elements[k2]).unwrap_or(1) > 0 {
+            return false;
+        }
+    }
+    false
+}
+
+fn element_commits_at(
+    elements: &[CompiledPatternElement],
+    tokens: &[&AnalyzedTokenReadings],
+    pos: usize,
+    elem_idx: usize,
+    has_previous: bool,
+    prior: &[usize],
+) -> bool {
+    let Some(element) = elements.get(elem_idx) else {
+        return true;
+    };
+    if pos >= tokens.len() {
+        return elements[elem_idx..]
+            .iter()
+            .all(|e| element_min(e).unwrap_or(1) == 0);
+    }
+    if element_min(element).unwrap_or(1) == 0
+        && later_element_matches_at(elements, tokens, pos, elem_idx, has_previous, prior)
+    {
+        return true;
+    }
+    element_matches_full(element, tokens, pos, has_previous, prior)
 }
 
 fn space_before_at(tokens: &[&AnalyzedTokenReadings], idx: usize) -> bool {
