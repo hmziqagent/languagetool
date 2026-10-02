@@ -1866,7 +1866,11 @@ impl PatternRuleEngine {
                 || pattern.compiled_regexp.is_some()
                 || pattern.compiled_regexp_fancy.is_some();
             if has_string && !element_surface_text_matches(pattern, token) {
-                format!("surface!={:?}", requirement_text(pattern))
+                if pattern.inflected {
+                    format!("inflected-lemma!={:?}", requirement_text(pattern))
+                } else {
+                    format!("surface!={:?}", requirement_text(pattern))
+                }
             } else if !element_matches_readings(pattern, token) {
                 if pattern.negate && pattern.postag.is_none() {
                     format!("negated token matched surface {surface:?}")
