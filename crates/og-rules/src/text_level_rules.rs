@@ -54,8 +54,14 @@ impl TextLevelRule for MultipleWhitespaceRule {
                 }
                 let end = i;
                 if end - start > 1 {
-                    let context_start = start.saturating_sub(30);
-                    let context_end = std::cmp::min(end + 30, text.len());
+                    let mut context_start = start.saturating_sub(30);
+                    while context_start > 0 && !text.is_char_boundary(context_start) {
+                        context_start -= 1;
+                    }
+                    let mut context_end = std::cmp::min(end + 30, text.len());
+                    while context_end < text.len() && !text.is_char_boundary(context_end) {
+                        context_end += 1;
+                    }
                     let context_text = text[context_start..context_end].to_string();
 
                     let rule = RuleMatchRule::new(&self.id, self.description())
@@ -1394,8 +1400,15 @@ impl TextLevelRule for PunctuationMarkAtParagraphEnd2Rule {
                 {
                     let start = last.token().start();
                     let end = last.token().end();
-                    let ctx_start = start.saturating_sub(30);
-                    let ctx_end = std::cmp::min(end + 30, sentence.text().len());
+                    let text_len = sentence.text().len();
+                    let mut ctx_start = start.saturating_sub(30);
+                    while ctx_start > 0 && !sentence.text().is_char_boundary(ctx_start) {
+                        ctx_start -= 1;
+                    }
+                    let mut ctx_end = std::cmp::min(end + 30, text_len);
+                    while ctx_end < text_len && !sentence.text().is_char_boundary(ctx_end) {
+                        ctx_end += 1;
+                    }
                     let context_text = sentence.text()[ctx_start..ctx_end].to_string();
                     let rm_rule = RuleMatchRule::new(self.id(), self.description())
                         .with_category(self.category.clone())

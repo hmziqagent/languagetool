@@ -80,8 +80,15 @@ impl Rule for WordRepeatRule {
             {
                 let start = curr.token().start();
                 let end = curr.token().end();
-                let context_start = start.saturating_sub(20);
-                let context_end = std::cmp::min(end + 20, sentence.text().len());
+                let text_len = sentence.text().len();
+                let mut context_start = start.saturating_sub(20);
+                while context_start > 0 && !sentence.text().is_char_boundary(context_start) {
+                    context_start -= 1;
+                }
+                let mut context_end = std::cmp::min(end + 20, text_len);
+                while context_end < text_len && !sentence.text().is_char_boundary(context_end) {
+                    context_end += 1;
+                }
                 let context_text = sentence.text()[context_start..context_end].to_string();
 
                 let rule = RuleMatchRule::new(&self.id, self.description())
@@ -444,8 +451,15 @@ impl Rule for UppercaseSentenceStartRule {
             let target = tokens[match_token_pos];
             let start = target.token().start();
             let end = target.token().end();
-            let context_start = start.saturating_sub(20);
-            let context_end = std::cmp::min(end + 20, sentence.text().len());
+            let text_len = sentence.text().len();
+            let mut context_start = start.saturating_sub(20);
+            while context_start > 0 && !sentence.text().is_char_boundary(context_start) {
+                context_start -= 1;
+            }
+            let mut context_end = std::cmp::min(end + 20, text_len);
+            while context_end < text_len && !sentence.text().is_char_boundary(context_end) {
+                context_end += 1;
+            }
             let context_text = sentence.text()[context_start..context_end].to_string();
 
             let rule = RuleMatchRule::new(&self.id, self.description())
@@ -628,8 +642,15 @@ impl Rule for CommaWhitespaceRule {
                     }
                 }
 
-                let context_start = from_pos.saturating_sub(30);
-                let context_end = std::cmp::min(to_pos + 30, sentence.text().len());
+                let text_len = sentence.text().len();
+                let mut context_start = from_pos.saturating_sub(30);
+                while context_start > 0 && !sentence.text().is_char_boundary(context_start) {
+                    context_start -= 1;
+                }
+                let mut context_end = std::cmp::min(to_pos + 30, text_len);
+                while context_end < text_len && !sentence.text().is_char_boundary(context_end) {
+                    context_end += 1;
+                }
                 let context_text = sentence.text()[context_start..context_end].to_string();
 
                 let rule = RuleMatchRule::new(&self.id, self.description())
@@ -772,8 +793,15 @@ impl Rule for WhitespaceBeforePunctuationRule {
             if let (Some(msg), Some(suggestion)) = (msg, suggestion) {
                 let from = tokens[i - 1].token().start();
                 let to = from + 1 + prev_len;
-                let context_start = from.saturating_sub(20);
-                let context_end = std::cmp::min(to + 20, sentence.text().len());
+                let text_len = sentence.text().len();
+                let mut context_start = from.saturating_sub(20);
+                while context_start > 0 && !sentence.text().is_char_boundary(context_start) {
+                    context_start -= 1;
+                }
+                let mut context_end = std::cmp::min(to + 20, text_len);
+                while context_end < text_len && !sentence.text().is_char_boundary(context_end) {
+                    context_end += 1;
+                }
                 let context_text = sentence.text()[context_start..context_end].to_string();
 
                 let rule = RuleMatchRule::new(&self.id, self.description())
