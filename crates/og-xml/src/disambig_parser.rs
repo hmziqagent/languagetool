@@ -296,6 +296,7 @@ impl DisambigXmlParser {
                                     "skip" => token.skip = val.parse().unwrap_or(0),
                                     "spacebefore" => token.space_before = Some(val),
                                     "chunk" => token.chunk = Some(val),
+                                    "chunk_re" => token.chunk_re = Some(val),
                                     _ => {}
                                 }
                             }
@@ -433,6 +434,7 @@ impl DisambigXmlParser {
                                     "skip" => token.skip = val.parse().unwrap_or(0),
                                     "spacebefore" => token.space_before = Some(val),
                                     "chunk" => token.chunk = Some(val),
+                                    "chunk_re" => token.chunk_re = Some(val),
                                     _ => {}
                                 }
                             }

@@ -2781,4 +2781,60 @@ mod tests {
         disambiguator.disambiguate(&mut split);
         assert!(split.tokens()[0].is_immunized());
     }
+
+    #[test]
+    fn chunk_re_constraints_are_honored_and_marker_targets_first_marked_token() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<rules lang="en">
+    <rule id="DO_NN_VB" name="does Peter have (VB) time">
+        <pattern>
+            <token postag="SENT_START|PCT|CC" postag_regexp="yes" />
+            <token regexp="yes" min="0">why|when|where|who|which|what|how</token>
+            <token inflected="yes" regexp="yes">do|will|can|should|may|must</token>
+            <token min="0">n't</token>
+            <token chunk_re="B-NP.*" min="0" />
+            <token chunk_re="E-NP.*" />
+            <marker>
+                <token postag="VB" chunk_re=".-VP" />
+            </marker>
+        </pattern>
+        <disambig action="filter" postag="VB" />
+    </rule>
+</rules>"#;
+        let disambig = XmlDisambiguator::from_xml(xml).unwrap();
+        let mut sentence = make_sentence(vec![
+            ("<S>", vec!["SENT_START"]),
+            ("Do", vec!["VB", "VBP"]),
+            ("you", vec!["PRP"]),
+            ("have", vec!["NN", "VB", "VBP"]),
+            ("bicycle", vec!["NN", "VB", "VBP"]),
+            (".", vec!["."]),
+        ]);
+        let chunks: [&[&str]; 6] = [
+            &[],
+            &[],
+            &["B-NP-singular", "E-NP-singular"],
+            &["B-VP"],
+            &["B-NP-singular", "E-NP-singular"],
+            &[],
+        ];
+        for (t, ch) in sentence.tokens_mut().iter_mut().zip(chunks) {
+            t.set_chunks(ch.iter().map(|c| c.to_string()).collect());
+        }
+        disambig.disambiguate(&mut sentence);
+        let have = &sentence.tokens()[3];
+        assert_eq!(
+            have.readings()
+                .iter()
+                .flat_map(|r| r.pos_tags().to_vec())
+                .collect::<Vec<_>>(),
+            vec!["VB".to_string()],
+            "the filter must hit the marked 'have', not the following token"
+        );
+        let bicycle = &sentence.tokens()[4];
+        assert!(
+            bicycle.has_pos_tag("NN"),
+            "bicycle must keep its NN reading"
+        );
+    }
 }
