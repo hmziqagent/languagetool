@@ -1,11 +1,19 @@
-use og_core::checker::{Disambiguator as _, Tagger};
+use og_core::checker::Tagger;
 use og_core::{AnalyzedSentence, AnalyzedToken, AnalyzedTokenReadings};
 use og_tagger::{EnglishTagger, XmlDisambiguator};
 use og_tokenizer::WordTokenizer as _;
 
+enum TokenizerChoice {
+    En(std::sync::Arc<og_tokenizer::DefaultWordTokenizer>),
+    Fr(std::sync::Arc<og_tokenizer::FrenchWordTokenizer>),
+    Plain,
+}
+
 struct Ctx {
-    tagger: std::sync::Arc<EnglishTagger>,
+    tagger: std::sync::Arc<dyn Tagger>,
     disambiguator: XmlDisambiguator,
+    tokenizer: TokenizerChoice,
+    resource_dir: std::path::PathBuf,
 }
 
 fn strip_markup(example: &str) -> (String, Option<(usize, usize)>) {
@@ -113,12 +121,63 @@ fn main() {
     let xml = std::fs::read_to_string(&xml_path).expect("disambiguation.xml");
     let cleaned = strip_comments(&xml);
 
-    let tagger = std::sync::Arc::new(EnglishTagger::from_resource_dir(&resource_dir));
-    let disambiguator =
-        XmlDisambiguator::from_xml_with_english(&cleaned, Some(tagger.clone())).expect("compile");
+    let (tagger, tokenizer): (std::sync::Arc<dyn Tagger>, TokenizerChoice) = match lang.as_str() {
+        "en" => {
+            let en = std::sync::Arc::new(EnglishTagger::from_resource_dir(&resource_dir));
+            let gate = en.clone();
+            let tokenizer = og_tokenizer::DefaultWordTokenizer::new_english(std::sync::Arc::new(
+                move |w: &str| gate.is_word_tagged(w),
+            ));
+            (en, TokenizerChoice::En(std::sync::Arc::new(tokenizer)))
+        }
+        "fr" => {
+            let fr = std::sync::Arc::new(og_tagger::GenericTagger::french(&resource_dir));
+            let gate = fr.clone();
+            let tokenizer =
+                og_tokenizer::FrenchWordTokenizer::new(std::sync::Arc::new(move |w: &str| {
+                    gate.is_word_tagged(w)
+                }));
+            (fr, TokenizerChoice::Fr(std::sync::Arc::new(tokenizer)))
+        }
+        "de" => {
+            let tagger: std::sync::Arc<dyn Tagger> =
+                match og_tagger::GermanTagger::from_resource_dir(&resource_dir) {
+                    Some(t) => std::sync::Arc::new(t),
+                    None => std::sync::Arc::new(EnglishTagger::from_resource_dir(&resource_dir)),
+                };
+            (tagger, TokenizerChoice::Plain)
+        }
+        other => {
+            let tagger: std::sync::Arc<dyn Tagger> = match og_test_runner::generic_dict_stem(other)
+            {
+                Some("french") => {
+                    std::sync::Arc::new(og_tagger::GenericTagger::french(&resource_dir))
+                }
+                Some("russian") => {
+                    std::sync::Arc::new(og_tagger::GenericTagger::russian(&resource_dir))
+                }
+                Some("arabic") => std::sync::Arc::new(
+                    og_tagger::arabic_tagger::ArabicTagger::from_resource_dir(&resource_dir),
+                ),
+                Some(stem) => std::sync::Arc::new(og_tagger::GenericTagger::from_resource_dir(
+                    &resource_dir,
+                    stem,
+                )),
+                None => std::sync::Arc::new(EnglishTagger::new()),
+            };
+            (tagger, TokenizerChoice::Plain)
+        }
+    };
+    let disambiguator = XmlDisambiguator::from_xml_with_english(
+        &cleaned,
+        og_tagger::english_tagger::shared_english_tagger(),
+    )
+    .expect("compile");
     let ctx = Ctx {
         tagger,
         disambiguator,
+        tokenizer,
+        resource_dir,
     };
 
     let mut untouched_total = 0usize;
@@ -195,12 +254,14 @@ fn main() {
 }
 
 fn raw_analyze(ctx: &Ctx, text: &str) -> AnalyzedSentence {
-    let tagger = ctx.tagger.clone();
-    let tokenizer =
-        og_tokenizer::DefaultWordTokenizer::new_english(std::sync::Arc::new(move |w: &str| {
-            tagger.is_word_tagged(w)
-        }));
-    let raw = tokenizer.split_underscores(tokenizer.tokenize(text));
+    let raw = match &ctx.tokenizer {
+        TokenizerChoice::En(tokenizer) => tokenizer.split_underscores(tokenizer.tokenize(text)),
+        TokenizerChoice::Fr(tokenizer) => tokenizer.tokenize(text),
+        TokenizerChoice::Plain => {
+            let tokenizer = og_tokenizer::DefaultWordTokenizer::new();
+            tokenizer.split_underscores(tokenizer.tokenize(text))
+        }
+    };
     let mut tokens: Vec<AnalyzedTokenReadings> = raw
         .into_iter()
         .map(|t| AnalyzedTokenReadings::new(AnalyzedToken::new(t.text(), t.start(), t.end())))
@@ -214,9 +275,7 @@ fn raw_analyze(ctx: &Ctx, text: &str) -> AnalyzedSentence {
     let mut sentence = AnalyzedSentence::new(text, 0, text.len());
     sentence.set_tokens(tokens);
     Tagger::tag(ctx.tagger.as_ref(), sentence.tokens_mut());
-    og_tagger::chunker::load_opennlp_chunker(&std::path::PathBuf::from(
-        "/home/agent/opengrammar-rs/languagetool/languagetool-language-modules/en/src/main/resources/org/languagetool/resource/en",
-    ));
+    og_tagger::chunker::load_opennlp_chunker(&ctx.resource_dir);
     og_tagger::chunker::apply_chunk_tags(&mut sentence);
     if let Some(last) = sentence.tokens_mut().last_mut() {
         last.add_sent_end();

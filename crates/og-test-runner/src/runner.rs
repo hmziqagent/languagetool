@@ -104,6 +104,31 @@ impl SentenceTokenizer for TestSentenceTokenizer {
     }
 }
 
+pub fn generic_dict_stem(code: &str) -> Option<&'static str> {
+    let generic_stems: &[(&str, &str)] = &[
+        ("fr", "french"),
+        ("es", "spanish"),
+        ("pt", "portuguese"),
+        ("nl", "dutch"),
+        ("pl", "polish"),
+        ("ru", "russian"),
+        ("it", "italian"),
+        ("ar", "arabic"),
+        ("ast", "asturian"),
+        ("br", "breton"),
+        ("ca", "catalan"),
+        ("el", "greek"),
+        ("gl", "galician"),
+        ("ro", "romanian"),
+        ("sv", "swedish"),
+        ("crh", "crimean_tatar"),
+    ];
+    generic_stems
+        .iter()
+        .find(|(c, _)| *c == code)
+        .map(|(_, stem)| *stem)
+}
+
 pub enum AnyTagger {
     English(EnglishTagger),
     German(og_tagger::GermanTagger),
@@ -148,25 +173,7 @@ impl TestRunner {
 
         let (tagger, disambiguator, pattern_engine) = std::thread::scope(|scope| {
             let tagger_h = scope.spawn(|| {
-                let generic_stems: &[(&str, &str)] = &[
-                    ("fr", "french"),
-                    ("es", "spanish"),
-                    ("pt", "portuguese"),
-                    ("nl", "dutch"),
-                    ("pl", "polish"),
-                    ("ru", "russian"),
-                    ("it", "italian"),
-                    ("ar", "arabic"),
-                    ("ast", "asturian"),
-                    ("br", "breton"),
-                    ("ca", "catalan"),
-                    ("el", "greek"),
-                    ("gl", "galician"),
-                    ("ro", "romanian"),
-                    ("sv", "swedish"),
-                    ("crh", "crimean_tatar"),
-                ];
-                if let Some((_, stem)) = generic_stems.iter().find(|(c, _)| *c == code)
+                if let Some(stem) = generic_dict_stem(code)
                     && resource_dir.exists()
                 {
                     if code == "fr" {
