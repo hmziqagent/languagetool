@@ -9,3 +9,6 @@ fancy-regex = "0.14"
 regex = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }
+
+[dev-dependencies]
+og-tagger = { workspace = true }

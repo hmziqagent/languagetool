@@ -24,9 +24,21 @@ pub struct WordTokenizerAdapter;
 
 impl WordTokenizer for WordTokenizerAdapter {
     fn tokenize(&self, text: &str, offset: usize) -> Vec<AnalyzedTokenReadings> {
-        let tokenizer = og_tokenizer::DefaultWordTokenizer::new();
         use og_tokenizer::WordTokenizer as _;
-        let tokens = tokenizer.tokenize(text);
+        static EN: std::sync::OnceLock<std::sync::Arc<og_tokenizer::DefaultWordTokenizer>> =
+            std::sync::OnceLock::new();
+        let tokenizer =
+            EN.get_or_init(
+                || match og_tagger::english_tagger::shared_english_tagger() {
+                    Some(tagger) => {
+                        std::sync::Arc::new(og_tokenizer::DefaultWordTokenizer::new_english(
+                            std::sync::Arc::new(move |w: &str| tagger.is_word_tagged(w)),
+                        ))
+                    }
+                    None => std::sync::Arc::new(og_tokenizer::DefaultWordTokenizer::new()),
+                },
+            );
+        let tokens = tokenizer.split_underscores(tokenizer.tokenize(text));
         tokens
             .into_iter()
             .map(|t| {

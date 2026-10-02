@@ -74,6 +74,10 @@ impl EnglishTagger {
         }
     }
 
+    pub fn is_word_tagged(&self, word: &str) -> bool {
+        !self.tag_word(word, 0, word.len()).is_empty()
+    }
+
     pub fn from_resource_dir(dir: &Path) -> Self {
         let mut tagger = Self::new();
         let read = |name: &str| std::fs::read_to_string(dir.join(name)).ok();
@@ -325,6 +329,27 @@ impl og_core::checker::Tagger for EnglishTagger {
             *atr = next;
         }
     }
+}
+
+pub fn shared_english_tagger() -> Option<std::sync::Arc<EnglishTagger>> {
+    static SHARED: std::sync::OnceLock<Option<std::sync::Arc<EnglishTagger>>> =
+        std::sync::OnceLock::new();
+    SHARED
+        .get_or_init(|| {
+            let candidates = [
+                "/home/agent/opengrammar-rs/languagetool/languagetool-language-modules/en/src/main/resources/org/languagetool/resource/en",
+                "languagetool/languagetool-language-modules/en/src/main/resources/org/languagetool/resource/en",
+            ];
+            candidates.iter().find_map(|p| {
+                let path = Path::new(p);
+                if path.join("dict_decoded.txt").is_file() {
+                    Some(std::sync::Arc::new(EnglishTagger::from_resource_dir(path)))
+                } else {
+                    None
+                }
+            })
+        })
+        .clone()
 }
 
 #[cfg(test)]
