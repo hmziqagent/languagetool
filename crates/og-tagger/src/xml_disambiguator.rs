@@ -214,6 +214,17 @@ fn parse_literal_alternation(pattern: &str) -> Option<Vec<String>> {
     Some(literals)
 }
 
+fn first_element_token(
+    rule: &CompiledDisambigRule,
+) -> Option<&og_xml::compiler::CompiledPatternToken> {
+    match rule.pattern.elements.first() {
+        Some(og_xml::compiler::CompiledPatternElement::Token(t)) => Some(t),
+        Some(og_xml::compiler::CompiledPatternElement::OrGroup(alts)) => alts.first(),
+        Some(og_xml::compiler::CompiledPatternElement::AndGroup(cs)) => cs.first(),
+        None => rule.pattern.tokens.first(),
+    }
+}
+
 fn build_first_token_gate(rule: &CompiledDisambigRule) -> FirstTokenGate {
     if let Some(og_xml::compiler::CompiledPatternElement::OrGroup(group)) =
         rule.pattern.elements.first()
@@ -237,7 +248,7 @@ fn build_first_token_gate(rule: &CompiledDisambigRule) -> FirstTokenGate {
         }
         return FirstTokenGate::None;
     }
-    let Some(first) = rule.pattern.tokens.first() else {
+    let Some(first) = first_element_token(rule) else {
         return FirstTokenGate::None;
     };
     if first.min == Some(0) || first.negate {
@@ -297,25 +308,7 @@ impl Disambiguator for XmlDisambiguator {
             let mut pending_unify: Vec<(usize, AnalyzedToken, Vec<AnalyzedToken>)> = Vec::new();
             let mut pending_filterall: Vec<(usize, &CompiledPatternToken)> = Vec::new();
             let mut pending_immunize: Vec<usize> = Vec::new();
-            let synthesized_tokens: Vec<CompiledPatternToken> = if rule.pattern.tokens.is_empty()
-                && !rule.pattern.elements.is_empty()
-            {
-                rule.pattern
-                    .elements
-                    .iter()
-                    .filter_map(|e| match e {
-                        og_xml::compiler::CompiledPatternElement::Token(t) => Some((**t).clone()),
-                        og_xml::compiler::CompiledPatternElement::OrGroup(alts) => {
-                            alts.first().cloned()
-                        }
-                        og_xml::compiler::CompiledPatternElement::AndGroup(cs) => {
-                            cs.first().cloned()
-                        }
-                    })
-                    .collect()
-            } else {
-                Vec::new()
-            };
+
             {
                 let tokens: Vec<&AnalyzedTokenReadings> = sentence.non_whitespace_tokens();
                 let raw_texts: std::collections::HashSet<&str> =
@@ -339,7 +332,7 @@ impl Disambiguator for XmlDisambiguator {
                     })
                     .collect();
 
-                let Some(first) = synthesized_tokens.first().or(rule.pattern.tokens.first()) else {
+                let Some(first) = first_element_token(rule) else {
                     continue;
                 };
                 match &self.gates[rule_idx] {
@@ -2011,6 +2004,47 @@ mod tests {
         assert!(
             !pure.tokens()[1].has_pos_tag("SUB:NOM:SIN:NEU"),
             "a pure preposition still triggers the NOM removal"
+        );
+    }
+
+    #[test]
+    fn and_group_leading_pattern_gates_on_its_first_member() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<rules lang="en">
+    <rule id="VBZ_BEFORE_DT_NN" name="verb/noun + det + noun => verb">
+        <pattern>
+            <marker>
+                <and>
+                    <token postag="NNS"/>
+                    <token postag="VBZ" />
+                </and>
+            </marker>
+            <token postag="DT"><exception>that</exception></token>
+            <token postag="NN(:UN?)?" postag_regexp="yes"><exception postag_regexp="yes" postag="VB.*"/></token>
+        </pattern>
+        <disambig postag="VBZ"/>
+    </rule>
+</rules>"#;
+        let disambig = XmlDisambiguator::from_xml(xml).unwrap();
+        let mut sentence = make_sentence(vec![
+            ("father", vec!["NN"]),
+            ("sings", vec!["NNS", "VBZ"]),
+            ("a", vec!["DT"]),
+            ("song", vec!["NN:UN"]),
+        ]);
+        disambig.disambiguate(&mut sentence);
+        let tok = sentence
+            .tokens()
+            .iter()
+            .find(|t| t.token().token() == "sings")
+            .unwrap();
+        assert_eq!(
+            tok.readings()
+                .iter()
+                .map(|r| r.pos_tags().join("|"))
+                .collect::<Vec<_>>(),
+            vec!["VBZ"],
+            "a pattern whose first element is an and-group must gate starts on the group's first member, not the following element"
         );
     }
 
