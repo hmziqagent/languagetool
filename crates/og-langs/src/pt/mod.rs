@@ -2,6 +2,7 @@ pub mod accentuation;
 pub mod compound;
 pub mod dash;
 pub mod filler_words;
+pub mod filters;
 pub mod readability;
 pub mod simple_replace;
 pub mod simple_replace2;
