@@ -1,10 +1,17 @@
 #[cfg(test)]
 pub(crate) mod dict_census;
+#[cfg(test)]
+pub(crate) mod disambig_suite;
+pub mod filters;
 pub mod question_mark;
 pub mod repeated_words;
 pub mod replace_verbs;
+#[cfg(test)]
+pub(crate) mod residue_analysis;
 pub mod simple_replace;
 pub mod tagger;
+#[cfg(test)]
+pub(crate) mod trace;
 pub mod unpaired_brackets;
 pub mod word_repeat;
 pub mod word_repeat_beginning;
@@ -160,6 +167,70 @@ pub fn spanish() -> crate::engine::LanguageEngine {
 }
 
 #[cfg(test)]
+fn build_es_disambiguator(
+    resource_dir: &std::path::Path,
+) -> Option<std::sync::Arc<dyn og_core::checker::Disambiguator>> {
+    use og_core::checker::Disambiguator as _;
+    let xml = std::fs::read_to_string(resource_dir.join("disambiguation.xml")).ok()?;
+    let expanded =
+        og_xml::parser::XmlRuleParser::expand_entities_with_base(&xml, Some(resource_dir));
+    let xml_disambiguator =
+        std::sync::Arc::new(og_tagger::XmlDisambiguator::from_xml(&expanded).ok()?);
+    let core = crate::engine::find_lt_core_resource_dir()?;
+    let global = og_tagger::MultiWordChunkerDisambiguator::from_params(
+        &core.join("spelling_global.txt"),
+        og_tagger::ChunkerParams {
+            allow_first_capitalized: false,
+            allow_all_uppercase: true,
+            allow_titlecase: false,
+            default_tag: Some("NPCN000"),
+            remove_previous_tags: false,
+            add_ignore_spelling: false,
+        },
+    )?;
+    let multiwords = og_tagger::MultiWordChunkerDisambiguator::from_params(
+        &resource_dir.join("multiwords.txt"),
+        og_tagger::ChunkerParams {
+            allow_first_capitalized: true,
+            allow_all_uppercase: true,
+            allow_titlecase: false,
+            default_tag: None,
+            remove_previous_tags: true,
+            add_ignore_spelling: false,
+        },
+    )?;
+    // Java's ADDCHUNK appends GV chunk tags only; our shared parser lacks the action and
+    // defaults it to FilterAll, so the PERIFRASIS_VERBALES group must be skipped entirely.
+    let cut = xml_disambiguator
+        .first_index_of_rule_id("PERIFRASIS_VERBALES")
+        .unwrap_or(xml_disambiguator.rule_count());
+    Some(std::sync::Arc::new(EsDisambiguatorChain {
+        global: std::sync::Arc::new(global),
+        multiwords: std::sync::Arc::new(multiwords),
+        xml: xml_disambiguator,
+        xml_cut: cut,
+    }))
+}
+
+#[cfg(test)]
+struct EsDisambiguatorChain {
+    global: std::sync::Arc<og_tagger::MultiWordChunkerDisambiguator>,
+    multiwords: std::sync::Arc<og_tagger::MultiWordChunkerDisambiguator>,
+    xml: std::sync::Arc<og_tagger::XmlDisambiguator>,
+    xml_cut: usize,
+}
+
+#[cfg(test)]
+impl og_core::checker::Disambiguator for EsDisambiguatorChain {
+    fn disambiguate(&self, sentence: &mut og_core::AnalyzedSentence) {
+        use og_core::checker::Disambiguator as _;
+        self.global.disambiguate(sentence);
+        self.multiwords.disambiguate(sentence);
+        self.xml.apply_rules_through(sentence, self.xml_cut);
+    }
+}
+
+#[cfg(test)]
 pub(crate) mod example_suite;
 
 #[cfg(test)]
@@ -184,15 +255,7 @@ pub(crate) mod test_support {
                 let resource_dir =
                     es_resource_dir().expect("es resource dir with spanish.dict present");
                 let tagger = Arc::new(tagger::SpanishTagger::from_resource_dir(&resource_dir));
-                let disambiguator =
-                    std::fs::read_to_string(resource_dir.join("disambiguation.xml"))
-                        .ok()
-                        .and_then(|xml| og_tagger::XmlDisambiguator::from_xml(&xml).ok())
-                        .and_then(|d| {
-                            crate::engine::find_lt_core_resource_dir().map(|core| {
-                                og_tagger::hybrid_disambiguator("es", &resource_dir, &core, d)
-                            })
-                        });
+                let disambiguator = build_es_disambiguator(&resource_dir);
                 SpanishPipeline {
                     tokenizer: word_tokenizer::SpanishWordTokenizer::new(),
                     tagger,

@@ -1,0 +1,381 @@
+use crate::es::test_support::SpanishPipeline;
+use og_rules::pattern_rule::PatternRuleEngine;
+use og_xml::compiler::XmlCompiler;
+use std::path::PathBuf;
+
+fn grammar_path() -> PathBuf {
+    PathBuf::from(
+        "/home/agent/opengrammar-rs/languagetool/languagetool-language-modules/es/src/main/resources/org/languagetool/rules/es/grammar.xml",
+    )
+}
+
+pub fn dump(text: &str) {
+    let pipeline = SpanishPipeline::shared();
+    for (sentence, start) in pipeline.analyze_offset_text(text) {
+        eprintln!("sentence @{start}: [{}]", sentence.text());
+        for t in sentence.tokens() {
+            let readings: Vec<String> = t
+                .readings()
+                .iter()
+                .map(|r| format!("{}/{}", r.lemma().unwrap_or("-"), r.pos_tags().join("|")))
+                .collect();
+            let chunks = t.chunks();
+            let chunk_str = if chunks.is_empty() {
+                String::new()
+            } else {
+                format!(" chunks={:?}", chunks)
+            };
+            eprintln!(
+                "  [{}..{}] {:?}: {}{}",
+                t.token().start(),
+                t.token().end(),
+                t.token().token(),
+                readings.join(", "),
+                chunk_str
+            );
+        }
+    }
+}
+
+pub fn run_rule(rule_id: &str, text: &str) {
+    let xml = std::fs::read_to_string(grammar_path()).expect("grammar.xml");
+    let rule_set = XmlCompiler::new()
+        .compile_file_with_base(&xml, grammar_path().parent())
+        .expect("compile");
+    let engine = PatternRuleEngine::new();
+    let pipeline = SpanishPipeline::shared();
+    let mut found = false;
+    for rule in &rule_set.rules {
+        if rule.id != rule_id {
+            continue;
+        }
+        found = true;
+        for (sentence, sentence_start) in pipeline.analyze_offset_text(text) {
+            for m in engine.match_rule(rule, &sentence) {
+                eprintln!(
+                    "match @{}..{} (sentence@{sentence_start}): {:?}",
+                    m.offset() + sentence_start,
+                    m.offset() + sentence_start + m.length(),
+                    &text[m.offset() + sentence_start
+                        ..(m.offset() + sentence_start + m.length()).min(text.len())]
+                );
+            }
+        }
+    }
+    if !found {
+        eprintln!("no rule with id {rule_id}");
+    }
+}
+
+pub fn staged_sentence(text: &str) -> og_core::AnalyzedSentence {
+    let pipeline = SpanishPipeline::shared();
+    let s = text;
+    let mut sentence = og_core::AnalyzedSentence::new(s, 0, s.len());
+    let mut tokens = Vec::new();
+    tokens.push(og_core::AnalyzedTokenReadings::new(
+        og_core::AnalyzedToken::new("<S>", 0, 0).with_pos_tags(vec!["SENT_START".to_string()]),
+    ));
+    use og_tokenizer::WordTokenizer as _;
+    let tokenizer = crate::es::word_tokenizer::SpanishWordTokenizer::new();
+    tokens.extend(tokenizer.tokenize(s).into_iter().map(|t| {
+        og_core::AnalyzedTokenReadings::new(og_core::AnalyzedToken::new(
+            t.text(),
+            t.start(),
+            t.end(),
+        ))
+    }));
+    sentence.set_tokens(tokens);
+    let token_texts: Vec<String> = sentence
+        .tokens()
+        .iter()
+        .skip(1)
+        .map(|t| t.token().token().to_string())
+        .collect();
+    let refs: Vec<&str> = token_texts.iter().map(|s| s.as_str()).collect();
+    let tagged = og_tagger::Tagger::tag(pipeline.tagger_ref(), &refs);
+    let tokens_mut = sentence.tokens_mut();
+    for (i, atr) in tagged.into_iter().enumerate() {
+        let token_idx = i + 1;
+        if token_idx < tokens_mut.len() && !atr.readings().is_empty() {
+            let readings = atr.into_readings();
+            let mut merged = og_core::AnalyzedTokenReadings::new(og_core::AnalyzedToken::new(
+                tokens_mut[token_idx].token().token(),
+                tokens_mut[token_idx].token().start(),
+                tokens_mut[token_idx].token().end(),
+            ))
+            .with_readings(readings);
+            if !merged.readings().is_empty() {
+                tokens_mut[token_idx] = merged;
+            }
+        }
+    }
+    sentence
+}
+
+pub fn dump_stages(text: &str) {
+    use og_core::checker::Disambiguator as _;
+    let resource_dir = crate::es::es_resource_dir().expect("es dir");
+    let core = crate::engine::find_lt_core_resource_dir().expect("core dir");
+    let show = |label: &str, s: &og_core::AnalyzedSentence| {
+        eprintln!("== {label} ==");
+        for t in s.tokens() {
+            if t.token().token().trim().is_empty() {
+                continue;
+            }
+            let readings: Vec<String> = t
+                .readings()
+                .iter()
+                .map(|r| format!("{}/{}", r.lemma().unwrap_or("-"), r.pos_tags().join("|")))
+                .collect();
+            eprintln!("  {:?}: {}", t.token().token(), readings.join(", "));
+        }
+    };
+    let mut s = staged_sentence(text);
+    if let Some(last) = s.tokens_mut().last_mut() {
+        last.add_sent_end();
+    }
+    show("tagged", &s);
+    let global = og_tagger::MultiWordChunkerDisambiguator::from_params(
+        &core.join("spelling_global.txt"),
+        og_tagger::ChunkerParams {
+            allow_first_capitalized: false,
+            allow_all_uppercase: true,
+            allow_titlecase: false,
+            default_tag: Some("NPCN000"),
+            remove_previous_tags: false,
+            add_ignore_spelling: false,
+        },
+    );
+    if let Some(g) = global {
+        g.disambiguate(&mut s);
+        show("spelling_global", &s);
+    }
+    let multi = og_tagger::MultiWordChunkerDisambiguator::from_params(
+        &resource_dir.join("multiwords.txt"),
+        og_tagger::ChunkerParams {
+            allow_first_capitalized: true,
+            allow_all_uppercase: true,
+            allow_titlecase: false,
+            default_tag: None,
+            remove_previous_tags: true,
+            add_ignore_spelling: false,
+        },
+    );
+    if let Some(m) = multi {
+        m.disambiguate(&mut s);
+        show("multiwords", &s);
+    }
+    let xml = std::fs::read_to_string(resource_dir.join("disambiguation.xml")).unwrap();
+    let d = og_tagger::XmlDisambiguator::from_xml(&xml).unwrap();
+    d.disambiguate(&mut s);
+    show("xml", &s);
+}
+
+fn readings_of(sentence: &og_core::AnalyzedSentence, word: &str) -> String {
+    sentence
+        .tokens()
+        .iter()
+        .filter(|t| t.token().token() == word)
+        .map(|t| {
+            format!(
+                "[{}]",
+                t.readings()
+                    .iter()
+                    .map(|r| format!("{}/{}", r.lemma().unwrap_or("-"), r.pos_tags().join("|")))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        })
+        .collect::<String>()
+}
+
+pub fn bisect_word_change(text: &str, word: &str) {
+    let resource_dir = crate::es::es_resource_dir().expect("es dir");
+    let raw = std::fs::read_to_string(resource_dir.join("disambiguation.xml")).unwrap();
+    let xml = og_xml::parser::XmlRuleParser::expand_entities_with_base(&raw, Some(&resource_dir));
+    let d = og_tagger::XmlDisambiguator::from_xml(&xml).unwrap();
+    let n = d.rule_count();
+    eprintln!("disambig rules: {n}");
+    let snapshot = |through: usize| -> String {
+        let mut s = staged_sentence(text);
+        if let Some(last) = s.tokens_mut().last_mut() {
+            last.add_sent_end();
+        }
+        d.apply_rules_through(&mut s, through);
+        readings_of(&s, word)
+    };
+    let before = snapshot(0);
+    eprintln!("before: {word}={before}");
+    let after = snapshot(n);
+    eprintln!("after:  {word}={after}");
+    if before == after {
+        eprintln!("no change; done");
+        return;
+    }
+    let (mut lo, mut hi) = (0usize, n);
+    while lo + 1 < hi {
+        let mid = (lo + hi) / 2;
+        if snapshot(mid) == before {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    eprintln!(
+        "first rule index changing {word}: {lo} id={:?} pattern={}",
+        d.rule_id(lo).unwrap_or("?"),
+        d.rule_pattern_debug(lo)
+    );
+    let mut s = staged_sentence(text);
+    if let Some(last) = s.tokens_mut().last_mut() {
+        last.add_sent_end();
+    }
+    d.apply_rule(&mut s, lo);
+    eprintln!("after single rule: {word}={}", readings_of(&s, word));
+}
+
+#[test]
+fn tokenizer_pins_java_spanish_word_tokenizer_test() {
+    use og_tokenizer::WordTokenizer as _;
+    let t = crate::es::word_tokenizer::SpanishWordTokenizer::new();
+    let cases: Vec<(&str, Vec<&str>)> = vec![
+        ("*test+", vec!["*", "test", "+"]),
+        ("e-mails", vec!["e-mails"]),
+        ("$100", vec!["$100"]),
+        ("$1.000", vec!["$1.000"]),
+        ("$1,400.50", vec!["$1,400.50"]),
+        ("1,400.50$", vec!["1,400.50$"]),
+        ("Ven ‒dijo.", vec!["Ven", " ", "‒", "dijo", "."]),
+        (
+            "11.as Jornadas de Estudio",
+            vec!["11.as", " ", "Jornadas", " ", "de", " ", "Estudio"],
+        ),
+    ];
+    for (text, expected) in cases {
+        let tokens = t.tokenize(text);
+        let got: Vec<&str> = tokens.iter().map(|x| x.text()).collect();
+        assert_eq!(&got, &expected, "tokenizing {text:?}");
+    }
+    for (text, want_len) in [
+        ("1.º", 1usize),
+        ("Es la 21.ª y el 45.º", 11),
+        ("Es la 21.a y el 45.o", 11),
+    ] {
+        let n = t.tokenize(text).len();
+        assert_eq!(n, want_len, "token count for {text:?}");
+    }
+    let toks = t.tokenize("best-seller sars-cov-2");
+    let texts: Vec<&str> = toks.iter().map(|x| x.text()).collect();
+    assert_eq!(texts, vec!["best-seller", " ", "sars-cov-2"]);
+}
+
+#[test]
+fn sentence_splits_pin_java_spanish_sentence_tokenizer_test() {
+    use og_tokenizer::SentenceTokenizer as _;
+    let splitter = og_tokenizer::srx::srx_splitter("es").expect("es srx");
+    let cases: Vec<(&str, Vec<&str>)> = vec![
+        (
+            "Esto es una frase. Esto es otra frase.",
+            vec!["Esto es una frase. ", "Esto es otra frase."],
+        ),
+        (
+            "¿Nos vamos? Hay que irse.",
+            vec!["¿Nos vamos? ", "Hay que irse."],
+        ),
+        ("1. Artículo primero", vec!["1. Artículo primero"]),
+        ("Entonces... apareció él.", vec!["Entonces... apareció él."]),
+        (
+            "A la atención de A. Comes.",
+            vec!["A la atención de A. Comes."],
+        ),
+        ("las Sras. diputadas", vec!["las Sras. diputadas"]),
+        ("El Dr. Joan no vendrá.", vec!["El Dr. Joan no vendrá."]),
+        (
+            "En EE. UU. por los DD. HH. después de los JJ. OO.",
+            vec!["En EE. UU. por los DD. HH. después de los JJ. OO."],
+        ),
+        (
+            "Me voy a EE. UU. Buen viaje.",
+            vec!["Me voy a EE. UU. ", "Buen viaje."],
+        ),
+        (
+            "Cebolla, ajo, calabaza, etc. Compramos en fruitería.",
+            vec!["Cebolla, ajo, calabaza, etc. ", "Compramos en fruitería."],
+        ),
+        (
+            "Son de 1 g. Han sido acondicionadas.",
+            vec!["Son de 1 g. ", "Han sido acondicionadas."],
+        ),
+        (
+            "El acto será a las 15.30 h. de la tarde.",
+            vec!["El acto será a las 15.30 h. de la tarde."],
+        ),
+        (
+            "cuando G.Oueddei se convierte en líder",
+            vec!["cuando G.Oueddei se convierte en líder"],
+        ),
+        (
+            "El jesuita alemán J.E. Nithard",
+            vec!["El jesuita alemán J.E. Nithard"],
+        ),
+        (
+            "Art. 2.1: Estarán obligados...",
+            vec!["Art. 2.1: Estarán obligados..."],
+        ),
+        (
+            "Hola, Albert: Me puedes decir tu correo?",
+            vec!["Hola, Albert: ", "Me puedes decir tu correo?"],
+        ),
+        (
+            "Mi profesora trabaja los lun., mié. y vie.; los juev. y los dom., no.",
+            vec!["Mi profesora trabaja los lun., mié. y vie.; los juev. y los dom., no."],
+        ),
+    ];
+    for (text, expected) in cases {
+        let got: Vec<String> = splitter
+            .split(text)
+            .iter()
+            .map(|s| text[s.start()..s.end()].to_string())
+            .collect();
+        assert_eq!(got, expected, "splitting {text:?}");
+    }
+}
+
+#[test]
+fn disambiguator_expands_external_entities() {
+    let pipeline = crate::es::test_support::SpanishPipeline::shared();
+    let sentence = &pipeline.analyze_text("Me junto con él en el patio.")[0];
+    let junto = sentence
+        .tokens()
+        .iter()
+        .find(|t| t.token().token() == "junto")
+        .expect("junto token");
+    assert!(
+        junto
+            .readings()
+            .iter()
+            .flat_map(|r| r.pos_tags().iter())
+            .any(|t| t.starts_with("VM")),
+        "junto_a must be vetoed after a clitic pronoun: {:?}",
+        junto.readings()
+    );
+}
+
+#[test]
+fn perifrasis_verbal_addchunk_rules_do_not_strip_interim_readings() {
+    let pipeline = crate::es::test_support::SpanishPipeline::shared();
+    let sentence = &pipeline.analyze_text("Nos hemos ido desarrollado")[0];
+    let ido = sentence
+        .tokens()
+        .iter()
+        .find(|t| t.token().token() == "ido")
+        .expect("ido token");
+    assert!(
+        ido.readings()
+            .iter()
+            .flat_map(|r| r.pos_tags().iter())
+            .any(|t| t == "_reflexive"),
+        "reflexive_verb interim tag must survive: {:?}",
+        ido.readings()
+    );
+}
