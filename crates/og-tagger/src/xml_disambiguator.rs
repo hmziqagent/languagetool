@@ -375,6 +375,51 @@ impl XmlDisambiguator {
         }
     }
 
+    pub fn rule_debug(&self, rule_idx: usize) -> String {
+        match self.rules.get(rule_idx) {
+            Some(rule) => format!("{:?} {:?}", rule.id, rule.disambig),
+            None => String::new(),
+        }
+    }
+
+    pub fn debug_match_rule(
+        &self,
+        sentence: &mut AnalyzedSentence,
+        rule_idx: usize,
+    ) -> Vec<Vec<usize>> {
+        let Some(rule) = self.rules.get(rule_idx) else {
+            return Vec::new();
+        };
+        let tokens: Vec<&AnalyzedTokenReadings> =
+            sentence.non_whitespace_tokens().into_iter().collect();
+        let mut out = Vec::new();
+        for start in 0..tokens.len() {
+            if let Some(result) = match_pattern(&rule.pattern, &tokens, start) {
+                out.push(result.matched_positions.clone());
+            }
+        }
+        out
+    }
+
+    pub fn rule_pattern_debug(&self, rule_idx: usize) -> String {
+        let Some(rule) = self.rules.get(rule_idx) else {
+            return String::new();
+        };
+        rule.pattern
+            .tokens
+            .iter()
+            .map(|t| {
+                format!(
+                    "{:?}/{:?}@{:?}",
+                    t.text,
+                    t.postag,
+                    t.compiled_regexp.as_ref().map(|r| r.as_str())
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(" ; ")
+    }
+
     pub fn first_index_of_rule_id(&self, rule_id: &str) -> Option<usize> {
         self.rules
             .iter()
@@ -1288,6 +1333,16 @@ fn token_matches_text_verified(
         }
     }
 
+    let readings = token.readings();
+    let pos_ok = if readings.is_empty() {
+        pt.postag.is_none()
+    } else {
+        readings.iter().any(|r| reading_pos_matches_disambig(pt, r))
+    };
+    if !pos_ok {
+        return false;
+    }
+
     token_matches_tail(
         pt,
         token,
@@ -1303,44 +1358,6 @@ fn token_matches_tail(
     token: &AnalyzedTokenReadings,
     token_space_before: bool,
 ) -> bool {
-    let pos_matches = if let Some(ref postag) = pt.postag {
-        let reading_matches = |r: &og_core::AnalyzedToken| {
-            if pt.compiled_postag_regexp.is_some() || pt.compiled_postag_regexp_fancy.is_some() {
-                let plain = pt
-                    .compiled_postag_regexp
-                    .as_ref()
-                    .is_some_and(|re| r.pos_tags().iter().any(|t| re.is_match(t)));
-                let fancy = pt
-                    .compiled_postag_regexp_fancy
-                    .as_ref()
-                    .is_some_and(|re| r.pos_tags().iter().any(|t| re.is_match(t).unwrap_or(false)));
-                let unknown = pt
-                    .compiled_postag_regexp
-                    .as_ref()
-                    .is_some_and(|re| re.is_match("UNKNOWN"))
-                    || pt
-                        .compiled_postag_regexp_fancy
-                        .as_ref()
-                        .is_some_and(|re| re.is_match("UNKNOWN").unwrap_or(false));
-                plain || fancy || (unknown && reading_tagless(r))
-            } else if postag == "UNKNOWN" {
-                reading_tagless(r)
-            } else {
-                r.pos_tags().iter().any(|t| t == postag)
-            }
-        };
-        if pt.negate_pos {
-            token.readings().iter().any(|r| !reading_matches(r))
-        } else {
-            token.readings().iter().any(reading_matches)
-        }
-    } else {
-        true
-    };
-    if !pos_matches {
-        return false;
-    }
-
     if let Some(ref chunk) = pt.chunk
         && !token.has_chunk(chunk)
     {
@@ -1364,6 +1381,68 @@ fn token_matches_tail(
     true
 }
 
+fn exception_reading_text_matches(
+    exc: &CompiledException,
+    reading: &og_core::AnalyzedToken,
+    surface: &str,
+) -> bool {
+    let Some(ref exc_text) = exc.text else {
+        return true;
+    };
+    if let Some(ref re) = exc.compiled_regexp {
+        let test = if exc.inflected {
+            reading.lemma().unwrap_or(surface)
+        } else {
+            surface
+        };
+        return re.is_match(test);
+    }
+    if exc.inflected {
+        let test = reading.lemma().unwrap_or(surface);
+        let matched = if exc.case_sensitive {
+            test == exc_text
+        } else {
+            og_xml::unifier::eq_ignore_case(test, exc_text)
+        };
+        return matched;
+    }
+    let matched = if exc.case_sensitive {
+        surface == exc_text
+    } else {
+        og_xml::unifier::eq_ignore_case(surface, exc_text)
+    };
+    matched
+}
+
+fn exception_reading_pos_matches(exc: &CompiledException, r: &og_core::AnalyzedToken) -> bool {
+    let Some(ref postag) = exc.postag else {
+        return true;
+    };
+    if exc.compiled_postag_regexp.is_some() || exc.compiled_postag_regexp_fancy.is_some() {
+        let plain = exc
+            .compiled_postag_regexp
+            .as_ref()
+            .is_some_and(|re| r.pos_tags().iter().any(|t| re.is_match(t)));
+        let fancy = exc
+            .compiled_postag_regexp_fancy
+            .as_ref()
+            .is_some_and(|re| r.pos_tags().iter().any(|t| re.is_match(t).unwrap_or(false)));
+        let unknown = exc
+            .compiled_postag_regexp
+            .as_ref()
+            .is_some_and(|re| re.is_match("UNKNOWN"))
+            || exc
+                .compiled_postag_regexp_fancy
+                .as_ref()
+                .is_some_and(|re| re.is_match("UNKNOWN").unwrap_or(false));
+        return (plain || fancy || (unknown && reading_tagless(r))) != exc.negate_pos;
+    }
+    if postag == "UNKNOWN" {
+        return reading_tagless(r) != exc.negate_pos;
+    }
+    r.pos_tags().iter().any(|t| t == postag) != exc.negate_pos
+}
+
 fn exception_matches(
     exc: &CompiledException,
     token: &AnalyzedTokenReadings,
@@ -1376,67 +1455,25 @@ fn exception_matches(
         return false;
     }
     let text = token.token().token();
-    let text_exc = if let Some(ref exc_text) = exc.text {
-        if let Some(ref re) = exc.compiled_regexp {
-            if exc.inflected {
-                token
-                    .readings()
-                    .iter()
-                    .any(|r| re.is_match(r.lemma().unwrap_or(text)))
-                    || token.readings().is_empty() && re.is_match(text)
-            } else {
-                re.is_match(text)
-            }
-        } else if exc.inflected {
-            inflected_text_matches(token.readings(), text, exc_text, exc.case_sensitive)
-        } else {
-            og_xml::unifier::eq_ignore_case(text, exc_text)
+    let readings = token.readings();
+    let per_reading = || {
+        if readings.is_empty() {
+            let synthetic = og_core::AnalyzedToken::new(text, 0, text.len());
+            return exception_reading_text_matches(exc, &synthetic, text)
+                && exception_reading_pos_matches(exc, &synthetic);
         }
-    } else {
-        false
-    };
-    let reading_matches = |r: &og_core::AnalyzedToken| {
-        if let Some(ref postag) = exc.postag {
-            if exc.compiled_postag_regexp.is_some() || exc.compiled_postag_regexp_fancy.is_some() {
-                let plain = exc
-                    .compiled_postag_regexp
-                    .as_ref()
-                    .is_some_and(|re| r.pos_tags().iter().any(|t| re.is_match(t)));
-                let fancy = exc
-                    .compiled_postag_regexp_fancy
-                    .as_ref()
-                    .is_some_and(|re| r.pos_tags().iter().any(|t| re.is_match(t).unwrap_or(false)));
-                let unknown = exc
-                    .compiled_postag_regexp
-                    .as_ref()
-                    .is_some_and(|re| re.is_match("UNKNOWN"))
-                    || exc
-                        .compiled_postag_regexp_fancy
-                        .as_ref()
-                        .is_some_and(|re| re.is_match("UNKNOWN").unwrap_or(false));
-                plain || fancy || (unknown && reading_tagless(r))
-            } else if postag == "UNKNOWN" {
-                reading_tagless(r)
-            } else {
-                r.pos_tags().iter().any(|t| t == postag)
-            }
-        } else {
-            false
-        }
+        readings.iter().any(|r| {
+            exception_reading_text_matches(exc, r, text) && exception_reading_pos_matches(exc, r)
+        })
     };
     let has_text_constraint = exc.text.is_some();
     let has_pos_constraint = exc.postag.is_some();
-    let pos_ok = if exc.negate_pos {
-        token.readings().iter().any(|r| !reading_matches(r))
-    } else {
-        token.readings().iter().any(reading_matches)
-    };
-    let exc_matches = if has_text_constraint && has_pos_constraint {
-        text_exc && pos_ok
-    } else if has_text_constraint {
-        text_exc
+    let exc_matches = if has_text_constraint {
+        per_reading()
     } else if has_pos_constraint {
-        pos_ok
+        readings
+            .iter()
+            .any(|r| exception_reading_pos_matches(exc, r))
     } else {
         false
     };
@@ -1715,6 +1752,96 @@ fn inflected_text_matches(
     })
 }
 
+fn reading_text_matches(
+    pt: &CompiledPatternToken,
+    reading: &og_core::AnalyzedToken,
+    surface: &str,
+) -> bool {
+    if let Some(ref pattern_text) = pt.text {
+        let test = if pt.inflected {
+            reading.lemma().unwrap_or(surface)
+        } else {
+            surface
+        };
+        let matched = if pt.case_sensitive {
+            test == pattern_text
+        } else {
+            og_xml::unifier::eq_ignore_case(test, pattern_text)
+        };
+        return matched != pt.negate;
+    }
+    if let Some(ref re) = pt.compiled_regexp {
+        let re_to_use = if !pt.case_sensitive {
+            pt.compiled_regexp_ci.as_ref().unwrap_or(re)
+        } else {
+            re
+        };
+        let test = if pt.inflected {
+            reading.lemma().unwrap_or(surface)
+        } else {
+            surface
+        };
+        return re_to_use.is_match(test) != pt.negate;
+    }
+    if pt.is_regexp {
+        if let Some(ref re) = pt.compiled_regexp_fancy {
+            let test = if pt.inflected {
+                reading.lemma().unwrap_or(surface)
+            } else {
+                surface
+            };
+            return re.is_match(test).unwrap_or(false) != pt.negate;
+        }
+        return false;
+    }
+    !pt.negate
+}
+
+fn reading_pos_matches_disambig(pt: &CompiledPatternToken, r: &og_core::AnalyzedToken) -> bool {
+    let Some(ref postag) = pt.postag else {
+        return true;
+    };
+    if pt.compiled_postag_regexp.is_some() || pt.compiled_postag_regexp_fancy.is_some() {
+        let plain = pt
+            .compiled_postag_regexp
+            .as_ref()
+            .is_some_and(|re| r.pos_tags().iter().any(|t| re.is_match(t)));
+        let fancy = pt
+            .compiled_postag_regexp_fancy
+            .as_ref()
+            .is_some_and(|re| r.pos_tags().iter().any(|t| re.is_match(t).unwrap_or(false)));
+        let unknown = pt
+            .compiled_postag_regexp
+            .as_ref()
+            .is_some_and(|re| re.is_match("UNKNOWN"))
+            || pt
+                .compiled_postag_regexp_fancy
+                .as_ref()
+                .is_some_and(|re| re.is_match("UNKNOWN").unwrap_or(false));
+        return (plain || fancy || (unknown && reading_tagless(r))) != pt.negate_pos;
+    }
+    if postag == "UNKNOWN" {
+        return reading_tagless(r) != pt.negate_pos;
+    }
+    r.pos_tags().iter().any(|t| t == postag) != pt.negate_pos
+}
+
+fn token_readings_match(pt: &CompiledPatternToken, token: &AnalyzedTokenReadings) -> bool {
+    let surface = token.token().token();
+    let readings = token.readings();
+    if readings.is_empty() {
+        return pt.postag.is_none()
+            && reading_text_matches(
+                pt,
+                &og_core::AnalyzedToken::new(surface, 0, surface.len()),
+                surface,
+            );
+    }
+    readings
+        .iter()
+        .any(|r| reading_text_matches(pt, r, surface) && reading_pos_matches_disambig(pt, r))
+}
+
 fn token_matches(
     pt: &CompiledPatternToken,
     tokens: &[&AnalyzedTokenReadings],
@@ -1728,7 +1855,6 @@ fn token_matches(
     if token.is_immunized() {
         return false;
     }
-    let text = token.token().token();
 
     if has_previous && token_idx > 0 {
         let prev = tokens[token_idx - 1];
@@ -1740,51 +1866,7 @@ fn token_matches(
         }
     }
 
-    let text_matches = if let Some(ref pattern_text) = pt.text {
-        let surface_matches = if pt.case_sensitive {
-            text == pattern_text
-        } else {
-            og_xml::unifier::eq_ignore_case(text, pattern_text)
-        };
-
-        if pt.inflected {
-            let lemma_matches =
-                inflected_text_matches(token.readings(), text, pattern_text, pt.case_sensitive);
-            if pt.negate {
-                !lemma_matches
-            } else {
-                lemma_matches
-            }
-        } else {
-            if pt.negate {
-                !surface_matches
-            } else {
-                surface_matches
-            }
-        }
-    } else if let Some(ref re) = pt.compiled_regexp {
-        let re_to_use = if !pt.case_sensitive {
-            pt.compiled_regexp_ci.as_ref().unwrap_or(re)
-        } else {
-            re
-        };
-        let matched = if pt.inflected {
-            token
-                .readings()
-                .iter()
-                .any(|r| re_to_use.is_match(r.lemma().unwrap_or(text)))
-                || token.readings().is_empty() && re_to_use.is_match(text)
-        } else {
-            re_to_use.is_match(text)
-        };
-        if pt.negate { !matched } else { matched }
-    } else if pt.is_regexp {
-        false
-    } else {
-        !pt.negate
-    };
-
-    if !text_matches {
+    if !token_readings_match(pt, token) {
         return false;
     }
 
