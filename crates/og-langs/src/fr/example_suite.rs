@@ -14,17 +14,10 @@ fn grammar_path() -> PathBuf {
 pub(crate) fn build_pattern_engine() -> PatternRuleEngine {
     let resource_dir = crate::fr::test_support::fr_resource_dir().expect("fr resource dir");
     let core_resource_dir = crate::engine::find_lt_core_resource_dir().expect("core resource dir");
-    let mut dict = og_spell::Dictionary::new();
-    for name in ["hunspell/spelling.txt", "added.txt"] {
-        if let Ok(words) = std::fs::read_to_string(resource_dir.join(name)) {
-            for line in words.lines() {
-                let word = line.trim();
-                if !word.is_empty() && !word.starts_with('#') {
-                    dict.add_word(word);
-                }
-            }
-        }
-    }
+    let dict = match crate::fr::suppress_misspelled::shared_french_spelling_dictionary() {
+        Some(dictionary) => dictionary.clone(),
+        None => og_spell::Dictionary::new(),
+    };
     let support = og_rules::spelling_support::SpellingSupport::new_for_language(
         Arc::new(dict),
         &core_resource_dir,
@@ -62,13 +55,34 @@ enum Outcome {
 #[test]
 #[ignore]
 fn french_grammar_examples_with_fr_pipeline() {
-    let xml = std::fs::read_to_string(grammar_path()).expect("grammar.xml");
+    evaluate_examples_file(
+        &grammar_path(),
+        "grammar.xml",
+        Some("/tmp/test_failures_fr_module.txt"),
+    );
+}
+
+#[test]
+#[ignore]
+fn french_style_examples_with_fr_pipeline() {
+    let style_path = crate::fr::test_support::fr_rules_dir()
+        .expect("fr rules dir")
+        .join("style.xml");
+    evaluate_examples_file(
+        &style_path,
+        "style.xml",
+        Some("/tmp/test_failures_fr_style.txt"),
+    );
+}
+
+fn evaluate_examples_file(rules_path: &std::path::Path, file_label: &str, artifact: Option<&str>) {
+    let xml = std::fs::read_to_string(rules_path).expect("rules xml");
     let raw_example_count = xml.matches("<example").count();
     let without_comments = strip_xml_comments(&xml);
     let comment_example_count = raw_example_count - without_comments.matches("<example").count();
     let rule_set = XmlCompiler::new()
-        .compile_file_with_base(&xml, grammar_path().parent())
-        .expect("compile grammar.xml");
+        .compile_file_with_base(&xml, rules_path.parent())
+        .expect("compile rules xml");
 
     let mut group_index: HashMap<(String, Option<String>), usize> = HashMap::new();
     let mut groups: Vec<Vec<&og_xml::compiler::CompiledRule>> = Vec::new();
@@ -107,8 +121,24 @@ fn french_grammar_examples_with_fr_pipeline() {
             let (clean_text, marker_range) = extract_marker(&example.text);
             let mut matches = Vec::new();
             for aux in group.iter() {
+                let fr_filter = aux
+                    .filter
+                    .as_ref()
+                    .filter(|f| {
+                        f.class == crate::fr::suppress_misspelled::FRENCH_SUPPRESS_MISSPELLED_FILTER_CLASS
+                    });
                 for (sentence, sentence_start) in pipeline.analyze_offset_text(&clean_text) {
-                    for mut m in engine.match_rule(aux, &sentence) {
+                    for m in engine.match_rule(aux, &sentence) {
+                        let Some(mut m) = (match fr_filter {
+                            Some(filter) => crate::fr::suppress_misspelled::accept_rule_match(
+                                m,
+                                &filter.args,
+                                &[],
+                            ),
+                            None => Some(m),
+                        }) else {
+                            continue;
+                        };
                         m.set_offset_length(m.offset() + sentence_start, m.length());
                         matches.push(m);
                     }
@@ -167,7 +197,7 @@ fn french_grammar_examples_with_fr_pipeline() {
     }
 
     eprintln!(
-        "fr module pipeline: {}/{} passed ({:.1}%) - no_match: {}, fp: {}, marker: {} [{:.1}s]",
+        "fr module pipeline [{file_label}]: {}/{} passed ({:.1}%) - no_match: {}, fp: {}, marker: {} [{:.1}s]",
         passed,
         passed + failed,
         100.0 * passed as f64 / (passed + failed).max(1) as f64,
@@ -180,14 +210,82 @@ fn french_grammar_examples_with_fr_pipeline() {
         started.elapsed().as_secs_f64(),
     );
     eprintln!(
-        "accepted-excluded residue: {raw_example_count} <example> tags in grammar.xml ({comment_example_count} inside XML comments), {compiled_example_count} on compiled rules, {} on non-first rules of duplicate (id,sub_id) groups, {evaluated_example_count} evaluated",
+        "accepted-excluded residue [{file_label}]: {raw_example_count} <example> tags ({comment_example_count} inside XML comments), {compiled_example_count} on compiled rules, {} on non-first rules of duplicate (id,sub_id) groups, {evaluated_example_count} evaluated",
         compiled_example_count - evaluated_example_count,
     );
-    let _ = std::fs::write(
-        "/tmp/test_failures_fr_module.txt",
-        fail_lines.join("\n") + "\n",
-    );
+    if let Some(artifact) = artifact {
+        let _ = std::fs::write(artifact, fail_lines.join("\n") + "\n");
+    }
     assert!(passed + failed > 0, "suite must evaluate examples");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn filtered_matches(rule_id: &str, text: &str) -> Vec<(usize, usize, Vec<String>)> {
+        let xml = std::fs::read_to_string(grammar_path()).expect("grammar.xml");
+        let rule_set = XmlCompiler::new()
+            .compile_file_with_base(&xml, grammar_path().parent())
+            .expect("compile grammar.xml");
+        let engine = build_pattern_engine();
+        let pipeline = FrenchPipeline::shared();
+        og_rules::pattern_rule::set_test_date_hack(true);
+        let mut out = Vec::new();
+        for rule in &rule_set.rules {
+            if rule.id != rule_id {
+                continue;
+            }
+            let fr_filter = rule.filter.as_ref().filter(|f| {
+                f.class == crate::fr::suppress_misspelled::FRENCH_SUPPRESS_MISSPELLED_FILTER_CLASS
+            });
+            for (sentence, sentence_start) in pipeline.analyze_offset_text(text) {
+                for m in engine.match_rule(rule, &sentence) {
+                    let Some(m) = (match fr_filter {
+                        Some(filter) => {
+                            crate::fr::suppress_misspelled::accept_rule_match(m, &filter.args, &[])
+                        }
+                        None => Some(m),
+                    }) else {
+                        continue;
+                    };
+                    let start = m.offset() + sentence_start;
+                    out.push((
+                        start,
+                        start + m.length(),
+                        m.replacements()
+                            .iter()
+                            .map(|r| r.value().to_string())
+                            .collect(),
+                    ));
+                }
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn suppress_misspelled_filter_removes_split_words_false_positive() {
+        let matches = filtered_matches("FR_SPLIT_WORDS_HYPHEN", "The pia- nist");
+        assert!(matches.is_empty(), "{matches:?}");
+    }
+
+    #[test]
+    fn suppress_misspelled_filter_keeps_valid_split_words_correction() {
+        let matches = filtered_matches("FR_SPLIT_WORDS_HYPHEN", "Le pia- niste joue très bien.");
+        assert!(
+            matches
+                .iter()
+                .any(|(_, _, replacements)| replacements.contains(&"pianiste".to_string())),
+            "{matches:?}"
+        );
+    }
+
+    #[test]
+    fn suppress_misspelled_filter_removes_apos_espace_false_positive() {
+        let matches = filtered_matches("APOS_ESPACE", "La surface du mur ne s'abîme.");
+        assert!(matches.is_empty(), "{matches:?}");
+    }
 }
 
 fn strip_xml_comments(xml: &str) -> String {

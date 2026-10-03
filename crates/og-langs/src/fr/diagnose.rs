@@ -136,7 +136,12 @@ fn rule_match_probe() {
             "Je vous écrirai ou vous téléphonerai la semaine prochaine.",
         ),
         ("PAS_DE_TRAIT_UNION", "Le néo-impressionnisme"),
+        ("CONF_N_V", "J'utilise google.com."),
         ("APOS_ESPACE", "La surface du mur ne s'abîme."),
+        ("MOTS_MAUX", "Antidote, le remède à tous vos mots."),
+        ("MOTS_MAUX", "Docteur délivrez moi de mes mots."),
+        ("DU_DU", "C'est trop, tu n'aurais pas du savoir !"),
+        ("CE_SE", "Il a décidé de ce lever tôt."),
         ("ACCORD_SUJET_VERBE", "Dominique peux venir."),
         ("ACCORD_SUJET_VERBE", "L'enfant dis merci."),
         ("ETRE_VPPA_OU_ADJ", "Un orage semble annoncée."),
@@ -150,7 +155,18 @@ fn rule_match_probe() {
                 if rule.id != *id {
                     continue;
                 }
+                let fr_filter = rule.filter.as_ref().filter(|f| {
+                    f.class == crate::fr::suppress_misspelled::FRENCH_SUPPRESS_MISSPELLED_FILTER_CLASS
+                });
                 for m in engine.match_rule(rule, &sentence) {
+                    let Some(m) = (match fr_filter {
+                        Some(filter) => {
+                            crate::fr::suppress_misspelled::accept_rule_match(m, &filter.args, &[])
+                        }
+                        None => Some(m),
+                    }) else {
+                        continue;
+                    };
                     any = true;
                     println!(
                         "  sub {:?} => {}..{} msg {:?} sugg {:?}",

@@ -5,8 +5,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 
 pub(crate) fn fr_resource_dir() -> Option<PathBuf> {
-    crate::engine::find_lt_resource_dir()
-        .map(|root| root.join("fr/src/main/resources/org/languagetool/resource/fr"))
+    crate::fr::fr_resource_dir()
 }
 
 pub(crate) fn fr_rules_dir() -> Option<PathBuf> {

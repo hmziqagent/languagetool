@@ -6,18 +6,25 @@ pub(crate) mod example_suite;
 pub mod question_whitespace;
 pub mod repeated_words;
 pub mod simple_replace;
+pub mod suppress_misspelled;
 pub mod tagger;
 #[cfg(test)]
 pub(crate) mod test_support;
 
 use og_rules::postponed_adjective::LangSynthesizer;
 use og_tagger::GenericTagger;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 pub use compound::CompoundRule;
 pub use question_whitespace::QuestionWhitespaceRule;
 pub use repeated_words::FrenchRepeatedWordsRule;
 pub use simple_replace::SimpleReplaceRule;
+
+pub(crate) fn fr_resource_dir() -> Option<PathBuf> {
+    crate::engine::find_lt_resource_dir()
+        .map(|root| root.join("fr/src/main/resources/org/languagetool/resource/fr"))
+}
 
 pub fn french_compound_rule(tagger: Option<Arc<GenericTagger>>) -> CompoundRule {
     CompoundRule::french(tagger)
