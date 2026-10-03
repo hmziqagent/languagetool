@@ -699,13 +699,17 @@ impl XmlRuleParser {
                                     token.unify_neutral = true;
                                 }
                                 if let Some(ref mut ap) = current_antipattern {
-                                    ap.tokens.push(token.clone());
-                                    ap.elements.push(XmlPatternElement::Token(token));
+                                    for copy in token.min_expansion() {
+                                        ap.tokens.push(copy.clone());
+                                        ap.elements.push(XmlPatternElement::Token(copy));
+                                    }
                                 }
                                 antipattern_text.clear();
                             } else if in_phrases {
-                                phrase_run_tokens.push(token.clone());
-                                phrase_run_elements.push(XmlPatternElement::Token(token));
+                                for copy in token.min_expansion() {
+                                    phrase_run_tokens.push(copy.clone());
+                                    phrase_run_elements.push(XmlPatternElement::Token(copy));
+                                }
                             } else if let Some(pattern) = &mut current_pattern {
                                 let trimmed = current_text.trim();
                                 if !trimmed.is_empty() {
@@ -714,8 +718,10 @@ impl XmlRuleParser {
                                 if in_unify_ignore {
                                     token.unify_neutral = true;
                                 }
-                                pattern.tokens.push(token.clone());
-                                pattern.elements.push(XmlPatternElement::Token(token));
+                                for copy in token.min_expansion() {
+                                    pattern.tokens.push(copy.clone());
+                                    pattern.elements.push(XmlPatternElement::Token(copy));
+                                }
                             }
                             current_text.clear();
                         }
@@ -1109,18 +1115,24 @@ impl XmlRuleParser {
                                         token.unify_neutral = true;
                                     }
                                     if let Some(ref mut ap) = current_antipattern {
-                                        ap.tokens.push(token.clone());
-                                        ap.elements.push(XmlPatternElement::Token(token));
+                                        for copy in token.min_expansion() {
+                                            ap.tokens.push(copy.clone());
+                                            ap.elements.push(XmlPatternElement::Token(copy));
+                                        }
                                     }
                                 } else if in_phrases {
-                                    phrase_run_tokens.push(token.clone());
-                                    phrase_run_elements.push(XmlPatternElement::Token(token));
+                                    for copy in token.min_expansion() {
+                                        phrase_run_tokens.push(copy.clone());
+                                        phrase_run_elements.push(XmlPatternElement::Token(copy));
+                                    }
                                 } else if let Some(pattern) = &mut current_pattern {
                                     if in_unify_ignore {
                                         token.unify_neutral = true;
                                     }
-                                    pattern.tokens.push(token.clone());
-                                    pattern.elements.push(XmlPatternElement::Token(token));
+                                    for copy in token.min_expansion() {
+                                        pattern.tokens.push(copy.clone());
+                                        pattern.elements.push(XmlPatternElement::Token(copy));
+                                    }
                                 }
                             }
                             current_text.clear();

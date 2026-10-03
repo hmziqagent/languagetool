@@ -1197,6 +1197,75 @@ mod tests {
     }
 
     #[test]
+    fn test_compile_min_two_expands_to_repeated_tokens() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <category id="GRAMMAR" name="Grammar">
+                <rule id="MM2" name="MinTwo">
+                    <pattern>
+                        <token>de</token>
+                        <marker>
+                            <token min="2" skip="1">x</token>
+                        </marker>
+                        <token>y</token>
+                    </pattern>
+                    <message>Msg</message>
+                </rule>
+            </category>
+        </rules>"#;
+
+        let compiler = XmlCompiler::new();
+        let result = compiler.compile_file(xml).unwrap();
+
+        assert_eq!(result.rules[0].pattern.tokens.len(), 4);
+        assert_eq!(
+            result.rules[0].pattern.tokens[0].text.as_deref(),
+            Some("de")
+        );
+        assert_eq!(result.rules[0].pattern.tokens[1].text.as_deref(), Some("x"));
+        assert_eq!(result.rules[0].pattern.tokens[2].text.as_deref(), Some("x"));
+        assert_eq!(result.rules[0].pattern.tokens[3].text.as_deref(), Some("y"));
+        assert_eq!(result.rules[0].pattern.tokens[1].min, None);
+        assert_eq!(result.rules[0].pattern.tokens[1].skip, 1);
+        assert_eq!(result.rules[0].pattern.marker_start, Some(1));
+        assert_eq!(result.rules[0].pattern.marker_end, Some(3));
+        assert_eq!(result.rules[0].pattern.elements.len(), 4);
+    }
+
+    #[test]
+    fn test_compile_min_two_in_antipattern_expands() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <category id="GRAMMAR" name="Grammar">
+                <rule id="APM" name="AntipatternMin">
+                    <antipattern>
+                        <token min="3">-</token>
+                    </antipattern>
+                    <pattern>
+                        <token>a</token>
+                        <token>b</token>
+                    </pattern>
+                    <message>Msg</message>
+                </rule>
+            </category>
+        </rules>"#;
+
+        let compiler = XmlCompiler::new();
+        let result = compiler.compile_file(xml).unwrap();
+
+        let ap = &result.rules[0].antipatterns[0];
+        assert_eq!(ap.tokens.len(), 3);
+        assert_eq!(
+            ap.tokens
+                .iter()
+                .filter(|t| t.text.as_deref() == Some("-"))
+                .count(),
+            3
+        );
+        assert_eq!(ap.elements.len(), 3);
+    }
+
+    #[test]
     fn test_compile_skip_token() {
         let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
         <rules lang="en">

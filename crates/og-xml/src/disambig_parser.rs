@@ -591,12 +591,16 @@ impl DisambigXmlParser {
                                 }
                             } else if in_antipattern {
                                 if let Some(ref mut ap) = current_antipattern {
-                                    ap.tokens.push(token.clone());
-                                    ap.elements.push(XmlPatternElement::Token(token));
+                                    for copy in token.min_expansion() {
+                                        ap.tokens.push(copy.clone());
+                                        ap.elements.push(XmlPatternElement::Token(copy));
+                                    }
                                 }
                             } else if let Some(ref mut p) = current_pattern {
-                                p.tokens.push(token.clone());
-                                p.elements.push(XmlPatternElement::Token(token));
+                                for copy in token.min_expansion() {
+                                    p.tokens.push(copy.clone());
+                                    p.elements.push(XmlPatternElement::Token(copy));
+                                }
                             }
                         }
                         "wd" => {
@@ -840,12 +844,16 @@ impl DisambigXmlParser {
                                     }
                                 } else if in_antipattern {
                                     if let Some(ref mut ap) = current_antipattern {
-                                        ap.tokens.push(token.clone());
-                                        ap.elements.push(XmlPatternElement::Token(token));
+                                        for copy in token.min_expansion() {
+                                            ap.tokens.push(copy.clone());
+                                            ap.elements.push(XmlPatternElement::Token(copy));
+                                        }
                                     }
                                 } else if let Some(ref mut p) = current_pattern {
-                                    p.tokens.push(token.clone());
-                                    p.elements.push(XmlPatternElement::Token(token));
+                                    for copy in token.min_expansion() {
+                                        p.tokens.push(copy.clone());
+                                        p.elements.push(XmlPatternElement::Token(copy));
+                                    }
                                 }
                             }
                         }

@@ -159,6 +159,18 @@ pub struct XmlPatternToken {
     pub match_no_setpos: bool,
 }
 
+impl XmlPatternToken {
+    pub fn min_expansion(mut self) -> Vec<XmlPatternToken> {
+        match self.min {
+            Some(m) if m >= 2 => {
+                self.min = None;
+                vec![self.clone(); m as usize]
+            }
+            _ => vec![self],
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct XmlException {
     pub text: Option<String>,
