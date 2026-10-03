@@ -807,10 +807,7 @@ impl XmlRuleParser {
                                 }
                             }
                         }
-                        "url" => {
-                            in_url = true;
-                            url_text.clear();
-                        }
+                        "url" => {}
                         "antipattern" => {
                             // Antipattern
                         }
