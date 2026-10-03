@@ -1,9 +1,12 @@
 pub mod compound;
 #[cfg(test)]
+pub(crate) mod diagnose;
+#[cfg(test)]
 pub(crate) mod example_suite;
 pub mod question_whitespace;
 pub mod repeated_words;
 pub mod simple_replace;
+pub mod tagger;
 #[cfg(test)]
 pub(crate) mod test_support;
 

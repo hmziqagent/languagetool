@@ -11,7 +11,7 @@ fn grammar_path() -> PathBuf {
         .join("grammar.xml")
 }
 
-fn build_pattern_engine() -> PatternRuleEngine {
+pub(crate) fn build_pattern_engine() -> PatternRuleEngine {
     let resource_dir = crate::fr::test_support::fr_resource_dir().expect("fr resource dir");
     let core_resource_dir = crate::engine::find_lt_core_resource_dir().expect("core resource dir");
     let mut dict = og_spell::Dictionary::new();

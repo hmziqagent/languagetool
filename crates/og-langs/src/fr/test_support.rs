@@ -29,7 +29,7 @@ pub(crate) fn apostrophe_chunk(surface: &str) -> Option<&'static str> {
 
 pub(crate) struct FrenchPipeline {
     tokenizer: og_tokenizer::FrenchWordTokenizer,
-    tagger: Arc<og_tagger::GenericTagger>,
+    tagger: Arc<crate::fr::tagger::FrenchTagger>,
     disambiguator: Option<Arc<dyn Disambiguator>>,
     splitter: Option<og_tokenizer::srx::SrxSentenceSplitter>,
 }
@@ -39,10 +39,12 @@ impl FrenchPipeline {
         static PIPE: OnceLock<FrenchPipeline> = OnceLock::new();
         PIPE.get_or_init(|| {
             let resource_dir = fr_resource_dir().expect("fr resource dir with french.dict");
-            let tagger = Arc::new(og_tagger::GenericTagger::french(&resource_dir));
+            let tagger = Arc::new(crate::fr::tagger::FrenchTagger::from_resource_dir(
+                &resource_dir,
+            ));
             let tokenizer = og_tokenizer::FrenchWordTokenizer::new(Arc::new({
                 let tagger = tagger.clone();
-                move |w: &str| tagger.is_word_tagged(w)
+                move |w: &str| tagger.inner_is_word_tagged(w)
             }));
             let disambiguator = std::fs::read_to_string(resource_dir.join("disambiguation.xml"))
                 .ok()
@@ -60,8 +62,12 @@ impl FrenchPipeline {
         })
     }
 
-    pub fn tagger_ref(&self) -> &og_tagger::GenericTagger {
+    pub fn tagger_ref(&self) -> &crate::fr::tagger::FrenchTagger {
         &self.tagger
+    }
+
+    pub fn tokenizer_ref(&self) -> &og_tokenizer::FrenchWordTokenizer {
+        &self.tokenizer
     }
 
     pub fn sentence_ranges(&self, text: &str) -> Vec<(usize, usize)> {
@@ -101,42 +107,38 @@ impl FrenchPipeline {
         let tokens_mut = sentence.tokens_mut();
         for (i, atr) in tagged.into_iter().enumerate() {
             let token_idx = i + 1;
-            if token_idx < tokens_mut.len() && !atr.readings().is_empty() {
-                let mut chunks = atr.chunks().to_vec();
-                if chunks.is_empty()
-                    && let Some(chunk) = apostrophe_chunk(tokens_mut[token_idx].token().token())
-                {
-                    chunks.push(chunk.to_string());
+            if token_idx >= tokens_mut.len() {
+                continue;
+            }
+            let start = tokens_mut[token_idx].token().start();
+            let end = tokens_mut[token_idx].token().end();
+            if atr.readings().is_empty() {
+                let primary = AnalyzedToken::new(atr.token().token(), start, end);
+                let mut next = AnalyzedTokenReadings::new(primary);
+                if !atr.chunks().is_empty() {
+                    next.set_chunks(atr.chunks().to_vec());
                 }
-                let readings = atr.into_readings();
-                let all_tags: Vec<String> = readings
-                    .iter()
-                    .flat_map(|r| r.pos_tags().to_vec())
-                    .collect();
-                let lemma = readings[0]
-                    .lemma()
-                    .unwrap_or(tokens_mut[token_idx].token().token())
-                    .to_string();
-                let mut merged = AnalyzedTokenReadings::new(
-                    AnalyzedToken::new(
-                        tokens_mut[token_idx].token().token(),
-                        tokens_mut[token_idx].token().start(),
-                        tokens_mut[token_idx].token().end(),
-                    )
+                tokens_mut[token_idx] = next;
+                continue;
+            }
+            let chunks = atr.chunks().to_vec();
+            let text = atr.token().token().to_string();
+            let readings = atr.into_readings();
+            let all_tags: Vec<String> = readings
+                .iter()
+                .flat_map(|r| r.pos_tags().to_vec())
+                .collect();
+            let lemma = readings[0].lemma().unwrap_or(text.as_str()).to_string();
+            let mut merged = AnalyzedTokenReadings::new(
+                AnalyzedToken::new(text, start, end)
                     .with_pos_tags(all_tags)
                     .with_lemma(lemma),
-                )
-                .with_readings(readings);
-                if !chunks.is_empty() {
-                    merged.set_chunks(chunks);
-                }
-                tokens_mut[token_idx] = merged;
-            } else if token_idx < tokens_mut.len() {
-                let chunk = apostrophe_chunk(tokens_mut[token_idx].token().token());
-                if let Some(chunk) = chunk {
-                    tokens_mut[token_idx].set_chunks(vec![chunk.to_string()]);
-                }
+            )
+            .with_readings(readings);
+            if !chunks.is_empty() {
+                merged.set_chunks(chunks);
             }
+            tokens_mut[token_idx] = merged;
         }
         let tokens = sentence.tokens_mut();
         for token in tokens.iter_mut().rev() {
@@ -183,7 +185,9 @@ mod tests {
         let parts: Vec<String> = sentences
             .iter()
             .flat_map(|s| s.tokens().iter())
-            .filter(|t| !t.is_whitespace() && t.token().token() != "<S>")
+            .filter(|t| {
+                !t.is_whitespace() && !t.token().token().is_empty() && t.token().token() != "<S>"
+            })
             .map(|t| {
                 let readings: Vec<String> = t
                     .readings()
@@ -217,6 +221,22 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join(" ; ")
+    }
+
+    #[test]
+    fn java_frenchrule_disambiguator_test_pins() {
+        assert_eq!(
+            readings_join("Quand j'étais petit, je jouais au football."),
+            "Quand=quand/[A inte]|quand/[C sub] ; j'=je/[R pers suj 1 s] ; étais=être/[V etre ind impa 1 s] \
+             ; petit=petit/[J m s] ; ,=,/[M nonfin]|,/[M nonfin] ; je=je/[R pers suj 1 s] ; jouais=jouer/[V ind impa 1 s] \
+             ; au=à+le/[P+D m s] ; football=football/[N m s] ; .=./[M fin]|./[M fin]"
+        );
+        assert_eq!(
+            readings_join("Je suis d'abord allé au laboratoire."),
+            "Je=je/[R pers suj 1 s] ; suis=être/[V etre ind pres 1 s] ; d'=d'abord/[A] \
+             ; abord=d'abord/[A] ; allé=aller/[V ppa m s] ; au=à+le/[P+D m s] \
+             ; laboratoire=laboratoire/[N m s] ; .=./[M fin]|./[M fin]"
+        );
     }
 
     #[test]
@@ -288,7 +308,7 @@ mod tests {
         );
         assert_eq!(
             tagger_only(&["d’", "aujourd’hui"]),
-            "d’/[de]D e sp|d’/[de]P -- aujourd’hui/[aujourd'hui]A"
+            "d'/[de]D e sp|d'/[de]P -- aujourd'hui/[aujourd'hui]A"
         );
         assert_eq!(
             tagger_only(&["Fontaine-l'Évêque"]),
@@ -296,7 +316,7 @@ mod tests {
         );
         assert_eq!(
             tagger_only(&["Fontaine-l’Évêque"]),
-            "Fontaine-l’Évêque/[Fontaine-l'Évêque]Z e sp"
+            "Fontaine-l'Évêque/[Fontaine-l'Évêque]Z e sp"
         );
         assert_eq!(
             tagger_only(&["Strauss-Kahn"]),
