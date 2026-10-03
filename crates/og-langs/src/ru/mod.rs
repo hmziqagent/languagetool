@@ -9,8 +9,8 @@ pub mod yo_speller;
 pub use advanced_word_repeat::RussianWordRepeatRule;
 pub use dash::RussianDashRule;
 pub use filler_words::RussianFillerWordsRule;
-pub use paragraph_repeat_beginning::RussianParagraphRepeatBeginningRule;
-pub use specific_case::RussianSpecificCaseRule;
+pub use paragraph_repeat_beginning::russian_paragraph_repeat_beginning_rule;
+pub use specific_case::russian_specific_case_rule;
 pub use verb_conjugation::RussianVerbConjugationRule;
 pub use yo_speller::RussianYoSpellerRule;
 
@@ -103,7 +103,7 @@ mod tests {
             RussianVerbConjugationRule::new().id(),
             "RU_VERB_CONJUGATION"
         );
-        assert_eq!(RussianSpecificCaseRule::new().id(), "RU_SPECIFIC_CASE");
+        assert_eq!(russian_specific_case_rule().id(), "RU_SPECIFIC_CASE");
         assert_eq!(RussianDashRule::new().id(), "RU_DASH_RULE");
         assert_eq!(RussianFillerWordsRule::new().id(), "FILLER_WORDS_RU");
     }

@@ -1051,6 +1051,21 @@ impl LanguageMatchFilter for PortugueseMatchFilter {
     }
 }
 
+pub struct BelarusianMatchFilter;
+
+impl LanguageMatchFilter for BelarusianMatchFilter {
+    fn priority_for_id(&self, id: &str) -> i32 {
+        match id {
+            "RUSSIAN_SIMPLE_REPLACE_RULE" => 10,
+            "BELARUSIAN_SPECIFIC_CASE" => 9,
+            "Word_root_repeat" => -1,
+            "PUNCT_DPT_2" => -2,
+            "TOO_LONG_PARAGRAPH" => -15,
+            _ => base_priority_for_id(id),
+        }
+    }
+}
+
 pub fn for_code(code: &str) -> Arc<dyn LanguageMatchFilter> {
     let short = code.split('-').next().unwrap_or(code);
     match short {
@@ -1060,6 +1075,7 @@ pub fn for_code(code: &str) -> Arc<dyn LanguageMatchFilter> {
         "fr" => Arc::new(FrenchMatchFilter),
         "nl" => Arc::new(DutchMatchFilter),
         "pt" => Arc::new(PortugueseMatchFilter),
+        "be" => Arc::new(BelarusianMatchFilter),
         _ => Arc::new(BaseLanguageMatchFilter),
     }
 }

@@ -911,7 +911,7 @@ impl LanguageEngine {
             Arc::new(og_rules::native_rules::DoublePunctuationRule::new()) as Arc<dyn Rule>,
             Arc::new(og_rules::native_rules::CommaWhitespaceRule::new()),
         ]);
-        let brackets_rule: Option<Arc<dyn TextLevelRule>> = if short == "es" {
+        let brackets_rule: Option<Arc<dyn TextLevelRule>> = if short == "es" || short == "be" {
             None
         } else if short == "pt" {
             Some(Arc::new(
@@ -1043,6 +1043,26 @@ impl LanguageEngine {
                         as Arc<dyn Rule>,
                 );
             }
+            "be" => {
+                engine.add_rule(
+                    Arc::new(og_rules::native_rules::UppercaseSentenceStartRule::new())
+                        as Arc<dyn Rule>,
+                );
+                engine.add_rule(Arc::new(
+                    og_rules::text_level_rules::WhiteSpaceAtBeginOfParagraphRule::new(),
+                ) as Arc<dyn Rule>);
+                engine.add_text_level_rules([
+                    Arc::new(og_rules::text_level_rules::LongSentenceRule::new(50))
+                        as Arc<dyn TextLevelRule>,
+                    Arc::new(og_rules::text_level_rules::LongParagraphRule::new(220)),
+                    Arc::new(crate::be::belarusian_paragraph_repeat_beginning_rule())
+                        as Arc<dyn TextLevelRule>,
+                    Arc::new(og_rules::text_level_rules::WhiteSpaceBeforeParagraphEndRule::new()),
+                    Arc::new(og_rules::text_level_rules::PunctuationMarkAtParagraphEnd2Rule::new()),
+                ]);
+                engine.add_rule(Arc::new(crate::be::belarusian_simple_replace_rule()));
+                engine.add_rule(Arc::new(crate::be::belarusian_specific_case_rule()));
+            }
             "el" => {
                 engine.add_rule(
                     Arc::new(og_rules::native_rules::UppercaseSentenceStartRule::new())
@@ -1073,7 +1093,7 @@ impl LanguageEngine {
                     Arc::new(crate::ru::russian_simple_replace_rule()),
                     Arc::new(crate::ru::russian_compound_rule()),
                     Arc::new(crate::ru::RussianVerbConjugationRule::new()),
-                    Arc::new(crate::ru::RussianSpecificCaseRule::new()),
+                    Arc::new(crate::ru::russian_specific_case_rule()),
                     Arc::new(crate::ru::RussianDashRule::new()),
                 ]);
                 engine.add_text_level_rules([
@@ -1092,7 +1112,7 @@ impl LanguageEngine {
                             .with_message("Добавьте знак пунктуации в конце абзаца."),
                     ),
                     Arc::new(og_rules::text_level_rules::WhiteSpaceBeforeParagraphEndRule::new()),
-                    Arc::new(crate::ru::RussianParagraphRepeatBeginningRule),
+                    Arc::new(crate::ru::russian_paragraph_repeat_beginning_rule()),
                 ]);
                 if let Some(yo) = crate::ru::RussianYoSpellerRule::from_resource_dir(&resource_dir)
                 {
