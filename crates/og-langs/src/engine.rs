@@ -434,19 +434,21 @@ impl LanguageEngine {
 
             if let Some(dict_arc) = shared_german_speller_dictionary(&resource_dir) {
                 shared_dict = Some(dict_arc.clone());
+                let speller = shared_german_speller(
+                    &dict_arc,
+                    &resource_dir,
+                    find_lt_core_resource_dir().as_deref(),
+                    engine.tagger.clone(),
+                );
                 if let Some(core_resource_dir) = find_lt_core_resource_dir() {
                     engine.spelling_support = shared_german_spelling_support(
                         &dict_arc,
                         &core_resource_dir,
                         &resource_dir,
+                        speller.as_ref(),
                     );
                 }
-                if let Some(speller) = shared_german_speller(
-                    &dict_arc,
-                    &resource_dir,
-                    find_lt_core_resource_dir().as_deref(),
-                    engine.tagger.clone(),
-                ) {
+                if let Some(speller) = speller {
                     german_speller = Some(speller.clone());
                     engine.german_speller = Some(speller.clone());
                     engine.add_rule(Arc::new(og_spell::GermanSpellerRule::new(
@@ -1307,6 +1309,7 @@ fn shared_german_spelling_support(
     dict: &Arc<og_spell::Dictionary>,
     core_resource_dir: &Path,
     resource_dir: &Path,
+    base_speller: Option<&Arc<og_spell::GermanSpeller>>,
 ) -> Option<Arc<og_rules::spelling_support::SpellingSupport>> {
     static CACHE: std::sync::OnceLock<
         std::sync::Mutex<
@@ -1318,16 +1321,53 @@ fn shared_german_spelling_support(
     if let Some(hit) = guard.get(resource_dir) {
         return Some(hit.clone());
     }
-    let support = std::sync::Arc::new(
-        og_rules::spelling_support::SpellingSupport::new_for_language(
-            dict.clone(),
-            core_resource_dir,
-            resource_dir,
-            "de",
-        ),
+    let mut support = og_rules::spelling_support::SpellingSupport::new_for_language(
+        dict.clone(),
+        core_resource_dir,
+        resource_dir,
+        "de",
     );
+    if let Some(base) = base_speller
+        && let Some(filter_speller) = shared_german_rule_speller(base, dict, resource_dir)
+    {
+        support = support.with_german_rule_speller(filter_speller);
+    }
+    let support = std::sync::Arc::new(support);
     guard.insert(resource_dir.to_path_buf(), support.clone());
     Some(support)
+}
+
+fn shared_german_rule_speller(
+    base: &Arc<og_spell::GermanSpeller>,
+    dict: &Arc<og_spell::Dictionary>,
+    resource_dir: &Path,
+) -> Option<Arc<og_spell::GermanSpeller>> {
+    static CACHE: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<PathBuf, Arc<og_spell::GermanSpeller>>>,
+    > = std::sync::OnceLock::new();
+    let cache = CACHE.get_or_init(Default::default);
+    let mut guard = cache.lock().unwrap();
+    if let Some(hit) = guard.get(resource_dir) {
+        return Some(hit.clone());
+    }
+    let country = if resource_dir.join("hunspell/de_DE.aff").exists() {
+        "de-DE"
+    } else if resource_dir.join("hunspell/de_CH.aff").exists() {
+        "de-CH"
+    } else {
+        "de-AT"
+    };
+    let stem = country.replace('-', "_");
+    let checker = og_spell::hunspell::HunspellChecker::load(
+        &resource_dir.join(format!("hunspell/{stem}.aff")),
+        &resource_dir.join(format!("hunspell/{stem}.dic")),
+    )?;
+    let speller = std::sync::Arc::new(
+        base.with_shared_data(dict.clone(), country)
+            .with_hunspell_core(std::sync::Arc::new(checker)),
+    );
+    guard.insert(resource_dir.to_path_buf(), speller.clone());
+    Some(speller)
 }
 
 fn shared_german_speller(

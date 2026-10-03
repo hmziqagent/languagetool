@@ -287,12 +287,29 @@ impl TestRunner {
                     )
                 } else if code == "de" && resource_dir.exists() && core_resource_dir.exists() {
                     shared_german_speller_dictionary(&resource_dir).map(|dictionary| {
-                        og_rules::spelling_support::SpellingSupport::new_for_language(
-                            dictionary,
-                            core_resource_dir,
-                            &resource_dir,
-                            "de",
-                        )
+                        let mut support =
+                            og_rules::spelling_support::SpellingSupport::new_for_language(
+                                dictionary.clone(),
+                                core_resource_dir,
+                                &resource_dir,
+                                "de",
+                            );
+                        if let Some(checker) = og_spell::hunspell::HunspellChecker::load(
+                            &resource_dir.join("hunspell/de_DE.aff"),
+                            &resource_dir.join("hunspell/de_DE.dic"),
+                        ) {
+                            let base = og_spell::GermanSpeller::new(
+                                dictionary,
+                                &resource_dir,
+                                Some(core_resource_dir),
+                                None,
+                                "de-DE",
+                            );
+                            support = support.with_german_rule_speller(std::sync::Arc::new(
+                                base.with_hunspell_core(std::sync::Arc::new(checker)),
+                            ));
+                        }
+                        support
                     })
                 } else {
                     None

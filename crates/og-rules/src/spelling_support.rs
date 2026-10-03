@@ -97,6 +97,7 @@ pub struct SpellingSupport {
     suggestion_engine: SuggestionEngine,
     multitoken: MultitokenSpeller,
     tagger: Option<Arc<dyn og_tagger::Tagger>>,
+    german_rule_speller: Option<Arc<og_spell::GermanSpeller>>,
 }
 
 impl SpellingSupport {
@@ -116,7 +117,13 @@ impl SpellingSupport {
             suggestion_engine,
             multitoken: MultitokenSpeller::from_data_with(multitoken_data, variant),
             tagger: None,
+            german_rule_speller: None,
         }
+    }
+
+    pub fn with_german_rule_speller(mut self, speller: Arc<og_spell::GermanSpeller>) -> Self {
+        self.german_rule_speller = Some(speller);
+        self
     }
 
     pub fn dictionary(&self) -> &Dictionary {
@@ -135,6 +142,9 @@ impl SpellingSupport {
     pub fn is_misspelled(&self, word: &str) -> bool {
         if word.is_empty() || !word.chars().any(|c| c.is_alphabetic()) {
             return false;
+        }
+        if let Some(rule) = &self.german_rule_speller {
+            return rule.filter_is_misspelled(word);
         }
         !self.dictionary.contains(word)
     }
