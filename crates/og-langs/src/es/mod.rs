@@ -1,3 +1,5 @@
+#[cfg(test)]
+pub(crate) mod dict_census;
 pub mod question_mark;
 pub mod repeated_words;
 pub mod replace_verbs;
@@ -373,6 +375,32 @@ mod tests {
         assert!(
             tagged[0].readings().is_empty(),
             "mixed-case words get no lowercase fallback (SpanishTagger.tag isMixedCase guard)"
+        );
+    }
+
+    #[test]
+    fn tagger_emits_current_colon_scheme_tags() {
+        let pipeline = SpanishPipeline::shared();
+        let tagged = og_tagger::Tagger::tag(pipeline.tagger_ref(), &["dímelo", "del"]);
+        let dimelo_tags: Vec<String> = tagged[0]
+            .readings()
+            .iter()
+            .flat_map(|r| r.pos_tags().to_vec())
+            .collect();
+        assert!(
+            dimelo_tags
+                .iter()
+                .any(|t| t.starts_with("VMM02S0:PP1CS") && t.ends_with("PP3MSA00")),
+            "Java pin SpanishTaggerTest dímelo/[decir]VMM02S0:PP1CS000:PP3MSA00 (chain joined by ':'), got {dimelo_tags:?}"
+        );
+        let del_tags: Vec<String> = tagged[1]
+            .readings()
+            .iter()
+            .flat_map(|r| r.pos_tags().to_vec())
+            .collect();
+        assert!(
+            del_tags.iter().any(|t| t == "SP:DA"),
+            "current grammar.xml expects SP:DA for 'del', got {del_tags:?}"
         );
     }
 }

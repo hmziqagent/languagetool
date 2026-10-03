@@ -5,7 +5,7 @@ use og_tagger::morfologik::MorfologikDictionary;
 use regex::Regex;
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 type Readings = Vec<(&'static str, &'static str)>;
 
@@ -94,6 +94,28 @@ fn is_emoji(word: &str) -> bool {
     utf16_len > 1 && word.chars().count() != utf16_len && !is_word_for_speller(word)
 }
 
+fn intern_tag(tag: &str) -> &'static str {
+    static POOL: OnceLock<Mutex<std::collections::HashSet<&'static str>>> = OnceLock::new();
+    let mut guard = POOL
+        .get_or_init(|| Mutex::new(std::collections::HashSet::new()))
+        .lock()
+        .unwrap();
+    if let Some(existing) = guard.get(tag) {
+        return existing;
+    }
+    let leaked: &'static str = Box::leak(tag.to_string().into_boxed_str());
+    guard.insert(leaked);
+    leaked
+}
+
+fn current_scheme_tag(tag: &str) -> &'static str {
+    if tag.contains('+') {
+        intern_tag(&tag.replace('+', ":"))
+    } else {
+        intern_tag(tag)
+    }
+}
+
 pub struct SpanishTagger {
     dict: Option<Arc<MorfologikDictionary>>,
     manual: HashMap<Box<str>, Readings>,
@@ -177,13 +199,17 @@ impl SpanishTagger {
             .map(|v| v.to_vec())
             .unwrap_or_default();
         if let Some(dict) = &self.dict {
-            readings.extend(dict.lookup(word).iter().copied());
+            readings.extend(
+                dict.lookup(word)
+                    .iter()
+                    .map(|(lemma, tag)| (*lemma, current_scheme_tag(tag))),
+            );
         }
         if let Some(removals) = self.removals.get(word) {
             readings.retain(|(lemma, tag)| {
-                !removals
-                    .iter()
-                    .any(|(r_lemma, r_tag)| r_lemma == lemma && r_tag == tag)
+                !removals.iter().any(|(r_lemma, r_tag)| {
+                    r_lemma == lemma && (*r_tag == *tag || r_tag.replace('+', ":") == *tag)
+                })
             });
         }
         readings
@@ -246,7 +272,12 @@ impl SpanishTagger {
     fn dict_lookup(&self, word: &str) -> Readings {
         self.dict
             .as_ref()
-            .map(|d| d.lookup(word).to_vec())
+            .map(|d| {
+                d.lookup(word)
+                    .iter()
+                    .map(|(lemma, tag)| (*lemma, current_scheme_tag(tag)))
+                    .collect()
+            })
             .unwrap_or_default()
     }
 
