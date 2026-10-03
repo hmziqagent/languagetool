@@ -394,6 +394,19 @@ impl GenericTagger {
         self.tag_word_inner(surface, start, end, surface)
     }
 
+    fn apostrophe_chunk(&self, surface: &str) -> Option<&'static str> {
+        if !self.french_normalization || surface.chars().count() <= 1 {
+            return None;
+        }
+        if surface.contains('\u{2019}') {
+            Some("containsTypographicApostrophe")
+        } else if surface.contains('\'') {
+            Some("containsTypewriterApostrophe")
+        } else {
+            None
+        }
+    }
+
     pub fn is_word_tagged(&self, word: &str) -> bool {
         if self.french_normalization {
             let normalized = if word.chars().count() > 1 {
@@ -457,7 +470,9 @@ impl Tagger for GenericTagger {
                 .with_pos_tags(all_tags)
                 .with_lemma(lemma);
             let mut atr = AnalyzedTokenReadings::new(primary).with_readings(readings);
-            if may_missing_yo {
+            if let Some(chunk) = self.apostrophe_chunk(token_text) {
+                atr.set_chunks(vec![chunk.to_string()]);
+            } else if may_missing_yo {
                 atr.set_chunks(vec!["MayMissingYO".to_string()]);
             }
             results.push(atr);
@@ -487,17 +502,7 @@ impl og_core::checker::Tagger for GenericTagger {
                 .first()
                 .and_then(|r| r.lemma().map(str::to_string))
                 .unwrap_or_else(|| surface.clone());
-            let apostrophe_chunk = if self.french_normalization && surface.chars().count() > 1 {
-                if surface.contains('\u{2019}') {
-                    Some("containsTypographicApostrophe")
-                } else if surface.contains('\'') {
-                    Some("containsTypewriterApostrophe")
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
+            let apostrophe_chunk = self.apostrophe_chunk(&surface);
             let updated = AnalyzedToken::new(surface, start, end)
                 .with_pos_tags(all_tags)
                 .with_lemma(lemma);
@@ -591,6 +596,41 @@ mod tests {
         );
         let readings = tagger.tag_word("miniatures", 0, 11);
         assert!(!readings.is_empty());
+    }
+
+    #[test]
+    fn french_tag_path_sets_apostrophe_chunks() {
+        let Some(dir) = resource_dir("fr") else {
+            return;
+        };
+        let tagger = GenericTagger::french(&dir);
+        let tagged = Tagger::tag(
+            &tagger,
+            &["eau", "aujourd'hui", "d\u{2019}aujourd\u{2019}hui", "'"],
+        );
+        let chunks: Vec<Vec<&str>> = tagged
+            .iter()
+            .map(|atr| atr.chunks().iter().map(String::as_str).collect())
+            .collect();
+        assert_eq!(chunks[0], Vec::<&str>::new(), "no apostrophe, no chunk");
+        assert_eq!(
+            chunks[1],
+            vec!["containsTypewriterApostrophe"],
+            "Java FrenchTagger sets the typewriter chunk"
+        );
+        assert_eq!(
+            chunks[2],
+            vec!["containsTypographicApostrophe"],
+            "typographic wins when both apostrophes could apply"
+        );
+        assert_eq!(chunks[3], Vec::<&str>::new(), "single-char token gets none");
+
+        let plain = GenericTagger::from_resource_dir(&dir, "french");
+        let tagged = Tagger::tag(&plain, &["aujourd'hui"]);
+        assert!(
+            tagged[0].chunks().is_empty(),
+            "chunk tags are French-only (french_normalization gate)"
+        );
     }
 
     #[test]
