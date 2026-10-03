@@ -592,6 +592,16 @@ impl Fsa {
     }
 }
 
+fn trim_frequency_tag(frequency_included: bool, tag: &str) -> &str {
+    if !frequency_included {
+        return tag;
+    }
+    match tag.char_indices().next_back() {
+        Some((end, _)) if end > 0 => &tag[..end],
+        _ => tag,
+    }
+}
+
 fn decode_suffix(word: &[u8], encoded: &[u8]) -> Option<Vec<u8>> {
     if encoded.is_empty() {
         return None;
@@ -743,6 +753,7 @@ struct FsaDict {
     separator: u8,
     encoder: LemmaEncoder,
     encoding: DictEncoding,
+    frequency_included: bool,
     cache: std::sync::RwLock<FxHashMap<&'static str, &'static [(&'static str, &'static str)]>>,
     interner: std::sync::Mutex<FxHashSet<&'static str>>,
 }
@@ -794,7 +805,11 @@ impl FsaDict {
                     let Some(lemma_bytes) = self.decode_lemma(&word_bytes, second) else {
                         return;
                     };
-                    let tag = intern(&mut interner, self.encoding.decode(tag_raw));
+                    let tag = intern(
+                        &mut interner,
+                        trim_frequency_tag(self.frequency_included, &self.encoding.decode(tag_raw))
+                            .to_string(),
+                    );
                     let lemma = intern(&mut interner, self.encoding.decode(&lemma_bytes));
                     readings.push((lemma, tag));
                 });
@@ -833,7 +848,11 @@ impl FsaDict {
                         .push((tag_id, form_id));
                 }
                 Some(tag_raw) => {
-                    let tag = intern(&mut interner, self.encoding.decode(tag_raw));
+                    let tag = intern(
+                        &mut interner,
+                        trim_frequency_tag(self.frequency_included, &self.encoding.decode(tag_raw))
+                            .to_string(),
+                    );
                     let lemma = intern(&mut interner, self.encoding.decode(&lemma_bytes));
                     let word_id = intern(&mut interner, word);
                     entries.entry(word_id).or_default().push((lemma, tag));
@@ -880,6 +899,8 @@ impl MorfologikDictionary {
         let encoding = DictEncoding::parse(
             &info_value(&info, "fsa.dict.encoding=").unwrap_or_else(|| "utf8".into()),
         );
+        let frequency_included = info_value(&info, "fsa.dict.frequency-included=")
+            .is_some_and(|v| v.eq_ignore_ascii_case("true"));
         let fsa = Fsa::from_static(data)?;
         Some(Self {
             source: Source::Fsa {
@@ -888,6 +909,7 @@ impl MorfologikDictionary {
                     separator: separator as u8,
                     encoder,
                     encoding,
+                    frequency_included,
                     cache: std::sync::RwLock::new(FxHashMap::default()),
                     interner: std::sync::Mutex::new(FxHashSet::default()),
                 },

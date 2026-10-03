@@ -228,7 +228,7 @@ mod tests {
         assert_eq!(readings_join("blablabla"), "blablabla=blablabla/[N m s]");
         assert_eq!(
             readings_join("entr'ouvrions"),
-            "entr'ouvrions=entr'ouvrir/[V sub pres 1 p]|entr'ouvrir/[V ind impa 1 p]"
+            "entr'ouvrions=entr'ouvrir/[V ind impa 1 p]|entr'ouvrir/[V sub pres 1 p]"
         );
         assert_eq!(
             readings_join("auto-mutilées"),
@@ -239,6 +239,107 @@ mod tests {
             "Grand-Chambre=grand-chambre/[N f s]"
         );
         assert_eq!(readings_join("soeur"), "soeur=sœur/[N f s]");
+    }
+
+    fn tagger_only(tokens: &[&str]) -> String {
+        let tagged = og_tagger::Tagger::tag(FrenchPipeline::shared().tagger_ref(), tokens);
+        tagged
+            .iter()
+            .map(|atr| {
+                let mut readings: Vec<String> = atr
+                    .readings()
+                    .iter()
+                    .map(|r| {
+                        format!(
+                            "{}/[{}]{}",
+                            atr.token().token(),
+                            r.lemma().unwrap_or("null"),
+                            if r.pos_tags().is_empty() {
+                                "null".to_string()
+                            } else {
+                                r.pos_tags().join("|")
+                            }
+                        )
+                    })
+                    .collect();
+                readings.sort_unstable();
+                readings.join("|")
+            })
+            .collect::<Vec<_>>()
+            .join(" -- ")
+    }
+
+    #[test]
+    fn java_frenchtagger_test_tagger_only_pins() {
+        assert_eq!(
+            tagger_only(&["C'", "est", "la", "vie"]),
+            "C'/[ce]R dem m s -- est/[est]N m s|est/[être]V etre ind pres 3 s \
+             -- la/[la]N m sp|la/[le]D f s|la/[le]R pers obj 3 f s -- vie/[vie]N f s"
+        );
+        assert_eq!(
+            tagger_only(&["Je", "ne", "parle", "pas", "français"]),
+            "Je/[je]R pers suj 1 s -- ne/[ne]A \
+             -- parle/[parler]V imp pres 2 s|parle/[parler]V ind pres 1 s|parle/[parler]V ind pres 3 s|parle/[parler]V sub pres 1 s|parle/[parler]V sub pres 3 s \
+             -- pas/[pas]A|pas/[pas]N m sp -- français/[français]J m sp|français/[français]N m sp"
+        );
+        assert_eq!(
+            tagger_only(&["d'", "aujourd'hui"]),
+            "d'/[de]D e sp|d'/[de]P -- aujourd'hui/[aujourd'hui]A"
+        );
+        assert_eq!(
+            tagger_only(&["d’", "aujourd’hui"]),
+            "d’/[de]D e sp|d’/[de]P -- aujourd’hui/[aujourd'hui]A"
+        );
+        assert_eq!(
+            tagger_only(&["Fontaine-l'Évêque"]),
+            "Fontaine-l'Évêque/[Fontaine-l'Évêque]Z e sp"
+        );
+        assert_eq!(
+            tagger_only(&["Fontaine-l’Évêque"]),
+            "Fontaine-l’Évêque/[Fontaine-l'Évêque]Z e sp"
+        );
+        assert_eq!(
+            tagger_only(&["Strauss-Kahn"]),
+            "Strauss-Kahn/[Strauss-Kahn]Z e sp"
+        );
+        assert_eq!(
+            tagger_only(&["Ç'", "avait"]),
+            "Ç'/[cela]R dem m s -- avait/[avoir]V avoir ind impa 3 s"
+        );
+        assert_eq!(
+            tagger_only(&["Penses", "-tu"]),
+            "Penses/[penser]V ind pres 2 s|Penses/[penser]V sub pres 2 s -- -tu/[tu]R pers suj 2 s"
+        );
+        assert_eq!(
+            tagger_only(&["va", "-t", "'en"]),
+            "va/[aller]V imp pres 2 s|va/[aller]V ind pres 3 s -- -t/[te]R pers obj 2 s -- 'en/[en]R pers obj 3 sp"
+        );
+        assert_eq!(tagger_only(&["Al-Qaïda"]), "Al-Qaïda/[Al-Qaïda]Z f sp");
+        assert_eq!(
+            tagger_only(&["micro-plastiques"]),
+            "micro-plastiques/[micro-plastique]J e p|micro-plastiques/[micro-plastique]N e p"
+        );
+        assert_eq!(
+            tagger_only(&["sous-espace"]),
+            "sous-espace/[sous-espace]N m s"
+        );
+        assert_eq!(
+            tagger_only(&["sous-corps"]),
+            "sous-corps/[sous-corps]N m sp"
+        );
+        assert_eq!(
+            tagger_only(&["minitélévision"]),
+            "minitélévision/[minitélévision]N f s"
+        );
+        assert_eq!(
+            tagger_only(&["oeils-de-boeuf"]),
+            "oeils-de-boeuf/[œils-de-bœuf]N m p"
+        );
+        assert_eq!(tagger_only(&["peut-être"]), "peut-être/[peut-être]A");
+        assert_eq!(tagger_only(&["aéro-club"]), "aéro-club/[aéro-club]N m s");
+        assert_eq!(tagger_only(&["Aéro-club"]), "Aéro-club/[aéro-club]N m s");
+        assert_eq!(tagger_only(&["Aéro-Club"]), "Aéro-Club/[aéro-club]N m s");
+        assert_eq!(tagger_only(&["AÉRO-CLUB"]), "AÉRO-CLUB/[aéro-club]N m s");
     }
 
     #[test]
