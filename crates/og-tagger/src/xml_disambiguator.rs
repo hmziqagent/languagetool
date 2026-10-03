@@ -1836,16 +1836,15 @@ fn reading_text_matches(
         };
         return re_to_use.is_match(test) != pt.negate;
     }
-    if pt.is_regexp {
-        if let Some(ref re) = pt.compiled_regexp_fancy {
-            let test = if pt.inflected {
-                reading.lemma().unwrap_or(surface)
-            } else {
-                surface
-            };
-            return re.is_match(test).unwrap_or(false) != pt.negate;
-        }
-        return false;
+    if pt.is_regexp
+        && let Some(ref re) = pt.compiled_regexp_fancy
+    {
+        let test = if pt.inflected {
+            reading.lemma().unwrap_or(surface)
+        } else {
+            surface
+        };
+        return re.is_match(test).unwrap_or(false) != pt.negate;
     }
     !pt.negate
 }
@@ -3116,6 +3115,45 @@ mod tests {
             tags(&upper, "Status"),
             Some(vec!["NN".to_string(), "NN:UN".to_string()]),
             "a case_sensitive antipattern must block the mixed-case match"
+        );
+    }
+
+    #[test]
+    fn empty_regexp_token_has_no_text_constraint() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<rules lang="en">
+    <rule id="EMPTY_REGEXP_WILDCARD">
+        <antipattern>
+            <token regexp="yes" postag="VB" />
+        </antipattern>
+        <pattern>
+            <marker>
+                <token regexp="yes" postag="NN.*" postag_regexp="yes" />
+            </marker>
+        </pattern>
+        <disambig postag="VB"/>
+    </rule>
+</rules>"#;
+        let disambiguator = XmlDisambiguator::from_xml(xml).unwrap();
+        let mut blocked = make_sentence(vec![
+            ("<S>", vec!["SENT_START"]),
+            ("word", vec!["NN", "VB"]),
+            (".", vec!["SENT_END"]),
+        ]);
+        disambiguator.disambiguate(&mut blocked);
+        assert!(
+            blocked.tokens()[1].readings().len() == 2,
+            "the marker element matches the token via postag alone, and the same empty-regexp shape with postag=VB in the antipattern overlaps and vetoes the rule (Java sets TEST_STRING_MASK only for non-empty patterns)"
+        );
+        let mut free = make_sentence(vec![
+            ("<S>", vec!["SENT_START"]),
+            ("word", vec!["NN"]),
+            (".", vec!["SENT_END"]),
+        ]);
+        disambiguator.disambiguate(&mut free);
+        assert!(
+            free.tokens()[1].readings().len() == 1 && free.tokens()[1].has_pos_tag("VB"),
+            "without a VB reading the antipattern does not overlap, and the marker element still matches on postag alone so the replace runs"
         );
     }
 
