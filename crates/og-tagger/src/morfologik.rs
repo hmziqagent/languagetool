@@ -1426,4 +1426,52 @@ mod tests {
             "entamu readings: {entamu:?}"
         );
     }
+
+    #[test]
+    #[ignore]
+    fn slovak_v6_prefix_dict_lookups_match_slovak_tagger_test() {
+        let _guard = DICT_TEST_LOCK.lock().unwrap();
+        let dir = [
+            "/home/agent/opengrammar-rs/languagetool/languagetool-language-modules/sk/src/main/resources/org/languagetool/resource/sk",
+            "languagetool/languagetool-language-modules/sk/src/main/resources/org/languagetool/resource/sk",
+        ]
+        .iter()
+        .map(std::path::PathBuf::from)
+        .find(|p| p.join("slovak.dict").exists());
+        let dir = match dir {
+            Some(d) => d,
+            None => return,
+        };
+        let dict = MorfologikDictionary::load(&dir.join("slovak.dict"), &dir.join("slovak.info"));
+        let dict = dict.expect("load slovak dict (CFSA version 0xc6, prefix encoder)");
+
+        let tu = dict.lookup("tu");
+        let tu_tags: Vec<&str> = tu.iter().map(|(_, t)| *t).collect();
+        for tag in ["J", "PD", "T"] {
+            assert!(tu_tags.contains(&tag), "tu tags: {tu:?}");
+        }
+
+        let najdete = dict.lookup("nájdete");
+        assert!(
+            najdete
+                .iter()
+                .any(|(lemma, tag)| lemma == &"nájsť" && *tag == "VKdpb+"),
+            "nájdete readings: {najdete:?}"
+        );
+
+        let cisla = dict.lookup("čísla");
+        assert!(
+            cisla.iter().any(|(lemma, tag)| lemma == &"číslo"
+                && ["SSnp1", "SSnp4", "SSnp5", "SSns2"].contains(tag)),
+            "čísla readings: {cisla:?}"
+        );
+
+        let kultura = dict.lookup("kultúra");
+        assert!(
+            kultura
+                .iter()
+                .any(|(lemma, tag)| lemma == &"kultúra" && ["SSfs1", "SSfs5"].contains(tag)),
+            "Kultúra readings: {kultura:?}"
+        );
+    }
 }

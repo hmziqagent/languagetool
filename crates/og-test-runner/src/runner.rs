@@ -120,6 +120,7 @@ pub fn generic_dict_stem(code: &str) -> Option<&'static str> {
         ("el", "greek"),
         ("gl", "galician"),
         ("ro", "romanian"),
+        ("sk", "slovak"),
         ("sv", "swedish"),
         ("crh", "crimean_tatar"),
     ];
@@ -2190,6 +2191,12 @@ fn test_real_romanian_grammar_examples() {
 #[ignore]
 fn test_real_swedish_grammar_examples() {
     run_generic_example_suite("sv");
+}
+
+#[test]
+#[ignore]
+fn test_real_slovak_grammar_examples() {
+    run_generic_example_suite("sk");
 }
 
 #[cfg(test)]

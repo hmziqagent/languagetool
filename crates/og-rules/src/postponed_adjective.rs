@@ -323,6 +323,7 @@ enum SynthLang {
     Polish,
     Galician,
     Romanian,
+    Slovak,
 }
 
 pub struct LangSynthesizer {
@@ -430,6 +431,11 @@ impl LangSynthesizer {
                 og_tagger::morfologik::shared_synth_dictionary(resource_dir, "romanian_synth"),
                 SynthLang::Romanian,
             ),
+            "sk" => (
+                None,
+                og_tagger::morfologik::shared_synth_dictionary(resource_dir, "slovak_synth"),
+                SynthLang::Slovak,
+            ),
             _ => return None,
         };
         let manual = std::fs::read_to_string(resource_dir.join("added.txt"))
@@ -455,6 +461,7 @@ impl LangSynthesizer {
             SynthLang::Polish => Some("polish_tags.txt"),
             SynthLang::Galician => Some("galician_tags.txt"),
             SynthLang::Romanian => Some("romanian_tags.txt"),
+            SynthLang::Slovak => Some("slovak_tags.txt"),
             _ => None,
         };
         let possible_tags = possible_tags
@@ -1866,6 +1873,44 @@ mod tests {
         assert_eq!(
             synth.synthesize_exact_for("cantar", None, "VMIP3S0"),
             vec!["canta".to_string()]
+        );
+    }
+
+    #[test]
+    fn sk_synthesizes_forms_from_slovak_synth_dict() {
+        let dir = std::path::Path::new(
+            "/home/agent/opengrammar-rs/languagetool/languagetool-language-modules/sk/src/main/resources/org/languagetool/resource/sk",
+        );
+        let Some(synth) = LangSynthesizer::for_language(dir, "sk") else {
+            return;
+        };
+        assert_eq!(
+            synth.synthesize_exact_for("blablabla", None, "blablabla"),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            synth.synthesize_exact_for("časopis", None, "SSis2"),
+            vec!["časopisu".to_string()]
+        );
+        let re = Regex::new("SS.*").unwrap();
+        assert_eq!(
+            synth.synthesize("časopis", &re),
+            vec![
+                "časopisy".to_string(),
+                "časopisov".to_string(),
+                "časopisom".to_string(),
+                "časopisy".to_string(),
+                "časopisy".to_string(),
+                "časopisoch".to_string(),
+                "časopismi".to_string(),
+                "časopis".to_string(),
+                "časopisu".to_string(),
+                "časopisu".to_string(),
+                "časopis".to_string(),
+                "časopis".to_string(),
+                "časopise".to_string(),
+                "časopisom".to_string(),
+            ]
         );
     }
 }

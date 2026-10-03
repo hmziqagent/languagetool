@@ -738,6 +738,7 @@ impl LanguageEngine {
             "el" => ("greek", "MORFOLOGIK_RULE_EL_GR"),
             "gl" => ("galician", "HUNSPELL_RULE"),
             "ro" => ("romanian", "MORFOLOGIK_RULE_RO_RO"),
+            "sk" => ("slovak", "MORFOLOGIK_RULE_SK_SK"),
             "sv" => ("swedish", "HUNSPELL_RULE"),
             _ => return None,
         };
@@ -863,6 +864,13 @@ impl LanguageEngine {
                 og_rules::text_level_rules::GenericUnpairedBracketsRule::new().with_symbols(
                     vec!["[", "(", "{", "«", "﴾", "\"", "'"],
                     vec!["]", ")", "}", "»", "﴿", "\"", "'"],
+                ),
+            )
+        } else if short == "sk" {
+            Arc::new(
+                og_rules::text_level_rules::GenericUnpairedBracketsRule::new().with_symbols(
+                    vec!["[", "(", "{", "„", "»", "«", "\""],
+                    vec!["]", ")", "}", "“", "«", "»", "\""],
                 ),
             )
         } else {
