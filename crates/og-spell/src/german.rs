@@ -237,8 +237,6 @@ struct GermanSharedData {
     tagger: Option<Arc<dyn Tagger>>,
     ignore_words: HashSet<String>,
     ignore_words_ch: HashSet<String>,
-    rule_ignore_words: HashSet<String>,
-    rule_ignore_words_ch: HashSet<String>,
     words_to_be_ignored_in_compounds: HashSet<String>,
     word_starts_to_be_prohibited: Vec<String>,
     word_endings_to_be_prohibited: Vec<String>,
@@ -394,8 +392,6 @@ impl GermanSpeller {
     ) -> Self {
         let mut ignore_words: HashSet<String> = HashSet::new();
         let mut ignore_words_ch: HashSet<String> = HashSet::new();
-        let mut rule_ignore_words: HashSet<String> = HashSet::new();
-        let mut rule_ignore_words_ch: HashSet<String> = HashSet::new();
         let mut ignored_in_compounds: HashSet<String> = HashSet::new();
         let mut prohibit_starts: Vec<String> = Vec::new();
         let mut prohibit_ends: Vec<String> = Vec::new();
@@ -410,7 +406,7 @@ impl GermanSpeller {
         if let Some(core) = core_resource_dir {
             ignore_sources.push(core.join("spelling_global.txt"));
         }
-        for (source_idx, source) in ignore_sources.iter().enumerate() {
+        for source in &ignore_sources {
             for line in load_word_file(source) {
                 let swiss_line = line.replace('ß', "ss");
                 let line = if variant == SWISS {
@@ -424,19 +420,13 @@ impl GermanSpeller {
                 }
                 for word in expand_line(&line) {
                     ignore_words.insert(word.clone());
-                    if source_idx == 0 {
-                        rule_ignore_words.insert(word.clone());
-                    }
                     if variant != SWISS {
                         let ch_form = if word.contains('ß') {
                             word.replace('ß', "ss")
                         } else {
                             word.clone()
                         };
-                        ignore_words_ch.insert(ch_form.clone());
-                        if source_idx == 0 {
-                            rule_ignore_words_ch.insert(ch_form);
-                        }
+                        ignore_words_ch.insert(ch_form);
                     }
                 }
             }
@@ -487,8 +477,6 @@ impl GermanSpeller {
                     tagger,
                     ignore_words,
                     ignore_words_ch,
-                    rule_ignore_words,
-                    rule_ignore_words_ch,
                     words_to_be_ignored_in_compounds: ignored_in_compounds,
                     word_starts_to_be_prohibited: prohibit_starts,
                     word_endings_to_be_prohibited: prohibit_ends,
@@ -563,34 +551,6 @@ impl GermanSpeller {
         self.is_ignored_no_case(word)
     }
 
-    fn rule_is_in_ignored_set(&self, word: &str) -> bool {
-        if self.swiss {
-            self.shared.rule_ignore_words_ch.contains(word)
-        } else {
-            self.shared.rule_ignore_words.contains(word)
-        }
-    }
-
-    fn rule_is_ignored_no_case(&self, word: &str) -> bool {
-        self.rule_is_in_ignored_set(word)
-            || (PATTERNS.first_upper_case.is_match(word)
-                && self.rule_is_in_ignored_set(&word.to_lowercase()))
-            || word.chars().count() <= 1
-    }
-
-    fn rule_ignore_word_base(&self, word: &str) -> bool {
-        if word.chars().count() > MAX_TOKEN_LENGTH {
-            return true;
-        }
-        if !word.chars().any(|c| c.is_alphabetic()) {
-            return true;
-        }
-        if word.ends_with('.') && !self.rule_is_in_ignored_set(word) {
-            return self.rule_is_ignored_no_case(cut_off_dot(word));
-        }
-        self.rule_is_ignored_no_case(word)
-    }
-
     pub fn filter_is_misspelled(&self, word: &str) -> bool {
         self.special_cases_misspelled(word) || self.hunspell_rule_is_misspelled(word)
     }
@@ -601,7 +561,7 @@ impl GermanSpeller {
         } else {
             true
         };
-        (is_alphabetic && word != "--" && !self.spell(word) && !self.rule_ignore_word_base(word))
+        (is_alphabetic && word != "--" && !self.spell(word) && !self.ignore_word_base(word))
             || self.is_prohibited(cut_off_dot(word))
     }
 
