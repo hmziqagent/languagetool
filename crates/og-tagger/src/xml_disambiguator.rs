@@ -1385,6 +1385,17 @@ fn token_matches_text_verified(
         return false;
     }
 
+    if token_idx > 0 {
+        let prev = tokens[token_idx - 1];
+        for exc in &pt.exceptions {
+            if exc.scope.as_deref() == Some("previous")
+                && exception_matches(exc, prev, space_before_at(tokens, token_idx - 1))
+            {
+                return false;
+            }
+        }
+    }
+
     token_matches_tail(
         pt,
         token,
@@ -4466,6 +4477,47 @@ mod tests {
         assert!(
             sentence.tokens()[3].has_pos_tag("RB"),
             "an element without postag leaves its token untouched"
+        );
+    }
+
+    #[test]
+    fn scope_previous_exception_vetoes_the_text_verified_first_element() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<rules lang="en">
+    <rule id="CAN_WILL_MD_2" name="can/will/must as a modal verb with adverb">
+        <pattern>
+            <marker><token regexp="yes">can|will|must<exception scope="previous" regexp="yes">be|am|is|was|are|were</exception></token></marker>
+            <token postag="RB"/>
+            <token postag="VB"><exception postag="MD"/></token>
+        </pattern>
+        <disambig postag="MD"/>
+    </rule>
+</rules>"#;
+        let disambiguator = XmlDisambiguator::from_xml(xml).unwrap();
+        let mut sentence = make_sentence(vec![
+            ("<S>", vec!["SENT_START"]),
+            ("accession", vec!["NN"]),
+            ("is", vec!["VBZ"]),
+            ("will", vec!["MD", "NN:UN", "VB", "VBP"]),
+            ("ultimately", vec!["RB"]),
+            ("be", vec!["VB"]),
+        ]);
+        disambiguator.disambiguate(&mut sentence);
+        assert!(
+            sentence.tokens()[3].has_pos_tag("NN:UN"),
+            "scope=previous exception on 'is' must veto the marker element even on the text-verified first-element path"
+        );
+        let mut modal = make_sentence(vec![
+            ("<S>", vec!["SENT_START"]),
+            ("This", vec!["DT"]),
+            ("can", vec!["MD", "NN", "VB", "VBP"]),
+            ("only", vec!["RB"]),
+            ("be", vec!["VB"]),
+        ]);
+        disambiguator.disambiguate(&mut modal);
+        assert!(
+            modal.tokens()[2].readings().len() == 1 && modal.tokens()[2].has_pos_tag("MD"),
+            "without the previous-token veto the rule still replaces with MD"
         );
     }
 }
