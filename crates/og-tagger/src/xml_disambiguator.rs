@@ -1365,7 +1365,7 @@ fn token_matches_text_verified(
         return false;
     }
 
-    if has_previous && token_idx > 0 {
+    if token_idx > 0 {
         let prev = tokens[token_idx - 1];
         let spaced = token.token().start() != prev.token().end();
         match pt.space_before.as_deref() {
@@ -1909,7 +1909,7 @@ fn token_matches(
         return false;
     }
 
-    if has_previous && token_idx > 0 {
+    if token_idx > 0 {
         let prev = tokens[token_idx - 1];
         let spaced = token.token().start() != prev.token().end();
         match pt.space_before.as_deref() {
@@ -1937,7 +1937,7 @@ fn token_matches(
     token_matches_tail(
         pt,
         token,
-        has_previous && token_idx > 0 && {
+        token_idx > 0 && {
             let prev = tokens[token_idx - 1];
             token.token().start() != prev.token().end()
         },
@@ -4518,6 +4518,56 @@ mod tests {
         assert!(
             modal.tokens()[2].readings().len() == 1 && modal.tokens()[2].has_pos_tag("MD"),
             "without the previous-token veto the rule still replaces with MD"
+        );
+    }
+
+    #[test]
+    fn spacebefore_is_enforced_on_the_match_initial_element() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<rules lang="en">
+    <rule id="QUOT_M3" name="quote glued to the previous token stays untouched">
+        <pattern>
+            <marker>
+                <and>
+                    <token postag="''" spacebefore="yes">x</token>
+                    <token postag="``" spacebefore="yes">x</token>
+                </and>
+            </marker>
+        </pattern>
+        <disambig postag="``"/>
+    </rule>
+</rules>"#;
+        let disambiguator = XmlDisambiguator::from_xml(xml).unwrap();
+        let build = |quote_start: usize| {
+            let mut sentence = make_sentence(vec![("<S>", vec!["SENT_START"])]);
+            let tokens = sentence.tokens_mut();
+            tokens.push(
+                AnalyzedTokenReadings::new(AnalyzedToken::new("a", 0, 1)).with_readings(vec![
+                    AnalyzedToken::new("a", 0, 1).with_pos_tags(vec!["NN".to_string()]),
+                ]),
+            );
+            tokens.push(
+                AnalyzedTokenReadings::new(AnalyzedToken::new("x", quote_start, quote_start + 1))
+                    .with_readings(vec![
+                        AnalyzedToken::new("x", quote_start, quote_start + 1)
+                            .with_pos_tags(vec!["''".to_string()]),
+                        AnalyzedToken::new("x", quote_start, quote_start + 1)
+                            .with_pos_tags(vec!["``".to_string()]),
+                    ]),
+            );
+            sentence
+        };
+        let mut glued = build(1);
+        disambiguator.disambiguate(&mut glued);
+        assert!(
+            glued.tokens()[2].readings().len() == 2,
+            "spacebefore=yes must veto the match-initial element when the token is glued to the previous one, like PatternToken.isMatched which tests the whitespace flag on every element"
+        );
+        let mut spaced = build(2);
+        disambiguator.disambiguate(&mut spaced);
+        assert!(
+            spaced.tokens()[2].readings().len() == 1 && spaced.tokens()[2].has_pos_tag("``"),
+            "with whitespace before the token the spacebefore=yes element still matches"
         );
     }
 }
