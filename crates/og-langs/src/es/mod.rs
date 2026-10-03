@@ -169,7 +169,6 @@ pub fn spanish() -> crate::engine::LanguageEngine {
 pub fn build_es_disambiguator(
     resource_dir: &std::path::Path,
 ) -> Option<std::sync::Arc<dyn og_core::checker::Disambiguator>> {
-    use og_core::checker::Disambiguator as _;
     let xml = std::fs::read_to_string(resource_dir.join("disambiguation.xml")).ok()?;
     let expanded =
         og_xml::parser::XmlRuleParser::expand_entities_with_base(&xml, Some(resource_dir));
@@ -257,7 +256,6 @@ struct EsDisambiguatorChain {
 
 impl og_core::checker::Disambiguator for EsDisambiguatorChain {
     fn disambiguate(&self, sentence: &mut og_core::AnalyzedSentence) {
-        use og_core::checker::Disambiguator as _;
         self.global.disambiguate(sentence);
         self.multiwords.disambiguate(sentence);
         self.xml.apply_rules_through(sentence, self.xml_cut);

@@ -235,6 +235,64 @@ pub fn bisect_word_change(text: &str, word: &str) {
 }
 
 #[test]
+#[ignore]
+fn probe_gn_readings() {
+    dump("África es bonito.");
+    dump("Los dragones son guay.");
+    dump("La tres reglas son estas.");
+    dump("vigésimo primera");
+}
+
+#[test]
+#[ignore]
+fn probe_direct_ok_failures() {
+    dump("hace dos años atrás");
+    dump("hace dos semanas y media atrás");
+    dump("Alguien explíqueme que sucede aquí.");
+    dump("El otro de Inglaterra.");
+    dump("medio millones de euros");
+}
+
+#[test]
+#[ignore]
+fn probe_synth_lookups() {
+    use crate::es::es_resource_dir;
+    let dir = es_resource_dir().expect("es dir");
+    let dict = og_tagger::morfologik::MorfologikDictionary::load(
+        &dir.join("spanish.dict"),
+        &dir.join("spanish.info"),
+    )
+    .expect("dict");
+    for w in [
+        "estos",
+        "este",
+        "guapa",
+        "guapo",
+        "vigésima",
+        "primera",
+        "África",
+        "guay",
+    ] {
+        eprintln!("lookup({w:?}) = {:?}", dict.lookup(w));
+    }
+    let synth =
+        og_rules::postponed_adjective::LangSynthesizer::for_language(&dir, "es").expect("synth");
+    for (lemma, tag) in [
+        ("este", "DI0[CM]P0"),
+        ("este", "DI0MP0"),
+        ("guapo", "A.*"),
+        ("guapo", "AQ0FS0"),
+        ("20", "AO0FS0"),
+    ] {
+        let re = regex::Regex::new(tag).unwrap();
+        eprintln!(
+            "synthesize({lemma:?}, {tag:?}) = {:?}",
+            synth.synthesize(lemma, &re)
+        );
+    }
+}
+
+#[test]
 fn tokenizer_pins_java_spanish_word_tokenizer_test() {
     use og_tokenizer::WordTokenizer as _;
     let t = crate::es::word_tokenizer::SpanishWordTokenizer::new();
