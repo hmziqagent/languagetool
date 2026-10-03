@@ -3831,6 +3831,114 @@ mod tests {
     }
 
     #[test]
+    fn immunize_marker_span_counts_elements_not_skip_bridges() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<rules lang="de">
+    <rule id="BRIDGE_IN_MARKER" name="bridge inside marker">
+        <pattern>
+            <marker>
+                <token skip="1">A</token>
+                <token>X</token>
+            </marker>
+        </pattern>
+        <disambig action="immunize"/>
+    </rule>
+</rules>"#;
+
+        let disambig = XmlDisambiguator::from_xml(xml).unwrap();
+        let mut sentence = make_sentence(vec![
+            ("A", vec!["NN"]),
+            ("b", vec!["NN"]),
+            ("X", vec!["NN"]),
+        ]);
+
+        disambig.disambiguate(&mut sentence);
+
+        assert!(sentence.tokens()[0].is_immunized(), "marker start A");
+        assert!(
+            sentence.tokens()[1].is_immunized(),
+            "the bridge token inside the element-count run is immunized"
+        );
+        assert!(
+            !sentence.tokens()[2].is_immunized(),
+            "Java immunizes through matchingTokensWithCorrection (A,b,X); ours stops after the element count"
+        );
+    }
+
+    #[test]
+    fn immunize_marker_at_first_element_starts_at_first_matched_token() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<rules lang="de">
+    <rule id="MARKER_FIRST" name="marker opens the pattern">
+        <pattern>
+            <marker>
+                <token>X</token>
+                <token>Y</token>
+            </marker>
+            <token>Z</token>
+        </pattern>
+        <disambig action="immunize"/>
+    </rule>
+</rules>"#;
+
+        let disambig = XmlDisambiguator::from_xml(xml).unwrap();
+        let mut sentence = make_sentence(vec![
+            ("X", vec!["NN"]),
+            ("Y", vec!["NN"]),
+            ("Z", vec!["NN"]),
+        ]);
+
+        disambig.disambiguate(&mut sentence);
+
+        assert!(sentence.tokens()[0].is_immunized());
+        assert!(sentence.tokens()[1].is_immunized());
+        assert!(
+            !sentence.tokens()[2].is_immunized(),
+            "spc=0: span covers the marker elements only, the trailing element stays visible"
+        );
+    }
+
+    #[test]
+    fn immunize_skipped_optional_element_blocks_the_whole_span() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<rules lang="de">
+    <rule id="OPTIONAL_IN_MARKER" name="optional element skipped inside marker">
+        <pattern>
+            <marker>
+                <token>X</token>
+                <token min="0">Q</token>
+                <token>Y</token>
+            </marker>
+        </pattern>
+        <disambig action="immunize"/>
+    </rule>
+</rules>"#;
+
+        let disambig = XmlDisambiguator::from_xml(xml).unwrap();
+        let mut sentence = make_sentence(vec![("X", vec!["NN"]), ("Y", vec!["NN"])]);
+
+        disambig.disambiguate(&mut sentence);
+
+        assert!(
+            !sentence.tokens()[0].is_immunized() && !sentence.tokens()[1].is_immunized(),
+            "the all-counts-positive gate vetoes the whole span when an optional element matched nothing"
+        );
+
+        let mut present = make_sentence(vec![
+            ("X", vec!["NN"]),
+            ("Q", vec!["NN"]),
+            ("Y", vec!["NN"]),
+        ]);
+        disambig.disambiguate(&mut present);
+        assert!(
+            present.tokens()[0].is_immunized()
+                && present.tokens()[1].is_immunized()
+                && present.tokens()[2].is_immunized(),
+            "positive control: the same rule immunizes the full span when no element is skipped"
+        );
+    }
+
+    #[test]
     fn test_filter_action_requires_full_postag_match() {
         let exact = r#"<?xml version="1.0" encoding="utf-8"?>
 <rules lang="en">
