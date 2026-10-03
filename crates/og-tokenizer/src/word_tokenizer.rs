@@ -69,7 +69,7 @@ impl DefaultWordTokenizer {
 
     fn is_word_char(&self, c: char) -> bool {
         if self.dutch {
-            return c.is_alphanumeric() || c == '-' || is_dutch_quote(c);
+            return !is_nl_delimiter(c);
         }
         c.is_alphanumeric()
             || c == '_'
@@ -431,6 +431,35 @@ fn apostrophe_len(bytes: &[u8]) -> Option<usize> {
 
 fn is_dutch_quote(c: char) -> bool {
     matches!(c, '\'' | '`' | '\u{2019}' | '\u{2018}' | '\u{00B4}')
+}
+
+fn is_nl_delimiter(c: char) -> bool {
+    matches!(c,
+        '\u{0020}' | '\u{00A0}' | '\u{115F}' | '\u{1160}' | '\u{1680}'
+        | '\u{2000}'..='\u{200F}'
+        | '\u{2028}'..='\u{202F}'
+        | '\u{205F}'..='\u{206F}'
+        | '\u{3000}' | '\u{3164}' | '\u{FEFF}' | '\u{FFA0}'
+        | '\u{FFF9}'..='\u{FFFB}'
+        | '\u{00A6}' | '\u{2016}' | '\u{2223}' | '|' | ',' | '.' | ';' | '(' | ')' | '['
+        | ']' | '{' | '}' | '=' | '*' | '#' | '\u{2217}' | '+' | '\u{00D7}' | '\u{00B7}'
+        | '\u{00F7}' | '<' | '>' | '!' | '?' | ':' | '~' | '/' | '\\' | '"' | '\u{00AB}'
+        | '\u{00BB}' | '\u{201E}' | '\u{201C}' | '\u{201D}' | '\u{201B}' | '\u{2032}'
+        | '\u{203A}' | '\u{2039}' | '\u{2026}' | '\u{00BF}' | '\u{00A1}' | '\u{203C}'
+        | '\u{2047}' | '\u{2048}' | '\u{2049}' | '\u{2122}' | '\u{00AE}' | '\u{203D}'
+        | '\u{00B6}' | '\u{FFEB}' | '\u{2E2E}'
+        | '\u{2012}'..='\u{2015}'
+        | '\u{2500}' | '\u{3161}' | '\u{2713}'
+        | '\u{25CF}' | '\u{25CB}' | '\u{25C6}' | '\u{27A2}' | '\u{25A0}' | '\u{25A1}'
+        | '\u{2605}' | '\u{274F}' | '\u{2794}' | '\u{21B5}' | '\u{2756}' | '\u{25AA}'
+        | '\u{2751}' | '\u{2022}'
+        | '\u{2B9A}' | '\u{2265}' | '\u{2192}' | '\u{21FE}' | '\u{21C9}' | '\u{21D2}'
+        | '\u{21E8}' | '\u{21DB}'
+        | '\u{00B9}' | '\u{00B2}' | '\u{00B3}' | '\u{2070}' | '\u{2071}'
+        | '\u{2074}'..='\u{2079}'
+        | '\t' | '\n' | '\r' | '\u{000B}'
+        | '_'
+    )
 }
 
 fn dutch_quote_pieces(text: &str) -> Vec<(usize, usize)> {
@@ -1538,6 +1567,67 @@ mod tests {
         let tokens = tz.tokenize("De oma's fiets.");
         assert_offsets_valid(&tokens);
         assert_reconstruction(&tokens, "De oma's fiets.");
+    }
+
+    #[test]
+    fn test_dutch_tokenizer_matches_java_test_expectations() {
+        let tz = DefaultWordTokenizer::new_dutch();
+        assert_eq!(
+            token_texts(&tz, "This is\u{00A0}a test"),
+            vec!["This", " ", "is", "\u{00A0}", "a", " ", "test"]
+        );
+        assert_eq!(
+            token_texts(&tz, "Bla bla oma's bla bla 'test"),
+            vec![
+                "Bla", " ", "bla", " ", "oma's", " ", "bla", " ", "bla", " ", "'", "test"
+            ]
+        );
+        assert_eq!(
+            token_texts(&tz, "Ik zie het''"),
+            vec!["Ik", " ", "zie", " ", "het", "'", "'"]
+        );
+        assert_eq!(
+            token_texts(&tz, "''Ik zie het"),
+            vec!["'", "'", "Ik", " ", "zie", " ", "het"]
+        );
+        assert_eq!(
+            token_texts(&tz, "Ik 'zie' het"),
+            vec!["Ik", " ", "'", "zie", "'", " ", "het"]
+        );
+        assert_eq!(
+            token_texts(&tz, "Ik \u{2018}zie\u{2019} het"),
+            vec!["Ik", " ", "\u{2018}", "zie", "\u{2019}", " ", "het"]
+        );
+        assert_eq!(
+            token_texts(&tz, "Ik \u{201C}zie\u{201D} het"),
+            vec!["Ik", " ", "\u{201C}", "zie", "\u{201D}", " ", "het"]
+        );
+        assert_eq!(token_texts(&tz, "'x'"), vec!["'", "x", "'"]);
+        assert_eq!(token_texts(&tz, "`x`"), vec!["`", "x", "`"]);
+    }
+
+    #[test]
+    fn test_dutch_symbols_join_word_runs_like_java_delimiter_complement() {
+        let tz = DefaultWordTokenizer::new_dutch();
+        assert_eq!(token_texts(&tz, "$15."), vec!["$15", "."]);
+        assert_eq!(token_texts(&tz, "20%"), vec!["20%"]);
+        assert_eq!(
+            token_texts(&tz, "Apple Watch\u{00A9}"),
+            vec!["Apple", " ", "Watch\u{00A9}"]
+        );
+        assert_eq!(token_texts(&tz, "&euml;"), vec!["&euml", ";"]);
+        assert_eq!(
+            token_texts(&tz, "be&euml;indigen"),
+            vec!["be&euml", ";", "indigen"]
+        );
+        assert_eq!(
+            token_texts(&tz, "€5 en £3"),
+            vec!["€5", " ", "en", " ", "£3"]
+        );
+        assert_eq!(token_texts(&tz, "15:00"), vec!["15", ":", "00"]);
+        assert_eq!(token_texts(&tz, "a\u{2013}b"), vec!["a", "\u{2013}", "b"]);
+        assert_eq!(token_texts(&tz, "wrd\u{00B2}"), vec!["wrd", "\u{00B2}"]);
+        assert_eq!(token_texts(&tz, "mijn.net"), vec!["mijn", ".", "net"]);
     }
 
     #[test]
