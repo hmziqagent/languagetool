@@ -2703,12 +2703,14 @@ impl PatternRuleEngine {
             | "org.languagetool.rules.pl.DateCheckFilter"
             | "org.languagetool.rules.ru.DateCheckFilter"
             | "org.languagetool.rules.br.DateCheckFilter"
+            | "org.languagetool.rules.eo.DateCheckFilter"
             | "org.languagetool.rules.ar.filters.ArabicDateCheckFilter" => {
                 let lang = match filter.class.as_str() {
                     c if c.contains(".it.") => DateLang::It,
                     c if c.contains(".pl.") => DateLang::Pl,
                     c if c.contains(".ru.") => DateLang::Ru,
                     c if c.contains(".br.") => DateLang::Br,
+                    c if c.contains(".eo.") => DateLang::Eo,
                     c if c.contains("Arabic") => DateLang::Ar,
                     _ => DateLang::En,
                 };
@@ -4668,6 +4670,7 @@ enum DateLang {
     Ru,
     Ar,
     Br,
+    Eo,
 }
 
 fn trim_special_chars(s: &str) -> String {
@@ -4689,6 +4692,7 @@ fn parse_month_for(lang: DateLang, s: &str) -> u32 {
         DateLang::Ru => parse_month_russian(s),
         DateLang::Ar => parse_month_arabic(s),
         DateLang::Br => parse_month_breton(s),
+        DateLang::Eo => parse_month_esperanto(s),
     }
 }
 
@@ -4911,6 +4915,7 @@ fn parse_weekday_for(lang: DateLang, s: &str) -> u32 {
         DateLang::Ru => parse_weekday_russian(s),
         DateLang::Ar => parse_weekday_arabic(s),
         DateLang::Br => parse_weekday_breton(s),
+        DateLang::Eo => parse_weekday_esperanto(s),
     }
 }
 
@@ -5168,6 +5173,9 @@ fn localized_day_name(lang: DateLang, weekday: u32) -> &'static str {
             "Gwener",
             "Sadorn",
         ],
+        DateLang::Eo => [
+            "", "dimanĉo", "lundo", "mardo", "merkredo", "jaŭdo", "vendredo", "sabato",
+        ],
     };
     names.get(weekday as usize).copied().unwrap_or("")
 }
@@ -5180,7 +5188,103 @@ fn parse_day_of_month_for(lang: DateLang, s: &str) -> u32 {
     if lang == DateLang::Br {
         return parse_day_of_month_breton(s);
     }
+    if lang == DateLang::Eo {
+        return parse_day_of_month_esperanto(s);
+    }
     0
+}
+
+fn parse_day_of_month_esperanto(s: &str) -> u32 {
+    let mut day = s.to_lowercase();
+    if day.ends_with('n') {
+        day.pop();
+    }
+    let mut n = 0u32;
+    if let Some(rest) = day.strip_prefix("tridek") {
+        n = 30;
+        day = rest.to_string();
+    } else if let Some(rest) = day.strip_prefix("dudek") {
+        n = 20;
+        day = rest.to_string();
+    } else if let Some(rest) = day.strip_prefix("dek") {
+        n = 10;
+        day = rest.to_string();
+    }
+    if n > 0 && day.starts_with('-') {
+        day.remove(0);
+    }
+    match day.as_str() {
+        "unua" => n + 1,
+        "dua" => n + 2,
+        "tria" => n + 3,
+        "kvara" => n + 4,
+        "kvina" => n + 5,
+        "sesa" => n + 6,
+        "sepa" => n + 7,
+        "oka" => n + 8,
+        "naŭa" | "nauxa" | "naua" => n + 9,
+        _ => n,
+    }
+}
+
+fn parse_weekday_esperanto(s: &str) -> u32 {
+    let day = s.to_lowercase();
+    let n = day.as_str();
+    if n.starts_with("dim") {
+        1
+    } else if n.starts_with("lun") {
+        2
+    } else if n.starts_with("mar") {
+        3
+    } else if n.starts_with("mer") {
+        4
+    } else if n.starts_with("ĵaŭ") {
+        5
+    } else if n.starts_with("jau") {
+        5
+    } else if n.starts_with("jhau") {
+        5
+    } else if n.starts_with("jxau") {
+        5
+    } else if n.starts_with("ven") {
+        6
+    } else if n.starts_with("sab") {
+        7
+    } else {
+        0
+    }
+}
+
+fn parse_month_esperanto(s: &str) -> u32 {
+    let mon = s.to_lowercase();
+    let n = mon.as_str();
+    if n.starts_with("jan") {
+        1
+    } else if n.starts_with("feb") {
+        2
+    } else if n.starts_with("mar") {
+        3
+    } else if n.starts_with("apr") {
+        4
+    } else if n.starts_with("maj") {
+        5
+    } else if n.starts_with("jun") {
+        6
+    } else if n.starts_with("jul") {
+        7
+    } else if n.starts_with("aŭg") {
+        8
+    } else if n.starts_with("sep") {
+        9
+    } else if n.starts_with("okt") {
+        10
+    } else if n.starts_with("nov") {
+        11
+    } else if n.starts_with("dec") {
+        12
+    } else {
+        0
+    }
 }
 
 fn parse_day_of_month_breton(s: &str) -> u32 {
@@ -5330,6 +5434,37 @@ fn is_numeric_str(s: &str) -> bool {
 mod tests {
     use super::*;
     use og_xml::compiler::XmlCompiler;
+
+    #[test]
+    fn esperanto_date_filter_parsers_match_java() {
+        assert_eq!(parse_weekday_esperanto("dimanĉon"), 1);
+        assert_eq!(parse_weekday_esperanto("lundon"), 2);
+        assert_eq!(parse_weekday_esperanto("mardon"), 3);
+        assert_eq!(parse_weekday_esperanto("mer"), 4);
+        assert_eq!(parse_weekday_esperanto("ĵaŭdon"), 5);
+        assert_eq!(parse_weekday_esperanto("jauxdon"), 5);
+        assert_eq!(parse_weekday_esperanto("jxaudon"), 5);
+        assert_eq!(parse_weekday_esperanto("vendredon"), 6);
+        assert_eq!(parse_weekday_esperanto("sabaton"), 7);
+        assert_eq!(parse_weekday_esperanto("flaugundo"), 0);
+
+        assert_eq!(parse_month_esperanto("Aŭgusto"), 8);
+        assert_eq!(parse_month_esperanto("Oktobro"), 10);
+        assert_eq!(parse_month_esperanto("jan"), 1);
+        assert_eq!(parse_month_esperanto("decembro"), 12);
+
+        assert_eq!(parse_day_of_month_for(DateLang::Eo, "28-an"), 28);
+        assert_eq!(parse_day_of_month_for(DateLang::Eo, "duan"), 2);
+        assert_eq!(parse_day_of_month_for(DateLang::Eo, "dudek-duan"), 22);
+        assert_eq!(parse_day_of_month_for(DateLang::Eo, "tridek-unuan"), 31);
+        assert_eq!(parse_day_of_month_for(DateLang::Eo, "dek"), 10);
+        assert_eq!(parse_day_of_month_for(DateLang::Eo, "naŭan"), 9);
+        assert_eq!(parse_day_of_month_for(DateLang::Eo, "nauxan"), 9);
+
+        assert_eq!(compute_weekday(2014, 8, 28), 5);
+        assert_eq!(localized_day_name(DateLang::Eo, 5), "jaŭdo");
+        assert_eq!(localized_day_name(DateLang::Eo, 1), "dimanĉo");
+    }
 
     #[test]
     fn java_replacement_disambiguates_group_ref_from_literal() {
