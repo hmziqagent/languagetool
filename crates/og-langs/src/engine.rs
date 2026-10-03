@@ -927,6 +927,15 @@ impl LanguageEngine {
                     vec!["]", ")", "}", "\"", "”"],
                 ),
             ))
+        } else if short == "el" {
+            Some(Arc::new(
+                og_rules::text_level_rules::GenericUnpairedBracketsRule::new()
+                    .with_id("EL_UNPAIRED_BRACKETS")
+                    .with_symbols(
+                        vec!["[", "(", "{", "“", "\"", "«"],
+                        vec!["]", ")", "}", "”", "\"", "»"],
+                    ),
+            ))
         } else if short == "it" || short == "ca" {
             Some(Arc::new(
                 og_rules::text_level_rules::GenericUnpairedBracketsRule::new().with_symbols(
@@ -1033,6 +1042,15 @@ impl LanguageEngine {
                     Arc::new(og_rules::native_rules::UppercaseSentenceStartRule::new())
                         as Arc<dyn Rule>,
                 );
+            }
+            "el" => {
+                engine.add_rule(
+                    Arc::new(og_rules::native_rules::UppercaseSentenceStartRule::new())
+                        as Arc<dyn Rule>,
+                );
+                engine.add_text_level_rules([Arc::new(
+                    og_rules::text_level_rules::LongSentenceRule::new(50),
+                ) as Arc<dyn TextLevelRule>]);
             }
             "ca" => {
                 engine.add_rule(
