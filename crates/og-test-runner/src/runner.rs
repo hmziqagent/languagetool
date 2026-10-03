@@ -148,6 +148,7 @@ pub enum AnyTagger {
     Arabic(og_tagger::arabic_tagger::ArabicTagger),
     Esperanto(og_tagger::EsperantoTagger),
     Spanish(Arc<og_langs::es::tagger::SpanishTagger>),
+    Portuguese(Arc<og_langs::pt::tagger::PortugueseTagger>),
 }
 
 impl AnyTagger {
@@ -159,6 +160,7 @@ impl AnyTagger {
             AnyTagger::Arabic(t) => Tagger::tag(t, tokens),
             AnyTagger::Esperanto(t) => Tagger::tag(t, tokens),
             AnyTagger::Spanish(t) => Tagger::tag(t.as_ref(), tokens),
+            AnyTagger::Portuguese(t) => Tagger::tag(t.as_ref(), tokens),
         }
     }
 }
@@ -200,6 +202,11 @@ impl TestRunner {
                     && let Some(tagger) = og_langs::es::tagger::SpanishTagger::shared_arc()
                 {
                     return AnyTagger::Spanish(tagger);
+                }
+                if code == "pt"
+                    && let Some(tagger) = og_langs::pt::tagger::PortugueseTagger::shared_arc()
+                {
+                    return AnyTagger::Portuguese(tagger);
                 }
                 if let Some(stem) = generic_dict_stem(code)
                     && resource_dir.exists()

@@ -268,6 +268,21 @@ async fn test_v2_languages_lists_only_implementable_languages() {
     );
     assert!(
         json.iter()
+            .any(|l| l["code"] == "es" && l["longCode"] == "es"),
+        "/v2/languages must advertise the implemented Spanish engine"
+    );
+    assert!(
+        json.iter()
+            .any(|l| l["code"] == "pt" && l["longCode"] == "pt-PT"),
+        "/v2/languages must advertise the implemented Portuguese engine"
+    );
+    assert!(
+        json.iter()
+            .any(|l| l["code"] == "pt" && l["longCode"] == "pt-BR"),
+        "/v2/languages must advertise the implemented pt-BR engine"
+    );
+    assert!(
+        json.iter()
             .any(|l| l["code"] == "ru" && l["longCode"] == "ru"),
         "/v2/languages must advertise the implemented Russian engine"
     );

@@ -1004,6 +1004,9 @@ impl LanguageEngine {
                 }
             }
             "pt" => {
+                if let Some(tagger) = crate::pt::tagger::PortugueseTagger::shared_arc() {
+                    engine.tagger = Some(tagger);
+                }
                 engine.add_rule(
                     Arc::new(og_rules::native_rules::UppercaseSentenceStartRule::new())
                         as Arc<dyn Rule>,
@@ -1017,7 +1020,10 @@ impl LanguageEngine {
                     Arc::new(og_rules::text_level_rules::LongParagraphRule::new(220)),
                     Arc::new(og_rules::text_level_rules::WhiteSpaceBeforeParagraphEndRule::new()),
                     Arc::new(og_rules::text_level_rules::EmptyLineRule::new()),
-                    Arc::new(og_rules::text_level_rules::PunctuationMarkAtParagraphEnd2Rule::new()),
+                    Arc::new(
+                        og_rules::text_level_rules::PunctuationMarkAtParagraphEnd2Rule::new()
+                            .with_message("Adicione pontuação final ao fim do parágrafo."),
+                    ),
                 ]);
                 let native = crate::pt::shared_native_rules();
                 engine.add_rules(native.rules);
