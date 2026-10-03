@@ -75,6 +75,8 @@ impl XmlRuleParser {
         let mut pattern_marker_end: Option<usize> = None;
         let mut pattern_marker_elem_start: Option<usize> = None;
         let mut pattern_marker_elem_end: Option<usize> = None;
+        let mut antipattern_marker_elem_start: Option<usize> = None;
+        let mut antipattern_marker_elem_end: Option<usize> = None;
         // Non-self-closing exception state
         let mut in_exception = false;
         let mut current_exception: Option<XmlException> = None;
@@ -342,7 +344,7 @@ impl XmlRuleParser {
                                 if key == "postag"
                                     && let Some(ref mut token) = current_token
                                 {
-                                    token.match_no_postag = Some(val);
+                                    token.match_no_postag = Some(val.clone());
                                 }
                             }
                         }
@@ -377,6 +379,8 @@ impl XmlRuleParser {
                                 if let Some(ref pattern) = current_pattern {
                                     pattern_marker_start = Some(pattern.tokens.len());
                                     pattern_marker_elem_start = Some(pattern.elements.len());
+                                } else if let Some(ref ap) = current_antipattern {
+                                    antipattern_marker_elem_start = Some(ap.elements.len());
                                 }
                             }
                         }
@@ -632,7 +636,7 @@ impl XmlRuleParser {
                                 if key == "postag"
                                     && let Some(ref mut token) = current_token
                                 {
-                                    token.match_no_postag = Some(val);
+                                    token.match_no_postag = Some(val.clone());
                                 }
                             }
                         }
@@ -764,7 +768,9 @@ impl XmlRuleParser {
                         }
                         "antipattern" => {
                             in_antipattern = false;
-                            if let Some(ap) = current_antipattern.take() {
+                            if let Some(mut ap) = current_antipattern.take() {
+                                ap.marker_elem_start = antipattern_marker_elem_start;
+                                ap.marker_elem_end = antipattern_marker_elem_end;
                                 if let Some(rule) = &mut current_rule {
                                     rule.antipatterns.push(ap);
                                 } else if let Some(group) = &mut current_group {
@@ -772,6 +778,8 @@ impl XmlRuleParser {
                                     group.antipatterns.push(ap);
                                 }
                             }
+                            antipattern_marker_elem_start = None;
+                            antipattern_marker_elem_end = None;
                         }
                         "exception" => {
                             in_exception = false;
@@ -893,6 +901,11 @@ impl XmlRuleParser {
                                 if let Some(ref pattern) = current_pattern {
                                     pattern_marker_end = Some(pattern.tokens.len());
                                     pattern_marker_elem_end = Some(pattern.elements.len());
+                                }
+                            } else if current_antipattern.is_some() {
+                                in_pattern_marker = false;
+                                if let Some(ref ap) = current_antipattern {
+                                    antipattern_marker_elem_end = Some(ap.elements.len());
                                 }
                             }
                         }
@@ -1137,6 +1150,51 @@ impl Default for XmlRuleParser {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[test]
+    fn test_parse_antipattern_marker_span() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <category id="GRAMMAR" name="Grammar">
+                <rule id="MARKER_ANTI" name="Marker antipattern">
+                    <antipattern>
+                        <token>foo</token>
+                        <marker>
+                            <token>bar</token>
+                        </marker>
+                        <token>baz</token>
+                    </antipattern>
+                    <pattern>
+                        <marker>
+                            <token>bar</token>
+                        </marker>
+                    </pattern>
+                    <message>Test</message>
+                </rule>
+                <rule id="NO_MARKER_ANTI" name="No marker antipattern">
+                    <antipattern>
+                        <token>foo</token>
+                    </antipattern>
+                    <pattern>
+                        <token>foo</token>
+                    </pattern>
+                    <message>Test</message>
+                </rule>
+            </category>
+        </rules>"#;
+
+        let parser = XmlRuleParser::new();
+        let result = parser.parse(xml).unwrap();
+
+        let marker_anti = &result.rules[0].antipatterns[0];
+        assert_eq!(marker_anti.elements.len(), 3);
+        assert_eq!(marker_anti.marker_elem_start, Some(1));
+        assert_eq!(marker_anti.marker_elem_end, Some(2));
+        let no_marker_anti = &result.rules[1].antipatterns[0];
+        assert_eq!(no_marker_anti.marker_elem_start, None);
+        assert_eq!(no_marker_anti.marker_elem_end, None);
+    }
 
     #[test]
     fn test_parse_simple_rule() {

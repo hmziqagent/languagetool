@@ -1817,18 +1817,38 @@ fn antipattern_matches(
 ) -> bool {
     for start in 0..tokens.len() {
         if let Some(result) = match_pattern(antipattern, tokens, start) {
-            let anti_first = result
+            let mut anti_first = result
                 .matched_positions
                 .first()
                 .copied()
                 .unwrap_or(usize::MAX);
-            let anti_last = result.matched_positions.last().copied().unwrap_or(0);
+            let mut anti_last = result.matched_positions.last().copied().unwrap_or(0);
+            if let (Some(ms), Some(me)) =
+                (antipattern.marker_elem_start, antipattern.marker_elem_end)
+                && let Some((mk_first, mk_last)) = marker_position_span(&result, ms, me)
+            {
+                anti_first = mk_first;
+                anti_last = mk_last;
+            }
             if anti_first <= rule_last && anti_last >= rule_first {
                 return true;
             }
         }
     }
     false
+}
+
+fn marker_position_span(
+    result: &MatchResult,
+    marker_elem_start: usize,
+    marker_elem_end: usize,
+) -> Option<(usize, usize)> {
+    let sum_to = |n: usize| -> usize { result.element_counts.iter().take(n).sum() };
+    let first_idx = sum_to(marker_elem_start);
+    let last_idx = sum_to(marker_elem_end).saturating_sub(1);
+    let first = *result.matched_positions.get(first_idx)?;
+    let last = *result.matched_positions.get(last_idx)?;
+    (first <= last).then_some((first, last))
 }
 
 impl XmlDisambiguator {

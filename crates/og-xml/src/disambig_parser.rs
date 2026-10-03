@@ -110,6 +110,7 @@ impl DisambigXmlParser {
         let mut in_pattern_marker = false;
         let mut pattern_marker_start: Option<usize> = None;
         let mut pattern_marker_elem_start: Option<usize> = None;
+        let mut antipattern_marker_elem_start: Option<usize> = None;
         let mut in_exception = false;
         let mut pending_filter_class: Option<String> = None;
         let mut pending_filter_args: Option<String> = None;
@@ -309,6 +310,11 @@ impl DisambigXmlParser {
                             pattern_marker_start = current_pattern.as_ref().map(|p| p.tokens.len());
                             pattern_marker_elem_start =
                                 current_pattern.as_ref().map(|p| p.elements.len());
+                        }
+                        "marker" if current_antipattern.is_some() => {
+                            in_pattern_marker = true;
+                            antipattern_marker_elem_start =
+                                current_antipattern.as_ref().map(|p| p.elements.len());
                         }
                         "exception" => {
                             let exc = exception_from_attrs(&e);
@@ -709,6 +715,7 @@ impl DisambigXmlParser {
                                 }
                             }
                             in_antipattern = false;
+                            antipattern_marker_elem_start = None;
                         }
                         "unify" => {
                             if let Some(start) = unify_start
@@ -775,6 +782,13 @@ impl DisambigXmlParser {
                                 p.marker_end = Some(p.tokens.len());
                                 p.marker_elem_start = pattern_marker_elem_start;
                                 p.marker_elem_end = Some(p.elements.len());
+                            }
+                        }
+                        "marker" if current_antipattern.is_some() && in_pattern_marker => {
+                            in_pattern_marker = false;
+                            if let Some(ref mut ap) = current_antipattern {
+                                ap.marker_elem_start = antipattern_marker_elem_start;
+                                ap.marker_elem_end = Some(ap.elements.len());
                             }
                         }
                         "exception" if in_exception => {
@@ -951,6 +965,48 @@ impl DisambigXmlParser {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_parse_antipattern_marker_span() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<rules lang="pl">
+    <rule id="ANTI_M" name="Antipattern with marker">
+        <antipattern>
+            <token>foo</token>
+            <marker>
+                <token>bar</token>
+            </marker>
+            <token>baz</token>
+        </antipattern>
+        <pattern>
+            <marker>
+                <token>bar</token>
+            </marker>
+        </pattern>
+        <disambig action="filter" postag="NN"/>
+    </rule>
+    <rule id="ANTI_PLAIN" name="Antipattern without marker">
+        <antipattern>
+            <token>foo</token>
+        </antipattern>
+        <pattern>
+            <token>foo</token>
+        </pattern>
+        <disambig action="filter" postag="NN"/>
+    </rule>
+</rules>"#;
+
+        let parser = DisambigXmlParser::new();
+        let result = parser.parse(xml).unwrap();
+
+        let marker_anti = &result.rules[0].antipatterns[0];
+        assert_eq!(marker_anti.elements.len(), 3);
+        assert_eq!(marker_anti.marker_elem_start, Some(1));
+        assert_eq!(marker_anti.marker_elem_end, Some(2));
+        let plain_anti = &result.rules[1].antipatterns[0];
+        assert_eq!(plain_anti.marker_elem_start, None);
+        assert_eq!(plain_anti.marker_elem_end, None);
+    }
 
     #[test]
     fn test_parse_simple_disambig_rule() {
