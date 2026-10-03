@@ -1360,8 +1360,8 @@ impl XmlRuleParser {
     }
 
     fn expand_internal_entities(xml: &str) -> String {
-        let double_q = regex::Regex::new(r#"<!ENTITY\s+(\w+)\s+"([^"]*)">"#).unwrap();
-        let single_q = regex::Regex::new(r#"<!ENTITY\s+(\w+)\s+'([^']*)'>"#).unwrap();
+        let double_q = regex::Regex::new(r#"<!ENTITY\s+(\w+)\s+"([^"]*)"\s*>"#).unwrap();
+        let single_q = regex::Regex::new(r#"<!ENTITY\s+(\w+)\s+'([^']*)'\s*>"#).unwrap();
         let mut entities: std::collections::HashMap<String, String> =
             std::collections::HashMap::new();
         for cap in double_q.captures_iter(xml) {
@@ -1458,6 +1458,25 @@ impl Default for XmlRuleParser {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_expand_internal_entities_allows_whitespace_before_gt() {
+        let xml = "<!ENTITY nombre_CASA_CADA \"casa|cada\" >\n&nombre_CASA_CADA;";
+        assert_eq!(
+            XmlRuleParser::expand_entities(xml),
+            "<!ENTITY nombre_CASA_CADA \"casa|cada\" >\ncasa|cada"
+        );
+        let xml = "<!ENTITY tight \"a|b\">\n&tight;";
+        assert_eq!(
+            XmlRuleParser::expand_entities(xml),
+            "<!ENTITY tight \"a|b\">\na|b"
+        );
+        let xml = "<!ENTITY single 'x|y' >\n&single;";
+        assert_eq!(
+            XmlRuleParser::expand_entities(xml),
+            "<!ENTITY single 'x|y' >\nx|y"
+        );
+    }
 
     #[test]
     fn test_parse_phrases_and_phraseref_expansion() {
