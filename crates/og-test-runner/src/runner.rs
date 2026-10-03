@@ -540,21 +540,46 @@ impl TestRunner {
 
     pub fn run_rule_set_example_tests(&self, rule_set: &CompiledRuleSet) -> TestRunSummary {
         use rayon::prelude::*;
+        use std::collections::HashMap;
 
         let started = std::time::Instant::now();
         og_rules::pattern_rule::set_test_date_hack(true);
 
-        let pairs: Vec<(&og_xml::compiler::CompiledRule, &og_xml::types::XmlExample)> = rule_set
-            .rules
+        let mut group_index: HashMap<(String, Option<String>), usize> = HashMap::new();
+        let mut groups: Vec<Vec<&og_xml::compiler::CompiledRule>> = Vec::new();
+        for rule in &rule_set.rules {
+            let key = (rule.id.clone(), rule.sub_id.clone());
+            let next = groups.len();
+            let idx = *group_index.entry(key).or_insert(next);
+            if idx == next {
+                groups.push(vec![rule]);
+            } else {
+                groups[idx].push(rule);
+            }
+        }
+
+        let pairs: Vec<(
+            &og_xml::compiler::CompiledRule,
+            &og_xml::types::XmlExample,
+            &Vec<&og_xml::compiler::CompiledRule>,
+        )> = groups
             .iter()
-            .flat_map(|rule| rule.examples.iter().map(move |e| (rule, e)))
+            .flat_map(|group| {
+                group
+                    .first()
+                    .into_iter()
+                    .flat_map(move |rule| rule.examples.iter().map(move |e| (*rule, e, group)))
+            })
             .collect();
 
         let results: Vec<ExampleTestResult> = pairs
             .par_iter()
-            .map(|(rule, example)| {
+            .map(|(rule, example, group)| {
                 let (clean_text, marker_range) = Self::extract_marker(&example.text);
-                let matches = self.match_rule_across_text(rule, &clean_text);
+                let mut matches = Vec::new();
+                for aux in group.iter() {
+                    matches.extend(self.match_rule_across_text(aux, &clean_text));
+                }
                 Self::evaluate_example(rule, example, &clean_text, marker_range, &matches)
             })
             .collect();

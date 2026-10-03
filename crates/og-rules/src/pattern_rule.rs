@@ -47,6 +47,44 @@ fn java_replacement(repl: &str) -> Cow<'_, str> {
     Cow::Owned(out)
 }
 
+fn whole_match_regex(pattern: &str, is_regexp: bool) -> Option<regex::Regex> {
+    let body = if is_regexp {
+        pattern.to_string()
+    } else {
+        regex::escape(pattern)
+    };
+    regex::Regex::new(&format!("^(?:{body})$")).ok()
+}
+
+fn seg_has_lower_dot_lower(seg: &str) -> bool {
+    let b = seg.as_bytes();
+    for i in 1..b.len().saturating_sub(1) {
+        if b[i] == b'.' && b[i - 1].is_ascii_lowercase() && b[i + 1].is_ascii_lowercase() {
+            return true;
+        }
+    }
+    false
+}
+
+fn pl_pos_tag_correction(tag: &str) -> String {
+    if !tag.contains('.') {
+        return tag.to_string();
+    }
+    let mut hit = false;
+    let out: Vec<String> = tag
+        .split(':')
+        .map(|seg| {
+            if seg_has_lower_dot_lower(seg) {
+                hit = true;
+                format!("(.*{}.*)", seg.replace('.', ".*|.*"))
+            } else {
+                seg.to_string()
+            }
+        })
+        .collect();
+    if hit { out.join(":") } else { tag.to_string() }
+}
+
 fn apply_case_conversion(text: &str, conversion: &str) -> String {
     match conversion {
         "startlower" => {
@@ -947,6 +985,49 @@ impl PatternRuleEngine {
         let match_no = pattern_token.match_no?;
         let ref_idx = match_no as usize;
         let entry = matched.get(ref_idx)?;
+        if pattern_token.match_no_setpos {
+            let ref_token = tokens.get(entry.token_idx)?;
+            let pos_pattern = pattern_token.match_no_postag.as_deref()?;
+            let filter = whole_match_regex(pos_pattern, pattern_token.match_no_postag_regexp)?;
+            let mut tags: Vec<&str> = Vec::new();
+            for reading in ref_token.readings() {
+                for tag in reading.pos_tags() {
+                    if !tag.is_empty() && filter.is_match(tag) {
+                        tags.push(tag);
+                    }
+                }
+            }
+            let target = match pattern_token.match_no_postag_replace.as_deref() {
+                Some(replace) => {
+                    let unanchored_body = if pattern_token.match_no_postag_regexp {
+                        pos_pattern.to_string()
+                    } else {
+                        regex::escape(pos_pattern)
+                    };
+                    let unanchored = regex::Regex::new(&unanchored_body).ok()?;
+                    let mut replaced: Vec<String> = if tags.is_empty() {
+                        vec![pos_pattern.to_string()]
+                    } else {
+                        tags.iter().map(|t| t.to_string()).collect()
+                    };
+                    for t in &mut replaced {
+                        *t = unanchored
+                            .replace_all(t, java_replacement(replace).as_ref())
+                            .into_owned();
+                        *t = pl_pos_tag_correction(t);
+                    }
+                    replaced.join("|")
+                }
+                None => tags.last().copied().unwrap_or(pos_pattern).to_string(),
+            };
+            let target_re = whole_match_regex(&target, true)?;
+            let hit = token.readings().iter().any(|r| {
+                r.pos_tags()
+                    .iter()
+                    .any(|t| !t.is_empty() && target_re.is_match(t))
+            });
+            return Some(if pattern_token.negate { !hit } else { hit });
+        }
         if let Some(postag) = pattern_token.match_no_postag.as_deref() {
             let ref_token = tokens.get(entry.token_idx)?;
             let synth = self
@@ -5323,6 +5404,94 @@ mod tests {
     }
 
     #[test]
+    fn phraseref_setpos_match_constrains_by_referenced_reading() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="pl">
+            <phrases>
+                <phrase id="ALT_A">
+                    <token>dummy</token>
+                </phrase>
+                <phrase id="ACC_MN">
+                    <token postag=".*:(sg|pl):.*(acc|nom).*[\.:][mn].*" postag_regexp="yes"></token>
+                    <token postag_regexp="yes"><match no="0" postag=".*:(sg|pl).*[\.:](acc|nom).*" postag_regexp="yes" postag_replace=".*:$1.*[.\:](acc|nom).*" setpos="yes"></match><exception postag=".*inst.*|.*loc.*" postag_regexp="yes"/></token>
+                </phrase>
+                <phrase id="ACC">
+                    <includephrases>
+                        <phraseref idref="ACC_MN"></phraseref>
+                        <phraseref idref="ALT_A"></phraseref>
+                    </includephrases>
+                </phrase>
+            </phrases>
+            <category id="GRAMMAR" name="Grammar">
+                <rule id="SETPOS_RULE" name="setpos">
+                    <pattern>
+                        <token>opatrzyć</token>
+                        <token>w</token>
+                        <phraseref idref="ACC"></phraseref>
+                    </pattern>
+                    <message>m</message>
+                </rule>
+            </category>
+        </rules>"#;
+        let compiler = XmlCompiler::new();
+        let rule_set = compiler.compile_file(xml).unwrap();
+        assert_eq!(rule_set.rules.len(), 2);
+
+        let mut sentence = make_analyzed_sentence("opatrzyć w osobiste godło .");
+        set_reading(&mut sentence, 2, "osobisty", "adj:sg:acc:n1.n2:pos");
+        set_reading(&mut sentence, 3, "godło", "subst:sg:acc:n2");
+        let engine = PatternRuleEngine::new();
+        let matches: Vec<_> = rule_set
+            .rules
+            .iter()
+            .flat_map(|r| engine.match_rule(r, &sentence))
+            .collect();
+        assert_eq!(
+            matches.len(),
+            1,
+            "variant with setpos agreement must fire on acc...acc"
+        );
+
+        let mut mismatch = make_analyzed_sentence("opatrzyć w osobistej godle .");
+        set_reading(&mut mismatch, 2, "osobisty", "adj:sg:loc:n1.n2:pos");
+        set_reading(&mut mismatch, 3, "godło", "subst:sg:loc:n2");
+        let engine = PatternRuleEngine::new();
+        let nomatch: Vec<_> = rule_set
+            .rules
+            .iter()
+            .flat_map(|r| engine.match_rule(r, &mismatch))
+            .collect();
+        assert_eq!(nomatch.len(), 0, "loc readings must not fire the rule");
+    }
+
+    #[test]
+    fn antipattern_marker_immunizes_only_marker_span() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <rule id="M_ANTI" name="marker antipattern">
+                <antipattern>
+                    <token>foo</token>
+                    <marker>
+                        <token>bar</token>
+                    </marker>
+                </antipattern>
+                <pattern>
+                    <marker>
+                        <token>foo</token>
+                    </marker>
+                </pattern>
+                <message>m</message>
+            </rule>
+        </rules>"#;
+        let matches = compile_and_match(xml, "foo bar");
+        assert_eq!(
+            matches.len(),
+            1,
+            "Java immunizes only the marker token 'bar' (startPositionCorrection=1), so 'foo' stays matchable"
+        );
+    }
+
+    #[test]
     fn nl_date_check_filter_rejects_consistent_and_suggests_for_mismatch() {
         set_test_date_hack(true);
         let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -5555,6 +5724,16 @@ mod tests {
         assert_eq!(m.message(), "n’est pas un vendredi mais un jeudi.");
         let reps: Vec<&str> = m.replacements().iter().map(|r| r.value()).collect();
         assert_eq!(reps, vec!["Jeudi 28", "Vendredi 29"]);
+    }
+
+    fn set_reading(sentence: &mut og_core::AnalyzedSentence, i: usize, lemma: &str, tag: &str) {
+        let tokens = sentence.tokens_mut();
+        let atr = &mut tokens[i];
+        let token = atr.token().clone();
+        let reading = og_core::AnalyzedToken::new(token.token(), token.start(), token.end())
+            .with_lemma(lemma.to_string())
+            .with_pos_tags(vec![tag.to_string()]);
+        *atr = og_core::AnalyzedTokenReadings::new(token).with_readings(vec![reading]);
     }
 
     fn make_analyzed_sentence(text: &str) -> og_core::AnalyzedSentence {

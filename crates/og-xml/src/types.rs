@@ -151,6 +151,12 @@ pub struct XmlPatternToken {
     pub match_no: Option<i32>,
     #[serde(default)]
     pub match_no_postag: Option<String>,
+    #[serde(default)]
+    pub match_no_postag_regexp: bool,
+    #[serde(default)]
+    pub match_no_postag_replace: Option<String>,
+    #[serde(default)]
+    pub match_no_setpos: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

@@ -1,6 +1,7 @@
 use crate::types::*;
 use quick_xml::Reader;
 use quick_xml::events::Event;
+use std::collections::HashMap;
 
 #[derive(Debug, thiserror::Error)]
 pub enum XmlParseError {
@@ -10,6 +11,26 @@ pub enum XmlParseError {
     InvalidRule(String),
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
+}
+
+struct PatternRefUse {
+    idref: String,
+    split_tok: usize,
+    split_elem: usize,
+}
+
+fn renumber_phrase_refs(tokens: &mut [XmlPatternToken], phrase_ranges: &[(usize, usize)]) {
+    for (idx, token) in tokens.iter_mut().enumerate() {
+        if idx == 0 || token.match_no.is_none() {
+            continue;
+        }
+        let in_phrase = phrase_ranges
+            .iter()
+            .any(|&(start, len)| idx >= start && idx < start + len);
+        if in_phrase {
+            token.match_no = Some(token.match_no.unwrap_or(0) + idx as i32 - 1);
+        }
+    }
 }
 
 pub struct XmlRuleParser;
@@ -77,6 +98,15 @@ impl XmlRuleParser {
         let mut pattern_marker_elem_end: Option<usize> = None;
         let mut antipattern_marker_elem_start: Option<usize> = None;
         let mut antipattern_marker_elem_end: Option<usize> = None;
+        let mut in_phrases = false;
+        let mut phrase_id = String::new();
+        let mut phrase_run_tokens: Vec<XmlPatternToken> = Vec::new();
+        let mut phrase_run_elements: Vec<XmlPatternElement> = Vec::new();
+        let mut phrase_variants: Vec<(Vec<XmlPatternToken>, Vec<XmlPatternElement>)> = Vec::new();
+        let mut phrase_after_ref = false;
+        let mut phrase_map: HashMap<String, Vec<(Vec<XmlPatternToken>, Vec<XmlPatternElement>)>> =
+            HashMap::new();
+        let mut pattern_ref_uses: Vec<PatternRefUse> = Vec::new();
         // Non-self-closing exception state
         let mut in_exception = false;
         let mut current_exception: Option<XmlException> = None;
@@ -156,6 +186,7 @@ impl XmlRuleParser {
                                 rule.category = cat.clone();
                             }
                             current_rule = Some(rule);
+                            pattern_ref_uses.clear();
                         }
                         "pattern" => {
                             let mut pattern = XmlPattern::default();
@@ -201,6 +232,60 @@ impl XmlRuleParser {
                             }
                             current_antipattern = Some(ap);
                             antipattern_text.clear();
+                        }
+                        "phrases" => {
+                            in_phrases = true;
+                        }
+                        "phrase" if in_phrases => {
+                            phrase_id.clear();
+                            for attr in e.attributes().flatten() {
+                                if attr.key.as_ref() == b"id" {
+                                    phrase_id = crate::decode_attr_value(&attr.value);
+                                }
+                            }
+                            phrase_run_tokens.clear();
+                            phrase_run_elements.clear();
+                            phrase_variants.clear();
+                            phrase_after_ref = false;
+                        }
+                        "phraseref" => {
+                            let mut idref = String::new();
+                            for attr in e.attributes().flatten() {
+                                if attr.key.as_ref() == b"idref" {
+                                    idref = crate::decode_attr_value(&attr.value);
+                                }
+                            }
+                            if in_phrases {
+                                if let Some(alts) = phrase_map.get(&idref) {
+                                    for alt in alts {
+                                        if phrase_run_tokens.is_empty() {
+                                            phrase_variants.push((alt.0.clone(), alt.1.clone()));
+                                        } else {
+                                            let mut tokens = phrase_run_tokens.clone();
+                                            tokens.extend(alt.0.iter().cloned());
+                                            let mut elements = phrase_run_elements.clone();
+                                            elements.extend(alt.1.iter().cloned());
+                                            phrase_variants.push((tokens, elements));
+                                        }
+                                    }
+                                    phrase_after_ref = true;
+                                }
+                            } else if let Some(alts) = phrase_map.get(&idref)
+                                && let (ref t0, ref e0) = alts[0]
+                            {
+                                if let Some(ref mut pattern) = current_pattern {
+                                    pattern_ref_uses.push(PatternRefUse {
+                                        idref: idref.clone(),
+                                        split_tok: pattern.tokens.len(),
+                                        split_elem: pattern.elements.len(),
+                                    });
+                                    pattern.tokens.extend(t0.iter().cloned());
+                                    pattern.elements.extend(e0.iter().cloned());
+                                } else if let Some(ref mut ap) = current_antipattern {
+                                    ap.tokens.extend(t0.iter().cloned());
+                                    ap.elements.extend(e0.iter().cloned());
+                                }
+                            }
                         }
                         "exception" => {
                             // Non-self-closing exception with text content
@@ -275,6 +360,11 @@ impl XmlRuleParser {
                                 }
                             }
                             current_text.clear();
+                            if in_phrases && phrase_after_ref {
+                                phrase_run_tokens.clear();
+                                phrase_run_elements.clear();
+                                phrase_after_ref = false;
+                            }
                             current_token = Some(token);
                         }
                         "message" => {
@@ -345,6 +435,21 @@ impl XmlRuleParser {
                                     && let Some(ref mut token) = current_token
                                 {
                                     token.match_no_postag = Some(val.clone());
+                                }
+                                if key == "postag_regexp"
+                                    && let Some(ref mut token) = current_token
+                                {
+                                    token.match_no_postag_regexp = val == "yes";
+                                }
+                                if key == "postag_replace"
+                                    && let Some(ref mut token) = current_token
+                                {
+                                    token.match_no_postag_replace = Some(val.clone());
+                                }
+                                if key == "setpos"
+                                    && let Some(ref mut token) = current_token
+                                {
+                                    token.match_no_setpos = val == "yes";
                                 }
                             }
                         }
@@ -482,6 +587,45 @@ impl XmlRuleParser {
                                 }
                             }
                         }
+                        "phraseref" => {
+                            let mut idref = String::new();
+                            for attr in e.attributes().flatten() {
+                                if attr.key.as_ref() == b"idref" {
+                                    idref = crate::decode_attr_value(&attr.value);
+                                }
+                            }
+                            if in_phrases {
+                                if let Some(alts) = phrase_map.get(&idref) {
+                                    for alt in alts {
+                                        if phrase_run_tokens.is_empty() {
+                                            phrase_variants.push((alt.0.clone(), alt.1.clone()));
+                                        } else {
+                                            let mut tokens = phrase_run_tokens.clone();
+                                            tokens.extend(alt.0.iter().cloned());
+                                            let mut elements = phrase_run_elements.clone();
+                                            elements.extend(alt.1.iter().cloned());
+                                            phrase_variants.push((tokens, elements));
+                                        }
+                                    }
+                                    phrase_after_ref = true;
+                                }
+                            } else if let Some(alts) = phrase_map.get(&idref)
+                                && let (ref t0, ref e0) = alts[0]
+                            {
+                                if let Some(ref mut pattern) = current_pattern {
+                                    pattern_ref_uses.push(PatternRefUse {
+                                        idref: idref.clone(),
+                                        split_tok: pattern.tokens.len(),
+                                        split_elem: pattern.elements.len(),
+                                    });
+                                    pattern.tokens.extend(t0.iter().cloned());
+                                    pattern.elements.extend(e0.iter().cloned());
+                                } else if let Some(ref mut ap) = current_antipattern {
+                                    ap.tokens.extend(t0.iter().cloned());
+                                    ap.elements.extend(e0.iter().cloned());
+                                }
+                            }
+                        }
                         "token" if current_unification.is_some() => {
                             let mut token = XmlPatternToken::default();
                             for attr in e.attributes().flatten() {
@@ -524,6 +668,11 @@ impl XmlRuleParser {
                                     _ => {}
                                 }
                             }
+                            if in_phrases && phrase_after_ref {
+                                phrase_run_tokens.clear();
+                                phrase_run_elements.clear();
+                                phrase_after_ref = false;
+                            }
                             if in_or_group {
                                 if let Some(ref mut or_group) = current_or_group {
                                     if in_unify_ignore {
@@ -554,6 +703,9 @@ impl XmlRuleParser {
                                     ap.elements.push(XmlPatternElement::Token(token));
                                 }
                                 antipattern_text.clear();
+                            } else if in_phrases {
+                                phrase_run_tokens.push(token.clone());
+                                phrase_run_elements.push(XmlPatternElement::Token(token));
                             } else if let Some(pattern) = &mut current_pattern {
                                 let trimmed = current_text.trim();
                                 if !trimmed.is_empty() {
@@ -637,6 +789,21 @@ impl XmlRuleParser {
                                     && let Some(ref mut token) = current_token
                                 {
                                     token.match_no_postag = Some(val.clone());
+                                }
+                                if key == "postag_regexp"
+                                    && let Some(ref mut token) = current_token
+                                {
+                                    token.match_no_postag_regexp = val == "yes";
+                                }
+                                if key == "postag_replace"
+                                    && let Some(ref mut token) = current_token
+                                {
+                                    token.match_no_postag_replace = Some(val.clone());
+                                }
+                                if key == "setpos"
+                                    && let Some(ref mut token) = current_token
+                                {
+                                    token.match_no_setpos = val == "yes";
                                 }
                             }
                         }
@@ -740,13 +907,134 @@ impl XmlRuleParser {
                                     rule.rule_regexp = Some(rule_regexp);
                                 }
                                 rule_regexp_text.clear();
+                                let mut variants = Vec::new();
+                                if !pattern_ref_uses.is_empty() {
+                                    let mut base_ranges: Vec<(usize, usize)> = Vec::new();
+                                    for use_ in &pattern_ref_uses {
+                                        if let Some(alts) = phrase_map.get(&use_.idref)
+                                            && let Some((alt0_tokens, _)) = alts.first()
+                                        {
+                                            base_ranges.push((use_.split_tok, alt0_tokens.len()));
+                                        }
+                                    }
+                                    renumber_phrase_refs(&mut rule.pattern.tokens, &base_ranges);
+                                    for use_ in &pattern_ref_uses {
+                                        let Some(alts) = phrase_map.get(&use_.idref) else {
+                                            continue;
+                                        };
+                                        let Some((alt0_tokens, alt0_elements)) = alts.first()
+                                        else {
+                                            continue;
+                                        };
+                                        for (alt_tokens, alt_elements) in alts.iter().skip(1) {
+                                            let mut tokens =
+                                                rule.pattern.tokens[..use_.split_tok].to_vec();
+                                            tokens.extend(alt_tokens.iter().cloned());
+                                            tokens.extend_from_slice(
+                                                &rule.pattern.tokens
+                                                    [use_.split_tok + alt0_tokens.len()..],
+                                            );
+                                            let mut elements =
+                                                rule.pattern.elements[..use_.split_elem].to_vec();
+                                            elements.extend(alt_elements.iter().cloned());
+                                            elements.extend_from_slice(
+                                                &rule.pattern.elements
+                                                    [use_.split_elem + alt0_elements.len()..],
+                                            );
+                                            let tok_delta = alt_tokens.len() as isize
+                                                - alt0_tokens.len() as isize;
+                                            let elem_delta = alt_elements.len() as isize
+                                                - alt0_elements.len() as isize;
+                                            let shift =
+                                                |idx: usize, split: usize, delta: isize| -> usize {
+                                                    if idx > split {
+                                                        (idx as isize + delta).max(0) as usize
+                                                    } else {
+                                                        idx
+                                                    }
+                                                };
+                                            let mut cloned = rule.clone();
+                                            cloned.pattern.marker_start = cloned
+                                                .pattern
+                                                .marker_start
+                                                .map(|i| shift(i, use_.split_tok, tok_delta));
+                                            cloned.pattern.marker_end = cloned
+                                                .pattern
+                                                .marker_end
+                                                .map(|i| shift(i, use_.split_tok, tok_delta));
+                                            cloned.pattern.marker_elem_start = cloned
+                                                .pattern
+                                                .marker_elem_start
+                                                .map(|i| shift(i, use_.split_elem, elem_delta));
+                                            cloned.pattern.marker_elem_end = cloned
+                                                .pattern
+                                                .marker_elem_end
+                                                .map(|i| shift(i, use_.split_elem, elem_delta));
+                                            for uni in &mut cloned.pattern.unify_groups {
+                                                uni.token_start = shift(
+                                                    uni.token_start,
+                                                    use_.split_tok,
+                                                    tok_delta,
+                                                );
+                                                uni.token_end =
+                                                    shift(uni.token_end, use_.split_tok, tok_delta);
+                                                uni.elem_start = shift(
+                                                    uni.elem_start,
+                                                    use_.split_elem,
+                                                    elem_delta,
+                                                );
+                                                uni.elem_end = shift(
+                                                    uni.elem_end,
+                                                    use_.split_elem,
+                                                    elem_delta,
+                                                );
+                                            }
+                                            renumber_phrase_refs(
+                                                &mut tokens,
+                                                &[(use_.split_tok, alt_tokens.len())],
+                                            );
+                                            cloned.pattern.tokens = tokens;
+                                            cloned.pattern.elements = elements;
+                                            variants.push(cloned);
+                                        }
+                                    }
+                                }
+                                pattern_ref_uses.clear();
                                 if let Some(group) = &mut current_group {
                                     group.rules.push(rule);
+                                    group.rules.append(&mut variants);
                                 } else {
                                     file.rules.push(rule);
+                                    file.rules.append(&mut variants);
                                 }
                             }
                         }
+                        "phrases" => {
+                            in_phrases = false;
+                        }
+                        "phrase" => {
+                            if in_phrases {
+                                let mut alts = std::mem::take(&mut phrase_variants);
+                                if alts.is_empty() {
+                                    alts.push((
+                                        std::mem::take(&mut phrase_run_tokens),
+                                        std::mem::take(&mut phrase_run_elements),
+                                    ));
+                                } else {
+                                    for alt in &mut alts {
+                                        alt.0.extend(phrase_run_tokens.iter().cloned());
+                                        alt.1.extend(phrase_run_elements.iter().cloned());
+                                    }
+                                    phrase_run_tokens.clear();
+                                    phrase_run_elements.clear();
+                                }
+                                if !phrase_id.is_empty() {
+                                    phrase_map.insert(phrase_id.clone(), alts);
+                                }
+                                phrase_after_ref = false;
+                            }
+                        }
+                        "phraseref" => {}
                         "pattern" => {
                             if let Some(mut pattern) = current_pattern.take() {
                                 // Set marker bounds if a marker was found inside the pattern
@@ -827,6 +1115,9 @@ impl XmlRuleParser {
                                         ap.tokens.push(token.clone());
                                         ap.elements.push(XmlPatternElement::Token(token));
                                     }
+                                } else if in_phrases {
+                                    phrase_run_tokens.push(token.clone());
+                                    phrase_run_elements.push(XmlPatternElement::Token(token));
                                 } else if let Some(pattern) = &mut current_pattern {
                                     if in_unify_ignore {
                                         token.unify_neutral = true;
@@ -1152,6 +1443,98 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_parse_phrases_and_phraseref_expansion() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="pl">
+            <phrases>
+                <phrase id="ALT1">
+                    <token>foo</token>
+                </phrase>
+                <phrase id="ALT2">
+                    <token>bar</token>
+                    <token>baz</token>
+                </phrase>
+                <phrase id="COMBINED">
+                    <phraseref idref="ALT1"></phraseref>
+                    <phraseref idref="ALT2"/>
+                </phrase>
+            </phrases>
+            <category id="GRAMMAR" name="Grammar">
+                <rule id="REF_RULE" name="Ref rule">
+                    <pattern>
+                        <token>start</token>
+                        <phraseref idref="COMBINED"></phraseref>
+                        <token>end</token>
+                    </pattern>
+                    <message>Test</message>
+                </rule>
+            </category>
+        </rules>"#;
+
+        let parser = XmlRuleParser::new();
+        let result = parser.parse(xml).unwrap();
+
+        assert_eq!(result.rules.len(), 2);
+        let texts: Vec<Vec<Option<&str>>> = result
+            .rules
+            .iter()
+            .map(|r| r.pattern.tokens.iter().map(|t| t.text.as_deref()).collect())
+            .collect();
+        assert_eq!(
+            texts,
+            vec![
+                vec![Some("start"), Some("foo"), Some("end")],
+                vec![Some("start"), Some("bar"), Some("baz"), Some("end")],
+            ]
+        );
+        assert_eq!(result.rules[0].id, "REF_RULE");
+        assert_eq!(result.rules[1].id, "REF_RULE");
+    }
+
+    #[test]
+    fn test_parse_phases_marker_bounds_survive_ref_expansion() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="pl">
+            <phrases>
+                <phrase id="ONE">
+                    <token regexp="yes">a|b</token>
+                </phrase>
+                <phrase id="TWO">
+                    <token>c</token>
+                    <token>d</token>
+                </phrase>
+                <phrase id="EITHER">
+                    <phraseref idref="ONE"></phraseref>
+                    <phraseref idref="TWO"></phraseref>
+                </phrase>
+            </phrases>
+            <category id="GRAMMAR" name="Grammar">
+                <rule id="MARKER_REF" name="Marker ref">
+                    <pattern>
+                        <token>start</token>
+                        <marker>
+                            <phraseref idref="EITHER"></phraseref>
+                        </marker>
+                    </pattern>
+                    <message>Test</message>
+                </rule>
+            </category>
+        </rules>"#;
+
+        let parser = XmlRuleParser::new();
+        let result = parser.parse(xml).unwrap();
+
+        assert_eq!(result.rules.len(), 2);
+        let first = &result.rules[0];
+        assert_eq!(first.pattern.tokens.len(), 2);
+        assert_eq!(first.pattern.marker_elem_start, Some(1));
+        assert_eq!(first.pattern.marker_elem_end, Some(2));
+        let second = &result.rules[1];
+        assert_eq!(second.pattern.tokens.len(), 3);
+        assert_eq!(second.pattern.marker_elem_start, Some(1));
+        assert_eq!(second.pattern.marker_elem_end, Some(3));
+    }
+
     #[test]
     fn test_parse_antipattern_marker_span() {
         let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
