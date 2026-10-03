@@ -13,6 +13,7 @@ pub struct DefaultWordTokenizer {
     english_word_chars: bool,
     hyphens: HyphenMode,
     dutch: bool,
+    esperanto: bool,
     en_word_tagged: Option<Arc<dyn Fn(&str) -> bool + Send + Sync>>,
 }
 
@@ -23,6 +24,7 @@ impl DefaultWordTokenizer {
             english_word_chars: true,
             hyphens: HyphenMode::InnerOnly,
             dutch: false,
+            esperanto: false,
             en_word_tagged: None,
         }
     }
@@ -33,6 +35,7 @@ impl DefaultWordTokenizer {
             english_word_chars: true,
             hyphens: HyphenMode::InnerOnly,
             dutch: false,
+            esperanto: false,
             en_word_tagged: Some(en_word_tagged),
         }
     }
@@ -43,6 +46,7 @@ impl DefaultWordTokenizer {
             english_word_chars: false,
             hyphens: HyphenMode::InRuns,
             dutch: false,
+            esperanto: false,
             en_word_tagged: None,
         }
     }
@@ -53,6 +57,7 @@ impl DefaultWordTokenizer {
             english_word_chars: false,
             hyphens: HyphenMode::Delimiter,
             dutch: false,
+            esperanto: false,
             en_word_tagged: None,
         }
     }
@@ -63,6 +68,18 @@ impl DefaultWordTokenizer {
             english_word_chars: false,
             hyphens: HyphenMode::InRuns,
             dutch: true,
+            esperanto: false,
+            en_word_tagged: None,
+        }
+    }
+
+    pub fn new_esperanto() -> Self {
+        Self {
+            english_contractions: false,
+            english_word_chars: false,
+            hyphens: HyphenMode::InRuns,
+            dutch: false,
+            esperanto: true,
             en_word_tagged: None,
         }
     }
@@ -70,6 +87,9 @@ impl DefaultWordTokenizer {
     fn is_word_char(&self, c: char) -> bool {
         if self.dutch {
             return !is_nl_delimiter(c);
+        }
+        if self.esperanto {
+            return !is_base_delimiter(c);
         }
         c.is_alphanumeric()
             || c == '_'
@@ -433,7 +453,7 @@ fn is_dutch_quote(c: char) -> bool {
     matches!(c, '\'' | '`' | '\u{2019}' | '\u{2018}' | '\u{00B4}')
 }
 
-fn is_nl_delimiter(c: char) -> bool {
+fn is_base_delimiter(c: char) -> bool {
     matches!(c,
         '\u{0020}' | '\u{00A0}' | '\u{115F}' | '\u{1160}' | '\u{1680}'
         | '\u{2000}'..='\u{200F}'
@@ -448,6 +468,7 @@ fn is_nl_delimiter(c: char) -> bool {
         | '\u{203A}' | '\u{2039}' | '\u{2026}' | '\u{00BF}' | '\u{00A1}' | '\u{203C}'
         | '\u{2047}' | '\u{2048}' | '\u{2049}' | '\u{2122}' | '\u{00AE}' | '\u{203D}'
         | '\u{00B6}' | '\u{FFEB}' | '\u{2E2E}'
+        | '\'' | '`' | '\u{2019}' | '\u{2018}' | '\u{00B4}'
         | '\u{2012}'..='\u{2015}'
         | '\u{2500}' | '\u{3161}' | '\u{2713}'
         | '\u{25CF}' | '\u{25CB}' | '\u{25C6}' | '\u{27A2}' | '\u{25A0}' | '\u{25A1}'
@@ -458,8 +479,97 @@ fn is_nl_delimiter(c: char) -> bool {
         | '\u{00B9}' | '\u{00B2}' | '\u{00B3}' | '\u{2070}' | '\u{2071}'
         | '\u{2074}'..='\u{2079}'
         | '\t' | '\n' | '\r' | '\u{000B}'
-        | '_'
     )
+}
+
+fn is_nl_delimiter(c: char) -> bool {
+    (is_base_delimiter(c) && !is_dutch_quote(c)) || c == '_'
+}
+
+fn is_eo_letter(c: char) -> bool {
+    c.is_ascii_alphabetic()
+        || matches!(
+            c,
+            'ĉ' | 'ĝ' | 'ĥ' | 'ĵ' | 'ŝ' | 'ŭ' | 'Ĉ' | 'Ĝ' | 'Ĥ' | 'Ĵ' | 'Ŝ' | 'Ŭ'
+        )
+}
+
+const EO_APOS1: &str = "\u{1}\u{1}EO@APOS1\u{1}\u{1}";
+const EO_APOS2: &str = "\u{1}\u{1}EO@APOS2\u{1}\u{1}";
+
+fn eo_prepare_apostrophes(text: &str) -> (String, Vec<usize>) {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    let mut map: Vec<usize> = Vec::with_capacity(text.len() + 16);
+    let mut orig = 0usize;
+    let mut push_mapped =
+        |out: &mut String, map: &mut Vec<usize>, piece: &str, orig: &mut usize| {
+            for _ in 0..piece.len() {
+                map.push(*orig);
+            }
+            out.push_str(piece);
+            *orig += piece.len();
+        };
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if c != '\'' {
+            let mut buf = [0u8; 4];
+            push_mapped(&mut out, &mut map, c.encode_utf8(&mut buf), &mut orig);
+            i += 1;
+            continue;
+        }
+        let mut run_start = i;
+        while run_start > 0 && is_eo_letter(chars[run_start - 1]) {
+            run_start -= 1;
+        }
+        let run_len = i - run_start;
+        let before = if run_start > 0 {
+            Some(chars[run_start - 1])
+        } else {
+            None
+        };
+        let boundary_ok =
+            before.is_none_or(|b| !(b.is_ascii_alphanumeric() || b == '_') && b != '\'');
+        if run_len == 0 || !boundary_ok {
+            push_mapped(&mut out, &mut map, "'", &mut orig);
+            i += 1;
+            continue;
+        }
+        let next = chars.get(i + 1).copied();
+        let piece: &str = match next {
+            Some(n) if is_eo_letter(n) || n == '-' => EO_APOS2,
+            _ => EO_APOS1,
+        };
+        for (idx, _) in piece.bytes().enumerate() {
+            map.push(orig + usize::from(idx > 0));
+        }
+        out.push_str(piece);
+        orig += 1;
+        if matches!(next, Some(n) if is_eo_letter(n) || n == '-') {
+            out.push(' ');
+            map.push(orig);
+        }
+        i += 1;
+    }
+    map.push(orig);
+    (out, map)
+}
+
+fn eo_restore_apostrophes(tokens: Vec<Token>, map: &[usize]) -> Vec<Token> {
+    let mut out = Vec::with_capacity(tokens.len());
+    let mut iter = tokens.into_iter();
+    while let Some(token) = iter.next() {
+        let text = token.text();
+        if text.ends_with(EO_APOS2) {
+            iter.next();
+        }
+        let restored = text.replace(EO_APOS1, "'").replace(EO_APOS2, "'");
+        let start = map[token.start().min(map.len() - 1)];
+        let end = map[token.end().min(map.len() - 1)];
+        out.push(Token::new(restored, start, end));
+    }
+    out
 }
 
 fn dutch_quote_pieces(text: &str) -> Vec<(usize, usize)> {
@@ -635,6 +745,19 @@ impl WordTokenizer for DefaultWordTokenizer {
             return Vec::new();
         }
 
+        if self.esperanto {
+            let (prepared, map) = eo_prepare_apostrophes(text);
+            let raw = self.tokenize_base(&prepared);
+            return eo_restore_apostrophes(raw, &map);
+        }
+
+        let tokens = self.tokenize_base(text);
+        self.split_contractions(self.join_variation_selectors(tokens))
+    }
+}
+
+impl DefaultWordTokenizer {
+    fn tokenize_base(&self, text: &str) -> Vec<Token> {
         let mut tokens = Vec::new();
         let chars: Vec<char> = text.chars().collect();
         let mut i = 0;
@@ -695,7 +818,7 @@ impl WordTokenizer for DefaultWordTokenizer {
             }
         }
 
-        self.split_contractions(self.join_variation_selectors(tokens))
+        tokens
     }
 }
 
@@ -1604,6 +1727,34 @@ mod tests {
         );
         assert_eq!(token_texts(&tz, "'x'"), vec!["'", "x", "'"]);
         assert_eq!(token_texts(&tz, "`x`"), vec!["`", "x", "`"]);
+    }
+
+    #[test]
+    fn test_esperanto_tokenizer_matches_java() {
+        let tz = DefaultWordTokenizer::new_esperanto();
+        assert_eq!(token_texts(&tz, "L'espero."), vec!["L'", "espero", "."]);
+        assert_eq!(
+            token_texts(&tz, "Dank'al vi, mi sukcesis."),
+            vec![
+                "Dank'", "al", " ", "vi", ",", " ", "mi", " ", "sukcesis", "."
+            ]
+        );
+        assert_eq!(
+            token_texts(&tz, "Neni' okazis."),
+            vec!["Neni'", " ", "okazis", "."]
+        );
+        assert_eq!(
+            token_texts(&tz, "Mi havas un' fraton."),
+            vec!["Mi", " ", "havas", " ", "un'", " ", "fraton", "."]
+        );
+        assert_eq!(token_texts(&tz, "'citita'"), vec!["'", "citita", "'"]);
+        let tokens = tz.tokenize("Dank'al vi");
+        assert_offsets_valid(&tokens);
+        assert_reconstruction(&tokens, "Dank'al vi");
+        assert_eq!((tokens[0].start(), tokens[0].end()), (0, 5));
+        assert_eq!((tokens[1].start(), tokens[1].end()), (5, 7));
+        assert_eq!((tokens[2].start(), tokens[2].end()), (7, 8));
+        assert_eq!((tokens[3].start(), tokens[3].end()), (8, 10));
     }
 
     #[test]

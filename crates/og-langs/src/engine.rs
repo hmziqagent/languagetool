@@ -740,6 +740,7 @@ impl LanguageEngine {
             "ro" => ("romanian", "MORFOLOGIK_RULE_RO_RO"),
             "sk" => ("slovak", "MORFOLOGIK_RULE_SK_SK"),
             "sv" => ("swedish", "HUNSPELL_RULE"),
+            "eo" => ("", "HUNSPELL_RULE_EO"),
             _ => return None,
         };
 
@@ -751,6 +752,11 @@ impl LanguageEngine {
         let resource_dir = lt_root.join(format!(
             "{short}/src/main/resources/org/languagetool/resource/{short}"
         ));
+        if short == "eo"
+            && let Some(tagger) = og_tagger::EsperantoTagger::from_resource_dir(&resource_dir)
+        {
+            engine.tagger = Some(Arc::new(tagger));
+        }
         let tagger = if short == "fr" {
             og_tagger::GenericTagger::french(&resource_dir)
         } else if short == "ru" {
@@ -1494,6 +1500,7 @@ enum WordTokenizerBridge {
     Arabic,
     Dutch,
     CrimeanTatar,
+    Esperanto,
 }
 
 impl WordTokenizerBridge {
@@ -1512,6 +1519,9 @@ impl WordTokenizerBridge {
         }
         if code == "crh" {
             return Self::CrimeanTatar;
+        }
+        if code == "eo" {
+            return Self::Esperanto;
         }
         if code != "fr" {
             return Self::Default(false);
@@ -1567,6 +1577,7 @@ impl WordTokenizer for WordTokenizerBridge {
                 let tz = og_tokenizer::DefaultWordTokenizer::new_generic();
                 tz.split_trailing_hyphens(tz.tokenize(text))
             }
+            Self::Esperanto => og_tokenizer::DefaultWordTokenizer::new_esperanto().tokenize(text),
         };
         tokens
             .into_iter()

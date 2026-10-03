@@ -3,6 +3,7 @@ pub mod arabic_tagger;
 pub mod chunker;
 pub mod disambiguator;
 pub mod english_tagger;
+pub mod esperanto_tagger;
 pub mod german_chunker;
 pub mod german_tagger;
 pub mod jwordsplitter;
@@ -16,6 +17,7 @@ pub mod xml_disambiguator;
 
 pub use disambiguator::*;
 pub use english_tagger::EnglishTagger;
+pub use esperanto_tagger::EsperantoTagger;
 pub use german_chunker::GermanChunker;
 pub use german_tagger::GermanTagger;
 pub mod generic_tagger;

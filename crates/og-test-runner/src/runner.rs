@@ -36,6 +36,7 @@ enum TestWordTokenizer {
     Arabic,
     Dutch,
     CrimeanTatar,
+    Esperanto,
 }
 
 impl WordTokenizer for TestWordTokenizer {
@@ -72,6 +73,9 @@ impl WordTokenizer for TestWordTokenizer {
             TestWordTokenizer::CrimeanTatar => {
                 let tz = og_tokenizer::DefaultWordTokenizer::new_generic();
                 tz.split_trailing_hyphens(tz.tokenize(text))
+            }
+            TestWordTokenizer::Esperanto => {
+                og_tokenizer::DefaultWordTokenizer::new_esperanto().tokenize(text)
             }
         };
         tokens
@@ -135,6 +139,7 @@ pub enum AnyTagger {
     German(og_tagger::GermanTagger),
     Generic(og_tagger::GenericTagger),
     Arabic(og_tagger::arabic_tagger::ArabicTagger),
+    Esperanto(og_tagger::EsperantoTagger),
 }
 
 impl AnyTagger {
@@ -144,6 +149,7 @@ impl AnyTagger {
             AnyTagger::German(t) => Tagger::tag(t, tokens),
             AnyTagger::Generic(t) => Tagger::tag(t, tokens),
             AnyTagger::Arabic(t) => Tagger::tag(t, tokens),
+            AnyTagger::Esperanto(t) => Tagger::tag(t, tokens),
         }
     }
 }
@@ -174,6 +180,13 @@ impl TestRunner {
 
         let (tagger, disambiguator, pattern_engine) = std::thread::scope(|scope| {
             let tagger_h = scope.spawn(|| {
+                if code == "eo"
+                    && resource_dir.exists()
+                    && let Some(tagger) =
+                        og_tagger::EsperantoTagger::from_resource_dir(&resource_dir)
+                {
+                    return AnyTagger::Esperanto(tagger);
+                }
                 if let Some(stem) = generic_dict_stem(code)
                     && resource_dir.exists()
                 {
@@ -374,6 +387,7 @@ impl TestRunner {
             None if self.language == "ar" => TestWordTokenizer::Arabic,
             None if self.language == "nl" => TestWordTokenizer::Dutch,
             None if self.language == "crh" => TestWordTokenizer::CrimeanTatar,
+            None if self.language == "eo" => TestWordTokenizer::Esperanto,
             None => TestWordTokenizer::Default(self.language == "en"),
         };
         let mut sentence = AnalyzedSentence::new(text, 0, text.len());
@@ -2197,6 +2211,12 @@ fn test_real_swedish_grammar_examples() {
 #[ignore]
 fn test_real_slovak_grammar_examples() {
     run_generic_example_suite("sk");
+}
+
+#[test]
+#[ignore]
+fn test_real_esperanto_grammar_examples() {
+    run_generic_example_suite("eo");
 }
 
 #[cfg(test)]

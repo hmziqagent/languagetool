@@ -1138,61 +1138,16 @@ impl PatternRuleEngine {
                     matched,
                 ),
             og_xml::compiler::CompiledPatternElement::OrGroup(alternatives) => {
-                let group_skip = alternatives.first().map(|a| a.skip).unwrap_or(0);
-                let max_group_skip = if group_skip < 0 {
-                    tokens.len()
-                } else {
-                    group_skip as usize
-                };
                 for alt in alternatives {
-                    let matches = if let Some(br) =
-                        self.backreference_matches(alt, tokens[token_idx], matched, tokens)
-                    {
-                        br
-                    } else {
-                        self.token_matches(alt, tokens[token_idx], token_idx, tokens)
-                    };
-                    if matches {
-                        let mut new_mt = matched.to_vec();
-                        new_mt.push(MatchedTraceEntry {
-                            text: tokens[token_idx].token().token().to_string(),
-                            token_idx,
-                        });
-                        for gap in 0..=max_group_skip {
-                            let after = token_idx + 1 + gap;
-                            if after > tokens.len() {
-                                break;
-                            }
-                            if !self.next_element_commits_at(
-                                elements,
-                                tokens,
-                                after,
-                                element_idx + 1,
-                                &new_mt,
-                            ) {
-                                continue;
-                            }
-                            if let Some(mut result) = self.match_elements_recursive(
-                                elements,
-                                tokens,
-                                after,
-                                element_idx + 1,
-                                &new_mt,
-                            ) {
-                                result.push_front(
-                                    token_idx,
-                                    element_idx,
-                                    tokens[token_idx].token().token().to_string(),
-                                );
-                                result.extend_span(
-                                    tokens[token_idx].token().start(),
-                                    tokens[token_idx].token().end(),
-                                );
-                                return Some(result);
-                            }
-                            return None;
-                        }
-                        return None;
+                    if let Some(result) = self.match_token_element(
+                        alt,
+                        elements,
+                        tokens,
+                        token_idx,
+                        element_idx,
+                        matched,
+                    ) {
+                        return Some(result);
                     }
                 }
                 if crate::pattern_trace::enabled()
