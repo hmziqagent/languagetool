@@ -435,28 +435,25 @@ impl LanguageEngine {
             if let Some(dict_arc) = shared_german_speller_dictionary(&resource_dir) {
                 shared_dict = Some(dict_arc.clone());
                 if let Some(core_resource_dir) = find_lt_core_resource_dir() {
-                    engine.spelling_support = Some(Arc::new(
-                        og_rules::spelling_support::SpellingSupport::new_for_language(
-                            dict_arc.clone(),
-                            &core_resource_dir,
-                            &resource_dir,
-                            "de",
-                        ),
-                    ));
+                    engine.spelling_support = shared_german_spelling_support(
+                        &dict_arc,
+                        &core_resource_dir,
+                        &resource_dir,
+                    );
                 }
-                let speller = Arc::new(og_spell::GermanSpeller::new(
-                    dict_arc.clone(),
+                if let Some(speller) = shared_german_speller(
+                    &dict_arc,
                     &resource_dir,
                     find_lt_core_resource_dir().as_deref(),
                     engine.tagger.clone(),
-                    "de-DE",
-                ));
-                german_speller = Some(speller.clone());
-                engine.german_speller = Some(speller.clone());
-                engine.add_rule(Arc::new(og_spell::GermanSpellerRule::new(
-                    speller,
-                    "MORFOLOGIK_RULE_DE_DE",
-                )));
+                ) {
+                    german_speller = Some(speller.clone());
+                    engine.german_speller = Some(speller.clone());
+                    engine.add_rule(Arc::new(og_spell::GermanSpellerRule::new(
+                        speller,
+                        "MORFOLOGIK_RULE_DE_DE",
+                    )));
+                }
                 engine.add_rule(Arc::new(crate::de::CompoundInfinitivRule::new(Some(
                     dict_arc,
                 ))));
@@ -1304,6 +1301,58 @@ impl LanguageEngine {
 fn load_german_wordlist(resource_dir: &Path) -> Option<Vec<String>> {
     let dict = og_tagger::german_tagger::shared_german_dictionary(resource_dir)?;
     Some(dict.word_list())
+}
+
+fn shared_german_spelling_support(
+    dict: &Arc<og_spell::Dictionary>,
+    core_resource_dir: &Path,
+    resource_dir: &Path,
+) -> Option<Arc<og_rules::spelling_support::SpellingSupport>> {
+    static CACHE: std::sync::OnceLock<
+        std::sync::Mutex<
+            std::collections::HashMap<PathBuf, Arc<og_rules::spelling_support::SpellingSupport>>,
+        >,
+    > = std::sync::OnceLock::new();
+    let cache = CACHE.get_or_init(Default::default);
+    let mut guard = cache.lock().unwrap();
+    if let Some(hit) = guard.get(resource_dir) {
+        return Some(hit.clone());
+    }
+    let support = std::sync::Arc::new(
+        og_rules::spelling_support::SpellingSupport::new_for_language(
+            dict.clone(),
+            core_resource_dir,
+            resource_dir,
+            "de",
+        ),
+    );
+    guard.insert(resource_dir.to_path_buf(), support.clone());
+    Some(support)
+}
+
+fn shared_german_speller(
+    dict: &Arc<og_spell::Dictionary>,
+    resource_dir: &Path,
+    core_resource_dir: Option<&Path>,
+    tagger: Option<Arc<dyn og_core::checker::Tagger>>,
+) -> Option<Arc<og_spell::GermanSpeller>> {
+    static CACHE: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<PathBuf, Arc<og_spell::GermanSpeller>>>,
+    > = std::sync::OnceLock::new();
+    let cache = CACHE.get_or_init(Default::default);
+    let mut guard = cache.lock().unwrap();
+    if let Some(hit) = guard.get(resource_dir) {
+        return Some(hit.clone());
+    }
+    let speller = std::sync::Arc::new(og_spell::GermanSpeller::new(
+        dict.clone(),
+        resource_dir,
+        core_resource_dir,
+        tagger,
+        "de-DE",
+    ));
+    guard.insert(resource_dir.to_path_buf(), speller.clone());
+    Some(speller)
 }
 
 fn shared_german_speller_dictionary(resource_dir: &Path) -> Option<Arc<og_spell::Dictionary>> {
