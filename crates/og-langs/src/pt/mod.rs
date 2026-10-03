@@ -5,9 +5,15 @@ pub mod filler_words;
 pub mod readability;
 pub mod simple_replace;
 pub mod simple_replace2;
+pub mod tagger;
 pub mod unit_conversion;
 pub mod word_repeat;
 pub mod word_tokenizer;
+
+#[cfg(test)]
+pub(crate) mod example_suite;
+#[cfg(test)]
+pub(crate) mod test_support;
 
 use crate::en::{WordCoherencyRule, WrongWordInContextRule};
 use og_core::rule::{Rule, TextLevelRule};

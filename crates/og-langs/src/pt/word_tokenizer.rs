@@ -489,9 +489,7 @@ impl WordTokenizer for PortugueseWordTokenizer {
 
 pub fn shared_portuguese_word_tokenizer() -> Option<Arc<PortugueseWordTokenizer>> {
     static SHARED: LazyLock<Option<Arc<PortugueseWordTokenizer>>> = LazyLock::new(|| {
-        let lt_root = crate::engine::find_lt_resource_dir()?;
-        let dir = lt_root.join("pt/src/main/resources/org/languagetool/resource/pt");
-        let tagger = og_tagger::GenericTagger::from_resource_dir(&dir, "portuguese");
+        let tagger = crate::pt::tagger::PortugueseTagger::shared_arc()?;
         if !tagger.has_dictionary() {
             return None;
         }
