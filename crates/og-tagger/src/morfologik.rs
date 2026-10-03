@@ -523,6 +523,18 @@ impl Fsa {
         }
     }
 
+    fn has_sequence(&self) -> bool {
+        match self {
+            Self::V5(f) => f
+                .root_node()
+                .is_some_and(|root| root != 0 && f.arcs.get(f.node_data_length + root).is_some()),
+            Self::C1(f) => f
+                .root_node()
+                .is_some_and(|root| root != 0 && f.arcs.get(f.node_data_length + root).is_some()),
+            Self::C2(f) => f.root() != 0 && f.arcs.get(f.root()).is_some(),
+        }
+    }
+
     fn separator_suffixes(&self, node: usize, separator: u8, out: &mut dyn FnMut(&[u8])) {
         match self {
             Self::V5(f) => {
@@ -1014,7 +1026,16 @@ impl MorfologikDictionary {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.materialized().entries.is_empty()
+        match &self.source {
+            Source::Fsa { dict, materialized } => {
+                if let Some(m) = materialized.get() {
+                    m.entries.is_empty()
+                } else {
+                    !dict.fsa.has_sequence()
+                }
+            }
+            Source::Decoded(m) => m.entries.is_empty(),
+        }
     }
 }
 
@@ -1473,5 +1494,23 @@ mod tests {
                 .any(|(lemma, tag)| lemma == &"kultúra" && ["SSfs1", "SSfs5"].contains(tag)),
             "Kultúra readings: {kultura:?}"
         );
+    }
+    #[test]
+    fn is_empty_answers_before_materialization_and_agrees_after() {
+        let _guard = DICT_TEST_LOCK.lock().unwrap();
+        let Some(dir) = dict_path() else {
+            return;
+        };
+        let dict = MorfologikDictionary::load(&dir.join("german.dict"), &dir.join("german.info"))
+            .expect("load german dict");
+        assert!(!dict.is_empty());
+        let len = dict.len();
+        assert!(len > 100_000, "german dict len: {len}");
+        assert!(!dict.is_empty());
+
+        let empty = MorfologikDictionary::from_decoded_text("");
+        assert!(empty.is_empty());
+        let one = MorfologikDictionary::from_decoded_text("haus\thaus\tNN");
+        assert!(!one.is_empty());
     }
 }

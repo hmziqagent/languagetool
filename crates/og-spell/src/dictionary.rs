@@ -109,7 +109,7 @@ impl Dictionary {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.words.is_empty() && self.shared.as_ref().is_none_or(|view| view.len() == 0)
+        self.words.is_empty() && self.shared.as_ref().is_none_or(|view| view.is_empty())
     }
 
     pub fn word_list(&self) -> Vec<String> {
