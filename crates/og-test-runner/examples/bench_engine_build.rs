@@ -232,6 +232,24 @@ fn phases_lang(code: &str) -> String {
         ));
     }
 
+    if short == "en" {
+        let t = Instant::now();
+        let tagger = og_tagger::EnglishTagger::from_resource_dir(&dir);
+        let tagger_ms = ms(t.elapsed());
+        out.push_str(&format!(
+            "  tagger_build[english] ms={tagger_ms:.0} rss_mib={:.0}\n",
+            vm_hwm_mib()
+        ));
+        let t = Instant::now();
+        let support = og_rules::spelling_support::SpellingSupport::dictionary_from_dir(&dir);
+        let support_ms = ms(t.elapsed());
+        out.push_str(&format!(
+            "  spelling_dictionary_from_dir ms={support_ms:.0} loaded={} rss_mib={:.0}\n",
+            support.is_some(),
+            vm_hwm_mib()
+        ));
+    }
+
     let mut rule_total = 0usize;
     for file in ["grammar.xml", "style.xml"] {
         let path = rules_dir(short).join(file);
