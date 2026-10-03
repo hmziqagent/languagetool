@@ -5,6 +5,7 @@ pub mod filler_words;
 pub mod readability;
 pub mod simple_replace;
 pub mod simple_replace2;
+pub mod unit_conversion;
 pub mod word_repeat;
 pub mod word_tokenizer;
 
@@ -31,6 +32,15 @@ pub fn variant_rules_dir(variant: PtVariant) -> &'static str {
         PtVariant::Brazil => "pt-BR",
         PtVariant::Portugal => "pt-PT",
     }
+}
+
+pub fn portuguese_paragraph_repeat_beginning_rule()
+-> crate::paragraph_repeat_beginning::ParagraphRepeatBeginningRule {
+    crate::paragraph_repeat_beginning::ParagraphRepeatBeginningRule::new(
+        "Início de parágrafo repetido",
+        "O mesmo começo que o parágrafo anterior",
+        "Estilo",
+    )
 }
 
 pub fn portuguese_word_coherency_rule() -> WordCoherencyRule {
@@ -77,9 +87,11 @@ pub fn shared_native_rules() -> PortugueseNativeRules {
             Arc::new(accentuation::PortugueseAccentuationCheckRule::new()),
             Arc::new(simple_replace2::diacritics_rule()),
             Arc::new(portuguese_wrong_word_in_context_rule()),
+            Arc::new(unit_conversion::PortugueseUnitConversionRule::new()),
             Arc::new(simple_replace::english_contraction_rule()),
         ],
         text_level_rules: vec![
+            Arc::new(portuguese_paragraph_repeat_beginning_rule()),
             Arc::new(filler_words::PortugueseFillerWordsRule::new()),
             Arc::new(word_repeat::PortugueseWordRepeatBeginningRule::new()),
             Arc::new(portuguese_word_coherency_rule()),
@@ -132,77 +144,6 @@ pub fn variant_native_rules(variant: PtVariant) -> PortugueseNativeRules {
         .collect(),
         text_level_rules: Vec::new(),
     }
-}
-
-pub fn priority_overrides() -> Vec<(&'static str, i32)> {
-    vec![
-        ("FRAGMENT_TWO_ARTICLES", 50),
-        ("DEGREE_MINUTES_SECONDS", 30),
-        ("INTERJECTIONS_PUNTUATION", 20),
-        ("CONFUSION_POR_PÔR_V2", 10),
-        ("PARONYM_POLITICA_523", 10),
-        ("PARONYM_PRONUNCIA_262", 10),
-        ("PARONYM_CRITICA_397", 10),
-        ("PARONYM_INICIO_169", 10),
-        ("LP_PARONYMS", 10),
-        ("PARONYM_MUSICO_499_bis", 10),
-        ("NA_NÃO", 10),
-        ("VERB_COMMA_CONJUNCTION", 10),
-        ("HOMOPHONE_AS_CARD", 5),
-        ("TODOS_FOLLOWED_BY_NOUN_PLURAL", 3),
-        ("TODOS_FOLLOWED_BY_NOUN_SINGULAR", 2),
-        ("AUSENCIA_VIRGULA", 1),
-        ("EMAIL", 1),
-        ("UNPAIRED_BRACKETS", -5),
-        ("PROFANITY", -6),
-        ("PT_BARBARISMS_REPLACE", -10),
-        ("BARBARISMS_PT_PT_V4", -10),
-        ("PT_PT_SIMPLE_REPLACE", -11),
-        ("PT_REDUNDANCY_REPLACE", -12),
-        ("PT_WORDINESS_REPLACE", -13),
-        ("PT_CLICHE_REPLACE", -17),
-        ("INTERNET_ABBREVIATIONS", -24),
-        ("CHILDISH_LANGUAGE", -25),
-        ("ARCHAISMS", -26),
-        ("INFORMALITIES", -27),
-        ("BIASED_OPINION_WORDS", -31),
-        ("PT_AGREEMENT_REPLACE", -35),
-        ("CONTA_TO", -44),
-        ("PT_DIACRITICS_REPLACE", -45),
-        ("DIACRITICS", -45),
-        ("PT_COMPOUNDS_POST_REFORM", -45),
-        ("AUX_VERBO", -45),
-        ("ENSINO_A_DISTANCIA", -45),
-        ("OQ_O_QUE_ORTHOGRAPHY", -45),
-        ("PT_ENGLISH_CONTRACTION_ORTHOGRAPHY", -45),
-        ("EMAIL_SEM_HIFEN", -45),
-        ("PRETERITO_PERFEITO", -51),
-        ("PT_BR_SIMPLE_REPLACE", -51),
-        ("CRASE_CONFUSION", -54),
-        ("NAO_MILITARES_CIVIS", -54),
-        ("NA_QUELE", -54),
-        ("NOTAS_FICAIS", -54),
-        ("GENERAL_VERB_AGREEMENT_ERRORS", -55),
-        ("GENERAL_NUMBER_AGREEMENT_ERRORS", -56),
-        ("GENERAL_GENDER_NUMBER_AGREEMENT_ERRORS", -56),
-        ("FINAL_STOPS", -75),
-        ("EU_NÓS_REMOVAL", -90),
-        ("COLOCAÇÃO_ADVÉRBIO", -90),
-        ("FAZER_USO_DE-USAR-RECORRER", -90),
-        ("FORMAL_T-V_DISTINCTION", -100),
-        ("FORMAL_T-V_DISTINCTION_ALL", -101),
-        ("REPEATED_WORDS", -210),
-        ("PT_WIKIPEDIA_COMMON_ERRORS", -500),
-        ("UPPERCASE_SENTENCE_START", -600),
-        ("FILLER_WORDS_PT", -990),
-        ("LONG_SENTENCE", -997),
-        ("LONG_PARAGRAPH", -998),
-        ("READABILITY_RULE_SIMPLE_PT", -1100),
-        ("READABILITY_RULE_DIFFICULT_PT", -1101),
-        ("UNKNOWN_WORD", -2000),
-        ("PT_COMPOUNDS_POST_REFORM_VARIANT", 1),
-        ("PORTUGUESE_OLD_SPELLING_INTERNAL", -9),
-    ]
 }
 
 #[cfg(test)]
@@ -276,6 +217,7 @@ mod tests {
             "PORTUGUESE_WORD_REPEAT_RULE",
             "ACCENTUATION_CHECK_PT",
             "PT_DIACRITICS_REPLACE",
+            "UNIDADES_METRICAS",
             "PORTUGUESE_WRONG_WORD_IN_CONTEXT",
             "PT_ENGLISH_CONTRACTION_ORTHOGRAPHY",
         ] {
@@ -283,6 +225,7 @@ mod tests {
         }
         let text_ids: Vec<&str> = rules.text_level_rules.iter().map(|r| r.id()).collect();
         for expected in [
+            "PARAGRAPH_REPEAT_BEGINNING_RULE",
             "FILLER_WORDS_PT",
             "PORTUGUESE_WORD_REPEAT_BEGINNING_RULE",
             "PT_WORD_COHERENCY",
@@ -291,6 +234,15 @@ mod tests {
         ] {
             assert!(text_ids.contains(&expected), "missing {expected}");
         }
+    }
+
+    #[test]
+    fn paragraph_repeat_beginning_rule_carries_pt_bundle_strings() {
+        let rule = portuguese_paragraph_repeat_beginning_rule();
+        assert_eq!(rule.id(), "PARAGRAPH_REPEAT_BEGINNING_RULE");
+        assert!(!rule.is_default_on());
+        assert_eq!(rule.description(), "Início de parágrafo repetido");
+        assert_eq!(rule.category().name(), "Estilo");
     }
 
     #[test]
