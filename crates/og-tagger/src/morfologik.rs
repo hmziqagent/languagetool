@@ -1019,14 +1019,14 @@ impl MorfologikDictionary {
 }
 
 pub struct SynthDictionary {
-    fsa: Cfsa2,
+    fsa: Fsa,
     separator: u8,
 }
 
 impl SynthDictionary {
     pub fn load(dict_path: &Path, info_path: &Path) -> Option<Self> {
         let data: &'static [u8] = Box::leak(std::fs::read(dict_path).ok()?.into_boxed_slice());
-        let fsa = Cfsa2::from_bytes(data)?;
+        let fsa = Fsa::from_static(data)?;
         let info = std::fs::read_to_string(info_path).ok()?;
         let separator = info
             .lines()
@@ -1039,23 +1039,14 @@ impl SynthDictionary {
     }
 
     pub fn lookup(&self, key: &str) -> Vec<String> {
-        let Some(node) = self.fsa.seek(self.fsa.root(), key.as_bytes()) else {
+        let Some(node) = self.fsa.seek(key.as_bytes()) else {
             return Vec::new();
         };
-        let mut encoded = Vec::new();
-        let mut arc = Some(self.fsa.first_arc(node));
-        while let Some(current) = arc {
-            if self.fsa.arc_label(current) == self.separator {
-                let dest = self.fsa.destination(current);
-                if dest != 0 {
-                    let mut sequence = Vec::new();
-                    self.fsa.walk(dest, &mut sequence, &mut |seq: &[u8]| {
-                        encoded.push(seq.to_vec())
-                    });
-                }
-            }
-            arc = self.fsa.next_arc(current);
-        }
+        let mut encoded: Vec<Vec<u8>> = Vec::new();
+        self.fsa
+            .separator_suffixes(node, self.separator, &mut |seq: &[u8]| {
+                encoded.push(seq.to_vec())
+            });
         encoded
             .iter()
             .filter_map(|bytes| {

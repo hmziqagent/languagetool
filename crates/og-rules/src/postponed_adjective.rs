@@ -321,10 +321,13 @@ enum SynthLang {
     English,
     Portuguese,
     Polish,
+    Galician,
+    Romanian,
 }
 
 pub struct LangSynthesizer {
     dictionary: Option<Arc<MorfologikDictionary>>,
+    seek: Option<Arc<og_tagger::morfologik::SynthDictionary>>,
     manual: Vec<(Box<str>, Box<str>, Box<str>)>,
     removals: Vec<(Box<str>, Box<str>, Box<str>)>,
     removals2: Vec<(Box<str>, Box<str>, Box<str>)>,
@@ -383,31 +386,50 @@ fn shared_decoded_dictionary(path: &Path) -> Option<Arc<MorfologikDictionary>> {
 
 impl LangSynthesizer {
     pub fn for_language(resource_dir: &Path, code: &str) -> Option<Self> {
-        let (dictionary, lang): (Option<Arc<MorfologikDictionary>>, SynthLang) = match code {
+        let (dictionary, seek, lang): (
+            Option<Arc<MorfologikDictionary>>,
+            Option<Arc<og_tagger::morfologik::SynthDictionary>>,
+            SynthLang,
+        ) = match code {
             "de" => (
                 og_tagger::german_tagger::shared_german_dictionary(resource_dir),
+                None,
                 SynthLang::German,
             ),
             "es" => (
                 og_tagger::generic_tagger::shared_dictionary(resource_dir, "spanish"),
+                None,
                 SynthLang::Spanish,
             ),
             "fr" => (
                 og_tagger::generic_tagger::shared_dictionary(resource_dir, "french"),
+                None,
                 SynthLang::French,
             ),
             "pt" => (
                 og_tagger::generic_tagger::shared_dictionary(resource_dir, "portuguese"),
+                None,
                 SynthLang::Portuguese,
             ),
             "pl" => (
                 og_tagger::generic_tagger::shared_dictionary(resource_dir, "polish_synth"),
+                None,
                 SynthLang::Polish,
             ),
             "en" => {
                 let dict = shared_decoded_dictionary(&resource_dir.join("dict_decoded.txt"));
-                (dict, SynthLang::English)
+                (dict, None, SynthLang::English)
             }
+            "gl" => (
+                None,
+                og_tagger::morfologik::shared_synth_dictionary(resource_dir, "galician_synth"),
+                SynthLang::Galician,
+            ),
+            "ro" => (
+                None,
+                og_tagger::morfologik::shared_synth_dictionary(resource_dir, "romanian_synth"),
+                SynthLang::Romanian,
+            ),
             _ => return None,
         };
         let manual = std::fs::read_to_string(resource_dir.join("added.txt"))
@@ -429,21 +451,31 @@ impl LangSynthesizer {
         } else {
             crate::en_article::ArticleData::empty()
         };
-        let possible_tags = if lang == SynthLang::Polish {
-            std::fs::read_to_string(resource_dir.join("polish_tags.txt"))
-                .map(|t| {
-                    t.lines()
-                        .map(str::trim)
-                        .filter(|l| !l.is_empty() && !l.starts_with('#'))
-                        .map(Box::from)
-                        .collect()
-                })
-                .unwrap_or_default()
-        } else {
-            Vec::new()
+        let possible_tags = match lang {
+            SynthLang::Polish => Some("polish_tags.txt"),
+            SynthLang::Galician => Some("galician_tags.txt"),
+            SynthLang::Romanian => Some("romanian_tags.txt"),
+            _ => None,
         };
+        let possible_tags = possible_tags
+            .and_then(|name| std::fs::read_to_string(resource_dir.join(name)).ok())
+            .map(|t| {
+                t.lines()
+                    .map(str::trim)
+                    .filter(|l| !l.is_empty() && !l.starts_with('#'))
+                    .map(Box::from)
+                    .collect::<Vec<Box<str>>>()
+            })
+            .unwrap_or_default();
+        let mut possible_tags = possible_tags;
+        for (_, tag, _) in &manual {
+            if !possible_tags.iter().any(|t| t == tag) {
+                possible_tags.push(tag.clone());
+            }
+        }
         Some(Self {
             dictionary,
+            seek,
             manual,
             removals,
             removals2,
@@ -733,10 +765,29 @@ impl LangSynthesizer {
     }
 
     fn lookup_forms(&self, lemma: &str, tag: &Regex) -> Vec<String> {
+        if let Some(dict) = &self.seek {
+            let mut results = Vec::new();
+            for t in &self.possible_tags {
+                if tag.is_match(t) {
+                    results.extend(dict.lookup(&format!("{lemma}|{t}")));
+                }
+            }
+            self.extend_manual(lemma, &mut results, &|t| tag.is_match(t));
+            self.apply_removals(lemma, &mut results, &|t| tag.is_match(t));
+            results.retain(|r| self.keep_form(r));
+            return results;
+        }
         self.lookup_matching(lemma, &|t| tag.is_match(t))
     }
 
     fn lookup_exact(&self, lemma: &str, postag: &str) -> Vec<String> {
+        if let Some(dict) = &self.seek {
+            let mut results = dict.lookup(&format!("{lemma}|{postag}"));
+            self.extend_manual(lemma, &mut results, &|t| t == postag);
+            self.apply_removals(lemma, &mut results, &|t| t == postag);
+            results.retain(|r| self.keep_form(r));
+            return results;
+        }
         self.lookup_matching(lemma, &|t| t == postag)
     }
 
@@ -1741,5 +1792,80 @@ mod tests {
     fn dedup_keeps_first_occurrence_order() {
         let out = dedup_preserving_order(vec!["a".into(), "b".into(), "a".into()]);
         assert_eq!(out, vec!["a".to_string(), "b".to_string()]);
+    }
+
+    #[test]
+    fn ro_synthesizes_forms_from_romanian_synth_dict() {
+        let dir = std::path::Path::new(
+            "/home/agent/opengrammar-rs/languagetool/languagetool-language-modules/ro/src/main/resources/org/languagetool/resource/ro",
+        );
+        let Some(synth) = LangSynthesizer::for_language(dir, "ro") else {
+            return;
+        };
+        assert_eq!(
+            synth.synthesize_exact_for("alege", None, "V000000f00"),
+            vec!["alege".to_string()]
+        );
+        assert_eq!(
+            synth.synthesize_exact_for("alege", None, "V0p2000cz0"),
+            vec!["alegeți".to_string()]
+        );
+        assert_eq!(
+            synth.synthesize_exact_for("fi", None, "V000000f0f"),
+            vec!["fi".to_string()]
+        );
+        assert_eq!(
+            synth.synthesize_exact_for("fi", None, "V0p2000izf"),
+            vec!["sunteți".to_string()]
+        );
+        assert_eq!(
+            synth.synthesize_exact_for("fi", None, "V0p3000izf"),
+            vec!["sunt".to_string()]
+        );
+        assert_eq!(
+            synth.synthesize_exact_for("merge", None, "V0p1000im0"),
+            vec!["merseserăm".to_string()]
+        );
+        assert_eq!(
+            synth.synthesize_exact_for("merge", None, "V0s1000im0"),
+            vec!["mersesem".to_string()]
+        );
+        assert_eq!(
+            synth.synthesize_exact_for("legătură", None, "Sfs3aac000"),
+            vec!["legătura".to_string()]
+        );
+    }
+
+    #[test]
+    fn ro_synthesizes_regex_tags_over_possible_tags() {
+        let dir = std::path::Path::new(
+            "/home/agent/opengrammar-rs/languagetool/languagetool-language-modules/ro/src/main/resources/org/languagetool/resource/ro",
+        );
+        let Some(synth) = LangSynthesizer::for_language(dir, "ro") else {
+            return;
+        };
+        let re = Regex::new("V0p2000izf|V0p3000izf").unwrap();
+        assert_eq!(
+            synth.synthesize("fi", &re),
+            vec!["sunteți".to_string(), "sunt".to_string()]
+        );
+    }
+
+    #[test]
+    fn gl_synthesizes_forms_from_galician_synth_dict() {
+        let dir = std::path::Path::new(
+            "/home/agent/opengrammar-rs/languagetool/languagetool-language-modules/gl/src/main/resources/org/languagetool/resource/gl",
+        );
+        let Some(synth) = LangSynthesizer::for_language(dir, "gl") else {
+            return;
+        };
+        assert_eq!(
+            synth.synthesize_exact_for("cantar", None, "VMIP1S0"),
+            vec!["canto".to_string()]
+        );
+        assert_eq!(
+            synth.synthesize_exact_for("cantar", None, "VMIP3S0"),
+            vec!["canta".to_string()]
+        );
     }
 }
