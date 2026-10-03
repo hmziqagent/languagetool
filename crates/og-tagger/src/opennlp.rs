@@ -654,6 +654,10 @@ impl OpenNlpChunker {
         Self { model }
     }
 
+    pub fn outcome(&self, index: usize) -> &str {
+        self.model.outcome(index)
+    }
+
     pub fn chunk(&self, tokens: &[&str], tags: &[&str]) -> Vec<usize> {
         let model = &self.model;
         beam_search(
@@ -1101,7 +1105,7 @@ fn english_chunk_filter(
     let end_of_np_is_singular = |start: usize| -> bool {
         for j in start..n {
             if is_end_np(j) {
-                return !chunk_type_plural(start);
+                return !chunk_type_plural(j);
             }
         }
         false
@@ -1290,6 +1294,78 @@ mod tests {
         assert_eq!(tags[10], "E-NP-singular", "{tags:?}");
         assert_eq!(tags[12], "B-VP", "{tags:?}");
         assert_eq!(tags[14], "I-VP", "{tags:?}");
+    }
+
+    #[test]
+    fn chunk_filter_marks_np_singular_when_only_the_end_token_lacks_plural() {
+        let words = [
+            "performance",
+            "management",
+            "and",
+            "staff",
+            "planning",
+            "tool",
+        ];
+        let readings: Vec<og_core::AnalyzedTokenReadings> = words
+            .iter()
+            .enumerate()
+            .map(|(i, w)| {
+                let tags: &[&str] = if *w == "staff" {
+                    &["NNS", "NN:UN"]
+                } else {
+                    &["NN"]
+                };
+                let rs = tags
+                    .iter()
+                    .map(|t| {
+                        og_core::AnalyzedToken::new(*w, 0, 0).with_pos_tags(vec![t.to_string()])
+                    })
+                    .collect();
+                let _ = i;
+                og_core::AnalyzedTokenReadings::new(og_core::AnalyzedToken::new(*w, 0, 0))
+                    .with_readings(rs)
+            })
+            .collect();
+        let raw = [
+            Some("B-NP"),
+            Some("I-NP"),
+            Some("I-NP"),
+            Some("I-NP"),
+            Some("I-NP"),
+            Some("I-NP"),
+        ];
+        let mapped: Vec<Option<usize>> = (0..words.len()).map(Some).collect();
+        let filtered = english_chunk_filter(&raw, &words, &mapped, &readings);
+        assert_eq!(
+            filtered[0],
+            vec!["B-NP-singular".to_string()],
+            "EnglishChunkFilter.endOfNounPhraseIsSingular: head noun 'tool' has no NNS reading"
+        );
+        assert_eq!(filtered[5], vec!["E-NP-singular".to_string()]);
+        let raw_plural_head = [
+            Some("B-NP"),
+            Some("I-NP"),
+            Some("I-NP"),
+            Some("I-NP"),
+            Some("I-NP"),
+            Some("I-NP"),
+        ];
+        let plural_readings: Vec<og_core::AnalyzedTokenReadings> = words
+            .iter()
+            .map(|w| {
+                let tags: &[&str] = if *w == "tool" { &["NNS"] } else { &["NN"] };
+                let rs = tags
+                    .iter()
+                    .map(|t| {
+                        og_core::AnalyzedToken::new(*w, 0, 0).with_pos_tags(vec![t.to_string()])
+                    })
+                    .collect();
+                og_core::AnalyzedTokenReadings::new(og_core::AnalyzedToken::new(*w, 0, 0))
+                    .with_readings(rs)
+            })
+            .collect();
+        let filtered2 = english_chunk_filter(&raw_plural_head, &words, &mapped, &plural_readings);
+        assert_eq!(filtered2[0], vec!["B-NP-plural".to_string()]);
     }
 
     #[test]
