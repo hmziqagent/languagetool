@@ -574,6 +574,60 @@ pub fn portuguese_proclisis_filter(
     Some(rm)
 }
 
+pub fn is_pt_filter(class: &str) -> bool {
+    matches!(
+        class,
+        "org.languagetool.rules.pt.ConfusionCheckFilter"
+            | "org.languagetool.rules.pt.BrazilianToponymFilter"
+            | "org.languagetool.rules.pt.RegularIrregularParticipleFilter"
+            | "org.languagetool.rules.pt.RomanNumeralFilter"
+            | "org.languagetool.rules.pt.PortugueseEnclisisFilter"
+            | "org.languagetool.rules.pt.PortugueseProclisisFilter"
+    )
+}
+
+pub struct PtFilterCall<'a> {
+    pub variant: &'a str,
+    pub args: &'a str,
+    pub matched_texts: &'a [String],
+    pub matched_positions: &'a [usize],
+    pub tokens: &'a [&'a AnalyzedTokenReadings],
+    pub regexp_groups: Option<&'a [&'a str]>,
+    pub synthesizer: Option<&'a LangSynthesizer>,
+}
+
+pub fn apply_pt_filter(class: &str, call: PtFilterCall<'_>, rm: RuleMatch) -> Option<RuleMatch> {
+    match class {
+        "org.languagetool.rules.pt.ConfusionCheckFilter" => confusion_check_filter(
+            call.variant,
+            call.args,
+            call.matched_texts,
+            pattern_token_range(call.tokens, call.matched_positions),
+            rm,
+        ),
+        "org.languagetool.rules.pt.BrazilianToponymFilter" => {
+            brazilian_toponym_filter(call.regexp_groups?, rm)
+        }
+        "org.languagetool.rules.pt.RegularIrregularParticipleFilter" => {
+            regular_irregular_participle_filter(call.synthesizer, call.args, call.tokens, rm)
+        }
+        "org.languagetool.rules.pt.RomanNumeralFilter" => {
+            roman_numeral_filter(call.args, call.matched_texts, rm)
+        }
+        "org.languagetool.rules.pt.PortugueseEnclisisFilter" => portuguese_enclisis_filter(
+            call.synthesizer,
+            call.args,
+            call.tokens,
+            call.matched_positions,
+            rm,
+        ),
+        "org.languagetool.rules.pt.PortugueseProclisisFilter" => {
+            portuguese_proclisis_filter(call.synthesizer, call.tokens, call.matched_positions, rm)
+        }
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1125,5 +1179,203 @@ mod tests {
         let tokens: Vec<&AnalyzedTokenReadings> = vec![&a, &b, &c];
         assert_eq!(pattern_token_range(&tokens, &[1, 2]).len(), 2);
         assert!(pattern_token_range(&tokens, &[]).is_empty());
+    }
+
+    #[test]
+    fn dispatch_recognizes_exactly_the_six_java_filter_classes() {
+        for class in [
+            "org.languagetool.rules.pt.ConfusionCheckFilter",
+            "org.languagetool.rules.pt.BrazilianToponymFilter",
+            "org.languagetool.rules.pt.RegularIrregularParticipleFilter",
+            "org.languagetool.rules.pt.RomanNumeralFilter",
+            "org.languagetool.rules.pt.PortugueseEnclisisFilter",
+            "org.languagetool.rules.pt.PortugueseProclisisFilter",
+        ] {
+            assert!(is_pt_filter(class), "{class} must route");
+        }
+        assert!(!is_pt_filter(
+            "org.languagetool.rules.es.ConfusionCheckFilter"
+        ));
+        assert!(!is_pt_filter("org.languagetool.rules.pt.FutureDateFilter"));
+        assert!(!is_pt_filter(""));
+    }
+
+    #[test]
+    fn dispatch_windows_the_confusion_pattern_tokens_for_gendernumber_from() {
+        let unmatched = atr("x", &[("x", "ZP0")]);
+        let source = atr("os", &[("o", "DA0MP0")]);
+        let entry = atr("tramites", &[("trâmite", "NCMP000")]);
+        let tokens: Vec<&AnalyzedTokenReadings> = vec![&unmatched, &source, &entry];
+        let matched = vec!["os".to_string(), "tramites".to_string()];
+        let call = PtFilterCall {
+            variant: "pt-PT",
+            args: "form:\\2 postag:N.[MC]P.*|A..[MC]P. gendernumberFrom:1",
+            matched_texts: &matched,
+            matched_positions: &[1, 2],
+            tokens: &tokens,
+            regexp_groups: None,
+            synthesizer: None,
+        };
+        let rm = base_rm("m", 3, 8, "{suggestion}");
+        let out = apply_pt_filter("org.languagetool.rules.pt.ConfusionCheckFilter", call, rm)
+            .expect("gendernumberFrom must index the match window, not the sentence tokens");
+        assert_eq!(out.replacements()[0].value(), "trâmites");
+    }
+
+    #[test]
+    fn dispatch_routes_the_toponym_filter_through_the_regexp_groups() {
+        let tokens: Vec<&AnalyzedTokenReadings> = Vec::new();
+        let call = PtFilterCall {
+            variant: "pt-BR",
+            args: "foo:bar",
+            matched_texts: &[],
+            matched_positions: &[],
+            tokens: &tokens,
+            regexp_groups: None,
+            synthesizer: None,
+        };
+        let rm = base_rm("m", 17, 5, "{suggestion}");
+        assert!(
+            apply_pt_filter("org.languagetool.rules.pt.BrazilianToponymFilter", call, rm).is_none(),
+            "the regexp path must pass capture group texts"
+        );
+        let groups = ["Niterói (RJ)", "Niterói", " (RJ)", "RJ"];
+        let call = PtFilterCall {
+            variant: "pt-BR",
+            args: "foo:bar",
+            matched_texts: &[],
+            matched_positions: &[],
+            tokens: &tokens,
+            regexp_groups: Some(&groups),
+            synthesizer: None,
+        };
+        let rm = base_rm("m", 17, 5, "{suggestion}");
+        let out = apply_pt_filter("org.languagetool.rules.pt.BrazilianToponymFilter", call, rm)
+            .expect("Niterói is an RJ municipality");
+        assert_eq!(out.replacements()[0].value(), "\u{2013}RJ");
+    }
+
+    #[test]
+    fn dispatch_drives_the_compiled_confusion_rule_end_to_end() {
+        let pipeline = PortuguesePipeline::shared();
+        let engine = PatternRuleEngine::new();
+        let rule = compiled_rules()
+            .rules
+            .iter()
+            .find(|r| {
+                r.filter.as_ref().is_some_and(|f| {
+                    f.class.ends_with("pt.ConfusionCheckFilter") && f.args.contains("N.[MC]P")
+                })
+            })
+            .expect("nos|são confusion subrule");
+        let text = "Um erro nos tramites.";
+        let sentence = &pipeline.analyze_text(text)[0];
+        let raw = engine
+            .match_rule(rule, sentence)
+            .into_iter()
+            .next()
+            .expect("raw pattern match on 'nos tramites'");
+        assert_eq!(raw.replacements()[0].value(), "{suggestion}");
+        let tokens: Vec<&AnalyzedTokenReadings> = sentence.non_whitespace_tokens();
+        let marker_idx = tokens
+            .iter()
+            .position(|t| t.token().start() == raw.offset())
+            .expect("marker token");
+        let matched_texts = vec!["nos".to_string(), "tramites".to_string()];
+        let start = marker_idx + 1 - matched_texts.len();
+        let matched_positions: Vec<usize> = (start..=marker_idx).collect();
+        let call = PtFilterCall {
+            variant: "pt-PT",
+            args: rule.filter.as_ref().unwrap().args.as_str(),
+            matched_texts: &matched_texts,
+            matched_positions: &matched_positions,
+            tokens: &tokens,
+            regexp_groups: None,
+            synthesizer: None,
+        };
+        let out = apply_pt_filter("org.languagetool.rules.pt.ConfusionCheckFilter", call, raw)
+            .expect("tramites -> trâmites");
+        assert_eq!(out.replacements()[0].value(), "trâmites");
+    }
+
+    #[test]
+    fn dispatch_routes_the_four_pattern_path_filters() {
+        let synth = synthesizer().expect("pt synthesizer from the main dict");
+        let gastado = atr("gastado", &[("gastar", "VMP00SM")]);
+        let tokens: Vec<&AnalyzedTokenReadings> = vec![&gastado];
+        let call = PtFilterCall {
+            variant: "pt-PT",
+            args: "direction:RegularToIrregular",
+            matched_texts: &[],
+            matched_positions: &[0],
+            tokens: &tokens,
+            regexp_groups: None,
+            synthesizer: Some(&synth),
+        };
+        let rm = base_rm("m", 0, 7, "{suggestion}");
+        let out = apply_pt_filter(
+            "org.languagetool.rules.pt.RegularIrregularParticipleFilter",
+            call,
+            rm,
+        )
+        .expect("gastado -> gasto");
+        assert_eq!(out.replacements()[0].value(), "gasto");
+
+        let matched = vec!["século".to_string(), "20".to_string()];
+        let call = PtFilterCall {
+            variant: "pt-PT",
+            args: "arabicSource:\\2",
+            matched_texts: &matched,
+            matched_positions: &[0, 1],
+            tokens: &tokens,
+            regexp_groups: None,
+            synthesizer: None,
+        };
+        let rm = base_rm("m", 0, 2, "{suggestion}");
+        let out = apply_pt_filter("org.languagetool.rules.pt.RomanNumeralFilter", call, rm)
+            .expect("roman replacement is always set");
+        assert_eq!(out.replacements()[0].value(), "XX");
+
+        let verb = atr("TEM", &[("ter", "VMIP3P0")]);
+        let hyphen = atr("-", &[]);
+        let pronoun = atr("O", &[("o", "PP3MSA00")]);
+        let tokens: Vec<&AnalyzedTokenReadings> = vec![&verb, &hyphen, &pronoun];
+        let call = PtFilterCall {
+            variant: "pt-BR",
+            args: "verbPos:0 pronounPos:2 convertToAccusative:False",
+            matched_texts: &[],
+            matched_positions: &[0, 1, 2],
+            tokens: &tokens,
+            regexp_groups: None,
+            synthesizer: Some(&synth),
+        };
+        let rm = base_rm("m", 4, 5, "{suggestion}");
+        let out = apply_pt_filter(
+            "org.languagetool.rules.pt.PortugueseEnclisisFilter",
+            call,
+            rm,
+        )
+        .expect("pronoun tags are non-empty");
+        assert!(out.replacements().is_empty());
+
+        let enclitic = atr("quis-lo", &[("querer", "VMIS3S0:PP3MSA00")]);
+        let tokens: Vec<&AnalyzedTokenReadings> = vec![&enclitic];
+        let call = PtFilterCall {
+            variant: "pt-PT",
+            args: "",
+            matched_texts: &[],
+            matched_positions: &[0],
+            tokens: &tokens,
+            regexp_groups: None,
+            synthesizer: Some(&synth),
+        };
+        let rm = base_rm("m", 0, 7, "{suggestion}");
+        let out = apply_pt_filter(
+            "org.languagetool.rules.pt.PortugueseProclisisFilter",
+            call,
+            rm,
+        )
+        .expect("proclisis match");
+        assert_eq!(out.replacements()[0].value(), "o quis");
     }
 }
