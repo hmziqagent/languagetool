@@ -858,7 +858,35 @@ impl XmlDisambiguator {
                                 ));
                             }
                         } else if matches!(rule.disambig, DisambigAction::Immunize) {
-                            pending_immunize.extend(match_result.matched_positions.iter().copied());
+                            let counts = &match_result.element_counts;
+                            let (span_start_elem, span_end_elem) =
+                                if let (Some(ms), Some(me)) = effective_marker {
+                                    (ms, me)
+                                } else {
+                                    (0, counts.len())
+                                };
+                            if span_end_elem > span_start_elem
+                                && counts[span_start_elem..span_end_elem]
+                                    .iter()
+                                    .all(|c| *c > 0)
+                            {
+                                let start_pos = if has_marker {
+                                    let slot_start: usize = counts[..span_start_elem].iter().sum();
+                                    match_result.matched_positions
+                                        [slot_start + counts[span_start_elem] - 1]
+                                } else {
+                                    match_result
+                                        .matched_positions
+                                        .first()
+                                        .copied()
+                                        .unwrap_or(usize::MAX)
+                                };
+                                if start_pos != usize::MAX {
+                                    pending_immunize.extend(
+                                        (0..span_end_elem - span_start_elem).map(|i| start_pos + i),
+                                    );
+                                }
+                            }
                         } else if matches!(rule.disambig, DisambigAction::RemovePostag(_)) {
                             if let Some(&first) = target_indices.first() {
                                 pending_actions.push((
