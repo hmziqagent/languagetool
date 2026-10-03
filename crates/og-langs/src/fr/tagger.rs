@@ -143,8 +143,8 @@ mod tests {
             .collect()
     }
 
-    fn joined(tokens: &[&str]) -> String {
-        og_tagger::Tagger::tag(&tagger(), tokens)
+    fn joined_with(tagger: &FrenchTagger, tokens: &[&str]) -> String {
+        og_tagger::Tagger::tag(tagger, tokens)
             .iter()
             .map(|atr| {
                 let mut readings: Vec<String> = atr
@@ -168,6 +168,10 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join(" -- ")
+    }
+
+    fn joined(tokens: &[&str]) -> String {
+        joined_with(&tagger(), tokens)
     }
 
     #[test]
@@ -200,6 +204,121 @@ mod tests {
             joined(&["entr’ouvrions"]),
             "entr'ouvrions/[entr'ouvrir]V ind impa 1 p|entr'ouvrions/[entr'ouvrir]V sub pres 1 p"
         );
+    }
+
+    #[test]
+    fn java_frenchtagger_test_battery() {
+        let tagger = tagger();
+        let battery: &[(&[&str], &str)] = &[
+            (
+                &["C'", "est", "la", "vie"],
+                "C'/[ce]R dem m s -- est/[est]N m s|est/[être]V etre ind pres 3 s -- \
+                 la/[la]N m sp|la/[le]D f s|la/[le]R pers obj 3 f s -- vie/[vie]N f s",
+            ),
+            (
+                &["Je", "ne", "parle", "pas", "français"],
+                "Je/[je]R pers suj 1 s -- ne/[ne]A -- \
+                 parle/[parler]V imp pres 2 s|parle/[parler]V ind pres 1 s|parle/[parler]V ind pres 3 s|\
+                 parle/[parler]V sub pres 1 s|parle/[parler]V sub pres 3 s -- \
+                 pas/[pas]A|pas/[pas]N m sp -- français/[français]J m sp|français/[français]N m sp",
+            ),
+            (&["blablabla"], "blablabla/[blablabla]N m s"),
+            (
+                &["passagère"],
+                "passagère/[passager]J f s|passagère/[passager]N f s",
+            ),
+            (&["nonexistingword"], ""),
+            (
+                &["auto-mutile"],
+                "auto-mutile/[auto-mutiler]V imp pres 2 s|auto-mutile/[auto-mutiler]V ind pres 1 s|\
+                 auto-mutile/[auto-mutiler]V ind pres 3 s|auto-mutile/[auto-mutiler]V sub pres 1 s|\
+                 auto-mutile/[auto-mutiler]V sub pres 3 s",
+            ),
+            (&["auto-mutilées"], "auto-mutilées/[auto-mutiler]V ppa f p"),
+            (
+                &["micro-plastiques"],
+                "micro-plastiques/[micro-plastique]J e p|micro-plastiques/[micro-plastique]N e p",
+            ),
+            (&["sous-espace"], "sous-espace/[sous-espace]N m s"),
+            (&["sous-corps"], "sous-corps/[sous-corps]N m sp"),
+            (
+                &["auto-empoisonnement"],
+                "auto-empoisonnement/[auto-empoisonnement]N m s",
+            ),
+            (
+                &["auto-équilibrage"],
+                "auto-équilibrage/[auto-équilibrage]N m s",
+            ),
+            (&["Grand-Chambre"], "Grand-Chambre/[grand-chambre]N f s"),
+            (
+                &["Fontaine-l'Évêque"],
+                "Fontaine-l'Évêque/[Fontaine-l'Évêque]Z e sp",
+            ),
+            (
+                &["entr'ouvrions"],
+                "entr'ouvrions/[entr'ouvrir]V ind impa 1 p|entr'ouvrions/[entr'ouvrir]V sub pres 1 p",
+            ),
+            (
+                &["Penses", "-tu"],
+                "Penses/[penser]V ind pres 2 s|Penses/[penser]V sub pres 2 s -- -tu/[tu]R pers suj 2 s",
+            ),
+            (&["Strauss-Kahn"], "Strauss-Kahn/[Strauss-Kahn]Z e sp"),
+            (
+                &["va", "-t", "'en"],
+                "va/[aller]V imp pres 2 s|va/[aller]V ind pres 3 s -- -t/[te]R pers obj 2 s -- \
+                 'en/[en]R pers obj 3 sp",
+            ),
+            (&["Al-Qaïda"], "Al-Qaïda/[Al-Qaïda]Z f sp"),
+            (&["minitélévision"], "minitélévision/[minitélévision]N f s"),
+            (&["soeur"], "soeur/[sœur]N f s"),
+            (&["oeils-de-boeuf"], "oeils-de-boeuf/[œils-de-bœuf]N m p"),
+            (
+                &["Ç'", "avait"],
+                "Ç'/[cela]R dem m s -- avait/[avoir]V avoir ind impa 3 s",
+            ),
+            (&["aéro-club"], "aéro-club/[aéro-club]N m s"),
+            (&["Aéro-club"], "Aéro-club/[aéro-club]N m s"),
+            (&["Aéro-Club"], "Aéro-Club/[aéro-club]N m s"),
+            (&["AÉRO-CLUB"], "AÉRO-CLUB/[aéro-club]N m s"),
+            (
+                &["ex", "Le", "Pen"],
+                "ex/[ex]A|ex/[ex]N e sp -- Le/[le]D m s|Le/[le]R pers obj 3 m s -- ",
+            ),
+            (
+                &["Saint-Côme", "Le", "Mesnil"],
+                "Saint-Côme/[Saint-Côme]Z e sp -- Le/[le]D m s|Le/[le]R pers obj 3 m s -- ",
+            ),
+            (
+                &["Dieppe", "Le", "Tréport"],
+                "Dieppe/[Dieppe]Z e sp -- Le/[le]D m s|Le/[le]R pers obj 3 m s -- ",
+            ),
+            (
+                &[
+                    "Caricaturistes",
+                    "Les",
+                    "fantassins",
+                    "de",
+                    "la",
+                    "démocratie",
+                ],
+                "Caricaturistes/[caricaturiste]N e p -- Les/[le]D e p|Les/[les]R pers obj 3 e p -- \
+                 fantassins/[fantassin]N m p -- de/[de]D e sp|de/[de]P -- \
+                 la/[la]N m sp|la/[le]D f s|la/[le]R pers obj 3 f s -- démocratie/[démocratie]N f s",
+            ),
+        ];
+        for (tokens, expected) in battery {
+            assert_eq!(joined_with(&tagger, tokens), *expected, "tokens {tokens:?}");
+        }
+    }
+
+    #[test]
+    fn unknown_words_have_zero_readings_java_null_reading_surrogate() {
+        let tagger = tagger();
+        for surface in ["nonexistingword", "Pen", "Mesnil", "Tréport"] {
+            let atr = &og_tagger::Tagger::tag(&tagger, &[surface])[0];
+            assert!(atr.readings().is_empty(), "{surface}");
+            assert_eq!(atr.token().token(), surface);
+        }
     }
 
     #[test]

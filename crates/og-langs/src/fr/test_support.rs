@@ -45,13 +45,7 @@ impl FrenchPipeline {
                 let tagger = tagger.clone();
                 move |w: &str| tagger.inner_is_word_tagged(w)
             }));
-            let disambiguator = std::fs::read_to_string(resource_dir.join("disambiguation.xml"))
-                .ok()
-                .and_then(|xml| og_tagger::XmlDisambiguator::from_xml(&xml).ok())
-                .and_then(|d| {
-                    crate::engine::find_lt_core_resource_dir()
-                        .map(|core| og_tagger::hybrid_disambiguator("fr", &resource_dir, &core, d))
-                });
+            let disambiguator = crate::fr::build_fr_disambiguator(&resource_dir);
             FrenchPipeline {
                 tokenizer,
                 tagger,
@@ -220,6 +214,20 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join(" ; ")
+    }
+
+    #[test]
+    fn global_disambiguation_marks_user_mentions_ignored_by_speller() {
+        let sentence = &analyze_french("Merci @utilisateur pour ton aide.")[0];
+        let mention = sentence
+            .tokens()
+            .iter()
+            .find(|t| t.token().token() == "@utilisateur")
+            .expect("@utilisateur token");
+        assert!(
+            mention.is_ignored_by_speller(),
+            "disambiguation-global.xml GLOBAL_IGNORE_USER_MENTION must ignore-spell @utilisateur"
+        );
     }
 
     #[test]

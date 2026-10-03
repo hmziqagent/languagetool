@@ -26,6 +26,29 @@ pub(crate) fn fr_resource_dir() -> Option<PathBuf> {
         .map(|root| root.join("fr/src/main/resources/org/languagetool/resource/fr"))
 }
 
+pub fn build_fr_disambiguator(
+    resource_dir: &std::path::Path,
+) -> Option<Arc<dyn og_core::checker::Disambiguator>> {
+    let xml = std::fs::read_to_string(resource_dir.join("disambiguation.xml")).ok()?;
+    let xml_disambiguator = og_tagger::XmlDisambiguator::from_xml(&xml).ok()?;
+    let core = crate::engine::find_lt_core_resource_dir()?;
+    let chain = og_tagger::hybrid_disambiguator("fr", resource_dir, &core, xml_disambiguator);
+    let global = std::fs::read_to_string(core.join("disambiguation-global.xml"))
+        .ok()
+        .and_then(|global_xml| {
+            let expanded =
+                og_xml::parser::XmlRuleParser::expand_entities_with_base(&global_xml, Some(&core));
+            og_tagger::XmlDisambiguator::from_xml(&expanded).ok()
+        });
+    Some(match global {
+        Some(global) => Arc::new(og_tagger::ChainedDisambiguator::new(vec![
+            chain,
+            Arc::new(global),
+        ])),
+        None => chain,
+    })
+}
+
 pub fn french_compound_rule(tagger: Option<Arc<GenericTagger>>) -> CompoundRule {
     CompoundRule::french(tagger)
 }
