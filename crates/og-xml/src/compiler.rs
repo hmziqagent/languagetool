@@ -327,7 +327,6 @@ impl XmlCompiler {
             t
         };
         let token = &resolved;
-        // Java's String.matches() requires full-string match, so anchor with ^(?:...)$
         let raw_pattern = if token.regexp.as_deref() == Some("yes") {
             token.text.clone()
         } else {

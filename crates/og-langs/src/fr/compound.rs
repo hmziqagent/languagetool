@@ -195,9 +195,6 @@ impl Rule for CompoundRule {
     }
 
     fn match_sentence(&self, sentence: &AnalyzedSentence) -> Vec<RuleMatch> {
-        // Java keys compounds case-sensitively and uncapitalizes only the lookup's
-        // first char at sentence start, which cannot match "Jésus Christ" to "Jésus-Christ*";
-        // lowercased keys keep both the en and fr Java test expectations.
         let full = sentence.tokens();
         let mut toks: Vec<(&AnalyzedTokenReadings, bool)> = Vec::with_capacity(full.len());
         for (i, t) in full.iter().enumerate() {

@@ -355,8 +355,6 @@ fn soros_overline(digits: &str) -> String {
     out
 }
 
-// Roman.sor evaluated with lang "Roman": the [:Roman-large:] lines stay commented
-// out and digits flow through the $(d:IVX/XLC/CDM/M--) charset rules 1..9.
 fn soros_roman(input: &str) -> String {
     if input.is_empty() || !input.bytes().all(|b| b.is_ascii_digit()) {
         return String::new();

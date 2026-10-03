@@ -198,15 +198,9 @@ pub fn build_es_disambiguator(
             add_ignore_spelling: false,
         },
     )?;
-    // Java's ADDCHUNK appends GV chunk tags only; our shared parser lacks the action and
-    // defaults it to FilterAll, so the PERIFRASIS_VERBALES group must be skipped in the
-    // generic pass and replayed by append_gv_chunks below with ADDCHUNK semantics.
     let cut = xml_disambiguator
         .first_index_of_rule_id("PERIFRASIS_VERBALES")
         .unwrap_or(xml_disambiguator.rule_count());
-    // XmlRuleDisambiguator(lang, true) appends disambiguation-global.xml after the
-    // language file (XmlRuleDisambiguator.java:62-68); SpanishHybridDisambiguator
-    // constructs it with useGlobalDisambiguation=true.
     let global_xml = std::fs::read_to_string(core.join("disambiguation-global.xml")).ok()?;
     let global_expanded =
         og_xml::parser::XmlRuleParser::expand_entities_with_base(&global_xml, Some(&core));

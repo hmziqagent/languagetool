@@ -86,12 +86,10 @@ impl XmlRuleParser {
         let mut example_text = String::new();
         let mut current_text = String::new();
         let mut buf = Vec::new();
-        // Antipattern state
         let mut in_antipattern = false;
         let mut current_antipattern: Option<XmlPattern> = None;
         let mut antipattern_token: Option<XmlPatternToken> = None;
         let mut antipattern_text = String::new();
-        // Marker-in-pattern state
         let mut in_pattern_marker = false;
         let mut pattern_marker_start: Option<usize> = None;
         let mut pattern_marker_end: Option<usize> = None;
@@ -108,23 +106,18 @@ impl XmlRuleParser {
         let mut phrase_map: HashMap<String, Vec<(Vec<XmlPatternToken>, Vec<XmlPatternElement>)>> =
             HashMap::new();
         let mut pattern_ref_uses: Vec<PatternRefUse> = Vec::new();
-        // Non-self-closing exception state
         let mut in_exception = false;
         let mut current_exception: Option<XmlException> = None;
         let mut exception_text = String::new();
-        // Or/And group state
         let mut in_or_group = false;
         let mut current_or_group: Option<XmlOrGroup> = None;
         let mut in_and_group = false;
         let mut current_and_group: Option<XmlAndGroup> = None;
-        // Short message and URL state
         let mut in_short = false;
         let mut short_text = String::new();
         let mut in_url = false;
         let mut url_text = String::new();
-        // Example correction attribute
         let mut example_correction: Option<String> = None;
-        // Rule-level <regexp> state
         let mut current_rule_regexp: Option<XmlRuleRegexp> = None;
         let mut rule_regexp_text = String::new();
 
@@ -293,7 +286,6 @@ impl XmlRuleParser {
                             }
                         }
                         "exception" => {
-                            // Non-self-closing exception with text content
                             let mut exc = XmlException::default();
                             for attr in e.attributes().flatten() {
                                 let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
@@ -406,7 +398,6 @@ impl XmlRuleParser {
                             }
                         }
                         "match" if in_suggestion => {
-                            // <match no="1" case_conversion="startupper">text</match>
                             let mut m = XmlMatch::default();
                             for attr in e.attributes().flatten() {
                                 let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
@@ -427,7 +418,6 @@ impl XmlRuleParser {
                             suggestion_parts.push(SuggestionPart::Match(m));
                         }
                         "match" if current_token.is_some() => {
-                            // <match no="1"> inside a <token> - backreference in pattern
                             for attr in e.attributes().flatten() {
                                 let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
                                 let val = crate::decode_attr_value(&attr.value);
@@ -480,11 +470,9 @@ impl XmlRuleParser {
                             example_text.clear();
                         }
                         "marker" => {
-                            // Inside example - preserve <marker> tags for position extraction
                             if in_example {
                                 example_text.push_str("<marker>");
                             } else if current_pattern.is_some() || current_antipattern.is_some() {
-                                // Inside pattern - track which tokens are in the marker
                                 in_pattern_marker = true;
                                 if let Some(ref pattern) = current_pattern {
                                     pattern_marker_start = Some(pattern.tokens.len());
@@ -693,9 +681,6 @@ impl XmlRuleParser {
                                     and_group.constraints.push(token);
                                 }
                             } else if in_antipattern {
-                                // For self-closing tokens in antipatterns, antipattern_text
-                                // contains only whitespace between tokens — don't assign it.
-                                // Only assign non-whitespace text content.
                                 let trimmed = antipattern_text.trim();
                                 if !trimmed.is_empty() {
                                     token.text = Some(trimmed.to_string());
@@ -766,7 +751,6 @@ impl XmlRuleParser {
                             short_text.clear();
                         }
                         "match" if in_suggestion => {
-                            // <match no="1" case_conversion="startupper" /> inside suggestion
                             let mut m = XmlMatch::default();
                             for attr in e.attributes().flatten() {
                                 let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
@@ -787,7 +771,6 @@ impl XmlRuleParser {
                             suggestion_parts.push(SuggestionPart::Match(m));
                         }
                         "match" if current_token.is_some() => {
-                            // <match no="1" /> inside a <token> - backreference in pattern
                             for attr in e.attributes().flatten() {
                                 let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
                                 let val = crate::decode_attr_value(&attr.value);
@@ -819,9 +802,7 @@ impl XmlRuleParser {
                             }
                         }
                         "url" => {}
-                        "antipattern" => {
-                            // Antipattern
-                        }
+                        "antipattern" => {}
                         "regexp"
                             if current_rule.is_some()
                                 && current_pattern.is_none()
@@ -1048,7 +1029,6 @@ impl XmlRuleParser {
                         "phraseref" => {}
                         "pattern" => {
                             if let Some(mut pattern) = current_pattern.take() {
-                                // Set marker bounds if a marker was found inside the pattern
                                 if let Some(start) = pattern_marker_start {
                                     pattern.marker_start = Some(start);
                                     pattern.marker_end = pattern_marker_end;
@@ -1073,7 +1053,6 @@ impl XmlRuleParser {
                                 if let Some(rule) = &mut current_rule {
                                     rule.antipatterns.push(ap);
                                 } else if let Some(group) = &mut current_group {
-                                    // Store rulegroup-level antipatterns for inheritance
                                     group.antipatterns.push(ap);
                                 }
                             }
@@ -1858,9 +1837,6 @@ mod tests {
 
     #[test]
     fn test_parse_exception_on_token() {
-        // Self-closing exception inside a non-empty token element.
-        // Uses <token>test</token> with a self-closing <exception/> to avoid
-        // the parser accumulating all child text into the token's text field.
         let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
         <rules lang="en">
             <category id="GRAMMAR" name="Grammar">
@@ -1877,8 +1853,6 @@ mod tests {
         let result = parser.parse(xml).unwrap();
 
         let token = &result.rules[0].pattern.tokens[0];
-        // Note: with inline non-self-closing exceptions, the token text accumulates
-        // all child text. Here we assert what the parser actually produces.
         assert_eq!(token.exceptions.len(), 1);
 
         let exc = &token.exceptions[0];
@@ -1917,7 +1891,6 @@ mod tests {
 
     #[test]
     fn test_parse_exception_with_postag() {
-        // Self-closing exception to verify postag/postag_regexp/inflected attrs
         let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
         <rules lang="en">
             <category id="GRAMMAR" name="Grammar">
@@ -1941,8 +1914,6 @@ mod tests {
 
     #[test]
     fn test_parse_exception_inline_text_accumulation() {
-        // Non-self-closing exceptions with text are now properly parsed.
-        // The token text includes only the text before the exception.
         let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
         <rules lang="en">
             <category id="GRAMMAR" name="Grammar">
@@ -1959,9 +1930,7 @@ mod tests {
         let result = parser.parse(xml).unwrap();
 
         let token = &result.rules[0].pattern.tokens[0];
-        // Token text is "base" (text before the exception only)
         assert_eq!(token.text.as_deref(), Some("base"));
-        // Non-self-closing exceptions with text are now properly captured
         assert_eq!(token.exceptions.len(), 1);
         assert!(token.exceptions[0].negate);
         assert_eq!(token.exceptions[0].text.as_deref(), Some("exc_text"));
@@ -2366,7 +2335,6 @@ mod tests {
         let parser = XmlRuleParser::new();
         let result = parser.parse(xml).unwrap();
 
-        // Rules default to true when no default attr is present
         assert!(result.rules[0].default_on);
     }
 
@@ -2653,9 +2621,9 @@ mod tests {
 
         assert_eq!(result.categories.len(), 2);
         assert_eq!(result.categories[0].id, "GRAMMAR");
-        assert!(result.categories[0].default_on); // explicit on
+        assert!(result.categories[0].default_on);
         assert_eq!(result.categories[1].id, "STYLE");
-        assert!(!result.categories[1].default_on); // explicit off
+        assert!(!result.categories[1].default_on);
         assert_eq!(result.rules.len(), 2);
     }
 
@@ -2741,13 +2709,11 @@ mod tests {
         let parser = XmlRuleParser::new();
         let result = parser.parse(xml).unwrap();
 
-        // sub_id defaults to None when not in XML attributes
         assert_eq!(result.rules[0].sub_id, None);
     }
 
     #[test]
     fn test_parse_exception_multiple() {
-        // Uses self-closing exceptions to avoid text accumulation issues
         let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
         <rules lang="en">
             <category id="GRAMMAR" name="Grammar">

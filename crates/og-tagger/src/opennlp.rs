@@ -291,8 +291,6 @@ fn beam_search(
 ) -> Vec<usize> {
     let mut arena = String::with_capacity(4096);
     let mut contexts: Vec<(usize, usize)> = Vec::with_capacity(64);
-    // Memoize eval by (position, previous two outcomes): contexts depend only
-    // on those, so repeated beam prefixes share the same probability vector.
     let mut memo: std::collections::HashMap<u64, Vec<f64>, FxBuild> =
         std::collections::HashMap::with_hasher(FxBuild::default());
     let mut prev: JavaPriorityQueue = JavaPriorityQueue::new();
@@ -414,7 +412,6 @@ fn whitespace_spans(text: &str) -> Vec<(usize, usize)> {
 }
 
 fn is_java_whitespace(c: char) -> bool {
-    // OpenNLP StringUtil.isWhitespace: Character.isWhitespace ∪ Unicode Zs (no-break spaces count).
     matches!(
         c,
         '\t' | '\n'

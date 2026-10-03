@@ -68,7 +68,6 @@ fn load_lines(content: &str) -> (String, Vec<String>) {
     (separator, lines)
 }
 
-// Java splits lines on the separator as a regex; data files use the [\t;] class form.
 fn split_line<'a>(line: &'a str, separator: &str) -> Vec<&'a str> {
     let mut parts: Vec<&str> = if let Some(class) = separator
         .strip_prefix('[')

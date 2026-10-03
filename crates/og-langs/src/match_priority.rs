@@ -4,7 +4,6 @@ use og_core::match_filters::{
 };
 use std::sync::Arc;
 
-// en zero-valued: ['EVERY_NOW_AND_THEN']
 fn en_priority_table(id: &str) -> Option<i32> {
     Some(match id {
         "I_E" => 10,
@@ -803,8 +802,6 @@ fn pt_priority_table(id: &str) -> Option<i32> {
         "CONTA_TO" => -44,
         "PT_DIACRITICS_REPLACE" => -45,
         "DIACRITICS" => -45,
-        // the engine registers the pt-PT variant, whose PortugalPortuguese.java:77-78
-        // overrides take precedence over the base Portuguese map
         "PT_COMPOUNDS_POST_REFORM" => 1,
         "PORTUGUESE_OLD_SPELLING_INTERNAL" => -9,
         "AUX_VERBO" => -45,

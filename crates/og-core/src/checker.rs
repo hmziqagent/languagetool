@@ -257,7 +257,6 @@ impl Checker {
                 chunker.add_chunk_tags(&mut sentence);
             }
 
-            // Step 2b2: Add SENT_END tag to last non-whitespace token (like Java's setSentEnd())
             {
                 let tokens = sentence.tokens_mut();
                 for i in (0..tokens.len()).rev() {

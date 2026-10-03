@@ -7,7 +7,6 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 
-/// Java LT normalizes these, so "it\u{2019}s" should match pattern token "'s".
 fn java_replacement(repl: &str) -> Cow<'_, str> {
     if !repl.contains('$') {
         return Cow::Borrowed(repl);
@@ -1650,8 +1649,6 @@ impl PatternRuleEngine {
                     });
                     return Some(rest);
                 }
-                // Java matchFrom commits to the first position where the next element
-                // matches and aborts the whole start when the remaining elements fail.
                 return None;
             }
 
@@ -2223,8 +2220,6 @@ fn element_matches_readings(
         {
             return true;
         }
-        // Java leaves unsplittable compounds as lemma-less no-info readings, so its
-        // inflected test falls back to the surface; our splitter gives them lemmas.
         return element_surface_text_matches(pattern, token) != pattern.negate
             && any_pos_ok(token.readings());
     }
@@ -2556,9 +2551,7 @@ fn skipped_suffix(
             break;
         };
         if out.is_empty() {
-            if following {
-                // Java skips the space only directly after the anchor token
-            } else {
+            if !following {
                 out.push(' ');
             }
         } else if tokens
@@ -4440,8 +4433,6 @@ fn days_in_month(year: u32, month: u32) -> u32 {
     }
 }
 
-// Java's strict Calendar resolves DAY_OF_MONTH 0 (unparseable day arg) to the
-// last day of the previous month instead of throwing; day 32+ does throw.
 fn day_zero_rolls_back(year: u32, month: u32, day: u32) -> (u32, u32, u32) {
     if day > 0 {
         return (year, month, day);
