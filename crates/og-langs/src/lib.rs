@@ -9,6 +9,7 @@ pub mod ar;
 pub mod confusion_probability;
 pub mod de;
 pub mod detection;
+pub mod fr;
 pub mod it;
 pub mod match_priority;
 pub mod ro;
