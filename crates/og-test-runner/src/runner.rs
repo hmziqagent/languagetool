@@ -117,6 +117,7 @@ impl SentenceTokenizer for TestSentenceTokenizer {
 pub fn generic_dict_stem(code: &str) -> Option<&'static str> {
     let generic_stems: &[(&str, &str)] = &[
         ("fr", "french"),
+        ("da", "danish"),
         ("es", "spanish"),
         ("pt", "portuguese"),
         ("nl", "dutch"),
