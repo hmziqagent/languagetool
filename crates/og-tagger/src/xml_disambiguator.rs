@@ -851,11 +851,25 @@ impl XmlDisambiguator {
 
                         if matches!(rule.disambig, DisambigAction::FilterAll) {
                             for (pos, pattern_idx) in indexed_targets {
-                                pending_filterall.push((
-                                    pos,
-                                    &rule.pattern.tokens[pattern_idx
-                                        .min(rule.pattern.tokens.len().saturating_sub(1))],
-                                ));
+                                let outer = if rule.pattern.has_structured_elements {
+                                    match rule.pattern.elements.get(pattern_idx) {
+                                        Some(og_xml::compiler::CompiledPatternElement::Token(
+                                            t,
+                                        )) => Some(t.as_ref()),
+                                        Some(
+                                            og_xml::compiler::CompiledPatternElement::AndGroup(cs),
+                                        ) => cs.first(),
+                                        Some(
+                                            og_xml::compiler::CompiledPatternElement::OrGroup(alts),
+                                        ) => alts.first(),
+                                        None => None,
+                                    }
+                                } else {
+                                    rule.pattern.tokens.get(pattern_idx)
+                                };
+                                if let Some(tok) = outer {
+                                    pending_filterall.push((pos, tok));
+                                }
                             }
                         } else if matches!(rule.disambig, DisambigAction::Immunize) {
                             let counts = &match_result.element_counts;
@@ -4405,6 +4419,53 @@ mod tests {
                 && sentence.tokens()[2].is_immunized()
                 && sentence.tokens()[3].is_immunized(),
             "three fully spaced dots must be immunized like Java's IMMUNIZE_ELLIPSIS"
+        );
+    }
+
+    #[test]
+    fn filterall_filters_marker_positions_by_element_postag_including_and_groups() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<rules lang="en">
+    <rule id="DO_not_VBNN_VB" name="do/did/does + not + verb/noun -> VB">
+        <pattern>
+            <marker>
+                <token postag="VB.*" postag_regexp="yes" regexp="yes">do(es)?|did</token>
+                <token>not</token>
+                <and>
+                    <token postag="VB"/>
+                    <token postag_regexp="yes" postag="JJ|NN.*"/>
+                </and>
+            </marker>
+        </pattern>
+        <disambig action="filterall"/>
+    </rule>
+</rules>"#;
+        let disambiguator = XmlDisambiguator::from_xml(xml).unwrap();
+        let mut sentence = make_sentence(vec![
+            ("<S>", vec!["SENT_START"]),
+            ("I", vec!["PRP"]),
+            ("did", vec!["VBD"]),
+            ("not", vec!["RB"]),
+            ("notice", vec!["NN:UN", "VB", "VBP"]),
+            (".", vec!["SENT_END"]),
+        ]);
+        disambiguator.disambiguate(&mut sentence);
+        let notice = &sentence.tokens()[4];
+        assert!(
+            notice.has_pos_tag("VB"),
+            "the VB reading kept by the and-group's outer postag must survive"
+        );
+        assert!(
+            !notice.has_pos_tag("NN:UN") && !notice.has_pos_tag("VBP"),
+            "filterall must filter the and-group position with the first sub-token's postag (VB) like Java's PatternToken.getPOStag()"
+        );
+        assert!(
+            sentence.tokens()[2].has_pos_tag("VBD"),
+            "the regexp-postag element keeps its own matching readings"
+        );
+        assert!(
+            sentence.tokens()[3].has_pos_tag("RB"),
+            "an element without postag leaves its token untouched"
         );
     }
 }
