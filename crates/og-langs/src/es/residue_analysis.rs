@@ -132,3 +132,57 @@ fn compare_failing_word_readings_across_dicts() {
         words.len()
     );
 }
+
+#[test]
+#[ignore]
+fn classify_failures_by_direct_dict_lookup() {
+    use og_tagger::morfologik::MorfologikDictionary;
+    let artifact =
+        std::fs::read_to_string("/tmp/test_failures_es_module.txt").expect("failure artifact");
+    let dir = crate::es::es_resource_dir().expect("es dir");
+    let dict = MorfologikDictionary::load(&dir.join("spanish.dict"), &dir.join("spanish.info"))
+        .expect("dict");
+    let mut missing_direct = 0usize;
+    let mut direct_ok = 0usize;
+    let mut lines_out: Vec<String> = Vec::new();
+    for line in artifact.lines() {
+        let Some(rest) = line.strip_prefix("FAIL: [") else {
+            continue;
+        };
+        let Some((_, rest)) = rest.split_once(']') else {
+            continue;
+        };
+        let text = rest
+            .split_once(": '")
+            .map(|(_, t)| t.trim_end_matches('\''))
+            .unwrap_or("");
+        let mut missing: Vec<String> = Vec::new();
+        let mut cur = String::new();
+        for c in text.chars() {
+            if c.is_alphanumeric() || c == '\'' || c == '-' || c == '’' {
+                cur.push(c);
+            } else if !cur.is_empty() {
+                let w = std::mem::take(&mut cur);
+                if w.chars().any(|c| c.is_alphabetic()) && dict.lookup(&w).is_empty() {
+                    missing.push(w);
+                }
+            }
+        }
+        if !cur.is_empty() && cur.chars().any(|c| c.is_alphabetic()) && dict.lookup(&cur).is_empty()
+        {
+            missing.push(cur);
+        }
+        if missing.is_empty() {
+            direct_ok += 1;
+            lines_out.push(line.to_string());
+        } else {
+            missing_direct += 1;
+        }
+    }
+    eprintln!("direct-ok (every word has a direct dict entry): {direct_ok}");
+    eprintln!("missing-direct (some word has no direct entry): {missing_direct}");
+    eprintln!("--- direct-ok lines ---");
+    for l in lines_out {
+        eprintln!("{l}");
+    }
+}

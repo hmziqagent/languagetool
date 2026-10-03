@@ -164,3 +164,47 @@ fn spanish_disambiguation_examples_match_java_forms() {
         eprintln!("{l}");
     }
 }
+
+#[test]
+fn global_disambiguation_marks_user_mentions_ignored_by_speller() {
+    let pipeline = crate::es::test_support::SpanishPipeline::shared();
+    let sentence = &pipeline.analyze_text("Escribe a @usuario ya.")[0];
+    let mention = sentence
+        .tokens()
+        .iter()
+        .find(|t| t.token().token() == "@usuario")
+        .expect("@usuario token");
+    assert!(
+        mention.is_ignored_by_speller(),
+        "disambiguation-global.xml GLOBAL_IGNORE_USER_MENTION must ignore-spell @usuario"
+    );
+}
+
+#[test]
+fn perifrasis_verbal_addchunk_appends_gv_chunks() {
+    let pipeline = crate::es::test_support::SpanishPipeline::shared();
+    let sentence = &pipeline.analyze_text("Tengo que comer.")[0];
+    for word in ["Tengo", "que", "comer"] {
+        let token = sentence
+            .tokens()
+            .iter()
+            .find(|t| t.token().token() == word)
+            .unwrap_or_else(|| panic!("{word} token"));
+        assert!(
+            token.has_chunk("GV"),
+            "{word} must carry the GV chunk (ADDCHUNK): chunks={:?}",
+            token.chunks()
+        );
+    }
+    let fuera = &pipeline.analyze_text("Comí fuera de casa.")[0];
+    let comi = fuera
+        .tokens()
+        .iter()
+        .find(|t| t.token().token() == "Comí")
+        .expect("Comí token");
+    assert!(
+        !comi.has_chunk("GV"),
+        "non-periphrasis verbs get no GV chunk: chunks={:?}",
+        comi.chunks()
+    );
+}

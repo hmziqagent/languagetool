@@ -166,8 +166,7 @@ pub fn spanish() -> crate::engine::LanguageEngine {
     engine
 }
 
-#[cfg(test)]
-fn build_es_disambiguator(
+pub fn build_es_disambiguator(
     resource_dir: &std::path::Path,
 ) -> Option<std::sync::Arc<dyn og_core::checker::Disambiguator>> {
     use og_core::checker::Disambiguator as _;
@@ -200,33 +199,76 @@ fn build_es_disambiguator(
         },
     )?;
     // Java's ADDCHUNK appends GV chunk tags only; our shared parser lacks the action and
-    // defaults it to FilterAll, so the PERIFRASIS_VERBALES group must be skipped entirely.
+    // defaults it to FilterAll, so the PERIFRASIS_VERBALES group must be skipped in the
+    // generic pass and replayed by append_gv_chunks below with ADDCHUNK semantics.
     let cut = xml_disambiguator
         .first_index_of_rule_id("PERIFRASIS_VERBALES")
         .unwrap_or(xml_disambiguator.rule_count());
+    // XmlRuleDisambiguator(lang, true) appends disambiguation-global.xml after the
+    // language file (XmlRuleDisambiguator.java:62-68); SpanishHybridDisambiguator
+    // constructs it with useGlobalDisambiguation=true.
+    let global_xml = std::fs::read_to_string(core.join("disambiguation-global.xml")).ok()?;
+    let global_expanded =
+        og_xml::parser::XmlRuleParser::expand_entities_with_base(&global_xml, Some(&core));
+    let global_disambiguator = og_tagger::XmlDisambiguator::from_xml(&global_expanded).ok()?;
     Some(std::sync::Arc::new(EsDisambiguatorChain {
         global: std::sync::Arc::new(global),
         multiwords: std::sync::Arc::new(multiwords),
         xml: xml_disambiguator,
         xml_cut: cut,
+        global_xml: std::sync::Arc::new(global_disambiguator),
     }))
 }
 
-#[cfg(test)]
+fn append_gv_chunks(
+    xml: &og_tagger::XmlDisambiguator,
+    sentence: &mut og_core::AnalyzedSentence,
+    from_rule: usize,
+) {
+    let mut gv_tokens: Vec<usize> = Vec::new();
+    for rule_idx in from_rule..xml.rule_count() {
+        for positions in xml.debug_match_rule(sentence, rule_idx) {
+            for p in positions {
+                if !gv_tokens.contains(&p) {
+                    gv_tokens.push(p);
+                }
+            }
+        }
+    }
+    if gv_tokens.is_empty() {
+        return;
+    }
+    gv_tokens.sort_unstable();
+    let mut nonws_seen = 0usize;
+    for token in sentence.tokens_mut().iter_mut() {
+        if token.is_whitespace() {
+            continue;
+        }
+        if gv_tokens.binary_search(&nonws_seen).is_ok() && !token.has_chunk("GV") {
+            let mut chunks = token.chunks().to_vec();
+            chunks.push("GV".to_string());
+            token.set_chunks(chunks);
+        }
+        nonws_seen += 1;
+    }
+}
+
 struct EsDisambiguatorChain {
     global: std::sync::Arc<og_tagger::MultiWordChunkerDisambiguator>,
     multiwords: std::sync::Arc<og_tagger::MultiWordChunkerDisambiguator>,
     xml: std::sync::Arc<og_tagger::XmlDisambiguator>,
     xml_cut: usize,
+    global_xml: std::sync::Arc<og_tagger::XmlDisambiguator>,
 }
 
-#[cfg(test)]
 impl og_core::checker::Disambiguator for EsDisambiguatorChain {
     fn disambiguate(&self, sentence: &mut og_core::AnalyzedSentence) {
         use og_core::checker::Disambiguator as _;
         self.global.disambiguate(sentence);
         self.multiwords.disambiguate(sentence);
         self.xml.apply_rules_through(sentence, self.xml_cut);
+        append_gv_chunks(&self.xml, sentence, self.xml_cut);
+        self.global_xml.disambiguate(sentence);
     }
 }
 
