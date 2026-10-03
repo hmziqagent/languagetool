@@ -1,7 +1,11 @@
 pub mod compound;
+#[cfg(test)]
+pub(crate) mod example_suite;
 pub mod question_whitespace;
 pub mod repeated_words;
 pub mod simple_replace;
+#[cfg(test)]
+pub(crate) mod test_support;
 
 use og_rules::postponed_adjective::LangSynthesizer;
 use og_tagger::GenericTagger;
