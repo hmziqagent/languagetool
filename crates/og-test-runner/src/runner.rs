@@ -210,33 +210,21 @@ impl TestRunner {
             let disambiguator_h = scope.spawn(|| {
                 let disambig_path = resource_dir.join("disambiguation.xml");
                 match std::fs::read_to_string(&disambig_path) {
-                    Ok(xml) => {
-                        let english_tagger = if code == "nl" {
-                            std::sync::Arc::new(og_tagger::EnglishTagger::from_resource_dir(
-                                &lt_modules
-                                    .join("en/src/main/resources/org/languagetool/resource/en"),
+                    Ok(xml) => match XmlDisambiguator::from_xml_with_english(&xml, None) {
+                        Ok(d) => {
+                            eprintln!("Loaded {} disambiguation rules", d.rule_count());
+                            Some(og_tagger::hybrid_disambiguator(
+                                code,
+                                &resource_dir,
+                                &core_resource_dir,
+                                d,
                             ))
-                        } else {
-                            std::sync::Arc::new(og_tagger::EnglishTagger::new())
-                        };
-                        let english_tagger =
-                            (english_tagger.entry_count() > 0).then_some(english_tagger);
-                        match XmlDisambiguator::from_xml_with_english(&xml, english_tagger) {
-                            Ok(d) => {
-                                eprintln!("Loaded {} disambiguation rules", d.rule_count());
-                                Some(og_tagger::hybrid_disambiguator(
-                                    code,
-                                    &resource_dir,
-                                    &core_resource_dir,
-                                    d,
-                                ))
-                            }
-                            Err(e) => {
-                                eprintln!("Warning: failed to load disambiguation: {}", e);
-                                None
-                            }
                         }
-                    }
+                        Err(e) => {
+                            eprintln!("Warning: failed to load disambiguation: {}", e);
+                            None
+                        }
+                    },
                     Err(_) => None,
                 }
             });

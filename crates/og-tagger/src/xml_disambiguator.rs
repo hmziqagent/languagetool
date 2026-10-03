@@ -214,10 +214,10 @@ impl XmlDisambiguator {
             .collect();
 
         let english_tagger = if english_tagger.is_none()
-            && compiled_rules.iter().any(|rule| {
-                rule.filter_class.as_deref() == Some("org.languagetool.rules.IsEnglishWordFilter")
-                    || rule.filter_class.as_deref() == Some(EN_PARTIAL_POSTAG_FILTER_CLASS)
-            }) {
+            && compiled_rules
+                .iter()
+                .any(|rule| rule.filter_class.as_deref() == Some(EN_PARTIAL_POSTAG_FILTER_CLASS))
+        {
             crate::english_tagger::shared_english_tagger()
         } else {
             english_tagger
