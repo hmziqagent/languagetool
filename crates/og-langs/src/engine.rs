@@ -831,7 +831,11 @@ impl LanguageEngine {
             engine.post_chunker = Some(og_tagger::russian_chunker::shared_russian_chunker());
         }
         let disambig_path = resource_dir.join("disambiguation.xml");
-        if disambig_path.exists()
+        if short == "es"
+            && let Some(chain) = crate::es::build_es_disambiguator(&resource_dir)
+        {
+            engine.disambiguator = Some(chain);
+        } else if disambig_path.exists()
             && let Ok(xml) = std::fs::read_to_string(&disambig_path)
             && let Ok(disambiguator) = XmlDisambiguator::from_xml(&xml)
             && let Some(core_resource_dir) = find_lt_core_resource_dir()
@@ -972,6 +976,9 @@ impl LanguageEngine {
 
         match short.as_str() {
             "fr" => {
+                if let Some(tagger) = crate::fr::tagger::FrenchTagger::shared_arc() {
+                    engine.tagger = Some(tagger);
+                }
                 engine.add_rule(
                     Arc::new(og_rules::native_rules::UppercaseSentenceStartRule::new())
                         as Arc<dyn Rule>,

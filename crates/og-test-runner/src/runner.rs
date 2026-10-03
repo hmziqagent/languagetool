@@ -149,6 +149,7 @@ pub enum AnyTagger {
     Esperanto(og_tagger::EsperantoTagger),
     Spanish(Arc<og_langs::es::tagger::SpanishTagger>),
     Portuguese(Arc<og_langs::pt::tagger::PortugueseTagger>),
+    French(Arc<og_langs::fr::tagger::FrenchTagger>),
 }
 
 impl AnyTagger {
@@ -161,6 +162,7 @@ impl AnyTagger {
             AnyTagger::Esperanto(t) => Tagger::tag(t, tokens),
             AnyTagger::Spanish(t) => Tagger::tag(t.as_ref(), tokens),
             AnyTagger::Portuguese(t) => Tagger::tag(t.as_ref(), tokens),
+            AnyTagger::French(t) => Tagger::tag(t.as_ref(), tokens),
         }
     }
 }
@@ -208,6 +210,11 @@ impl TestRunner {
                 {
                     return AnyTagger::Portuguese(tagger);
                 }
+                if code == "fr"
+                    && let Some(tagger) = og_langs::fr::tagger::FrenchTagger::shared_arc()
+                {
+                    return AnyTagger::French(tagger);
+                }
                 if let Some(stem) = generic_dict_stem(code)
                     && resource_dir.exists()
                 {
@@ -243,6 +250,11 @@ impl TestRunner {
             });
 
             let disambiguator_h = scope.spawn(|| {
+                if code == "es"
+                    && let Some(chain) = og_langs::es::build_es_disambiguator(&resource_dir)
+                {
+                    return Some(chain);
+                }
                 let disambig_path = resource_dir.join("disambiguation.xml");
                 match std::fs::read_to_string(&disambig_path) {
                     Ok(xml) => match XmlDisambiguator::from_xml_with_english(&xml, None) {
@@ -436,30 +448,40 @@ impl TestRunner {
 
         for (i, tagged_atr) in tagged.into_iter().enumerate() {
             let token_idx = i + 1;
-            if token_idx < tokens.len() {
-                let tagged_chunks = tagged_atr.chunks().to_vec();
-                let readings = tagged_atr.into_readings();
-                if !readings.is_empty() {
-                    let primary = tokens[token_idx].token().clone();
-                    let all_tags: Vec<String> = readings
-                        .iter()
-                        .flat_map(|r| r.pos_tags().to_vec())
-                        .collect();
-                    let updated_primary =
-                        AnalyzedToken::new(primary.token(), primary.start(), primary.end())
-                            .with_pos_tags(all_tags)
-                            .with_lemma(readings[0].lemma().unwrap_or(primary.token()).to_string());
-
-                    let mut atr =
-                        AnalyzedTokenReadings::new(updated_primary).with_readings(readings);
-                    if !tagged_chunks.is_empty() {
-                        atr.set_chunks(tagged_chunks);
-                    }
-                    tokens[token_idx] = atr;
-                } else if !tagged_chunks.is_empty() {
-                    tokens[token_idx].set_chunks(tagged_chunks);
-                }
+            if token_idx >= tokens.len() {
+                continue;
             }
+            let start = tokens[token_idx].token().start();
+            let end = tokens[token_idx].token().end();
+            if tagged_atr.readings().is_empty() {
+                let primary = AnalyzedToken::new(tagged_atr.token().token(), start, end);
+                let mut next = AnalyzedTokenReadings::new(primary);
+                if !tagged_atr.chunks().is_empty() {
+                    next.set_chunks(tagged_atr.chunks().to_vec());
+                }
+                tokens[token_idx] = next;
+                continue;
+            }
+            let tagged_chunks = tagged_atr.chunks().to_vec();
+            let text = tagged_atr.token().token().to_string();
+            let readings = tagged_atr.into_readings();
+            let all_tags: Vec<String> = readings
+                .iter()
+                .flat_map(|r| r.pos_tags().to_vec())
+                .collect();
+            let lemma = readings[0]
+                .lemma()
+                .map(str::to_string)
+                .unwrap_or_else(|| text.clone());
+            let updated_primary = AnalyzedToken::new(text, start, end)
+                .with_pos_tags(all_tags)
+                .with_lemma(lemma);
+
+            let mut atr = AnalyzedTokenReadings::new(updated_primary).with_readings(readings);
+            if !tagged_chunks.is_empty() {
+                atr.set_chunks(tagged_chunks);
+            }
+            tokens[token_idx] = atr;
         }
 
         sentence.set_tokens(tokens);
