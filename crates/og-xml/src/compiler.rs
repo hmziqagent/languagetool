@@ -128,7 +128,9 @@ impl XmlCompiler {
                     && let Some(ref group_id) = group.id
                 {
                     compiled_rule.id = group_id.clone();
-                    compiled_rule.sub_id = Some(format!("{}", i + 1));
+                    if compiled_rule.sub_id.is_none() {
+                        compiled_rule.sub_id = Some(format!("{}", i + 1));
+                    }
                 }
                 if group.default_on == Some(false) {
                     compiled_rule.default_on = false;
@@ -1263,6 +1265,61 @@ mod tests {
             3
         );
         assert_eq!(ap.elements.len(), 3);
+    }
+
+    #[test]
+    fn test_phrase_siblings_in_rulegroup_share_sub_id() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <phrases>
+                <phrase id="TIMEWORD">
+                    <token>yesterday</token>
+                </phrase>
+                <phrase id="LASTWEEK">
+                    <token>last</token>
+                    <token>week</token>
+                </phrase>
+                <phrase id="ALL_PAST">
+                    <includephrases>
+                        <phraseref idref="TIMEWORD"/>
+                        <phraseref idref="LASTWEEK"/>
+                    </includephrases>
+                </phrase>
+            </phrases>
+            <category id="GRAMMAR" name="Grammar">
+                <rulegroup id="GRP" name="Group">
+                    <rule name="One">
+                        <pattern>
+                            <phraseref idref="ALL_PAST"/>
+                            <token>went</token>
+                        </pattern>
+                        <message>Msg</message>
+                        <example correction=""><marker>yesterday went</marker></example>
+                    </rule>
+                    <rule name="Two">
+                        <pattern>
+                            <token>other</token>
+                        </pattern>
+                        <message>Msg2</message>
+                    </rule>
+                </rulegroup>
+            </category>
+        </rules>"#;
+
+        let compiler = XmlCompiler::new();
+        let result = compiler.compile_file(xml).unwrap();
+
+        assert_eq!(result.rules.len(), 3);
+        assert_eq!(result.rules[0].id, "GRP");
+        assert_eq!(result.rules[0].sub_id.as_deref(), Some("1"));
+        assert_eq!(result.rules[0].pattern.tokens.len(), 2);
+        assert_eq!(
+            result.rules[1].sub_id.as_deref(),
+            Some("1"),
+            "phrase sibling must share the original rule's subId like createRules"
+        );
+        assert_eq!(result.rules[1].pattern.tokens.len(), 3);
+        assert_eq!(result.rules[2].sub_id.as_deref(), Some("2"));
     }
 
     #[test]

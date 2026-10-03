@@ -73,6 +73,7 @@ impl XmlRuleParser {
         let mut current_equivalence: Option<crate::disambig_types::UnificationEquivalence> = None;
         let mut current_token: Option<XmlPatternToken> = None;
         let mut current_group: Option<XmlRuleGroup> = None;
+        let mut group_sub_id: u32 = 0;
         let mut in_message = false;
         let mut in_suggestion = false;
         let mut suggestion_text = String::new();
@@ -162,12 +163,16 @@ impl XmlRuleParser {
                                 }
                             }
                             current_group = Some(group);
+                            group_sub_id = 0;
                         }
                         "rule" => {
                             let mut rule = XmlRule {
                                 default_on: true,
                                 ..Default::default()
                             };
+                            if current_group.is_some() {
+                                group_sub_id += 1;
+                            }
                             for attr in e.attributes().flatten() {
                                 let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
                                 let val = crate::decode_attr_value(&attr.value);
@@ -910,6 +915,9 @@ impl XmlRuleParser {
                                     rule.rule_regexp = Some(rule_regexp);
                                 }
                                 rule_regexp_text.clear();
+                                if current_group.is_some() && rule.sub_id.is_none() {
+                                    rule.sub_id = Some(group_sub_id.to_string());
+                                }
                                 let mut variants = Vec::new();
                                 if !pattern_ref_uses.is_empty() {
                                     let mut base_ranges: Vec<(usize, usize)> = Vec::new();
