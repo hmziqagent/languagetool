@@ -717,6 +717,49 @@ impl LanguageEngine {
         engine
     }
 
+    pub fn portuguese_variant(&self, code: &str) -> Self {
+        let variant = crate::pt::variant_for_code(code).unwrap_or(crate::pt::PtVariant::Portugal);
+        let variant_dir = crate::pt::variant_rules_dir(variant);
+        let mut rules: Vec<Arc<dyn Rule>> = self.rules.clone();
+        if let Some(lt_root) = find_lt_resource_dir() {
+            let rules_dir = lt_root.join(format!(
+                "pt/src/main/resources/org/languagetool/rules/pt/{variant_dir}"
+            ));
+            for file in ["grammar.xml", "style.xml"] {
+                let path = rules_dir.join(file);
+                if !path.exists() {
+                    continue;
+                }
+                if let Ok(xml) = std::fs::read_to_string(&path) {
+                    let compiler = XmlCompiler::new();
+                    if let Ok(rule_set) = compiler.compile_file(&xml) {
+                        rules.extend(rule_set.rules.into_iter().map(|compiled| {
+                            Arc::new(XmlPatternRule::with_spelling(
+                                compiled,
+                                self.spelling_support.clone(),
+                            )) as Arc<dyn Rule>
+                        }));
+                    }
+                }
+            }
+        }
+        let native = crate::pt::variant_native_rules(variant);
+        rules.extend(native.rules);
+        let mut text_level_rules = self.text_level_rules.clone();
+        text_level_rules.extend(native.text_level_rules);
+        let mut engine = Self::new(Language::from_code(code).unwrap_or(Language::PortuguesePt));
+        engine.rules = rules;
+        engine.text_level_rules = text_level_rules;
+        engine.tagger = self.tagger.clone();
+        engine.disambiguator = self.disambiguator.clone();
+        engine.spelling_support = self.spelling_support.clone();
+        engine.synthesizer = self.synthesizer.clone();
+        engine.suggestion_synth = self.suggestion_synth.clone();
+        engine.post_chunker = self.post_chunker.clone();
+        engine.rebuild_checker();
+        engine
+    }
+
     pub fn for_code(code: &str) -> Option<Self> {
         let language = Language::from_code(code)?;
         let short = language.short_code().to_string();
@@ -764,16 +807,26 @@ impl LanguageEngine {
         } else {
             og_tagger::GenericTagger::from_resource_dir(&resource_dir, config.0)
         };
-        if short == "ar" && tagger.has_dictionary() {
+        let has_dictionary = tagger.has_dictionary();
+        if short == "ar" && has_dictionary {
             let resource = resource_dir.clone();
             engine.tagger = Some(Arc::new(
                 og_tagger::arabic_tagger::ArabicTagger::from_resource_dir(&resource),
             ));
         }
         let has_manual = resource_dir.join("added.txt").exists();
-        if engine.tagger.is_none() && (tagger.has_dictionary() || has_manual) {
-            engine.tagger = Some(Arc::new(tagger));
+        let generic_tagger_arc: Option<Arc<og_tagger::GenericTagger>> =
+            if engine.tagger.is_none() && (has_dictionary || has_manual) {
+                Some(Arc::new(tagger))
+            } else {
+                None
+            };
+        if let Some(arc) = generic_tagger_arc.clone() {
+            engine.tagger = Some(arc);
         }
+        let fr_native_tagger = (short == "fr")
+            .then(|| generic_tagger_arc.clone())
+            .flatten();
         if short == "ru" {
             engine.post_chunker = Some(og_tagger::russian_chunker::shared_russian_chunker());
         }
@@ -858,38 +911,102 @@ impl LanguageEngine {
             Arc::new(og_rules::native_rules::DoublePunctuationRule::new()) as Arc<dyn Rule>,
             Arc::new(og_rules::native_rules::CommaWhitespaceRule::new()),
         ]);
-        let brackets_rule: Arc<dyn TextLevelRule> = if short == "it" || short == "ca" {
-            Arc::new(
+        let brackets_rule: Option<Arc<dyn TextLevelRule>> = if short == "es" {
+            None
+        } else if short == "pt" {
+            Some(Arc::new(
+                og_rules::text_level_rules::GenericUnpairedBracketsRule::new().with_symbols(
+                    vec!["[", "(", "{", "\"", "“"],
+                    vec!["]", ")", "}", "\"", "”"],
+                ),
+            ))
+        } else if short == "it" || short == "ca" {
+            Some(Arc::new(
                 og_rules::text_level_rules::GenericUnpairedBracketsRule::new().with_symbols(
                     vec!["[", "(", "{", "\u{bb}", "\u{ab}"],
                     vec!["]", ")", "}", "\u{ab}", "\u{bb}"],
                 ),
-            )
+            ))
         } else if short == "ar" {
-            Arc::new(
+            Some(Arc::new(
                 og_rules::text_level_rules::GenericUnpairedBracketsRule::new().with_symbols(
                     vec!["[", "(", "{", "«", "﴾", "\"", "'"],
                     vec!["]", ")", "}", "»", "﴿", "\"", "'"],
                 ),
-            )
+            ))
         } else if short == "sk" {
-            Arc::new(
+            Some(Arc::new(
                 og_rules::text_level_rules::GenericUnpairedBracketsRule::new().with_symbols(
                     vec!["[", "(", "{", "„", "»", "«", "\""],
                     vec!["]", ")", "}", "“", "«", "»", "\""],
                 ),
-            )
+            ))
         } else {
-            Arc::new(og_rules::text_level_rules::GenericUnpairedBracketsRule::new())
+            Some(Arc::new(
+                og_rules::text_level_rules::GenericUnpairedBracketsRule::new(),
+            ))
         };
-        engine.add_text_level_rules([
+        let mut generic_text_level_rules: Vec<Arc<dyn TextLevelRule>> = vec![
             Arc::new(og_rules::text_level_rules::MultipleWhitespaceRule::new())
                 as Arc<dyn TextLevelRule>,
             Arc::new(og_rules::text_level_rules::SentenceWhitespaceRule::new()),
-            brackets_rule,
-        ]);
+        ];
+        generic_text_level_rules.extend(brackets_rule);
+        engine.add_text_level_rules(generic_text_level_rules);
 
         match short.as_str() {
+            "fr" => {
+                engine.add_rule(
+                    Arc::new(og_rules::native_rules::UppercaseSentenceStartRule::new())
+                        as Arc<dyn Rule>,
+                );
+                engine.add_text_level_rules([
+                    Arc::new(og_rules::text_level_rules::LongSentenceRule::new(40))
+                        as Arc<dyn TextLevelRule>,
+                    Arc::new(og_rules::text_level_rules::LongParagraphRule::new(220)),
+                ]);
+                engine.add_rule(Arc::new(crate::fr::french_compound_rule(fr_native_tagger)));
+                engine.add_rule(Arc::new(crate::fr::french_question_whitespace_strict_rule()));
+                engine.add_rule(Arc::new(crate::fr::french_question_whitespace_rule()));
+                engine.add_rule(Arc::new(crate::fr::french_simple_replace_rule()));
+                engine.add_text_level_rule(Arc::new(crate::fr::french_repeated_words_rule(
+                    engine.synthesizer.clone(),
+                )));
+            }
+            "es" => {
+                if let Some(tagger) = crate::es::tagger::SpanishTagger::shared_arc() {
+                    engine.tagger = Some(tagger);
+                }
+                let (sentence_rules, text_level_rules) = crate::es::native_rules();
+                engine.add_rules(sentence_rules);
+                engine.add_text_level_rules(text_level_rules);
+                if let Some(model) = og_languagemodel::DiskLanguageModel::shared_for_language("es")
+                {
+                    engine.add_rule(Arc::new(
+                        crate::confusion_probability::ConfusionRule::new_spanish(model),
+                    ));
+                }
+            }
+            "pt" => {
+                engine.add_rule(
+                    Arc::new(og_rules::native_rules::UppercaseSentenceStartRule::new())
+                        as Arc<dyn Rule>,
+                );
+                engine.add_rule(Arc::new(
+                    og_rules::text_level_rules::WhiteSpaceAtBeginOfParagraphRule::new(),
+                ) as Arc<dyn Rule>);
+                engine.add_text_level_rules([
+                    Arc::new(og_rules::text_level_rules::LongSentenceRule::new(50))
+                        as Arc<dyn TextLevelRule>,
+                    Arc::new(og_rules::text_level_rules::LongParagraphRule::new(220)),
+                    Arc::new(og_rules::text_level_rules::WhiteSpaceBeforeParagraphEndRule::new()),
+                    Arc::new(og_rules::text_level_rules::EmptyLineRule::new()),
+                    Arc::new(og_rules::text_level_rules::PunctuationMarkAtParagraphEnd2Rule::new()),
+                ]);
+                let native = crate::pt::shared_native_rules();
+                engine.add_rules(native.rules);
+                engine.add_text_level_rules(native.text_level_rules);
+            }
             "it" => {
                 engine.add_rules([
                     Arc::new(og_rules::native_rules::WhitespaceBeforePunctuationRule::new())
@@ -1501,6 +1618,8 @@ enum WordTokenizerBridge {
     Dutch,
     CrimeanTatar,
     Esperanto,
+    Spanish(crate::es::word_tokenizer::SpanishWordTokenizer),
+    Portuguese(Arc<crate::pt::word_tokenizer::PortugueseWordTokenizer>),
 }
 
 impl WordTokenizerBridge {
@@ -1522,6 +1641,14 @@ impl WordTokenizerBridge {
         }
         if code == "eo" {
             return Self::Esperanto;
+        }
+        if code == "es" {
+            return Self::Spanish(crate::es::word_tokenizer::SpanishWordTokenizer::new());
+        }
+        if code == "pt" {
+            return crate::pt::word_tokenizer::shared_portuguese_word_tokenizer()
+                .map(Self::Portuguese)
+                .unwrap_or(Self::Default(false));
         }
         if code != "fr" {
             return Self::Default(false);
@@ -1578,6 +1705,10 @@ impl WordTokenizer for WordTokenizerBridge {
                 tz.split_trailing_hyphens(tz.tokenize(text))
             }
             Self::Esperanto => og_tokenizer::DefaultWordTokenizer::new_esperanto().tokenize(text),
+            Self::Spanish(tz) => tz.tokenize(text),
+            Self::Portuguese(tz) => {
+                return tz.tokenize(text, offset);
+            }
         };
         tokens
             .into_iter()
@@ -1800,6 +1931,101 @@ mod tests {
             !ids.contains(&"Unify_Adj_NN_case"),
             "correct ADJ+NN pair must not be flagged, got {ids:?}"
         );
+    }
+
+    #[test]
+    fn french_engine_registers_native_rules() {
+        let engine =
+            LanguageEngine::for_code("fr").expect("French engine must be registered via for_code");
+        assert!(
+            engine.rule_count() > 10,
+            "expected French rules to load, got {}",
+            engine.rule_count()
+        );
+        assert!(
+            engine.tagger.is_some(),
+            "expected the French morfologik tagger to load"
+        );
+        let result = engine.check("le quel est le bon ?");
+        let ids: Vec<&str> = result.matches.iter().map(|m| m.rule().id()).collect();
+        assert!(
+            ids.iter().any(|id| id.starts_with("FR_COMPOUNDS")),
+            "expected FR_COMPOUNDS to fire on 'Congo Brazzaville', got {ids:?}"
+        );
+    }
+
+    #[test]
+    fn spanish_engine_registers_native_rules_and_tagger() {
+        let engine =
+            LanguageEngine::for_code("es").expect("Spanish engine must be registered via for_code");
+        assert!(
+            engine.rule_count() > 10,
+            "expected Spanish rules to load, got {}",
+            engine.rule_count()
+        );
+        assert!(
+            engine.tagger.is_some(),
+            "expected the Spanish tagger to load"
+        );
+        let ids: Vec<String> = engine
+            .text_level_rules
+            .iter()
+            .map(|r| r.id().to_string())
+            .collect();
+        assert!(
+            ids.contains(&"ES_UNPAIRED_BRACKETS".to_string()),
+            "expected SpanishUnpairedBracketsRule instead of the generic bracket rule, got {ids:?}"
+        );
+        assert!(
+            !ids.contains(&"UNPAIRED_BRACKETS".to_string()),
+            "the generic bracket rule must not be registered for es, got {ids:?}"
+        );
+        let result = engine.check("Qué pasa?");
+        let match_ids: Vec<&str> = result.matches.iter().map(|m| m.rule().id()).collect();
+        assert!(
+            match_ids.contains(&"ES_QUESTION_MARK"),
+            "expected ES_QUESTION_MARK to fire, got {match_ids:?}"
+        );
+    }
+
+    #[test]
+    fn portuguese_engine_registers_native_rules() {
+        let engine =
+            LanguageEngine::for_code("pt").expect("pt engine must be registered via for_code");
+        let ids: Vec<String> = engine.rules.iter().map(|r| r.id().to_string()).collect();
+        for expected in ["PT_COMPOUNDS_POST_REFORM", "PT_BARBARISMS_REPLACE"] {
+            assert!(
+                ids.contains(&expected.to_string()),
+                "missing {expected} in pt engine"
+            );
+        }
+        let result = engine.check("Esta casa é velha. foi construida em 1950.");
+        let match_ids: Vec<&str> = result.matches.iter().map(|m| m.rule().id()).collect();
+        assert!(
+            match_ids.contains(&"UPPERCASE_SENTENCE_START"),
+            "expected UPPERCASE_SENTENCE_START to fire, got {match_ids:?}"
+        );
+    }
+
+    #[test]
+    fn portuguese_variant_engines_add_variant_rules() {
+        let base = LanguageEngine::for_code("pt").expect("pt base engine");
+        let pt_pt = base.portuguese_variant("pt-PT");
+        let pt_br = base.portuguese_variant("pt-BR");
+        assert!(pt_pt.rule_count() > base.rule_count());
+        assert!(pt_br.rule_count() > base.rule_count());
+        let pt_pt_ids: Vec<String> = pt_pt.rules.iter().map(|r| r.id().to_string()).collect();
+        let pt_br_ids: Vec<String> = pt_br.rules.iter().map(|r| r.id().to_string()).collect();
+        assert!(
+            pt_pt_ids.contains(&"PT_AGREEMENT_REPLACE".to_string()),
+            "pt-PT variant must carry PT_AGREEMENT_REPLACE"
+        );
+        assert!(
+            !pt_br_ids.contains(&"PT_AGREEMENT_REPLACE".to_string()),
+            "pt-BR variant must not carry PT_AGREEMENT_REPLACE"
+        );
+        assert_eq!(pt_pt.language.code(), "pt-PT");
+        assert_eq!(pt_br.language.code(), "pt-BR");
     }
 
     #[test]

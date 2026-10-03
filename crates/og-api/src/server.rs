@@ -45,6 +45,7 @@ enum EngineSource {
     EnglishVariant(&'static str),
     German,
     GermanVariant(&'static str),
+    PortugueseVariant(&'static str),
     Generic(&'static str),
 }
 
@@ -62,8 +63,8 @@ fn engine_source(code: &str) -> Option<EngineSource> {
         "da" => Some(EngineSource::Generic("da")),
         "fr" => Some(EngineSource::Generic("fr")),
         "es" => Some(EngineSource::Generic("es")),
-        "pt" | "pt-PT" => Some(EngineSource::Generic("pt")),
-        "pt-BR" => Some(EngineSource::Generic("pt")),
+        "pt" | "pt-PT" => Some(EngineSource::PortugueseVariant("pt-PT")),
+        "pt-BR" => Some(EngineSource::PortugueseVariant("pt-BR")),
         "nl" => Some(EngineSource::Generic("nl")),
         "pl" => Some(EngineSource::Generic("pl")),
         "ru" => Some(EngineSource::Generic("ru")),
@@ -114,6 +115,7 @@ fn build_engine_for(code: &str) -> Arc<LanguageEngine> {
             Arc::new(variant)
         }
         Some(EngineSource::Generic(short)) => shared_generic_engine(short),
+        Some(EngineSource::PortugueseVariant(code)) => shared_portuguese_variant_engine(code),
         Some(EngineSource::GermanVariant(code)) => {
             info!("Loading {code} engine...");
             let variant = shared_german_engine().german_variant(code);
@@ -144,6 +146,22 @@ fn shared_generic_engine(short_code: &'static str) -> Arc<LanguageEngine> {
         engine.rule_count()
     );
     guard.insert(short_code, engine.clone());
+    engine
+}
+
+fn shared_portuguese_variant_engine(code: &'static str) -> Arc<LanguageEngine> {
+    static CACHE: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<&'static str, Arc<LanguageEngine>>>,
+    > = std::sync::OnceLock::new();
+    let cache = CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+    let mut guard = cache.lock().unwrap();
+    if let Some(hit) = guard.get(code) {
+        return hit.clone();
+    }
+    info!("Loading {code} engine...");
+    let engine = Arc::new(shared_generic_engine("pt").portuguese_variant(code));
+    info!("Loaded {code} engine with {} rules", engine.rule_count());
+    guard.insert(code, engine.clone());
     engine
 }
 

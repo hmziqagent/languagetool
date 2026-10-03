@@ -37,6 +37,8 @@ enum TestWordTokenizer {
     Dutch,
     CrimeanTatar,
     Esperanto,
+    Spanish(og_langs::es::word_tokenizer::SpanishWordTokenizer),
+    Portuguese(Arc<og_langs::pt::word_tokenizer::PortugueseWordTokenizer>),
 }
 
 impl WordTokenizer for TestWordTokenizer {
@@ -76,6 +78,10 @@ impl WordTokenizer for TestWordTokenizer {
             }
             TestWordTokenizer::Esperanto => {
                 og_tokenizer::DefaultWordTokenizer::new_esperanto().tokenize(text)
+            }
+            TestWordTokenizer::Spanish(tz) => tz.tokenize(text),
+            TestWordTokenizer::Portuguese(tz) => {
+                return tz.tokenize(text, offset);
             }
         };
         tokens
@@ -140,6 +146,7 @@ pub enum AnyTagger {
     Generic(og_tagger::GenericTagger),
     Arabic(og_tagger::arabic_tagger::ArabicTagger),
     Esperanto(og_tagger::EsperantoTagger),
+    Spanish(Arc<og_langs::es::tagger::SpanishTagger>),
 }
 
 impl AnyTagger {
@@ -150,6 +157,7 @@ impl AnyTagger {
             AnyTagger::Generic(t) => Tagger::tag(t, tokens),
             AnyTagger::Arabic(t) => Tagger::tag(t, tokens),
             AnyTagger::Esperanto(t) => Tagger::tag(t, tokens),
+            AnyTagger::Spanish(t) => Tagger::tag(t.as_ref(), tokens),
         }
     }
 }
@@ -186,6 +194,11 @@ impl TestRunner {
                         og_tagger::EsperantoTagger::from_resource_dir(&resource_dir)
                 {
                     return AnyTagger::Esperanto(tagger);
+                }
+                if code == "es"
+                    && let Some(tagger) = og_langs::es::tagger::SpanishTagger::shared_arc()
+                {
+                    return AnyTagger::Spanish(tagger);
                 }
                 if let Some(stem) = generic_dict_stem(code)
                     && resource_dir.exists()
@@ -388,6 +401,14 @@ impl TestRunner {
             None if self.language == "nl" => TestWordTokenizer::Dutch,
             None if self.language == "crh" => TestWordTokenizer::CrimeanTatar,
             None if self.language == "eo" => TestWordTokenizer::Esperanto,
+            None if self.language == "es" => {
+                TestWordTokenizer::Spanish(og_langs::es::word_tokenizer::SpanishWordTokenizer::new())
+            }
+            None if self.language == "pt" => {
+                og_langs::pt::word_tokenizer::shared_portuguese_word_tokenizer()
+                    .map(TestWordTokenizer::Portuguese)
+                    .unwrap_or(TestWordTokenizer::Default(false))
+            }
             None => TestWordTokenizer::Default(self.language == "en"),
         };
         let mut sentence = AnalyzedSentence::new(text, 0, text.len());

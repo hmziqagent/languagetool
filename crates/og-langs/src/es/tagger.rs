@@ -125,12 +125,23 @@ impl SpanishTagger {
     }
 
     pub fn shared() -> Option<&'static SpanishTagger> {
-        static CACHE: OnceLock<Option<SpanishTagger>> = OnceLock::new();
+        static CACHE: OnceLock<Option<Arc<SpanishTagger>>> = OnceLock::new();
         CACHE
             .get_or_init(|| {
-                crate::es::es_resource_dir().map(|dir| SpanishTagger::from_resource_dir(&dir))
+                crate::es::es_resource_dir()
+                    .map(|dir| Arc::new(SpanishTagger::from_resource_dir(&dir)))
             })
-            .as_ref()
+            .as_deref()
+    }
+
+    pub fn shared_arc() -> Option<Arc<SpanishTagger>> {
+        static CACHE: OnceLock<Option<Arc<SpanishTagger>>> = OnceLock::new();
+        CACHE
+            .get_or_init(|| {
+                crate::es::es_resource_dir()
+                    .map(|dir| Arc::new(SpanishTagger::from_resource_dir(&dir)))
+            })
+            .clone()
     }
 
     fn load_manual_data(&mut self, data: &str, into_removals: bool) {
