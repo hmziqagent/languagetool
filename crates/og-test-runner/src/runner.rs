@@ -934,9 +934,11 @@ pub mod test_support {
             "/home/agent/opengrammar-rs/languagetool/languagetool-language-modules/{code}/src/main/resources/org/languagetool/rules/{code}/grammar.xml"
         ));
         let xml = std::fs::read_to_string(&path).expect("Failed to read grammar.xml");
-        let xml = (code == "fr")
-            .then(|| og_langs::fr::normalize_fr_rules_xml(&xml).into_owned())
-            .unwrap_or(xml);
+        let xml = match code {
+            "fr" => og_langs::fr::normalize_fr_rules_xml(&xml).into_owned(),
+            "pl" => og_langs::pl::normalize_pl_rules_xml(&xml).into_owned(),
+            _ => xml,
+        };
         let compiled: &'static CompiledRuleSet = Box::leak(Box::new(
             XmlCompiler::new()
                 .compile_file_with_base(&xml, path.parent())

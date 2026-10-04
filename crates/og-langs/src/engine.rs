@@ -931,6 +931,8 @@ impl LanguageEngine {
             }
             let outcome = if short == "fr" {
                 engine.load_xml_file_normalized(&path, crate::fr::normalize_fr_rules_xml)
+            } else if short == "pl" {
+                engine.load_xml_file_normalized(&path, crate::pl::normalize_pl_rules_xml)
             } else {
                 engine.load_xml_file(&path)
             };
