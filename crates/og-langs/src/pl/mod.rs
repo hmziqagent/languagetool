@@ -409,6 +409,10 @@ mod dict_probe {
         for w in [
             "kobieta",
             "kobietą",
+            "K",
+            "k",
+            "W",
+            "w",
             "Były",
             "były",
             "rozum",

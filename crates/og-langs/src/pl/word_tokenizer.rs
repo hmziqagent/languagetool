@@ -111,11 +111,160 @@ fn push_dashes_between(parts: &[&str], start: usize, out: &mut Vec<Token>) {
     }
 }
 
+fn is_java_tokenizing_char(c: char) -> bool {
+    matches!(
+        c,
+        '\u{0020}'
+            | '\u{00A0}'
+            | '\u{115f}'
+            | '\u{1160}'
+            | '\u{1680}'
+            | '\u{2000}'..='\u{200f}'
+            | '\u{2028}'..='\u{202f}'
+            | '\u{205f}'
+            | '\u{2060}'..='\u{206f}'
+            | '\u{3000}'
+            | '\u{3164}'
+            | '\u{FEFF}'
+            | '\u{FFA0}'
+            | '\u{FFF9}'..='\u{FFFB}'
+            | '¦'
+            | '‖'
+            | '∣'
+            | '|'
+            | ','
+            | '.'
+            | ';'
+            | '('
+            | ')'
+            | '['
+            | ']'
+            | '{'
+            | '}'
+            | '='
+            | '*'
+            | '#'
+            | '∗'
+            | '+'
+            | '×'
+            | '·'
+            | '÷'
+            | '<'
+            | '>'
+            | '!'
+            | '?'
+            | ':'
+            | '~'
+            | '/'
+            | '\\'
+            | '"'
+            | '\''
+            | '«'
+            | '»'
+            | '„'
+            | '”'
+            | '“'
+            | '‘'
+            | '’'
+            | '‚'
+            | '`'
+            | '´'
+            | '‛'
+            | '′'
+            | '›'
+            | '‹'
+            | '…'
+            | '¿'
+            | '¡'
+            | '‼'
+            | '⁇'
+            | '⁈'
+            | '⁉'
+            | '™'
+            | '®'
+            | '\u{203d}'
+            | '\u{00B6}'
+            | '\u{FFEB}'
+            | '\u{2E2E}'
+            | '\u{2012}'
+            | '\u{2013}'
+            | '\u{2014}'
+            | '\u{2015}'
+            | '\u{2500}'
+            | '\u{3161}'
+            | '\u{2713}'
+            | '\u{25CF}'
+            | '\u{25CB}'
+            | '\u{25C6}'
+            | '\u{27A2}'
+            | '\u{25A0}'
+            | '\u{25A1}'
+            | '\u{2605}'
+            | '\u{274F}'
+            | '\u{2794}'
+            | '\u{21B5}'
+            | '\u{2756}'
+            | '\u{25AA}'
+            | '\u{2751}'
+            | '\u{2022}'
+            | '\u{2B9A}'
+            | '\u{2265}'
+            | '\u{2192}'
+            | '\u{21FE}'
+            | '\u{21C9}'
+            | '\u{21D2}'
+            | '\u{21E8}'
+            | '\u{21DB}'
+            | '\u{00B9}'
+            | '\u{00B2}'
+            | '\u{00B3}'
+            | '\u{2070}'
+            | '\u{2071}'
+            | '\u{2074}'..='\u{2079}'
+            | '\t'
+            | '\n'
+            | '\r'
+            | '\u{000B}'
+    )
+}
+
+fn join_java_runs(tokens: Vec<Token>) -> Vec<Token> {
+    let mut out: Vec<Token> = Vec::with_capacity(tokens.len());
+    for token in tokens {
+        let boundary_joins = out.last().is_some_and(|prev| {
+            prev.end() == token.start()
+                && prev
+                    .text()
+                    .chars()
+                    .last()
+                    .is_some_and(|c| !is_java_tokenizing_char(c))
+                && token
+                    .text()
+                    .chars()
+                    .next()
+                    .is_some_and(|c| !is_java_tokenizing_char(c))
+        });
+        if boundary_joins {
+            let last = out.last_mut().expect("checked non-empty");
+            let end = token.end();
+            let mut text = String::with_capacity(last.text().len() + token.text().len());
+            text.push_str(last.text());
+            text.push_str(token.text());
+            let start = last.start();
+            *last = Token::new(text, start, end);
+        } else {
+            out.push(token);
+        }
+    }
+    out
+}
+
 impl og_tokenizer::WordTokenizer for PolishWordTokenizer {
     fn tokenize(&self, text: &str) -> Vec<Token> {
         let base = self.inner.tokenize(text);
-        let mut out = Vec::with_capacity(base.len());
-        for token in base {
+        let joined = join_java_runs(base);
+        let mut out = Vec::with_capacity(joined.len());
+        for token in joined {
             self.expand_token(token.text(), token.start(), &mut out);
         }
         out
@@ -210,5 +359,102 @@ mod tests {
     #[test]
     fn java_pins_apostrophe_and_low_quote_splitting() {
         assert_eq!(tokens("IPN'ie"), vec!["IPN", "'", "ie"]);
+    }
+
+    #[test]
+    fn java_pins_percent_stays_glued_to_the_number() {
+        assert_eq!(tokens("9%"), vec!["9%"]);
+        assert_eq!(tokens("40%"), vec!["40%"]);
+        assert_eq!(tokens("3%."), vec!["3%", "."]);
+        assert_eq!(
+            tokens("Mam 1,5% chleb."),
+            vec!["Mam", " ", "1", ",", "5%", " ", "chleb", "."]
+        );
+    }
+
+    #[test]
+    fn java_pins_percent_joining_keeps_hyphen_expansion() {
+        assert_eq!(tokens("65-67%,"), vec!["65", "-", "67%", ","]);
+        assert_eq!(
+            tokens("Wzrósł zaledwie o 1, 9%."),
+            vec![
+                "Wzrósł", " ", "zaledwie", " ", "o", " ", "1", ",", " ", "9%", "."
+            ]
+        );
+    }
+
+    #[test]
+    fn java_pins_joined_runs_keep_original_offsets() {
+        let text = "Wzrósł zaledwie o 1, 9%.";
+        for token in PolishWordTokenizer::shared().tokenize(text) {
+            assert_eq!(
+                &text[token.start()..token.end()],
+                token.text(),
+                "offsets must address the original text"
+            );
+        }
+    }
+
+    #[test]
+    fn java_pins_delimiters_are_not_joined_across() {
+        assert_eq!(tokens("1,9 %."), vec!["1", ",", "9", " ", "%", "."]);
+        assert_eq!(tokens("a. b"), vec!["a", ".", " ", "b"]);
+        assert_eq!(
+            tokens("To ‚rekiny’."),
+            vec!["To", " ", "‚", "rekiny", "’", "."]
+        );
+        assert_eq!(
+            tokens("To jest wyraz „krowa“."),
+            vec!["To", " ", "jest", " ", "wyraz", " ", "„", "krowa", "“", "."]
+        );
+    }
+
+    fn decode_java_escapes(literal: &str) -> String {
+        let mut out = String::with_capacity(literal.len());
+        let mut rest = literal;
+        while let Some(pos) = rest.find("\\u{") {
+            out.push_str(&rest[..pos]);
+            let after = &rest[pos + 3..];
+            let end = after.find('}').expect("closed escape");
+            let cp = u32::from_str_radix(&after[..end], 16).expect("hex escape");
+            out.push(char::from_u32(cp).expect("valid code point"));
+            rest = &after[end + 1..];
+        }
+        out.push_str(rest);
+        out
+    }
+
+    #[test]
+    fn java_pins_the_tokenizing_character_set_matches_wordtokenizer_java() {
+        let pieces = [
+            r"\u{0020}\u{00A0}\u{115f}\u{1160}\u{1680}\u{2000}\u{2001}\u{2002}\u{2003}\u{2004}\u{2005}\u{2006}\u{2007}\u{2008}\u{2009}\u{200A}\u{200B}\u{200C}\u{200D}\u{200E}\u{200F}\u{2028}\u{2029}\u{202A}\u{202B}\u{202C}\u{202D}\u{202E}\u{202F}\u{205F}\u{2060}\u{2061}\u{2062}\u{2063}\u{206A}\u{206B}\u{206C}\u{206D}\u{206E}\u{206F}\u{3000}\u{3164}\u{FEFF}\u{FFA0}\u{FFF9}\u{FFFA}\u{FFFB}",
+            "¦‖∣|,.;()[]{}=*#∗+×·÷<>!?:~/\\\\\"'«»„”“‘’`´‛′›‹…¿¡‼⁇⁈⁉™®\u{203D}\u{00B6}\u{FFEB}\u{2E2E}",
+            r"\u{2012}\u{2013}\u{2014}\u{2015}",
+            r"\u{2500}\u{3161}\u{2713}",
+            r"\u{25CF}\u{25CB}\u{25C6}\u{27A2}\u{25A0}\u{25A1}\u{2605}\u{274F}\u{2794}\u{21B5}\u{2756}\u{25AA}\u{2751}\u{2022}",
+            r"\u{2B9A}\u{2265}\u{2192}\u{21FE}\u{21C9}\u{21D2}\u{21E8}\u{21DB}",
+            r"\u{00B9}\u{00B2}\u{00B3}\u{2070}\u{2071}\u{2074}\u{2075}\u{2076}\u{2077}\u{2078}\u{2079}",
+            "\t\n\r\u{000B}",
+            "–‚",
+        ];
+        let mut covered = std::collections::HashSet::new();
+        for piece in pieces {
+            for c in decode_java_escapes(piece).chars() {
+                assert!(
+                    is_java_tokenizing_char(c),
+                    "WordTokenizer.java delimiter {c:?} (U+{:04X}) missing from the Rust set",
+                    c as u32
+                );
+                covered.insert(c);
+            }
+        }
+        for not_delim in ['%', '$', '&', '@', '^', '€', '°', '£', '§', 'µ', '-'] {
+            assert!(
+                !is_java_tokenizing_char(not_delim),
+                "{not_delim:?} is not a Java tokenizing character"
+            );
+        }
+        assert!(covered.contains(&'\u{201A}'), "the Polish ‚ addition");
+        assert!(covered.len() > 120, "the full Java set is transcribed");
     }
 }
