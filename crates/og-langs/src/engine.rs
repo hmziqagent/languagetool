@@ -899,7 +899,7 @@ impl LanguageEngine {
             }
         } else if !dict.is_empty() {
             let dict = Arc::new(dict);
-            if short != "pl" {
+            if short != "pl" && short != "ast" {
                 engine.add_rule(Arc::new(
                     og_spell::SpellingCheckRule::new_shared(dict.clone(), config.1, HashSet::new())
                         .with_ignore_words(ignore_words),
@@ -1116,10 +1116,10 @@ impl LanguageEngine {
                 }
             }
             "ast" => {
-                engine.add_rule(
-                    Arc::new(og_rules::native_rules::UppercaseSentenceStartRule::new())
-                        as Arc<dyn Rule>,
-                );
+                engine.add_rules([
+                    Arc::new(crate::ast::AsturianSpellerRule::new()) as Arc<dyn Rule>,
+                    Arc::new(og_rules::native_rules::UppercaseSentenceStartRule::new()),
+                ]);
             }
             "da" => {
                 engine.add_rule(
@@ -2404,6 +2404,14 @@ mod tests {
                 "expected {expected} in Asturian natives, got {ids:?}"
             );
         }
+        assert_eq!(
+            ids.iter()
+                .filter(|id| **id == crate::ast::MORFOLOGIK_RULE_AST)
+                .count(),
+            1,
+            "the ast arm's AsturianSpellerRule and the generic speller block must not both \
+             register MORFOLOGIK_RULE_AST"
+        );
         let text_level_ids = engine.text_level_rule_ids();
         assert!(
             text_level_ids.contains(&"UNPAIRED_BRACKETS")
@@ -2416,6 +2424,13 @@ mod tests {
         assert!(
             ids.contains(&"UPPERCASE_SENTENCE_START"),
             "expected UPPERCASE_SENTENCE_START on lowercase start, got {ids:?}"
+        );
+
+        let result = engine.check("\u{bf}Tas avec\u{e1}u colos correutores gramaticales?");
+        let ids: Vec<&str> = result.matches.iter().map(|m| m.rule().id()).collect();
+        assert!(
+            ids.contains(&crate::ast::MORFOLOGIK_RULE_AST),
+            "expected the ast_ES.dict speller to flag 'avec\u{e1}u', got {ids:?}"
         );
     }
 
