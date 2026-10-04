@@ -1,150 +1,9 @@
-use og_core::{AnalyzedToken, AnalyzedTokenReadings, RuleMatch};
-use og_rules::spelling_support::{SpellerVariant, prepare_line_for_speller};
-use og_spell::Dictionary;
-use std::collections::HashMap;
-use std::sync::{Arc, OnceLock};
-
-pub const FRENCH_SUPPRESS_MISSPELLED_FILTER_CLASS: &str =
-    "org.languagetool.rules.fr.FrenchSuppressMisspelledSuggestionsFilter";
-
-pub fn shared_french_spelling_dictionary() -> Option<&'static Dictionary> {
-    static CACHE: OnceLock<Option<Dictionary>> = OnceLock::new();
-    CACHE
-        .get_or_init(|| {
-            let resource_dir = crate::fr::fr_resource_dir()?;
-            let dictionary = og_tagger::generic_tagger::shared_dictionary(&resource_dir, "french")?;
-            let mut dict = Dictionary::from_shared_words(Arc::new(
-                og_spell::morfologik_view::MorfologikView::new(dictionary),
-            ));
-            if let Ok(text) = std::fs::read_to_string(resource_dir.join("hunspell/spelling.txt")) {
-                for line in text.lines() {
-                    for word in prepare_line_for_speller(SpellerVariant::French, line) {
-                        if !word.is_empty() {
-                            dict.add_word(&word);
-                        }
-                    }
-                }
-            }
-            Some(dict)
-        })
-        .as_ref()
-}
-
-pub fn is_misspelled(word: &str) -> bool {
-    if word.is_empty() || !word.chars().any(|c| c.is_alphabetic()) {
-        return false;
-    }
-    match shared_french_spelling_dictionary() {
-        Some(dictionary) => !dictionary.contains(word),
-        None => false,
-    }
-}
-
-fn shared_french_tokenizer() -> Option<&'static og_tokenizer::FrenchWordTokenizer> {
-    static CACHE: OnceLock<Option<og_tokenizer::FrenchWordTokenizer>> = OnceLock::new();
-    CACHE
-        .get_or_init(|| {
-            let tagger = crate::fr::tagger::FrenchTagger::shared_arc()?;
-            Some(og_tokenizer::FrenchWordTokenizer::new(Arc::new(
-                move |w: &str| tagger.inner_is_word_tagged(w),
-            )))
-        })
-        .as_ref()
-}
-
-pub fn replacement_is_misspelled(value: &str) -> bool {
-    match shared_french_tokenizer() {
-        Some(tokenizer) => {
-            use og_tokenizer::WordTokenizer as _;
-            tokenizer
-                .tokenize(value)
-                .iter()
-                .any(|t| is_misspelled(t.text()))
-        }
-        None => value.split_whitespace().any(is_misspelled),
-    }
-}
-
-fn parse_filter_args(args: &str, matched_texts: &[String]) -> HashMap<String, String> {
-    let mut result = HashMap::new();
-    for part in args.split_whitespace() {
-        let Some((key, val)) = part.split_once(':') else {
-            continue;
-        };
-        let resolved = if let Some(rest) = val.strip_prefix('\\')
-            && let Ok(idx) = rest.parse::<usize>()
-            && idx > 0
-            && idx <= matched_texts.len()
-        {
-            matched_texts[idx - 1].clone()
-        } else if let Ok(idx) = val.parse::<usize>()
-            && idx > 0
-            && idx <= matched_texts.len()
-        {
-            matched_texts[idx - 1].clone()
-        } else {
-            val.to_string()
-        };
-        result.insert(key.to_string(), resolved);
-    }
-    result
-}
-
-fn replacement_matches_postag(word: &str, pattern: &str) -> bool {
-    let Some(tagger) = crate::fr::tagger::FrenchTagger::shared_arc() else {
-        return false;
-    };
-    let readings = og_tagger::Tagger::tag(tagger.as_ref(), &[word])
-        .into_iter()
-        .next()
-        .map(|atr| atr.into_readings())
-        .unwrap_or_default();
-    AnalyzedTokenReadings::new(AnalyzedToken::new(word, 0, 0))
-        .with_readings(readings)
-        .has_pos_tag_matching(pattern)
-}
-
-pub fn accept_rule_match(
-    mut rm: RuleMatch,
-    args: &str,
-    matched_texts: &[String],
-) -> Option<RuleMatch> {
-    let parsed = parse_filter_args(args, matched_texts);
-    let suppress_match = parsed
-        .get("suppressMatch")
-        .is_none_or(|v| !v.eq_ignore_ascii_case("false"));
-    let suppress_postag = parsed.get("SuppressPostag").cloned();
-    let filter_postag = parsed.get("FilterPostag").cloned();
-    let mut kept = Vec::new();
-    for repl in rm.replacements() {
-        let value = repl.value();
-        if replacement_is_misspelled(value) {
-            continue;
-        }
-        if let Some(sp) = suppress_postag.as_deref()
-            && replacement_matches_postag(value, sp)
-        {
-            continue;
-        }
-        if let Some(fp) = filter_postag.as_deref()
-            && !replacement_matches_postag(value, fp)
-        {
-            continue;
-        }
-        kept.push(repl.clone());
-    }
-    if kept.is_empty() && suppress_match {
-        None
-    } else {
-        rm.set_replacements(kept);
-        Some(rm)
-    }
-}
+pub use crate::fr::suppress_portable::*;
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use og_core::SuggestedReplacement;
+    use og_core::{RuleMatch, SuggestedReplacement};
 
     fn base_rm(replacement: &str) -> RuleMatch {
         RuleMatch::new(
@@ -217,5 +76,36 @@ mod tests {
         let kept = accept_rule_match(rm, "suppressMatch:true", &[]).expect("match kept");
         let values: Vec<&str> = kept.replacements().iter().map(|r| r.value()).collect();
         assert_eq!(values, vec!["pianiste"]);
+    }
+
+    #[test]
+    fn portable_walkers_resolve_the_lt_module_layout() {
+        let dir = fr_resource_dir().expect("fr resource dir");
+        assert_eq!(
+            Some(dir.clone()),
+            crate::fr::test_support::fr_resource_dir()
+        );
+        assert!(dir.join("french.dict").exists());
+        assert!(dir.join("hunspell/spelling.txt").exists());
+    }
+
+    #[test]
+    fn portable_postag_matching_reads_the_pipeline_tagger_readings() {
+        let tagger = crate::fr::tagger::FrenchTagger::shared_arc().expect("fr tagger");
+        for word in ["guerre", "arrive", "l‘opulence", "pianiste", "j‘arrive"] {
+            let tags: Vec<String> = og_tagger::Tagger::tag(tagger.as_ref(), &[word])
+                .into_iter()
+                .next()
+                .map(|atr| {
+                    atr.into_readings()
+                        .iter()
+                        .flat_map(|r| r.pos_tags().to_vec())
+                        .collect()
+                })
+                .unwrap_or_default();
+            for tag in &tags {
+                assert!(replacement_matches_postag(word, tag), "{word} {tag}");
+            }
+        }
     }
 }
