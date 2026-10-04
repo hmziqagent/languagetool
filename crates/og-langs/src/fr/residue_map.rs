@@ -68,7 +68,7 @@ impl Family {
                 "og-xml/src/parser.rs (compile raw_pos) + og-core AnalyzedSentence (pre-disambiguation copy) + og-rules/src/pattern_rule.rs (token view selection)"
             }
             Self::SuppressMisspelledSuggestionSpeller => {
-                "og-rules/src/pattern_rule.rs raw_match_alternatives/suggestion_alternatives + lift crate::fr::suppress_portable.rs and route org.languagetool.rules.fr.FrenchSuppressMisspelledSuggestionsFilter in pattern_rule.rs:2778-2779 (closes the 4-example runner delta, 15243->15247)"
+                "the filter routing landed (og-rules/src/fr_suppress.rs + the pattern_rule.rs:2814-2815 dispatch arm); remaining work is og-rules/src/pattern_rule.rs raw_match_alternatives/suggestion_alternatives - the MatchState.java:307-318 pass that rewrites unknown suggestion parts to <mistake/> before accept_rule_match nulls the match"
             }
             Self::CommaSuggestionSentStartOffset => {
                 "og-rules/src/pattern_rule.rs:627 and :639 (use prev.token().end(), not start + text length)"
