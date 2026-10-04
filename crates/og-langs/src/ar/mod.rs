@@ -1,40 +1,28 @@
+pub mod comma_whitespace;
 pub mod inflected_one_word;
 pub mod trans_verb;
+pub mod word_coherency;
+pub mod word_repeat;
 
+#[cfg(test)]
+mod example_suite;
+
+pub use comma_whitespace::{
+    ArabicCommaWhitespaceRule, arabic_base_comma_whitespace_rule, arabic_comma_whitespace_rule,
+    arabic_question_mark_whitespace_rule, arabic_semicolon_whitespace_rule,
+};
 pub use inflected_one_word::ArabicInflectedOneWordReplaceRule;
 pub use trans_verb::ArabicTransVerbRule;
+pub use word_coherency::ArabicWordCoherencyRule;
+pub use word_repeat::ArabicWordRepeatRule;
 
-use crate::en::{SimpleReplaceRule, WordCoherencyRule};
-use og_rules::native_rules::{CommaWhitespaceRule, DoublePunctuationRule, WordRepeatRule};
+use crate::en::SimpleReplaceRule;
+use og_rules::native_rules::DoublePunctuationRule;
 
 pub fn arabic_double_punctuation_rule() -> DoublePunctuationRule {
     DoublePunctuationRule::new()
         .with_id("ARABIC_DOUBLE_PUNCTUATION")
         .with_comma_character('،')
-}
-
-pub fn arabic_comma_whitespace_rule() -> CommaWhitespaceRule {
-    CommaWhitespaceRule::new()
-        .with_id("ARABIC_COMMA_PARENTHESIS_WHITESPACE")
-        .with_comma_character('،')
-}
-
-pub fn arabic_question_mark_whitespace_rule() -> CommaWhitespaceRule {
-    CommaWhitespaceRule::new()
-        .with_id("ARABIC_QM_WHITESPACE")
-        .with_comma_character('؟')
-}
-
-pub fn arabic_semicolon_whitespace_rule() -> CommaWhitespaceRule {
-    CommaWhitespaceRule::new()
-        .with_id("ARABIC_SC_WHITESPACE")
-        .with_comma_character('؛')
-}
-
-pub fn arabic_word_repeat_rule() -> WordRepeatRule {
-    WordRepeatRule::new()
-        .with_id("ARABIC_WORD_REPEAT_RULE")
-        .with_ignored_words(&["خطوة", "رويدا"])
 }
 
 fn replace_rule(
@@ -129,17 +117,12 @@ pub fn arabic_wordiness_rule() -> SimpleReplaceRule {
     )
 }
 
-pub fn arabic_word_coherency_rule() -> WordCoherencyRule {
-    WordCoherencyRule::for_language(
-        "AR_WORD_COHERENCY",
-        "ضبط انسجام التهجئة للكلمات التي تكتب بطرق مختلفة مقبولة.",
-        include_str!(
-            "../../../../languagetool/languagetool-language-modules/ar/src/main/resources/org/languagetool/rules/ar/coherency.txt"
-        ),
-    )
-    .with_message_template(
-        "تجنب استعمال شكلين للكلمة نفسها ('{word1}' و '{word2}') في  النص نفسه.",
-    )
+pub fn arabic_word_coherency_rule() -> ArabicWordCoherencyRule {
+    ArabicWordCoherencyRule::new()
+}
+
+pub fn arabic_word_repeat_rule() -> ArabicWordRepeatRule {
+    ArabicWordRepeatRule::new()
 }
 
 pub fn arabic_wrong_word_in_context_rule() -> crate::en::WrongWordInContextRule {
@@ -207,7 +190,9 @@ mod tests {
                 let e = s + part.len();
                 offset = e;
                 tokens.push(og_core::AnalyzedTokenReadings::new(
-                    og_core::AnalyzedToken::new(part, start + s, start + e),
+                    og_core::AnalyzedToken::new(part, start + s, start + e)
+                        .with_lemma(part.to_string())
+                        .with_pos_tags(vec!["NJ-;---;---".to_string()]),
                 ));
             }
             sentence.set_tokens(tokens);

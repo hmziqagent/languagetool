@@ -2451,6 +2451,7 @@ mod tests {
             "ARABIC_COMMA_PARENTHESIS_WHITESPACE",
             "ARABIC_QM_WHITESPACE",
             "ARABIC_SC_WHITESPACE",
+            "COMMA_PARENTHESIS_WHITESPACE",
             "ARABIC_WORD_REPEAT_RULE",
             "AR_DARJA_REPLACE",
             "AR_DIACRITICS_REPLACE",
@@ -2499,8 +2500,15 @@ mod tests {
         let result = engine.check("قال « ثم أغلق القوس");
         let ids: Vec<&str> = result.matches.iter().map(|m| m.rule().id()).collect();
         assert!(
+            ids.contains(&"ARABIC_SC_WHITESPACE") && !ids.contains(&"UNPAIRED_BRACKETS"),
+            "space around the guillemet must surface the quotes-whitespace match and clean_overlapping_filter must drop the shorter bracket match, got {ids:?}"
+        );
+
+        let result = engine.check("قال«ثم أغلق القوس");
+        let ids: Vec<&str> = result.matches.iter().map(|m| m.rule().id()).collect();
+        assert!(
             ids.contains(&"UNPAIRED_BRACKETS"),
-            "unpaired Arabic guillemet must be flagged, got {ids:?}"
+            "unpaired Arabic guillemet without surrounding whitespace must be flagged, got {ids:?}"
         );
     }
 

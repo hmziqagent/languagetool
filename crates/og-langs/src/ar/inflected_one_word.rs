@@ -115,8 +115,23 @@ impl Rule for ArabicInflectedOneWordReplaceRule {
                 let rm_rule = RuleMatchRule::new(self.id(), self.description())
                     .with_category(self.category())
                     .with_issue_type(self.issue_type().as_str());
-                let ctx_start = start.saturating_sub(40);
-                let ctx_end = std::cmp::min(end + 40, sentence.text().len());
+                let ctx_start = (start - sentence.start()).saturating_sub(40);
+                let ctx_start = {
+                    let mut cs = ctx_start;
+                    while cs > 0 && !sentence.text().is_char_boundary(cs) {
+                        cs += 1;
+                    }
+                    cs
+                };
+                let ctx_end = std::cmp::min(end - sentence.start() + 40, sentence.text().len());
+                let ctx_end = {
+                    let mut ce = ctx_end;
+                    let text_len = sentence.text().len();
+                    while ce < text_len && !sentence.text().is_char_boundary(ce) {
+                        ce += 1;
+                    }
+                    ce
+                };
                 let context_text = sentence.text()[ctx_start..ctx_end].to_string();
                 rule_matches.push(
                     RuleMatch::new(
