@@ -4461,19 +4461,14 @@ fn parse_month_italian(s: &str) -> u32 {
 
 fn parse_weekday_italian(s: &str) -> u32 {
     let lower = s.to_lowercase();
-    let prefix = if lower.len() >= 3 {
-        &lower[..3]
-    } else {
-        &lower
-    };
-    match prefix {
-        "dom" => 1,
-        "lun" => 2,
-        "mar" => 3,
-        "mer" => 4,
-        "gio" => 5,
-        "ven" => 6,
-        "sab" => 7,
+    match lower.as_str() {
+        n if n.starts_with("do") => 1,
+        n if n.starts_with("lu") => 2,
+        n if n.starts_with("ma") => 3,
+        n if n.starts_with("me") => 4,
+        n if n.starts_with("gi") => 5,
+        n if n.starts_with("ve") => 6,
+        n if n.starts_with("sa") => 7,
         _ => 0,
     }
 }
@@ -5515,6 +5510,36 @@ mod tests {
         assert_eq!(compute_weekday(2014, 8, 28), 5);
         assert_eq!(localized_day_name(DateLang::Eo, 5), "jaŭdo");
         assert_eq!(localized_day_name(DateLang::Eo, 1), "dimanĉo");
+    }
+
+    #[test]
+    fn italian_date_filter_parsers_match_java() {
+        assert_eq!(parse_weekday_italian("Domenica"), 1);
+        assert_eq!(parse_weekday_italian("Luned\u{ec}"), 2);
+        assert_eq!(parse_weekday_italian("lun"), 2);
+        assert_eq!(parse_weekday_italian("Lun"), 2);
+        assert_eq!(parse_weekday_italian("Lu\u{ec}"), 2);
+        assert_eq!(parse_weekday_italian("lu"), 2);
+        assert_eq!(parse_weekday_italian("marted\u{ec}"), 3);
+        assert_eq!(parse_weekday_italian("ma"), 3);
+        assert_eq!(parse_weekday_italian("mercoled\u{ec}"), 4);
+        assert_eq!(parse_weekday_italian("me"), 4);
+        assert_eq!(parse_weekday_italian("gioved\u{ec}"), 5);
+        assert_eq!(parse_weekday_italian("gi"), 5);
+        assert_eq!(parse_weekday_italian("venerd\u{ec}"), 6);
+        assert_eq!(parse_weekday_italian("ve"), 6);
+        assert_eq!(parse_weekday_italian("sabato"), 7);
+        assert_eq!(parse_weekday_italian("sa"), 7);
+        assert_eq!(parse_weekday_italian("do"), 1);
+        assert_eq!(parse_weekday_italian("Dom."), 1);
+        assert_eq!(parse_weekday_italian("x"), 0);
+        assert_eq!(parse_weekday_italian(""), 0);
+
+        assert_eq!(parse_month_italian("Ottobre"), 10);
+        assert_eq!(parse_month_italian("ott"), 10);
+        assert_eq!(parse_month_italian("settembre"), 9);
+        assert_eq!(parse_month_italian("dic"), 12);
+        assert_eq!(parse_month_italian("07"), 7);
     }
 
     #[test]
