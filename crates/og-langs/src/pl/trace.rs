@@ -13,8 +13,9 @@ pub(crate) fn compiled_rules() -> &'static CompiledRuleSet {
             .expect("pl rules dir")
             .join("grammar.xml");
         let xml = std::fs::read_to_string(&path).expect("grammar.xml");
+        let xml = crate::pl::normalize_pl_rules_xml(&xml);
         XmlCompiler::new()
-            .compile_file_with_base(&xml, path.parent())
+            .compile_file_with_base(xml.as_ref(), path.parent())
             .expect("compile pl grammar.xml")
     })
 }

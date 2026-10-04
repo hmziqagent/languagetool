@@ -60,6 +60,8 @@ fn polish_grammar_examples_with_pl_pipeline() {
 
 fn evaluate_examples_file(rules_path: &Path, file_label: &str, artifact: &str) {
     let xml = std::fs::read_to_string(rules_path).expect("rules xml");
+    let xml = crate::pl::normalize_pl_rules_xml(&xml);
+    let xml = xml.as_ref();
     let raw_example_count = xml.matches("<example").count();
     let without_comments = strip_xml_comments(&xml);
     let comment_example_count = raw_example_count - without_comments.matches("<example").count();
@@ -229,24 +231,23 @@ mod tests {
         };
         slot.get_or_init(|| {
             let xml = std::fs::read_to_string(&path).unwrap();
+            let xml = crate::pl::normalize_pl_rules_xml(&xml);
             XmlCompiler::new()
-                .compile_file_with_base(&xml, path.parent())
+                .compile_file_with_base(xml.as_ref(), path.parent())
                 .expect("compile rules xml")
         })
     }
 
     fn rule_matches(rules_path: PathBuf, rule_id: &str, text: &str) -> Vec<(usize, usize)> {
-        let rule = compiled_rules_from(rules_path)
-            .rules
-            .iter()
-            .find(|r| r.id == rule_id)
-            .unwrap_or_else(|| panic!("rule {rule_id} not compiled"));
+        let rules = compiled_rules_from(rules_path);
         let engine = suite_engine();
         let pipeline = PolishPipeline::shared();
         let mut out = Vec::new();
         for (sentence, sentence_start) in pipeline.analyze_offset_text(text) {
-            for m in engine.match_rule(rule, &sentence) {
-                out.push((m.offset() + sentence_start, m.length()));
+            for rule in rules.rules.iter().filter(|r| r.id == rule_id) {
+                for m in engine.match_rule(rule, &sentence) {
+                    out.push((m.offset() + sentence_start, m.length()));
+                }
             }
         }
         out
@@ -291,6 +292,62 @@ mod tests {
         assert!(
             rule_matches(grammar_path(), "ADJ_SUBST_ADJ_UNIFY", text).is_empty(),
             "the agreed example stays clean: {text}"
+        );
+    }
+
+    #[test]
+    fn brak_kropki_punctuation_terminated_sentences_stay_clean() {
+        for text in [
+            "Po\u{17c}ycz mi sto z\u{142}otych.",
+            "To jest zdanie z \u{201e}cytatem na ko\u{144}cu i przypisem\u{201d}.",
+            "Po\u{17c}ycz mi sto z\u{142}otych\u{2026}",
+        ] {
+            assert!(
+                rule_matches(grammar_path(), "BRAK_KROPKI", text).is_empty(),
+                "the restored \\02 class exception must suppress: {text}"
+            );
+        }
+        assert!(
+            !rule_matches(
+                grammar_path(),
+                "BRAK_KROPKI",
+                "Po\u{17c}ycz mi sto z\u{142}otych"
+            )
+            .is_empty(),
+            "the unterminated sentence still fires"
+        );
+    }
+
+    #[test]
+    fn dni_tygodnia_lowercase_days_fire_and_holidays_stay_clean() {
+        assert!(
+            !rule_matches(
+                grammar_path(),
+                "DNI_TYGODNIA",
+                "To si\u{119} sta\u{142}o w wielki pi\u{105}tek."
+            )
+            .is_empty(),
+            "the lowercase holiday no longer matches the case-sensitive antipattern"
+        );
+        for text in [
+            "To si\u{119} sta\u{142}o w Wielki Pi\u{105}tek.",
+            "Poniedzia\u{142}ek to idealny pocz\u{105}tek tygodnia.",
+            "To si\u{119} zdarzy\u{142}o w \u{15a}rod\u{119} Popielcow\u{105} albo Niedziel\u{119} Palmow\u{105}, sam nie pami\u{119}tam.",
+            "Niebawem b\u{119}dzie Niedziela Mi\u{142}osierdzia Bo\u{17c}ego.",
+        ] {
+            assert!(
+                rule_matches(grammar_path(), "DNI_TYGODNIA", text).is_empty(),
+                "the antipatterns must keep protecting: {text}"
+            );
+        }
+        assert!(
+            !rule_matches(
+                grammar_path(),
+                "DNI_TYGODNIA",
+                "Robimy dorsza co Pi\u{105}tek."
+            )
+            .is_empty(),
+            "the capitalized weekday still fires"
         );
     }
 }

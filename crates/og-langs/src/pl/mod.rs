@@ -22,6 +22,50 @@ pub fn pl_rules_dir() -> Option<PathBuf> {
         .map(|root| root.join("pl/src/main/resources/org/languagetool/rules/pl"))
 }
 
+pub fn normalize_pl_rules_xml(xml: &str) -> std::borrow::Cow<'_, str> {
+    if !xml.contains("(?-iu)") && !xml.contains("\\0") {
+        return std::borrow::Cow::Borrowed(xml);
+    }
+    let bytes = xml.as_bytes();
+    let mut out = String::with_capacity(xml.len() + 96);
+    let mut i = 0usize;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b == b'(' && xml[i..].starts_with("(?-iu)") {
+            out.push_str("(?-i)");
+            i += 6;
+        } else if b == b'\\'
+            && bytes.get(i + 1) == Some(&b'0')
+            && is_java_octal_digit(bytes.get(i + 2))
+        {
+            let mut value = (bytes[i + 2] - b'0') as u32;
+            let mut digits = 1usize;
+            while digits < 3 && is_java_octal_digit(bytes.get(i + 2 + digits)) {
+                let candidate = value * 8 + (bytes[i + 2 + digits] - b'0') as u32;
+                if candidate > 0o377 {
+                    break;
+                }
+                value = candidate;
+                digits += 1;
+            }
+            out.push_str(&format!("\\x{{{value:x}}}"));
+            i += 2 + digits;
+        } else {
+            let mut step = xml[i..].chars().next().map_or(1, char::len_utf8);
+            if b == b'\\' && bytes.get(i + 1).is_some() {
+                step = 1 + xml[i + 1..].chars().next().map_or(1, char::len_utf8);
+            }
+            out.push_str(&xml[i..i + step]);
+            i += step;
+        }
+    }
+    std::borrow::Cow::Owned(out)
+}
+
+fn is_java_octal_digit(d: Option<&u8>) -> bool {
+    matches!(d, Some(d) if d.is_ascii_digit() && *d <= b'7')
+}
+
 fn normalize_disambiguation_xml(xml: &str) -> String {
     // Java parses the bare dash in this char class as a literal member; the Rust regex
     // crate rejects it as a range boundary, so escape it like the sibling grammar.xml entity.
@@ -166,6 +210,71 @@ mod tests {
         assert_eq!(priority_for_id("REPETITIONS_STYLE"), -55);
         assert_eq!(priority_for_id("SOMETHING_STYLE_CAT"), -50);
         assert_eq!(priority_for_id("UNKNOWN_RULE"), 0);
+    }
+
+    #[test]
+    fn normalize_pl_rules_xml_rewrites_the_java_only_regex_constructs() {
+        let xml =
+            std::fs::read_to_string(pl_rules_dir().expect("pl rules dir").join("grammar.xml"))
+                .expect("grammar.xml");
+        let normalized = normalize_pl_rules_xml(&xml);
+        assert_eq!(
+            xml.matches("(?-iu)").count(),
+            19,
+            "the round-10 inventory of inline unicode-flag negations"
+        );
+        assert_eq!(xml.matches("\\02").count(), 1);
+        assert!(normalized.contains("(?-i)w.*"));
+        assert!(normalized.contains("\\x{2}"));
+        assert!(!normalized.contains("(?-iu)"));
+        assert!(!normalized.contains("\\02"));
+        assert_eq!(normalized.matches("(?-i)").count(), 19);
+        assert_eq!(
+            normalized.matches("<example").count(),
+            xml.matches("<example").count()
+        );
+        assert_eq!(
+            normalized.matches("<rule").count(),
+            xml.matches("<rule").count()
+        );
+    }
+
+    #[test]
+    fn normalize_pl_rules_xml_escapes_backslash_pairs_and_borrows_clean_input() {
+        assert!(matches!(
+            normalize_pl_rules_xml("<rules lang='pl'/>"),
+            std::borrow::Cow::Borrowed(_)
+        ));
+        assert_eq!(normalize_pl_rules_xml("a(?-iu)w.*b").as_ref(), "a(?-i)w.*b");
+        assert_eq!(
+            normalize_pl_rules_xml("[\\\\02]|(?-iu)Don").as_ref(),
+            "[\\\\02]|(?-i)Don"
+        );
+        assert_eq!(normalize_pl_rules_xml("\\021x").as_ref(), "\\x{11}x");
+        assert_eq!(normalize_pl_rules_xml("\\0").as_ref(), "\\0");
+    }
+
+    #[test]
+    fn normalized_regexes_carry_java_semantics() {
+        let punct = regex::Regex::new("^(?:[?\\.!,:;\u{2026}\u{201d}\"\\x{2}])$").unwrap();
+        for hit in [".", "!", "?", ",", ":", ";", "\u{2026}", "\u{201d}", "\""] {
+            assert!(
+                punct.is_match(hit),
+                "{hit:?} must hit the BRAK_KROPKI class"
+            );
+        }
+        assert!(!punct.is_match("z\u{142}otych."));
+        let day = regex::Regex::new("^(?:(?-i)w.*)$").unwrap();
+        assert!(day.is_match("wielki"));
+        assert!(!day.is_match("Wielki"));
+        let exceptions = regex::RegexBuilder::new("^(?:minus|plus|lada|(?-i)Don|Los)$")
+            .case_insensitive(true)
+            .build()
+            .unwrap();
+        assert!(exceptions.is_match("MINUS"));
+        assert!(exceptions.is_match("Don"));
+        assert!(!exceptions.is_match("don"));
+        assert!(!exceptions.is_match("los"));
     }
 
     #[test]
