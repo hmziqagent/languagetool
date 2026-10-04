@@ -7,6 +7,7 @@ pub mod dash_rule;
 pub mod simple_replace;
 pub mod speller;
 pub mod tagger;
+pub mod unpaired_brackets;
 pub mod word_repeat;
 pub mod word_tokenizer;
 
@@ -117,13 +118,8 @@ pub fn polish_word_coherency_rule() -> crate::en::WordCoherencyRule {
     )
 }
 
-pub fn pl_unpaired_brackets_rule() -> og_rules::text_level_rules::GenericUnpairedBracketsRule {
-    og_rules::text_level_rules::GenericUnpairedBracketsRule::new()
-        .with_id("PL_UNPAIRED_BRACKETS")
-        .with_symbols(
-            vec!["[", "(", "{", "„", "»", "\\"],
-            vec!["]", ")", "}", "”", "«", "\\"],
-        )
+pub fn pl_unpaired_brackets_rule() -> unpaired_brackets::PolishUnpairedBracketsRule {
+    unpaired_brackets::PolishUnpairedBracketsRule::new()
 }
 
 pub struct PolishNativeRules {
