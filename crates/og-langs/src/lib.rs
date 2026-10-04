@@ -6,6 +6,7 @@ pub use en::*;
 pub use engine::*;
 pub use registry::*;
 pub mod ar;
+pub mod ast;
 pub mod be;
 pub mod confusion_probability;
 pub mod de;
