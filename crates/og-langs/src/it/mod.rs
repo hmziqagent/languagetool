@@ -1,3 +1,8 @@
+pub mod speller;
+
+#[cfg(test)]
+mod example_suite;
+
 use og_core::rule::Rule;
 use og_core::{
     AnalyzedSentence, AnalyzedTokenReadings, Category, IssueType, RuleMatch, RuleMatchContext,
@@ -9,6 +14,50 @@ const BASE_IGNORES: &[&str] = &[
 ];
 
 const ITALIAN_IGNORES: &[&str] = &["cos\u{ec}", "passo", "piano", "via"];
+
+fn is_zs(c: char) -> bool {
+    matches!(
+        c,
+        '\u{00A0}' | '\u{1680}' | '\u{2000}'..='\u{200A}' | '\u{202F}' | '\u{205F}' | '\u{3000}'
+    )
+}
+
+fn word_for_speller(token: &str) -> bool {
+    !token.is_empty()
+        && token.chars().all(|c| {
+            c.is_alphabetic() || c.is_numeric() || c.is_ascii_punctuation() || c == ' ' || is_zs(c)
+        })
+}
+
+fn is_emoji(token: &str) -> bool {
+    token.chars().any(|c| c as u32 > 0xFFFF) && !word_for_speller(token)
+}
+
+fn is_numeric_space(token: &str) -> bool {
+    token.chars().all(|c| c == ' ' || c.is_numeric())
+}
+
+fn is_word(token: &str) -> bool {
+    if is_emoji(token) {
+        return false;
+    }
+    if is_numeric_space(token) {
+        return false;
+    }
+    let mut chars = token.chars();
+    if let (Some(c), None) = (chars.next(), chars.next())
+        && !c.is_alphabetic()
+    {
+        return false;
+    }
+    true
+}
+
+fn eq_ignore_case(a: &str, b: &str) -> bool {
+    a.chars()
+        .flat_map(char::to_lowercase)
+        .eq(b.chars().flat_map(char::to_lowercase))
+}
 
 pub struct ItalianWordRepeatRule {
     id: String,
@@ -23,22 +72,17 @@ impl ItalianWordRepeatRule {
         }
     }
 
-    fn word_repetition_of(
-        &self,
-        word: &str,
-        tokens: &[&AnalyzedTokenReadings],
-        position: usize,
-    ) -> bool {
+    fn word_repetition_of(word: &str, tokens: &[&AnalyzedTokenReadings], position: usize) -> bool {
         position > 0
             && tokens[position - 1].token().token() == word
             && tokens[position].token().token() == word
     }
 
     fn ignore(&self, tokens: &[&AnalyzedTokenReadings], position: usize) -> bool {
-        if BASE_IGNORES
+        if ITALIAN_IGNORES
             .iter()
-            .chain(ITALIAN_IGNORES.iter())
-            .any(|word| self.word_repetition_of(word, tokens, position))
+            .chain(BASE_IGNORES.iter())
+            .any(|word| Self::word_repetition_of(word, tokens, position))
         {
             return true;
         }
@@ -58,7 +102,7 @@ impl Rule for ItalianWordRepeatRule {
     }
 
     fn description(&self) -> &str {
-        "Word repetition"
+        "Parola ripetuta (es. 'casa casa')"
     }
 
     fn category(&self) -> Category {
@@ -72,22 +116,32 @@ impl Rule for ItalianWordRepeatRule {
     fn match_sentence(&self, sentence: &AnalyzedSentence) -> Vec<RuleMatch> {
         let mut matches = Vec::new();
         let tokens = sentence.non_whitespace_tokens();
+        let mut prev_token: &str = "";
 
         for i in 1..tokens.len() {
-            let prev = tokens[i - 1];
-            let curr = tokens[i];
-
-            let prev_text = prev.token().token().to_lowercase();
-            let curr_text = curr.token().token().to_lowercase();
-
-            if prev_text == curr_text
-                && curr_text.chars().any(|c| c.is_alphabetic())
+            let token = tokens[i].token().token();
+            if is_word(token)
+                && !prev_token.is_empty()
+                && eq_ignore_case(prev_token, token)
                 && !self.ignore(&tokens, i)
             {
-                let start = curr.token().start();
-                let end = curr.token().end();
-                let context_start = start.saturating_sub(20);
-                let context_end = std::cmp::min(end + 20, sentence.text().len());
+                let start = tokens[i - 1].token().start();
+                let end = tokens[i].token().start() + prev_token.len();
+                if end <= start {
+                    prev_token = token;
+                    continue;
+                }
+                let rel_start = start - sentence.start();
+                let rel_end = end - sentence.start();
+                let text_len = sentence.text().len();
+                let mut context_start = rel_start.saturating_sub(20);
+                while context_start > 0 && !sentence.text().is_char_boundary(context_start) {
+                    context_start -= 1;
+                }
+                let mut context_end = std::cmp::min(rel_end + 20, text_len);
+                while context_end < text_len && !sentence.text().is_char_boundary(context_end) {
+                    context_end += 1;
+                }
                 let context_text = sentence.text()[context_start..context_end].to_string();
 
                 let rule = RuleMatchRule::new(&self.id, self.description())
@@ -96,7 +150,7 @@ impl Rule for ItalianWordRepeatRule {
 
                 matches.push(
                     RuleMatch::new(
-                        format!("Possible word repetition: '{}'", curr.token().token()),
+                        "Possibile errore di battitura: parola ripetuta",
                         start,
                         end - start,
                         rule,
@@ -107,9 +161,10 @@ impl Rule for ItalianWordRepeatRule {
                         ),
                     )
                     .with_sentence(sentence.text().to_string())
-                    .with_replacements(vec![SuggestedReplacement::new(curr.token().token())]),
+                    .with_replacements(vec![SuggestedReplacement::new(prev_token)]),
                 );
             }
+            prev_token = token;
         }
 
         matches
@@ -123,7 +178,9 @@ mod tests {
 
     fn make_sentence(text: &str) -> AnalyzedSentence {
         let mut sentence = AnalyzedSentence::new(text, 0, text.len());
-        let mut tokens = Vec::new();
+        let mut tokens = vec![AnalyzedTokenReadings::new(
+            AnalyzedToken::new("<S>", 0, 0).with_pos_tags(vec!["SENT_START".to_string()]),
+        )];
         let mut byte_pos = 0;
         for part in text.split(|c: char| c.is_whitespace()) {
             if part.is_empty() {
@@ -146,7 +203,72 @@ mod tests {
     fn detects_real_repetition() {
         let rule = ItalianWordRepeatRule::new();
         let sentence = make_sentence("Questa \u{e8} una una prova");
-        assert_eq!(rule.match_sentence(&sentence).len(), 1);
+        let matches = rule.match_sentence(&sentence);
+        assert_eq!(matches.len(), 1);
+        let m = &matches[0];
+        assert_eq!(
+            &sentence.text()[m.offset()..m.offset() + m.length()],
+            "una una"
+        );
+        assert_eq!(
+            m.message(),
+            "Possibile errore di battitura: parola ripetuta"
+        );
+        assert_eq!(m.replacements().len(), 1);
+        assert_eq!(m.replacements()[0].value(), "una");
+    }
+
+    #[test]
+    fn span_covers_both_tokens_like_java() {
+        let rule = ItalianWordRepeatRule::new();
+        let sentence = make_sentence("Mi mi \u{e8} sembrato cos\u{ec}");
+        let matches = rule.match_sentence(&sentence);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(
+            &sentence.text()[matches[0].offset()..matches[0].offset() + matches[0].length()],
+            "Mi mi"
+        );
+        assert_eq!(matches[0].replacements()[0].value(), "Mi");
+    }
+
+    #[test]
+    fn java_test_rule_expectations() {
+        let rule = ItalianWordRepeatRule::new();
+        assert!(
+            rule.match_sentence(&make_sentence("Mi \u{e8} sembrato cos\u{ec} cos\u{ec}"))
+                .is_empty()
+        );
+        assert!(
+            rule.match_sentence(&make_sentence("Duran Duran"))
+                .is_empty()
+        );
+        assert!(
+            rule.match_sentence(&make_sentence("Devi mescolare piano piano"))
+                .is_empty()
+        );
+        assert!(
+            rule.match_sentence(&make_sentence("Seguo passo passo"))
+                .is_empty()
+        );
+        assert_eq!(
+            rule.match_sentence(&make_sentence("Mi mi \u{e8} sembrato cos\u{ec}"))
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn non_words_never_repeat() {
+        let rule = ItalianWordRepeatRule::new();
+        assert!(
+            rule.match_sentence(&make_sentence("Pag\u{f2} 1 000 000 euro"))
+                .is_empty()
+        );
+        assert!(rule.match_sentence(&make_sentence("- -")).is_empty());
+        assert!(
+            rule.match_sentence(&make_sentence("Wagga Wagga Wagga"))
+                .is_empty()
+        );
     }
 
     #[test]
