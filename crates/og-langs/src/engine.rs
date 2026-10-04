@@ -950,7 +950,7 @@ impl LanguageEngine {
             }
         }
 
-        if short != "nl" && short != "pl" && short != "ru" {
+        if short != "nl" && short != "pl" && short != "ru" && short != "ar" {
             engine.add_rules([
                 Arc::new(og_rules::native_rules::DoublePunctuationRule::new()) as Arc<dyn Rule>,
                 Arc::new(og_rules::native_rules::CommaWhitespaceRule::new()),
@@ -1236,7 +1236,8 @@ impl LanguageEngine {
             }
             "ar" => {
                 engine.add_rules([
-                    Arc::new(crate::ar::arabic_double_punctuation_rule()) as Arc<dyn Rule>,
+                    Arc::new(crate::ar::arabic_base_comma_whitespace_rule()) as Arc<dyn Rule>,
+                    Arc::new(crate::ar::arabic_double_punctuation_rule()),
                     Arc::new(crate::ar::arabic_comma_whitespace_rule()),
                     Arc::new(crate::ar::arabic_question_mark_whitespace_rule()),
                     Arc::new(crate::ar::arabic_semicolon_whitespace_rule()),
@@ -1262,6 +1263,12 @@ impl LanguageEngine {
                         as Arc<dyn TextLevelRule>,
                     Arc::new(crate::ar::arabic_word_coherency_rule()),
                 ]);
+                if let Some(model) = og_languagemodel::DiskLanguageModel::shared_for_language("ar")
+                {
+                    engine.add_rule(Arc::new(
+                        crate::confusion_probability::ConfusionRule::new_arabic(model),
+                    ));
+                }
             }
             _ => {}
         }
@@ -2468,6 +2475,10 @@ mod tests {
                 "expected {expected} in Arabic natives, got {ids:?}"
             );
         }
+        assert!(
+            !ids.contains(&"DOUBLE_PUNCTUATION"),
+            "Arabic.java:103-127 registers only ArabicDoublePunctuationRule, not the shared base, got {ids:?}"
+        );
         let text_level_ids = engine.text_level_rule_ids();
         for expected in ["AR_WORD_COHERENCY", "TOO_LONG_SENTENCE"] {
             assert!(
