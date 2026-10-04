@@ -76,7 +76,9 @@ fn french_style_examples_with_fr_pipeline() {
 }
 
 fn evaluate_examples_file(rules_path: &std::path::Path, file_label: &str, artifact: Option<&str>) {
-    let xml = std::fs::read_to_string(rules_path).expect("rules xml");
+    let xml =
+        crate::fr::normalize_fr_rules_xml(&std::fs::read_to_string(rules_path).expect("rules xml"))
+            .into_owned();
     let raw_example_count = xml.matches("<example").count();
     let without_comments = strip_xml_comments(&xml);
     let comment_example_count = raw_example_count - without_comments.matches("<example").count();
@@ -224,7 +226,10 @@ mod tests {
     use super::*;
 
     fn filtered_matches(rule_id: &str, text: &str) -> Vec<(usize, usize, Vec<String>)> {
-        let xml = std::fs::read_to_string(grammar_path()).expect("grammar.xml");
+        let xml = crate::fr::normalize_fr_rules_xml(
+            &std::fs::read_to_string(grammar_path()).expect("grammar.xml"),
+        )
+        .into_owned();
         let rule_set = XmlCompiler::new()
             .compile_file_with_base(&xml, grammar_path().parent())
             .expect("compile grammar.xml");
@@ -262,6 +267,32 @@ mod tests {
             }
         }
         out
+    }
+
+    #[test]
+    fn la_la2_no_longer_false_positives_now_that_the_noop_flag_group_is_normalized() {
+        let matches = filtered_matches("LA_LA2", "Mais la plupart travaillaient dans la pêcherie.");
+        assert!(
+            matches.is_empty(),
+            "the exception list (plupart|fois|...) must suppress 'la plupart': {matches:?}"
+        );
+        let matches = filtered_matches("LA_LA2", "La personne photographiée est à la fois :");
+        assert!(matches.is_empty(), "{matches:?}");
+    }
+
+    #[test]
+    fn faire_plus_no_longer_false_positives_now_that_alternatives_are_joined() {
+        let matches = filtered_matches("FAIRE_PLUS_NOM_INCORRECT", "Il fait frais.");
+        assert!(
+            matches.is_empty(),
+            "'frais' must be covered by the exception list: {matches:?}"
+        );
+        let matches =
+            filtered_matches("REFAIRE_PLUS_NOM_INCORRECT", "Il refait usage de son bras.");
+        assert!(
+            matches.is_empty(),
+            "'usage' must be covered by the exception list: {matches:?}"
+        );
     }
 
     #[test]

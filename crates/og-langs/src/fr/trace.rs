@@ -13,7 +13,10 @@ fn compiled_grammar() -> &'static CompiledRuleSet {
     static GRAMMAR: OnceLock<CompiledRuleSet> = OnceLock::new();
     GRAMMAR.get_or_init(|| {
         let path = rules_dir().join("grammar.xml");
-        let xml = std::fs::read_to_string(&path).expect("grammar.xml");
+        let xml = crate::fr::normalize_fr_rules_xml(
+            &std::fs::read_to_string(&path).expect("grammar.xml"),
+        )
+        .into_owned();
         XmlCompiler::new()
             .compile_file_with_base(&xml, path.parent())
             .expect("compile grammar.xml")
@@ -24,7 +27,9 @@ fn compiled_style() -> &'static CompiledRuleSet {
     static STYLE: OnceLock<CompiledRuleSet> = OnceLock::new();
     STYLE.get_or_init(|| {
         let path = rules_dir().join("style.xml");
-        let xml = std::fs::read_to_string(&path).expect("style.xml");
+        let xml =
+            crate::fr::normalize_fr_rules_xml(&std::fs::read_to_string(&path).expect("style.xml"))
+                .into_owned();
         XmlCompiler::new()
             .compile_file_with_base(&xml, path.parent())
             .expect("compile style.xml")

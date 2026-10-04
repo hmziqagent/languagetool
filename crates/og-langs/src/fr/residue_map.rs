@@ -11,10 +11,8 @@ pub enum Family {
     RawPosPreDisambiguation,
     SuppressMisspelledSuggestionSpeller,
     CommaSuggestionSentStartOffset,
-    EmptyFlagGroupRegex,
     ScopeNextExceptionReadingZero,
     MatchNoZeroTextInterpolation,
-    MultilineTokenTextNormalization,
     ApostropheNormalizationAsymmetry,
     Differential,
 }
@@ -40,17 +38,11 @@ impl Family {
             Self::CommaSuggestionSentStartOffset => {
                 "PatternRuleMatcher.java:177-182 fromPos = prev.getStartPos() + prev.getToken().length() with the Java SENT_START token whose text is empty (JLanguageTool.java:1813)"
             }
-            Self::EmptyFlagGroupRegex => {
-                "Java accepts the empty flag group (?-) as a no-op; fancy-regex 0.14.0 parse.rs:700-703 rejects it (grammar.xml:108181 and :108368)"
-            }
             Self::ScopeNextExceptionReadingZero => {
                 "AbstractPatternRulePerformer.java:184-190: the current element's scope-next exception is tested only when prevSkipNext == 0 and only against reading 0 of the next token"
             }
             Self::MatchNoZeroTextInterpolation => {
                 "PatternToken.java:502-515 doCompile replaces the \\\\N placeholder inside the token string with the referenced token text (style.xml ECRITURE_INCLUSIVE <token><match no=\"0\"/>e</token>)"
-            }
-            Self::MultilineTokenTextNormalization => {
-                "PatternToken.java:305-307 normalizeTextPattern + StringTools.java:485-496 trimWhitespace drop \\n/\\t/\\r inside token and exception text, so the line-trailing alternative 'frais\\n|froid' still matches 'frais'"
             }
             Self::ApostropheNormalizationAsymmetry => {
                 "Java pattern matching normalizes no apostrophes (no U+2018 handling in PatternToken.java or StringMatcher.java); the class [´‘′`] matches the raw token '‘'"
@@ -63,28 +55,30 @@ impl Family {
 
     fn rust_target(self) -> &'static str {
         match self {
-            Self::TokenizerDecimalRun
-            | Self::TokenizerPercentWordChar
-            | Self::TokenizerLeadingHyphen => "og-tokenizer/src/french_word_tokenizer.rs",
+            Self::TokenizerDecimalRun => {
+                "og-tokenizer/src/french_word_tokenizer.rs scan_word_end :291-295 chains digit.digit joins greedily; Java DECIMAL_POINT replaceAll resumes after the consumed digit.digit triple, so '32.1.1985' tokenizes ['32.1','.','1985'] - gate the branch so a dot directly after a consumed triple cannot re-anchor"
+            }
+            Self::TokenizerPercentWordChar => {
+                "og-tokenizer/src/french_word_tokenizer.rs is_fr_word_char :52-58 is missing '%' (Java wordCharacters has °%‰‱), so '8%'/'51%' split"
+            }
+            Self::TokenizerLeadingHyphen => {
+                "og-tokenizer/src/french_word_tokenizer.rs split_word_token lacks the Java tokenize() strip of leading hyphens into standalone '-' tokens before pattern matching, so '-l\\u{2019}homme' stays fused ['-', 'l\\u{2019}homme'] instead of Java ['-','-','l\\u{2019}','homme']"
+            }
             Self::RawPosPreDisambiguation => {
                 "og-xml/src/parser.rs (compile raw_pos) + og-core AnalyzedSentence (pre-disambiguation copy) + og-rules/src/pattern_rule.rs (token view selection)"
             }
             Self::SuppressMisspelledSuggestionSpeller => {
-                "og-rules/src/pattern_rule.rs raw_match_alternatives/suggestion_alternatives"
+                "og-rules/src/pattern_rule.rs raw_match_alternatives/suggestion_alternatives + lift crate::fr::suppress_portable.rs and route org.languagetool.rules.fr.FrenchSuppressMisspelledSuggestionsFilter in pattern_rule.rs:2778-2779 (closes the 4-example runner delta, 15243->15247)"
             }
             Self::CommaSuggestionSentStartOffset => {
                 "og-rules/src/pattern_rule.rs:627 and :639 (use prev.token().end(), not start + text length)"
             }
-            Self::EmptyFlagGroupRegex => "og-xml/src/compiler.rs regex translation",
             Self::ScopeNextExceptionReadingZero => "og-rules/src/pattern_rule.rs:1352-1357",
             Self::MatchNoZeroTextInterpolation => {
                 "og-xml/src/parser.rs (keep the in-text match placeholder) + og-rules/src/pattern_rule.rs backreference_matches"
             }
-            Self::MultilineTokenTextNormalization => {
-                "og-xml/src/parser.rs token and exception text accumulation"
-            }
             Self::ApostropheNormalizationAsymmetry => {
-                "og-xml/src/unifier.rs:8-13 + og-rules/src/pattern_rule.rs:2164-2188"
+                "og-xml/src/unifier.rs:8-13 + og-rules/src/pattern_rule.rs:2164-2188; not shim-able from fr: U+2018 maps to the typewriter apostrophe the Java class deliberately excludes, so normalizing the pattern side would create false positives on correct examples"
             }
             Self::Differential => "unresolved",
         }
@@ -98,10 +92,8 @@ impl Family {
             Self::RawPosPreDisambiguation => "raw_pos pre-disambiguation",
             Self::SuppressMisspelledSuggestionSpeller => "suppress_misspelled suggestion speller",
             Self::CommaSuggestionSentStartOffset => "comma-suggestion SENT_START offset",
-            Self::EmptyFlagGroupRegex => "(?-) empty flag group",
             Self::ScopeNextExceptionReadingZero => "scope-next exception reading-0",
             Self::MatchNoZeroTextInterpolation => "<match no=\"0\"/> text interpolation",
-            Self::MultilineTokenTextNormalization => "multiline token text",
             Self::ApostropheNormalizationAsymmetry => "apostrophe normalization asymmetry",
             Self::Differential => "differential",
         }
@@ -118,21 +110,6 @@ const GRAMMAR_RESIDUES: &[(&str, &str, Family)] = &[
         "MOTS_MAUX",
         "Docteur délivrez moi de mes mots.",
         Family::ScopeNextExceptionReadingZero,
-    ),
-    (
-        "LA_LA2",
-        "La personne photographiée est à la fois :",
-        Family::EmptyFlagGroupRegex,
-    ),
-    (
-        "LA_LA2",
-        "La guimbarde de Hulot à la 203 de Schmutz stationnée devant l’hôte.",
-        Family::EmptyFlagGroupRegex,
-    ),
-    (
-        "LA_LA2",
-        "Mais la plupart travaillaient dans la pêcherie.",
-        Family::EmptyFlagGroupRegex,
     ),
     (
         "IL_DEVIENT_QUOI",
@@ -237,7 +214,7 @@ const GRAMMAR_RESIDUES: &[(&str, &str, Family)] = &[
     (
         "ETRE_VPPA_OU_ADJ",
         "De leur rencontre est donc né ce lieu.",
-        Family::Differential,
+        Family::ScopeNextExceptionReadingZero,
     ),
     (
         "ACCORD_SUJET_VERBE",
@@ -258,16 +235,6 @@ const GRAMMAR_RESIDUES: &[(&str, &str, Family)] = &[
         "PREFIXES_NON_SEPARES",
         "Elle poursuit les séries et aligne sur la post saison 14,3 points",
         Family::SuppressMisspelledSuggestionSpeller,
-    ),
-    (
-        "FAIRE_PLUS_NOM_INCORRECT",
-        "Il fait frais.",
-        Family::MultilineTokenTextNormalization,
-    ),
-    (
-        "REFAIRE_PLUS_NOM_INCORRECT",
-        "Il refait usage de son bras.",
-        Family::MultilineTokenTextNormalization,
     ),
     (
         "ESPACE_POURCENT",
@@ -386,6 +353,7 @@ fn compiled_rule_count() -> usize {
             let Ok(xml) = std::fs::read_to_string(&path) else {
                 continue;
             };
+            let xml = crate::fr::normalize_fr_rules_xml(&xml);
             let Ok(set) =
                 og_xml::compiler::XmlCompiler::new().compile_file_with_base(&xml, path.parent())
             else {
@@ -427,8 +395,8 @@ mod tests {
     }
 
     #[test]
-    fn residue_counts_match_the_round9_suites() {
-        assert_eq!(GRAMMAR_RESIDUES.len(), 46, "grammar.xml residue inventory");
+    fn residue_counts_match_the_suites() {
+        assert_eq!(GRAMMAR_RESIDUES.len(), 41, "grammar.xml residue inventory");
         assert_eq!(STYLE_RESIDUES.len(), 1, "style.xml residue inventory");
         let differential: Vec<_> = GRAMMAR_RESIDUES
             .iter()
@@ -438,9 +406,53 @@ mod tests {
             .collect();
         assert_eq!(
             differential.len(),
-            7,
+            6,
             "unresolved differential residues: {differential:?}"
         );
+    }
+
+    #[test]
+    fn ou_differential_second_vous_keeps_suj_reading_in_rust() {
+        let sentence = &crate::fr::test_support::analyze_french(
+            "Je vous écrirai ou vous téléphonerai la semaine prochaine.",
+        )[0];
+        let tokens = sentence.non_whitespace_tokens();
+        let vous = tokens
+            .iter()
+            .find(|t| t.token().token() == "vous" && t.token().start() == 20)
+            .expect("second 'vous'");
+        assert!(
+            vous.has_pos_tag("R pers suj 2 p") && vous.has_pos_tag("R pers obj 2 p"),
+            "the OU owning rule needs the suj reading here; Rust keeps suj+obj after \
+             disambiguation, so the FP is either a Java disambiguator rule the Rust chain \
+             misses or a combined postag+regexp+(?-i) element divergence"
+        );
+    }
+
+    #[test]
+    fn il_devient_quoi_readings_are_all_present() {
+        let sentence = &crate::fr::test_support::analyze_french("Il devient de plus en plus.")[0];
+        let tokens = sentence.non_whitespace_tokens();
+        let devient = tokens
+            .iter()
+            .find(|t| t.token().token() == "devient")
+            .expect("devient");
+        assert!(devient.has_pos_tag("V ind pres 3 s"));
+        for surface in ["de", "plus", "en", "plus"] {
+            let token = tokens
+                .iter()
+                .find(|t| t.token().token() == surface)
+                .unwrap_or_else(|| panic!("{surface} token"));
+            assert!(
+                token.has_pos_tag("A") || token.has_pos_tag(" A"),
+                "{surface} must carry the chunked 'de plus en plus' adverb reading"
+            );
+        }
+        let end = tokens
+            .iter()
+            .find(|t| t.token().token() == ".")
+            .expect("final dot");
+        assert!(end.has_pos_tag("SENT_END"));
     }
 
     #[test]
@@ -469,7 +481,8 @@ mod tests {
         let dir = fr_rules_dir().expect("fr rules dir");
         let mut ids: Vec<String> = Vec::new();
         for file in ["grammar.xml", "style.xml"] {
-            let xml = std::fs::read_to_string(dir.join(file)).expect(file);
+            let raw = std::fs::read_to_string(dir.join(file)).expect(file);
+            let xml = crate::fr::normalize_fr_rules_xml(&raw);
             let set = og_xml::compiler::XmlCompiler::new()
                 .compile_file_with_base(&xml, Some(&dir))
                 .expect(file);
@@ -488,6 +501,33 @@ mod tests {
     fn java_empty_flag_group_is_rejected_by_the_rust_regex_engine() {
         assert!(regex::Regex::new("(?-)[A-Z]").is_err());
         assert!(regex::Regex::new("(?-i)[A-Z]").is_ok());
+    }
+
+    #[test]
+    fn normalize_fr_rules_xml_strips_the_java_noop_flag_group() {
+        let xml = rule_file("LA_LA2").expect("LA_LA2 in grammar.xml");
+        assert!(xml.contains("(?-i)[A-Z].*|(?-)[A-Z]"));
+        let normalized = crate::fr::normalize_fr_rules_xml(&xml);
+        let normalized = normalized.as_ref();
+        assert!(!normalized.contains("(?-)[A-Z]"));
+        assert!(
+            normalized.contains("(?-i)[A-Z].*|[A-Z]"),
+            "the (?-i) inline flag must survive while the empty (?-) group is dropped"
+        );
+    }
+
+    #[test]
+    fn normalize_fr_rules_xml_joins_multiline_token_alternatives() {
+        let xml =
+            std::fs::read_to_string(fr_rules_dir().expect("fr rules dir").join("grammar.xml"))
+                .expect("grammar.xml");
+        assert!(xml.contains("frais\n"));
+        let normalized = crate::fr::normalize_fr_rules_xml(&xml);
+        let normalized = normalized.as_ref();
+        assert!(
+            normalized.contains("frais|"),
+            "the FAIRE_PLUS_NOM_INCORRECT exception alternative 'frais\\n|froid' must be joined"
+        );
     }
 
     #[test]
@@ -515,7 +555,8 @@ mod tests {
     #[test]
     fn faire_plus_exception_regexp_still_matches_its_listed_words() {
         let dir = fr_rules_dir().expect("fr rules dir");
-        let xml = std::fs::read_to_string(dir.join("grammar.xml")).expect("grammar.xml");
+        let raw = std::fs::read_to_string(dir.join("grammar.xml")).expect("grammar.xml");
+        let xml = crate::fr::normalize_fr_rules_xml(&raw);
         let set = og_xml::compiler::XmlCompiler::new()
             .compile_file_with_base(&xml, Some(&dir))
             .expect("compile grammar.xml");
@@ -535,6 +576,17 @@ mod tests {
             exception.compiled_regexp.is_some() || exception.compiled_regexp_fancy.is_some(),
             "giant word-list exception regexp failed to compile in both engines"
         );
+        let text = exception.text.as_deref().expect("exception text");
+        assert!(
+            text.contains("frais|"),
+            "alternatives must be joined: {text:?}"
+        );
+        assert!(
+            !text.contains(['\n', '\t', '\r']),
+            "token text must be whitespace-normalized"
+        );
+        let anchored = regex::Regex::new(&format!("^(?:{text})$")).expect("recompile exception");
+        assert!(anchored.is_match("frais"));
     }
 
     #[test]
