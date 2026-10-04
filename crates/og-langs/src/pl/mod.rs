@@ -1,0 +1,459 @@
+use crate::en::CompoundRule;
+use og_core::rule::{Rule, TextLevelRule};
+use std::path::PathBuf;
+use std::sync::Arc;
+
+pub mod dash_rule;
+pub mod simple_replace;
+pub mod speller;
+pub mod tagger;
+pub mod word_repeat;
+pub mod word_tokenizer;
+
+#[cfg(test)]
+pub(crate) mod example_suite;
+#[cfg(test)]
+pub(crate) mod test_support;
+#[cfg(test)]
+pub(crate) mod trace;
+
+pub fn pl_rules_dir() -> Option<PathBuf> {
+    crate::engine::find_lt_resource_dir()
+        .map(|root| root.join("pl/src/main/resources/org/languagetool/rules/pl"))
+}
+
+fn normalize_disambiguation_xml(xml: &str) -> String {
+    // Java parses the bare dash in this char class as a literal member; the Rust regex
+    // crate rejects it as a range boundary, so escape it like the sibling grammar.xml entity.
+    xml.replace(
+        "[\\p{Punct}-\u{2212}\u{2013}\u{2014}\u{2015}\u{201e}\u{00ab}\u{00bb}\u{2026}\u{201d}&amp;&amp;[^!\\.]",
+        "[\\p{Punct}\\-\u{2212}\u{2013}\u{2014}\u{2015}\u{201e}\u{00ab}\u{00bb}\u{2026}\u{201d}&amp;&amp;[^!\\.]",
+    )
+}
+
+pub fn build_pl_disambiguator(
+    resource_dir: &std::path::Path,
+) -> Option<Arc<dyn og_core::checker::Disambiguator>> {
+    let xml = std::fs::read_to_string(resource_dir.join("disambiguation.xml")).ok()?;
+    let normalized = normalize_disambiguation_xml(&xml);
+    let disambiguator =
+        og_tagger::XmlDisambiguator::from_xml_with_english(&normalized, None).ok()?;
+    let core = crate::engine::find_lt_core_resource_dir()?;
+    Some(og_tagger::hybrid_disambiguator(
+        "pl",
+        resource_dir,
+        &core,
+        disambiguator,
+    ))
+}
+
+pub fn polish_compound_rule() -> CompoundRule {
+    CompoundRule::for_language(
+        "PL_COMPOUNDS",
+        "Sprawdza wyrazy z łącznikiem, np. „łapu capu” zamiast „łapu-capu”",
+        "Ten wyraz pisze się z łącznikiem.",
+        "Ten wyraz pisze się razem (bez spacji ani łącznika).",
+        "Ten wyraz pisze się z łącznikiem lub bez niego.",
+        include_str!(
+            "../../../../languagetool/languagetool-language-modules/pl/src/main/resources/org/languagetool/resource/pl/compounds.txt"
+        ),
+    )
+}
+
+pub fn polish_word_coherency_rule() -> crate::en::WordCoherencyRule {
+    crate::en::WordCoherencyRule::for_language(
+        "PL_WORD_COHERENCY",
+        "Jednolita pisownia wyrazów o obocznej dopuszczalnej pisowni",
+        include_str!(
+            "../../../../languagetool/languagetool-language-modules/pl/src/main/resources/org/languagetool/rules/pl/coherency.txt"
+        ),
+    )
+    .with_message_template(
+        "Formy „{word1}” i „{word2}” zwykle nie powinny być używane jednocześnie.",
+    )
+}
+
+pub fn pl_unpaired_brackets_rule() -> og_rules::text_level_rules::GenericUnpairedBracketsRule {
+    og_rules::text_level_rules::GenericUnpairedBracketsRule::new()
+        .with_id("PL_UNPAIRED_BRACKETS")
+        .with_symbols(
+            vec!["[", "(", "{", "„", "»", "\\"],
+            vec!["]", ")", "}", "”", "«", "\\"],
+        )
+}
+
+pub struct PolishNativeRules {
+    pub rules: Vec<std::sync::Arc<dyn Rule>>,
+    pub text_level_rules: Vec<std::sync::Arc<dyn TextLevelRule>>,
+}
+
+pub fn polish_native_rules() -> PolishNativeRules {
+    PolishNativeRules {
+        rules: vec![
+            std::sync::Arc::new(og_rules::native_rules::CommaWhitespaceRule::new()),
+            std::sync::Arc::new(og_rules::native_rules::UppercaseSentenceStartRule::new()),
+            std::sync::Arc::new(og_rules::native_rules::WordRepeatRule::new()),
+            std::sync::Arc::new(speller::PolishSpellerRule::new()),
+            std::sync::Arc::new(word_repeat::PolishWordRepeatRule::new()),
+            std::sync::Arc::new(polish_compound_rule()),
+            std::sync::Arc::new(simple_replace::PolishSimpleReplaceRule::new()),
+            std::sync::Arc::new(dash_rule::PolishDashRule::new()),
+        ],
+        text_level_rules: vec![
+            std::sync::Arc::new(og_rules::text_level_rules::MultipleWhitespaceRule::new()),
+            std::sync::Arc::new(og_rules::text_level_rules::SentenceWhitespaceRule::new()),
+            std::sync::Arc::new(pl_unpaired_brackets_rule()),
+            std::sync::Arc::new(polish_word_coherency_rule()),
+        ],
+    }
+}
+
+pub fn priority_for_id(id: &str) -> i32 {
+    if id == "ZDANIA_ZLOZONE" {
+        return -1;
+    }
+    if id.eq_ignore_ascii_case("TOO_LONG_SENTENCE") {
+        return -101;
+    }
+    if id == "REPETITIONS_STYLE" {
+        return -55;
+    }
+    if id.contains("STYLE") {
+        return -50;
+    }
+    0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn native_rules_carry_java_ids() {
+        let native = polish_native_rules();
+        let ids: Vec<&str> = native.rules.iter().map(|r| r.id()).collect();
+        for expected in [
+            "COMMA_PARENTHESIS_WHITESPACE",
+            "UPPERCASE_SENTENCE_START",
+            "WORD_REPEAT_RULE",
+            "MORFOLOGIK_RULE_PL_PL",
+            "PL_WORD_REPEAT",
+            "PL_COMPOUNDS",
+            "PL_SIMPLE_REPLACE",
+            "PL_DASH_RULE",
+        ] {
+            assert!(ids.contains(&expected), "missing {expected} in {ids:?}");
+        }
+        let text_ids: Vec<&str> = native.text_level_rules.iter().map(|r| r.id()).collect();
+        for expected in [
+            "WHITESPACE_RULE",
+            "SENTENCE_WHITESPACE",
+            "PL_UNPAIRED_BRACKETS",
+            "PL_WORD_COHERENCY",
+        ] {
+            assert!(
+                text_ids.contains(&expected),
+                "missing {expected} in {text_ids:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn java_pins_priority_map() {
+        assert_eq!(priority_for_id("ZDANIA_ZLOZONE"), -1);
+        assert_eq!(priority_for_id("TOO_LONG_SENTENCE"), -101);
+        assert_eq!(priority_for_id("too_long_sentence"), -101);
+        assert_eq!(priority_for_id("REPETITIONS_STYLE"), -55);
+        assert_eq!(priority_for_id("SOMETHING_STYLE_CAT"), -50);
+        assert_eq!(priority_for_id("UNKNOWN_RULE"), 0);
+    }
+
+    #[test]
+    fn java_pins_compound_rule_examples() {
+        let rule = polish_compound_rule();
+        let pipeline = crate::pl::test_support::PolishPipeline::shared();
+        let text = "Witamy w Rabka Zdr\u{f3}j.";
+        let sentence = pipeline.analyze_range(text, 0, text.len());
+        let matches = og_core::rule::Rule::match_sentence(&rule, &sentence);
+        assert!(
+            matches
+                .iter()
+                .any(|m| &text[m.offset()..m.offset() + m.length()] == "Rabka Zdr\u{f3}j"),
+            "the compounds.txt entry Rabka-Zdr\u{f3}j* fires on the spaced form: {matches:?}"
+        );
+        let text = "Witamy w \u{141}apu capu.";
+        let sentence = pipeline.analyze_range(text, 0, text.len());
+        let matches = og_core::rule::Rule::match_sentence(&rule, &sentence);
+        assert!(
+            matches
+                .iter()
+                .any(|m| &text[m.offset()..m.offset() + m.length()] == "\u{141}apu capu"),
+            "the description's \u{141}apu-capu example fires: {matches:?}"
+        );
+        let text = "Witamy w Rabka-Zdr\u{f3}j.";
+        let sentence = pipeline.analyze_range(text, 0, text.len());
+        assert!(
+            og_core::rule::Rule::match_sentence(&rule, &sentence).is_empty(),
+            "the hyphenated form is accepted"
+        );
+    }
+
+    #[test]
+    fn java_pins_word_coherency_example() {
+        let rule = polish_word_coherency_rule();
+        let pipeline = crate::pl::test_support::PolishPipeline::shared();
+        let text = "Kupi\u{142}em grapefruity, a grejpfrut\u{f3}w nie lubi\u{119}.";
+        let sentences = pipeline.analyze_text(text);
+        let matches = og_core::rule::TextLevelRule::match_text(&rule, text, &sentences);
+        assert_eq!(
+            matches.len(),
+            1,
+            "the Java example pair pins one coherency match"
+        );
+    }
+
+    #[test]
+    fn java_pins_unpaired_brackets_example() {
+        let rule = pl_unpaired_brackets_rule();
+        let pipeline = crate::pl::test_support::PolishPipeline::shared();
+        let text = "To jest zdanie z \u{201e}cudzys\u{142}owem.";
+        let sentences = pipeline.analyze_text(text);
+        let matches = og_core::rule::TextLevelRule::match_text(&rule, text, &sentences);
+        assert!(
+            matches.len() >= 1,
+            "the Polish quote symbols are tracked: {matches:?}"
+        );
+        let text = "To jest zdanie z \u{201e}cudzys\u{142}owem\u{201d}.";
+        let sentences = pipeline.analyze_text(text);
+        assert!(rule.match_text(text, &sentences).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod dict_probe {
+    use og_tagger::morfologik::MorfologikDictionary;
+
+    fn polish_dict() -> MorfologikDictionary {
+        let dir = super::tagger::pl_resource_dir().expect("pl resource dir");
+        let dict = MorfologikDictionary::load(&dir.join("polish.dict"), &dir.join("polish.info"))
+            .expect("polish.dict loads");
+        dict
+    }
+
+    #[ignore]
+    #[test]
+    fn probe_oracle_divergence_sample() {
+        let dir = super::tagger::pl_resource_dir().expect("pl resource dir");
+        let hunspell = og_tagger::morfologik::load_fsa_word_list(
+            &dir.join("hunspell/pl_PL.dict"),
+            &dir.join("hunspell/pl_PL.info"),
+        )
+        .expect("pl_PL words");
+        let tagger =
+            og_tagger::generic_tagger::shared_dictionary(&dir, "polish").expect("polish dict");
+        let mut missing: Vec<&String> = Vec::new();
+        let mut checked = 0usize;
+        for (i, w) in hunspell.iter().enumerate() {
+            if i % 2267 != 0 {
+                continue;
+            }
+            checked += 1;
+            if tagger.lookup(w).is_empty() && !missing.contains(&w) {
+                missing.push(w);
+            }
+        }
+        eprintln!(
+            "checked {checked} hunspell words; not in polish.dict: {}",
+            missing.len()
+        );
+        for w in missing.iter().take(10) {
+            eprintln!("  hunspell-only: {w}");
+        }
+    }
+
+    #[test]
+    fn probe_hunspell_words() {
+        let dir = super::tagger::pl_resource_dir().expect("pl resource dir");
+        let words = og_tagger::morfologik::load_fsa_word_list(
+            &dir.join("hunspell/pl_PL.dict"),
+            &dir.join("hunspell/pl_PL.info"),
+        )
+        .expect("pl_PL hunspell FSA");
+        eprintln!("pl_PL hunspell word count: {}", words.len());
+        let lookup = |w: &str| words.iter().any(|x| x == w);
+        for w in [
+            "bledem",
+            "b\u{142}\u{119}dem",
+            "kobieta",
+            "warszawa",
+            "nauk\u{119}",
+            "ekstradycj\u{119}",
+        ] {
+            eprintln!("hunspell contains {w}: {}", lookup(w));
+        }
+        let with_prefix: Vec<&String> = words
+            .iter()
+            .filter(|w| w.starts_with("quasi") || w.starts_with("niby"))
+            .take(10)
+            .collect();
+        eprintln!("quasi/niby words: {with_prefix:?}");
+    }
+
+    #[ignore]
+    #[test]
+    fn probe_speller_words() {
+        let rule = crate::pl::speller::PolishSpellerRule::shared();
+        for text in [
+            "To jest zdanie z b\u{142}\u{119}dem.",
+            "To jest bia\u{142}ozielony dach.",
+            "To jest supernowoczesny sprz\u{119}t.",
+            "On uprawia quasi-nauk\u{119}.",
+        ] {
+            let sentence = crate::pl::test_support::PolishPipeline::shared().analyze_range(
+                text,
+                0,
+                text.len(),
+            );
+            let matches = og_core::rule::Rule::match_sentence(rule.as_ref(), &sentence);
+            eprintln!("{text} -> {}", matches.len());
+            for m in &matches {
+                let rel = m.offset().saturating_sub(sentence.start());
+                eprintln!(
+                    "   word {:?} known={} offset {} len {}",
+                    &sentence.text()[rel..rel + m.length()],
+                    rule.is_known_word(&sentence.text()[rel..rel + m.length()]),
+                    m.offset(),
+                    m.length()
+                );
+            }
+        }
+    }
+
+    #[ignore]
+    #[test]
+    fn probe_word_repeat_tokens() {
+        let text =
+            "M\u{f3}wi\u{142}a d\u{142}ugo, bo lubi\u{142}a robi\u{107} wszystko d\u{142}ugo.";
+        let sentence =
+            crate::pl::test_support::PolishPipeline::shared().analyze_range(text, 0, text.len());
+        let mut inflected: std::collections::HashSet<String> = Default::default();
+        for (i, t) in sentence.non_whitespace_tokens().iter().enumerate() {
+            let _ = &mut inflected;
+            let readings: Vec<String> = t
+                .readings()
+                .iter()
+                .map(|r| format!("{}[{}]", r.lemma().unwrap_or("-"), r.pos_tags().join("+")))
+                .collect();
+            eprintln!("{i} {:?} => {}", t.token().token(), readings.join(", "));
+        }
+    }
+
+    #[ignore]
+    #[test]
+    fn probe_coherency_matches() {
+        let rule = crate::pl::polish_word_coherency_rule();
+        let text = "Kupi\u{142}em grapefruity, a grejpfrut\u{f3}w nie lubi\u{119}.";
+        let sentences = crate::pl::test_support::PolishPipeline::shared().analyze_text(text);
+        let matches = og_core::rule::TextLevelRule::match_text(&rule, text, &sentences);
+        eprintln!("coherency matches: {}", matches.len());
+        for m in &matches {
+            eprintln!(
+                "  match off {} len {} msg {}",
+                m.offset(),
+                m.length(),
+                m.message()
+            );
+        }
+        let inline = crate::en::WordCoherencyRule::for_language("X", "Y", "grapefruit;grejpfrut\n");
+        let matches_inline = og_core::rule::TextLevelRule::match_text(&inline, text, &sentences);
+        eprintln!("inline data matches: {}", matches_inline.len());
+        let rule2 = crate::pl::polish_compound_rule();
+        for w in [
+            "Rabka Zdr\u{f3}j",
+            "Rabka-Zdr\u{f3}j",
+            "\u{141}apu capu",
+            "\u{141}apu-capu",
+        ] {
+            let sentence =
+                crate::pl::test_support::PolishPipeline::shared().analyze_range(w, 0, w.len());
+            eprintln!(
+                "compound {w:?} -> {}",
+                og_core::rule::Rule::match_sentence(&rule2, &sentence).len()
+            );
+        }
+    }
+
+    #[ignore]
+    #[test]
+    fn probe_coherency_tokens() {
+        let text = "Kupi\u{142}em grapefruity, a grejpfrut\u{f3}w nie lubi\u{119}.";
+        for (si, sentence) in crate::pl::test_support::PolishPipeline::shared()
+            .analyze_text(text)
+            .into_iter()
+            .enumerate()
+        {
+            for t in sentence.non_whitespace_tokens() {
+                let readings: Vec<String> = t
+                    .readings()
+                    .iter()
+                    .map(|r| format!("{}[{}]", r.lemma().unwrap_or("-"), r.pos_tags().join("+")))
+                    .collect();
+                eprintln!("{si} {:?} => {}", t.token().token(), readings.join(", "));
+            }
+        }
+    }
+
+    #[test]
+    fn probe_polish_readings() {
+        let dict = polish_dict();
+        for w in [
+            "kobieta",
+            "kobietą",
+            "Były",
+            "były",
+            "rozum",
+            "działanie",
+            "najlepiej",
+            "lepiej",
+            "nielepiej",
+            "białozielony",
+            "polsko",
+            "warszawa",
+            "Warszawa",
+            "niemiecko",
+            "indonezyjski",
+            "kobieta-wojownik",
+            "Rabke",
+            "Zdroju",
+            "Rabke-Zdroju",
+            "32-u",
+            "64-bitowe",
+            "XIX-go",
+            "bledem",
+            "ble",
+            "dem",
+            "b\u{142}\u{119}d",
+            "b\u{142}\u{119}dem",
+            "b\u{142}\u{119}du",
+            "b\u{142}\u{119}dy",
+            "edem",
+            "bled",
+            "quasi",
+            "quasi-nauk\u{119}",
+            "nauk\u{119}",
+            "bia\u{142}ozielony",
+            "bia\u{142}o",
+            "zielony",
+            "trzynastobitowy",
+            "supernowoczesny",
+            "ekstradycj\u{119}",
+        ] {
+            let readings: Vec<String> = dict
+                .lookup(w)
+                .iter()
+                .map(|(l, t)| format!("{l}/{t}"))
+                .collect();
+            eprintln!("{w} => [{}]", readings.join(", "));
+        }
+    }
+}

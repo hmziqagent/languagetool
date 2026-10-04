@@ -16,6 +16,7 @@ pub mod it;
 pub mod match_priority;
 pub mod nl;
 pub mod paragraph_repeat_beginning;
+pub mod pl;
 pub mod pt;
 pub mod ro;
 pub mod ru;
