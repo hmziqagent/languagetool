@@ -188,6 +188,150 @@ fn rule_match_probe() {
     }
 }
 
+fn disambig_bisect_probe() {
+    use og_core::checker::Disambiguator as _;
+    use og_core::{AnalyzedSentence, AnalyzedToken, AnalyzedTokenReadings};
+    use og_tagger::multiword_chunker::{ChunkerParams, MultiWordChunkerDisambiguator};
+    use og_tokenizer::WordTokenizer as _;
+
+    let resource_dir = crate::fr::test_support::fr_resource_dir().expect("fr resource dir");
+    let core = crate::engine::find_lt_core_resource_dir().expect("core resource dir");
+    let pipeline = FrenchPipeline::shared();
+    let text = "Il a décidé de ce lever tôt.";
+    let mut sentence = {
+        let mut s = AnalyzedSentence::new(text, 0, text.len());
+        let mut tokens = vec![AnalyzedTokenReadings::new(
+            AnalyzedToken::new("<S>", 0, 0).with_pos_tags(vec!["SENT_START".to_string()]),
+        )];
+        tokens.extend(
+            pipeline
+                .tokenizer_ref()
+                .tokenize(text)
+                .into_iter()
+                .map(|t| {
+                    AnalyzedTokenReadings::new(AnalyzedToken::new(t.text(), t.start(), t.end()))
+                }),
+        );
+        s.set_tokens(tokens);
+        let refs: Vec<&str> = s
+            .tokens()
+            .iter()
+            .skip(1)
+            .map(|t| t.token().token())
+            .collect();
+        let tagged = og_tagger::Tagger::tag(pipeline.tagger_ref(), &refs);
+        let tokens_mut = s.tokens_mut();
+        for (i, atr) in tagged.into_iter().enumerate() {
+            let idx = i + 1;
+            let start = tokens_mut[idx].token().start();
+            let end = tokens_mut[idx].token().end();
+            let chunks = atr.chunks().to_vec();
+            let token_text = atr.token().token().to_string();
+            let readings = atr.into_readings();
+            if readings.is_empty() {
+                continue;
+            }
+            let mut merged = AnalyzedTokenReadings::new(
+                AnalyzedToken::new(token_text, start, end)
+                    .with_pos_tags(
+                        readings
+                            .iter()
+                            .flat_map(|r| r.pos_tags().to_vec())
+                            .collect::<Vec<_>>(),
+                    )
+                    .with_lemma(readings[0].lemma().unwrap_or_default().to_string()),
+            )
+            .with_readings(readings);
+            if !chunks.is_empty() {
+                merged.set_chunks(chunks);
+            }
+            tokens_mut[idx] = merged;
+        }
+        s
+    };
+    let show = |stage: &str, s: &AnalyzedSentence| {
+        for t in s.tokens() {
+            if matches!(t.token().token(), "ce" | "lever" | "cache") {
+                println!(
+                    "{stage} {:?} => {}",
+                    t.token().token(),
+                    t.readings()
+                        .iter()
+                        .map(|r| format!(
+                            "{}/{}",
+                            r.lemma().unwrap_or("null"),
+                            r.pos_tags().join(" ")
+                        ))
+                        .collect::<Vec<_>>()
+                        .join(" | ")
+                );
+            }
+        }
+    };
+    show("TAGGED", &sentence);
+    let global = MultiWordChunkerDisambiguator::from_params(
+        &core.join("spelling_global.txt"),
+        ChunkerParams {
+            allow_first_capitalized: false,
+            allow_all_uppercase: true,
+            allow_titlecase: false,
+            default_tag: Some("_NONE_"),
+            remove_previous_tags: false,
+            add_ignore_spelling: true,
+        },
+    )
+    .expect("spelling_global chunker");
+    global.disambiguate(&mut sentence);
+    show("GLOBAL", &sentence);
+    let chunker = MultiWordChunkerDisambiguator::from_params(
+        &resource_dir.join("multiwords.txt"),
+        ChunkerParams {
+            allow_first_capitalized: true,
+            allow_all_uppercase: true,
+            allow_titlecase: false,
+            default_tag: None,
+            remove_previous_tags: true,
+            add_ignore_spelling: false,
+        },
+    )
+    .expect("multiwords chunker");
+    chunker.disambiguate(&mut sentence);
+    show("CHUNKER", &sentence);
+    let xml = std::fs::read_to_string(resource_dir.join("disambiguation.xml")).expect("xml");
+    let disambiguator = og_tagger::XmlDisambiguator::from_xml(&xml).expect("parse");
+    let snapshot = |s: &AnalyzedSentence| {
+        String::new()
+            + &s.tokens()
+                .iter()
+                .filter(|t| matches!(t.token().token(), "ce" | "lever"))
+                .map(|t| {
+                    format!(
+                        "{}={}",
+                        t.token().token(),
+                        t.readings()
+                            .iter()
+                            .map(|r| r.pos_tags().first().map_or("?".to_string(), |p| p.clone()))
+                            .collect::<Vec<_>>()
+                            .join(",")
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(" ; ")
+    };
+    let mut prev = snapshot(&sentence);
+    for rule_idx in 0..disambiguator.rule_count() {
+        disambiguator.apply_rules_through(&mut sentence, rule_idx + 1);
+        let now = snapshot(&sentence);
+        if now != prev {
+            println!(
+                "CHANGED by rule {rule_idx} id={:?}: {now}",
+                disambiguator.rule_id(rule_idx)
+            );
+            prev = now;
+        }
+    }
+}
+
 #[test]
 #[ignore]
 fn fr_diagnose_tokenizer() {
@@ -224,6 +368,12 @@ fn fr_diagnose_offsets() {
             }
         }
     }
+}
+
+#[test]
+#[ignore]
+fn fr_diagnose_disambig_bisect() {
+    disambig_bisect_probe();
 }
 
 #[test]
