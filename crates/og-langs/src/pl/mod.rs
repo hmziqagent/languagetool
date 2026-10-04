@@ -68,12 +68,48 @@ fn is_java_octal_digit(d: Option<&u8>) -> bool {
 }
 
 fn normalize_disambiguation_xml(xml: &str) -> String {
-    // Java parses the bare dash in this char class as a literal member; the Rust regex
-    // crate rejects it as a range boundary, so escape it like the sibling grammar.xml entity.
-    xml.replace(
+    // Java quirks the shared crates cannot express: the bare dash is a literal class member,
+    // and AnalyzedToken.matches treats a remove <wd> null pos as an any-pos wildcard.
+    let escaped = xml.replace(
         "[\\p{Punct}-\u{2212}\u{2013}\u{2014}\u{2015}\u{201e}\u{00ab}\u{00bb}\u{2026}\u{201d}&amp;&amp;[^!\\.]",
         "[\\p{Punct}\\-\u{2212}\u{2013}\u{2014}\u{2015}\u{201e}\u{00ab}\u{00bb}\u{2026}\u{201d}&amp;&amp;[^!\\.]",
-    )
+    );
+    wildcard_lemma_only_remove_wds(&escaped)
+}
+
+fn wildcard_lemma_only_remove_wds(xml: &str) -> String {
+    const OPEN: &str = "action=\"remove\"><wd ";
+    let mut out = String::with_capacity(xml.len() + 460);
+    let mut rest = xml;
+    while let Some(found) = rest.find(OPEN) {
+        let split = found + OPEN.len();
+        out.push_str(&rest[..split]);
+        rest = &rest[split..];
+        let Some(tag_end) = rest.find('>') else {
+            break;
+        };
+        let attrs = &rest[..tag_end];
+        let self_closing = attrs.ends_with('/');
+        let attr_body = if self_closing {
+            &attrs[..attrs.len() - 1]
+        } else {
+            attrs
+        };
+        if attr_body.contains("lemma=\"") && !attr_body.contains("pos=\"") {
+            out.push_str(attr_body);
+            out.push_str(" pos=\".*\"");
+            if self_closing {
+                out.push('/');
+            }
+            out.push('>');
+        } else {
+            out.push_str(attrs);
+            out.push('>');
+        }
+        rest = &rest[tag_end + 1..];
+    }
+    out.push_str(rest);
+    out
 }
 
 pub fn build_pl_disambiguator(
@@ -196,6 +232,84 @@ mod tests {
                 "missing {expected} in {text_ids:?}"
             );
         }
+    }
+
+    #[test]
+    fn normalize_disambiguation_xml_gives_lemma_only_remove_wds_the_java_wildcard_pos() {
+        let xml = std::fs::read_to_string(
+            crate::pl::tagger::pl_resource_dir()
+                .expect("pl resource dir")
+                .join("disambiguation.xml"),
+        )
+        .expect("disambiguation.xml");
+        let normalized = normalize_disambiguation_xml(&xml);
+        let self_closing = regex::Regex::new("action=\"remove\"><wd lemma=\"[^\"]*\"/>").unwrap();
+        let empty_text = regex::Regex::new("action=\"remove\"><wd lemma=\"[^\"]*\"></wd>").unwrap();
+        assert_eq!(self_closing.find_iter(&xml).count(), 88);
+        assert_eq!(empty_text.find_iter(&xml).count(), 4);
+        assert_eq!(self_closing.find_iter(&normalized).count(), 0);
+        assert_eq!(empty_text.find_iter(&normalized).count(), 0);
+        assert_eq!(xml.matches(" pos=\".*\"").count(), 0);
+        assert_eq!(normalized.matches(" pos=\".*\"").count(), 92);
+        assert_eq!(
+            normalized.matches("<wd ").count(),
+            xml.matches("<wd ").count(),
+            "the rewrite must not create or drop wd elements"
+        );
+        assert!(normalized.contains("<wd lemma=\"ko\u{142}o\" pos=\".*\"/>"));
+        assert!(normalized.contains("<wd lemma=\"mi\" pos=\".*\"></wd>"));
+        assert_eq!(
+            normalized
+                .matches("<wd lemma=\"zdarzy\u{107}\" pos=\"refl\">")
+                .count(),
+            2,
+            "wds that already carry pos stay untouched"
+        );
+    }
+
+    #[test]
+    fn java_pins_rule_k_removes_every_kolo_reading_of_the_k_token() {
+        let resource_dir = crate::pl::tagger::pl_resource_dir().expect("pl resource dir");
+        let xml = std::fs::read_to_string(resource_dir.join("disambiguation.xml")).expect("xml");
+        let parsed = og_tagger::XmlDisambiguator::from_xml_with_english(
+            &normalize_disambiguation_xml(&xml),
+            None,
+        )
+        .expect("parse disambiguation.xml");
+        let idx = parsed
+            .rule_ids()
+            .iter()
+            .position(|id| *id == "K")
+            .expect("K rule");
+        let text = "Stopie\u{144} dysocjacji w temperaturze 4000 K wynosi nieca\u{142}e 3%.";
+        let mut sentence = crate::pl::test_support::analyze_undisambiguated(text, 0, text.len());
+        let k_lemmas = |sentence: &og_core::AnalyzedSentence| -> Vec<Option<String>> {
+            sentence
+                .non_whitespace_tokens()
+                .iter()
+                .find(|t| t.token().token() == "K")
+                .expect("K token")
+                .readings()
+                .iter()
+                .map(|r| r.lemma().map(str::to_string))
+                .collect()
+        };
+        let before = k_lemmas(&sentence);
+        assert!(
+            before.iter().any(|l| l.as_deref() == Some("ko\u{142}o")),
+            "the tagger offers ko\u{142}o readings for K: {before:?}"
+        );
+        parsed.apply_rule(&mut sentence, idx);
+        let after = k_lemmas(&sentence);
+        assert!(
+            after.iter().all(|l| l.as_deref() != Some("ko\u{142}o")),
+            "AnalyzedToken.matches (AnalyzedToken.java:91-111) treats a null pos as a \
+             wildcard, so the lemma-only remove must drop every ko\u{142}o reading: {after:?}"
+        );
+        assert!(
+            !after.is_empty(),
+            "Java falls back to a bare reading when all readings are removed"
+        );
     }
 
     #[test]
