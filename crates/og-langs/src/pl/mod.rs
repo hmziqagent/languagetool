@@ -24,9 +24,23 @@ pub fn pl_rules_dir() -> Option<PathBuf> {
 }
 
 pub fn normalize_pl_rules_xml(xml: &str) -> std::borrow::Cow<'_, str> {
-    if !xml.contains("(?-iu)") && !xml.contains("\\0") {
+    if !xml.contains("(?-iu)") && !xml.contains("\\0") && !needs_java_class_rewrites(xml) {
         return std::borrow::Cow::Borrowed(xml);
     }
+    let negated = negate_inflected_tokens_to_exceptions(xml);
+    let xml: &str = negated.as_deref().unwrap_or(xml);
+    let mut class_fixed = rewrite_java_regex_classes(xml);
+    if let Some(widened) =
+        widen_engine_normalized_quote_classes(class_fixed.as_deref().unwrap_or(xml))
+    {
+        class_fixed = Some(widened);
+    }
+    if let Some(stripped) =
+        strip_whitespace_only_exception_bodies(class_fixed.as_deref().unwrap_or(xml))
+    {
+        class_fixed = Some(stripped);
+    }
+    let xml: &str = class_fixed.as_deref().unwrap_or(xml);
     let bytes = xml.as_bytes();
     let mut out = String::with_capacity(xml.len() + 96);
     let mut i = 0usize;
@@ -67,6 +81,168 @@ fn is_java_octal_digit(d: Option<&u8>) -> bool {
     matches!(d, Some(d) if d.is_ascii_digit() && *d <= b'7')
 }
 
+const JAVA_ASCII_PUNCT_CLASS: &str = "!-/:-@\\[-`{-~";
+
+fn needs_java_class_rewrites(xml: &str) -> bool {
+    xml.contains("\\p{Punct}") || xml.contains("\\p{Ll}") || xml.contains("\\p{Lu}")
+}
+
+fn strip_whitespace_only_exception_bodies(xml: &str) -> Option<String> {
+    let mut out = String::with_capacity(xml.len());
+    let mut rest = xml;
+    let mut changed = false;
+    while let Some(open) = rest.find("<exception") {
+        out.push_str(&rest[..open]);
+        let tail = &rest[open..];
+        let Some(gt) = tail.find('>') else {
+            out.push_str(tail);
+            rest = "";
+            break;
+        };
+        let gt_abs = open + gt;
+        let body_start = gt_abs + 1;
+        if rest[..gt_abs].ends_with('/') {
+            out.push_str(&rest[open..body_start]);
+            rest = &rest[body_start..];
+            continue;
+        }
+        let Some(close) = rest[body_start..].find("</exception>") else {
+            out.push_str(tail);
+            rest = "";
+            break;
+        };
+        let close = body_start + close;
+        let close_end = close + "</exception>".len();
+        if rest[body_start..close].trim().is_empty() {
+            out.push_str(&rest[open..body_start]);
+            out.push_str("</exception>");
+            changed = true;
+        } else {
+            out.push_str(&rest[open..close_end]);
+        }
+        rest = &rest[close_end..];
+    }
+    out.push_str(rest);
+    changed.then_some(out)
+}
+
+fn widen_engine_normalized_quote_classes(xml: &str) -> Option<String> {
+    let widened = xml
+        .replace("[\u{2018}\u{201e}]", "['\u{201e}]")
+        .replace("[\u{201d}\u{2019}]", "[\u{201d}']");
+    (widened != xml).then_some(widened)
+}
+
+fn negate_inflected_tokens_to_exceptions(xml: &str) -> Option<String> {
+    let mut out = xml.replace(
+        "<token inflected=\"yes\" negate=\"yes\" regexp=\"yes\">uzna\u{107}|uznawa\u{107}|uwa\u{17c}a\u{107}</token>",
+        "<token><exception inflected=\"yes\" regexp=\"yes\">uzna\u{107}|uznawa\u{107}|uwa\u{17c}a\u{107}</exception></token>",
+    );
+    out = out.replace(
+        "<token postag=\"UNKNOWN\" negate_pos=\"yes\" inflected=\"yes\" regexp=\"yes\" negate=\"yes\">",
+        "<token postag=\"UNKNOWN\" negate_pos=\"yes\"><exception inflected=\"yes\" regexp=\"yes\">",
+    );
+    if out != xml {
+        let mut fixed = String::with_capacity(out.len());
+        let mut rest = out.as_str();
+        while let Some(at) = rest.find("<token postag=\"UNKNOWN\" negate_pos=\"yes\"><exception") {
+            let split = at + "<token postag=\"UNKNOWN\" negate_pos=\"yes\"><exception".len();
+            fixed.push_str(&rest[..split]);
+            rest = &rest[split..];
+            let Some(tag_end) = rest.find("</token>") else {
+                break;
+            };
+            fixed.push_str(&rest[..tag_end]);
+            fixed.push_str("</exception></token>");
+            rest = &rest[tag_end + "</token>".len()..];
+        }
+        fixed.push_str(rest);
+        return Some(fixed);
+    }
+    None
+}
+
+fn rewrite_java_regex_classes(xml: &str) -> Option<String> {
+    if !needs_java_class_rewrites(xml) {
+        return None;
+    }
+    let mut out = String::with_capacity(xml.len() + 512);
+    let mut rest = xml;
+    let mut class_depth: u32 = 0;
+    while let Some(at) = rest.find(['\\', '[', ']', '<', '>']) {
+        let (sep, tail) = rest.split_at(at);
+        out.push_str(sep);
+        let first = tail.chars().next().expect("non-empty tail");
+        let mut advance = first.len_utf8();
+        match first {
+            '[' => {
+                class_depth = class_depth.saturating_add(1);
+                out.push('[');
+            }
+            ']' => {
+                class_depth = class_depth.saturating_sub(1);
+                out.push(']');
+            }
+            '<' | '>' => {
+                class_depth = 0;
+                out.push(first);
+            }
+            _ => {
+                if tail.starts_with("\\p{Punct}") {
+                    if class_depth > 0 {
+                        out.push_str(JAVA_ASCII_PUNCT_CLASS);
+                    } else {
+                        out.push('[');
+                        out.push_str(JAVA_ASCII_PUNCT_CLASS);
+                        out.push(']');
+                    }
+                    advance = 9;
+                } else if tail.starts_with("\\p{Ll}") && class_depth == 0 {
+                    out.push_str("(?-i:\\p{Ll})");
+                    advance = 6;
+                } else if tail.starts_with("\\p{Lu}") && class_depth == 0 {
+                    out.push_str("(?-i:\\p{Lu})");
+                    advance = 6;
+                } else {
+                    advance = first.len_utf8()
+                        + tail[first.len_utf8()..]
+                            .chars()
+                            .next()
+                            .map_or(0, char::len_utf8);
+                    out.push_str(&tail[..advance]);
+                }
+            }
+        }
+        rest = &tail[advance..];
+    }
+    out.push_str(rest);
+    Some(out)
+}
+
+fn append_sent_end_to_filter_postags(xml: &str) -> Option<String> {
+    // Java re-adds SENT_END on filtered sentence-final tokens (MatchState.java:151-156);
+    // letting the filter postag keep that reading reproduces it without engine changes.
+    const NEEDLE: &str = "action=\"filter\" postag=\"";
+    if !xml.contains(NEEDLE) {
+        return None;
+    }
+    let mut out = String::with_capacity(xml.len() + 160);
+    let mut rest = xml;
+    while let Some(at) = rest.find(NEEDLE) {
+        let split = at + NEEDLE.len();
+        out.push_str(&rest[..split]);
+        rest = &rest[split..];
+        let Some(close) = rest.find('"') else {
+            break;
+        };
+        out.push_str(&rest[..close]);
+        out.push_str("|SENT_END");
+        rest = &rest[close..];
+    }
+    out.push_str(rest);
+    Some(out)
+}
+
 fn normalize_disambiguation_xml(xml: &str) -> String {
     // Java quirks the shared crates cannot express: the bare dash is a literal class member,
     // and AnalyzedToken.matches treats a remove <wd> null pos as an any-pos wildcard.
@@ -74,7 +250,17 @@ fn normalize_disambiguation_xml(xml: &str) -> String {
         "[\\p{Punct}-\u{2212}\u{2013}\u{2014}\u{2015}\u{201e}\u{00ab}\u{00bb}\u{2026}\u{201d}&amp;&amp;[^!\\.]",
         "[\\p{Punct}\\-\u{2212}\u{2013}\u{2014}\u{2015}\u{201e}\u{00ab}\u{00bb}\u{2026}\u{201d}&amp;&amp;[^!\\.]",
     );
-    wildcard_lemma_only_remove_wds(&escaped)
+    let and_form = escaped.replace(
+        "<token><exception negate_pos=\"yes\" postag=\"SENT_END\">.</exception></token>",
+        "<and><token>.</token><token postag=\"SENT_END\"/></and>",
+    );
+    let wd_form = and_form.replace(
+        "<disambig postag=\"replace\">",
+        "<disambig action=\"replace\">",
+    );
+    let filtered = append_sent_end_to_filter_postags(&wd_form).unwrap_or(wd_form);
+    let class_fixed = rewrite_java_regex_classes(&filtered).unwrap_or(filtered);
+    wildcard_lemma_only_remove_wds(&class_fixed)
 }
 
 fn wildcard_lemma_only_remove_wds(xml: &str) -> String {
@@ -112,6 +298,26 @@ fn wildcard_lemma_only_remove_wds(xml: &str) -> String {
     out
 }
 
+struct SentEndRestoringDisambiguator {
+    inner: Arc<dyn og_core::checker::Disambiguator>,
+}
+
+impl og_core::checker::Disambiguator for SentEndRestoringDisambiguator {
+    fn disambiguate(&self, sentence: &mut og_core::AnalyzedSentence) {
+        self.inner.disambiguate(sentence);
+        for token in sentence.tokens_mut().iter_mut().rev() {
+            if !token.is_whitespace()
+                && !token.token().pos_tags().contains(&"SENT_START".to_string())
+            {
+                if !token.has_pos_tag("SENT_END") {
+                    token.add_sent_end();
+                }
+                break;
+            }
+        }
+    }
+}
+
 pub fn build_pl_disambiguator(
     resource_dir: &std::path::Path,
 ) -> Option<Arc<dyn og_core::checker::Disambiguator>> {
@@ -120,12 +326,9 @@ pub fn build_pl_disambiguator(
     let disambiguator =
         og_tagger::XmlDisambiguator::from_xml_with_english(&normalized, None).ok()?;
     let core = crate::engine::find_lt_core_resource_dir()?;
-    Some(og_tagger::hybrid_disambiguator(
-        "pl",
-        resource_dir,
-        &core,
-        disambiguator,
-    ))
+    Some(Arc::new(SentEndRestoringDisambiguator {
+        inner: og_tagger::hybrid_disambiguator("pl", resource_dir, &core, disambiguator),
+    }))
 }
 
 pub fn polish_compound_rule() -> CompoundRule {
@@ -268,6 +471,54 @@ mod tests {
     }
 
     #[test]
+    fn o_wym_disambiguation_fires_on_sentence_final_dot_only() {
+        let resource_dir = crate::pl::tagger::pl_resource_dir().expect("pl resource dir");
+        let xml = std::fs::read_to_string(resource_dir.join("disambiguation.xml")).expect("xml");
+        let exception_shape =
+            "<token><exception negate_pos=\"yes\" postag=\"SENT_END\">.</exception></token>";
+        assert_eq!(xml.matches(exception_shape).count(), 1);
+        let normalized = normalize_disambiguation_xml(&xml);
+        assert_eq!(
+            normalized
+                .matches("<and><token>.</token><token postag=\"SENT_END\"/></and>")
+                .count(),
+            1
+        );
+        let parsed =
+            og_tagger::XmlDisambiguator::from_xml_with_english(&normalized, None).expect("parse");
+        let idx = parsed
+            .rule_ids()
+            .iter()
+            .position(|id| *id == "O_WYM_")
+            .expect("O_WYM_ rule");
+        let brev_stays = |sentence: &og_core::AnalyzedSentence| -> bool {
+            sentence
+                .non_whitespace_tokens()
+                .iter()
+                .find(|t| t.token().token() == "wym")
+                .expect("wym token")
+                .readings()
+                .iter()
+                .any(|r| r.pos_tags().iter().any(|p| p == "brev:pun"))
+        };
+        let dotted = "Rozmawiali o tym i o wym.";
+        let mut sentence =
+            crate::pl::test_support::analyze_undisambiguated(dotted, 0, dotted.len());
+        parsed.apply_rule(&mut sentence, idx);
+        assert!(
+            !brev_stays(&sentence),
+            "the sentence-final dot lets O_WYM_ drop the brev reading"
+        );
+        let mid = "S\u{142}owo o wym. \u{142}an.";
+        let mut sentence = crate::pl::test_support::analyze_undisambiguated(mid, 0, mid.len());
+        parsed.apply_rule(&mut sentence, idx);
+        assert!(
+            brev_stays(&sentence),
+            "the mid-sentence dot keeps the abbreviation reading"
+        );
+    }
+
+    #[test]
     fn java_pins_rule_k_removes_every_kolo_reading_of_the_k_token() {
         let resource_dir = crate::pl::tagger::pl_resource_dir().expect("pl resource dir");
         let xml = std::fs::read_to_string(resource_dir.join("disambiguation.xml")).expect("xml");
@@ -320,6 +571,132 @@ mod tests {
         assert_eq!(priority_for_id("REPETITIONS_STYLE"), -55);
         assert_eq!(priority_for_id("SOMETHING_STYLE_CAT"), -50);
         assert_eq!(priority_for_id("UNKNOWN_RULE"), 0);
+    }
+
+    #[test]
+    fn whitespace_only_exception_bodies_stripped_without_tag_loss() {
+        let xml =
+            std::fs::read_to_string(pl_rules_dir().expect("pl rules dir").join("grammar.xml"))
+                .expect("grammar.xml");
+        let stripped =
+            strip_whitespace_only_exception_bodies(&xml).expect("one body in grammar.xml");
+        assert_eq!(
+            xml.matches("<exception").count(),
+            stripped.matches("<exception").count()
+        );
+        assert_eq!(
+            xml.matches("</exception>").count(),
+            stripped.matches("</exception>").count()
+        );
+        assert_eq!(
+            xml.matches("<rule").count(),
+            stripped.matches("<rule").count()
+        );
+        assert_eq!(
+            xml.matches("<exception postag=\".*loc.*|conj|comp|adv.*|num.*\" postag_regexp=\"yes\">\n                                                    </exception>")
+                .count(),
+            1
+        );
+        assert_eq!(
+            stripped
+                .matches("<exception postag=\".*loc.*|conj|comp|adv.*|num.*\" postag_regexp=\"yes\"></exception>")
+                .count(),
+            1
+        );
+        assert!(stripped.len() < xml.len());
+    }
+
+    #[test]
+    fn negated_inflected_tokens_become_java_equivalent_exceptions() {
+        let xml =
+            std::fs::read_to_string(pl_rules_dir().expect("pl rules dir").join("grammar.xml"))
+                .expect("grammar.xml");
+        let rewritten =
+            negate_inflected_tokens_to_exceptions(&xml).expect("both shapes in grammar.xml");
+        assert_eq!(
+            rewritten
+                .matches("<token><exception inflected=\"yes\" regexp=\"yes\">uzna")
+                .count(),
+            2
+        );
+        assert_eq!(
+            rewritten
+                .matches("<token postag=\"UNKNOWN\" negate_pos=\"yes\"><exception inflected=\"yes\" regexp=\"yes\">")
+                .count(),
+            1
+        );
+        assert!(!rewritten.contains("negate=\"yes\" regexp=\"yes\">uzna"));
+    }
+
+    #[test]
+    fn filter_postags_keep_the_sent_end_reading() {
+        let xml = std::fs::read_to_string(
+            crate::pl::tagger::pl_resource_dir()
+                .expect("pl resource dir")
+                .join("disambiguation.xml"),
+        )
+        .expect("disambiguation.xml");
+        let bridged =
+            append_sent_end_to_filter_postags(&xml).expect("filters exist in disambiguation.xml");
+        let filter_shapes =
+            regex::Regex::new("action=\"filter\" postag=\"[^\"']*[|]SENT_END\"").unwrap();
+        assert_eq!(filter_shapes.find_iter(&bridged).count(), 144);
+        assert_eq!(filter_shapes.find_iter(&xml).count(), 0);
+    }
+
+    #[test]
+    fn normalize_pl_rules_xml_makes_posix_punct_ascii_and_case_classes_case_exact() {
+        let xml =
+            std::fs::read_to_string(pl_rules_dir().expect("pl rules dir").join("grammar.xml"))
+                .expect("grammar.xml");
+        let normalized = normalize_pl_rules_xml(&xml);
+        assert_eq!(xml.matches("\\p{Punct}").count(), 7);
+        assert_eq!(normalized.matches("\\p{Punct}").count(), 0);
+        assert!(normalized.contains("[!-/:-@\\[-`{-~]"));
+        assert!(normalized.contains(
+            "[!-/:-@\\[-`{-~\\-\u{2013}\u{2212}\u{2014}\u{2015}\u{201e}\u{00ab}\u{00bb}\u{2026}\u{2019}&amp;&amp;[^\\)]]+"
+        ));
+        let out_of_class_ll = xml.matches("\\p{Ll}").count()
+            - xml.matches("[\\p{Ll}]").count()
+            - xml.matches("[\\p{Ll}&amp;").count();
+        assert!(
+            out_of_class_ll > 100,
+            "grammar.xml carries many out-of-class \\p{{Ll}} uses: {out_of_class_ll}"
+        );
+        assert_eq!(normalized.matches("(?-i:\\p{Ll})").count(), out_of_class_ll);
+        assert_eq!(
+            normalized.matches("(?-i:\\p{Lu})").count(),
+            xml.matches("\\p{Lu}").count()
+                - xml.matches("[\\p{Lu}\\d]").count()
+                - xml.matches("[\\p{Lu}^R]").count()
+                - xml.matches("[^\\p{Lu}]").count()
+        );
+        assert!(normalized.contains("[\\p{Lu}\\d]"));
+        assert!(normalized.contains("[\\p{L}&amp;&amp;[^\\p{Lu}]"));
+        assert_eq!(normalized.matches("[\\p{Ll}]").count(), 1);
+        let ascii_punct = regex::Regex::new("[!-/:-@\\[-`{-~]").unwrap();
+        for hit in [",", ".", ";", "!", "(", "[", "{", "@", "?"] {
+            assert!(ascii_punct.is_match(hit), "{hit:?} is ASCII punct");
+        }
+        for miss in [
+            "\u{201e}", "\u{2018}", "\u{2013}", "\u{2026}", "w", "\u{a0}",
+        ] {
+            assert!(!ascii_punct.is_match(miss), "{miss:?} is not ASCII punct");
+        }
+        let java_ci_lower = regex::RegexBuilder::new("(?-i:\\p{Ll})+")
+            .case_insensitive(true)
+            .build()
+            .unwrap();
+        assert!(!java_ci_lower.is_match("IPN"));
+        assert!(java_ci_lower.is_match("ohn"));
+        let folded_lower = regex::RegexBuilder::new("\\p{Ll}+")
+            .case_insensitive(true)
+            .build()
+            .unwrap();
+        assert!(
+            folded_lower.is_match("IPN"),
+            "the regex crate case-folds \\p{{Ll}} under (?i), Java does not"
+        );
     }
 
     #[test]

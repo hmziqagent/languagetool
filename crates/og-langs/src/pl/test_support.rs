@@ -225,11 +225,11 @@ mod tests {
         );
         assert!(
             normalized.contains(
-                "\\p{Punct}\\-\\u{2212}"
+                "[!-/:-@\\[-`{-~\\-\\u{2212}"
                     .replace("\\u{2212}", "\u{2212}")
                     .as_str()
             ),
-            "the escaped dash form must be present"
+            "the Java ASCII punct class with the escaped dash form must be present"
         );
         assert_eq!(
             normalized.matches("PUNCT_NO_DOT").count(),

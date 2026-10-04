@@ -447,6 +447,215 @@ mod tests {
         }
     }
 
+    #[ignore]
+    #[test]
+    fn probe_round15_zdania_zlozone_residues() {
+        for text in [
+            "Romuald odpowiedzia\u{142} z wa\u{17c}n\u{105} i tajemnicz\u{105} min\u{105} zwielokrotniaj\u{105}c g\u{142}osk\u{119}.",
+            "Je\u{15b}li w w\u{119}glowodorze wyst\u{119}puje wi\u{105}zanie podw\u{f3}jne i potr\u{f3}jne to wa\u{17c}niejsze przy nazewnictwie jest podw\u{f3}jne.",
+            "Fatma uca\u{142}owawszy r\u{119}ce obu in\u{17c}ynier\u{f3}w i dzieci wysz\u{142}a, b\u{142}ogos\u{142}awi\u{105}c szczeg\u{f3}lniej Nel.",
+            "Kupi\u{142}em wino chcia\u{142}em te\u{17c} pi\u{107} wod\u{119}.",
+        ] {
+            probe("ZDANIA_ZLOZONE", text);
+        }
+    }
+
+    #[ignore]
+    #[test]
+    fn probe_round15_zdania_zlozone_engine_trace() {
+        probe_with_engine_trace(
+            "ZDANIA_ZLOZONE",
+            "Romuald odpowiedzia\u{142} z wa\u{17c}n\u{105} i tajemnicz\u{105} min\u{105} zwielokrotniaj\u{105}c g\u{142}osk\u{119}.",
+        );
+    }
+
+    #[ignore]
+    #[test]
+    fn probe_round15_remaining_singles() {
+        probe(
+            "ZAGNIEZDZONE_CUDZYSLOWY",
+            "\u{201e}Ka\u{17c}dy noemat ma \u{2018}tre\u{15b}\u{107}\u{2019}\u{201d}.",
+        );
+        probe(
+            "ADJ_SUBST_ADJ_UNIFY",
+            "Beztlenowe bakterie magnetotaktyczna maj\u{105} funkcj\u{119} wykrywania tlenu.",
+        );
+        probe(
+            "ZDANIE_PODRZEDNE_Z_KTORY_LUB_JAKI",
+            "I skoczy\u{142} ku domowi, w kt\u{f3}rego sieni s\u{142}ycha\u{107} by\u{142}o \u{15b}iej\u{105}ce si\u{119} g\u{142}osy i huk obracanych \u{17c}aren.",
+        );
+        probe(
+            "NIETYPOWA_KOMBINACJA_DUZYCH_I_MALYCH_LITER",
+            "To jest dziwnie napisane s\u{141}oWo.",
+        );
+        probe("O_WYM", "Rozmawiali o tym i o wym.");
+        probe("WLADCE", "Surowce zawieraj\u{105}ce te alkaloidy");
+        probe(
+            "BRAK_PRZECINKA_ZE",
+            "I c\u{f3}\u{17c}, stary Balu \u{2014} doda\u{142}a \u{2014} jak \u{17c}e\u{15b} wyszed\u{142} z tej przygody?",
+        );
+        probe(
+            "BRAK_PRZECINKA_GDY",
+            "Co znajdujemy gdy \u{201e}spogl\u{105}damy\u{201d} wewn\u{105}trz?",
+        );
+        probe(
+            "BRAK_PRZECINKA_ANI",
+            "Dojad\u{119} tam b\u{105}d\u{17a} rowerem b\u{105}d\u{17a} hulajnog\u{105}.",
+        );
+        probe("PREP_CASUS", "By\u{142}em przy grobie Mickiewicza.");
+        probe("RYMY", "Tu wyl\u{105}dowa\u{142}y oddzia\u{142}y.");
+        probe("IMIONA_Z_APOSTROFAMI", "Porozmawiajmy o IPN'ie.");
+        probe("PO_SRODKU", "Prawda po \u{15b}rodku");
+        probe("PO_WOLI", "\u{15a}pieszcie si\u{119} po woli");
+        probe(
+            "ZA_ZWYCZAJ",
+            "W Egipcie wszyscy dygnitarze uwa\u{17c}aj\u{105} \u{142}ap\u{f3}wki za zwyczaj tak powszechny...",
+        );
+    }
+
+    #[ignore]
+    #[test]
+    fn probe_round15_disambig_rule_effects() {
+        let resource_dir = crate::pl::tagger::pl_resource_dir().expect("pl resource dir");
+        let xml = std::fs::read_to_string(resource_dir.join("disambiguation.xml")).unwrap();
+        let normalized = crate::pl::normalize_disambiguation_xml(&xml);
+        let parsed = og_tagger::XmlDisambiguator::from_xml_with_english(&normalized, None)
+            .expect("parse disambiguation.xml");
+        let snapshot = |s: &og_core::AnalyzedSentence, watched: &str| -> Vec<String> {
+            s.non_whitespace_tokens()
+                .iter()
+                .filter(|t| t.token().token() == watched)
+                .map(|t| {
+                    t.readings()
+                        .iter()
+                        .map(|r| r.pos_tags().join("|"))
+                        .collect::<Vec<_>>()
+                        .join(",")
+                })
+                .collect()
+        };
+        let cases: &[(&str, &str)] = &[
+            (
+                "I c\u{f3}\u{17c}, stary Balu \u{2014} doda\u{142}a \u{2014} jak \u{17c}e\u{15b} wyszed\u{142} z tej przygody?",
+                "jak",
+            ),
+            ("By\u{142}em przy grobie Mickiewicza.", "grobie"),
+            (
+                "Tu wyl\u{105}dowa\u{142}y oddzia\u{142}y.",
+                "wyl\u{105}dowa\u{142}y",
+            ),
+            ("Rozmawiali o tym i o wym.", "wym"),
+            ("O tym i o wym", "wym"),
+            ("\u{15a}pieszcie si\u{119} po woli", "woli"),
+            ("Prawda po \u{15b}rodku", "\u{15b}rodku"),
+            (
+                "Dojad\u{119} tam b\u{105}d\u{17a} rowerem b\u{105}d\u{17a} hulajnog\u{105}.",
+                "b\u{105}d\u{17a}",
+            ),
+        ];
+        for (text, watched) in cases {
+            eprintln!("=== '{text}' watching {watched:?} ===");
+            let mut sentence =
+                crate::pl::test_support::analyze_undisambiguated(text, 0, text.len());
+            eprintln!("   pre  {watched:?}: {:?}", snapshot(&sentence, watched));
+            for (idx, id) in parsed.rule_ids().iter().enumerate() {
+                let before = snapshot(&sentence, watched);
+                parsed.apply_rule(&mut sentence, idx);
+                let after = snapshot(&sentence, watched);
+                if before != after {
+                    eprintln!("   rule {id} (idx {idx}): {before:?} -> {after:?}");
+                }
+            }
+            eprintln!("   post {watched:?}: {:?}", snapshot(&sentence, watched));
+        }
+    }
+
+    #[ignore]
+    #[test]
+    fn probe_round15_o_wym_disambig_rule() {
+        let resource_dir = crate::pl::tagger::pl_resource_dir().expect("pl resource dir");
+        let xml = std::fs::read_to_string(resource_dir.join("disambiguation.xml")).unwrap();
+        let normalized = crate::pl::normalize_disambiguation_xml(&xml);
+        let parsed = og_tagger::XmlDisambiguator::from_xml_with_english(&normalized, None)
+            .expect("parse disambiguation.xml");
+        let snapshot = |s: &og_core::AnalyzedSentence| -> Vec<String> {
+            s.non_whitespace_tokens()
+                .iter()
+                .map(|t| {
+                    format!(
+                        "{:?}:{}",
+                        t.token().token(),
+                        t.readings()
+                            .iter()
+                            .map(|r| r.pos_tags().join("|"))
+                            .collect::<Vec<_>>()
+                            .join(",")
+                    )
+                })
+                .collect()
+        };
+        for wanted in ["O_WYM_", "o_wym_2"] {
+            let Some(idx) = parsed.rule_ids().iter().position(|id| *id == wanted) else {
+                eprintln!("rule {wanted}: NOT FOUND");
+                continue;
+            };
+            eprintln!("== rule {wanted} (idx {idx}) ==");
+            eprintln!("{}", parsed.rule_debug(idx));
+            for text in ["Rozmawiali o tym i o wym.", "O tym i o wym"] {
+                let mut sentence =
+                    crate::pl::test_support::analyze_undisambiguated(text, 0, text.len());
+                let before = snapshot(&sentence);
+                parsed.apply_rule(&mut sentence, idx);
+                let after = snapshot(&sentence);
+                eprintln!("  '{text}'");
+                eprintln!("    before {before:?}");
+                eprintln!("    after  {after:?}");
+            }
+        }
+    }
+
+    #[ignore]
+    #[test]
+    fn probe_round15_zagniezdzone_wladce_traces() {
+        pattern_of("ZAGNIEZDZONE_CUDZYSLOWY");
+        probe_with_engine_trace(
+            "ZAGNIEZDZONE_CUDZYSLOWY",
+            "\u{201e}Ka\u{17c}dy noemat ma \u{2018}tre\u{15b}\u{107}\u{2019}\u{201d}.",
+        );
+        pattern_of("WLADCE");
+        probe_with_engine_trace("WLADCE", "Surowce zawieraj\u{105}ce te alkaloidy");
+    }
+
+    #[test]
+    fn quote_class_survives_java_ci_compilation() {
+        let plain = regex::RegexBuilder::new("^(?:[\u{2018}\u{201e}])$")
+            .case_insensitive(true)
+            .build()
+            .unwrap();
+        assert!(
+            plain.is_match("\u{2018}"),
+            "plain ci compile matches the class member"
+        );
+        let folded = og_xml::java_case_fold::compile_java_ci("^(?:[\u{2018}\u{201e}])$");
+        assert!(
+            folded.as_ref().is_some_and(|re| re.is_match("\u{2018}")),
+            "java_case_fold must keep the quote class intact"
+        );
+    }
+
+    #[ignore]
+    #[test]
+    fn probe_round15_prep_casus_trace() {
+        probe_with_engine_trace("PREP_CASUS", "By\u{142}em przy grobie Mickiewicza.");
+    }
+
+    #[ignore]
+    #[test]
+    fn probe_round15_rymy_trace() {
+        pattern_of("RYMY");
+        probe_with_engine_trace("RYMY", "Tu wyl\u{105}dowa\u{142}y oddzia\u{142}y.");
+    }
+
     #[test]
     fn regex_crate_rejects_java_octal_and_inline_unicode_flag_negation() {
         let brak_kropki_exception_class = "[?\\.!,:;…\u{201d}\"\\02]";
