@@ -10,6 +10,8 @@ pub mod suppress_misspelled;
 pub mod tagger;
 #[cfg(test)]
 pub(crate) mod test_support;
+#[cfg(test)]
+pub(crate) mod trace;
 
 use og_rules::postponed_adjective::LangSynthesizer;
 use og_tagger::GenericTagger;

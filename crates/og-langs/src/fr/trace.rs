@@ -1,0 +1,299 @@
+use crate::fr::test_support::FrenchPipeline;
+use og_core::AnalyzedSentence;
+use og_tokenizer::WordTokenizer as _;
+use og_xml::compiler::{CompiledRule, CompiledRuleSet, XmlCompiler};
+use std::path::PathBuf;
+use std::sync::OnceLock;
+
+fn rules_dir() -> PathBuf {
+    crate::fr::test_support::fr_rules_dir().expect("fr rules dir")
+}
+
+fn compiled_grammar() -> &'static CompiledRuleSet {
+    static GRAMMAR: OnceLock<CompiledRuleSet> = OnceLock::new();
+    GRAMMAR.get_or_init(|| {
+        let path = rules_dir().join("grammar.xml");
+        let xml = std::fs::read_to_string(&path).expect("grammar.xml");
+        XmlCompiler::new()
+            .compile_file_with_base(&xml, path.parent())
+            .expect("compile grammar.xml")
+    })
+}
+
+fn compiled_style() -> &'static CompiledRuleSet {
+    static STYLE: OnceLock<CompiledRuleSet> = OnceLock::new();
+    STYLE.get_or_init(|| {
+        let path = rules_dir().join("style.xml");
+        let xml = std::fs::read_to_string(&path).expect("style.xml");
+        XmlCompiler::new()
+            .compile_file_with_base(&xml, path.parent())
+            .expect("compile style.xml")
+    })
+}
+
+fn rules_owning_example(text: &str) -> Vec<(&'static CompiledRule, &'static str)> {
+    let mut out = Vec::new();
+    for (set, label) in [
+        (compiled_grammar(), "grammar.xml"),
+        (compiled_style(), "style.xml"),
+    ] {
+        for rule in &set.rules {
+            if rule.examples.iter().any(|e| e.text.contains(text)) {
+                out.push((rule, label));
+            }
+        }
+    }
+    out
+}
+
+fn example_uses_raw_pos(fragment: &str) -> bool {
+    // raw_pos is not compiled by the shared XML parser, so the flag is read
+    // back from the rule XML: its absence from CompiledRule is the gap under diagnosis.
+    for file in ["grammar.xml", "style.xml"] {
+        let xml = std::fs::read_to_string(rules_dir().join(file)).expect("rules xml");
+        let mut rest = xml.as_str();
+        while let Some(offset) = rest.find(fragment) {
+            let pos = xml.len() - rest.len() + offset;
+            let before = xml[..pos].rfind("<rule").unwrap_or(0);
+            let after = xml[pos..].find("</rule>").map(|i| pos + i).unwrap_or(pos);
+            if xml[before..after].contains("raw_pos=\"yes\"") {
+                return true;
+            }
+            rest = &xml[pos + fragment.len()..];
+        }
+    }
+    false
+}
+
+fn dump_readings(sentence: &AnalyzedSentence) {
+    for t in sentence.non_whitespace_tokens() {
+        if t.token().token() == "<S>" {
+            continue;
+        }
+        let readings: Vec<String> = t
+            .readings()
+            .iter()
+            .map(|r| format!("{}/{}", r.lemma().unwrap_or("-"), r.pos_tags().join("|")))
+            .collect();
+        eprintln!(
+            "    [{: >3}] {:?}: {}",
+            t.token().start(),
+            t.token().token(),
+            readings.join(", ")
+        );
+    }
+}
+
+fn marker_range(text: &str) -> Option<(usize, usize)> {
+    let s = text.find("<marker>")?;
+    let e = text.find("</marker>")?;
+    Some((s, e - "<marker>".len()))
+}
+
+pub fn probe(example_fragment: &str) {
+    let engine = crate::fr::example_suite::build_pattern_engine();
+    let pipeline = FrenchPipeline::shared();
+    og_rules::pattern_rule::set_test_date_hack(true);
+    let raw_pos = example_uses_raw_pos(example_fragment);
+    for (rule, file) in rules_owning_example(example_fragment) {
+        let example = rule
+            .examples
+            .iter()
+            .find(|e| e.text.contains(example_fragment))
+            .expect("example");
+        let clean = example
+            .text
+            .replace("<marker>", "")
+            .replace("</marker>", "");
+        eprintln!(
+            "== [{file}] {} / {:?} [type {:?}] raw_pos={raw_pos} filter={:?} '{}'",
+            rule.id,
+            rule.sub_id,
+            example.example_type,
+            rule.filter.as_ref().map(|f| f.class.as_str()),
+            clean
+        );
+        if let Some(range) = marker_range(&example.text) {
+            eprintln!("   marker {}..{}", range.0, range.1);
+        }
+        for (sentence, sentence_start) in pipeline.analyze_offset_text(&clean) {
+            eprintln!("  sentence @{sentence_start}: [{}]", sentence.text());
+            dump_readings(&sentence);
+            for m in engine.match_rule(rule, &sentence) {
+                let span = m.offset()..m.offset() + m.length();
+                eprintln!(
+                    "  raw match {}..{} '{}'",
+                    span.start,
+                    span.end,
+                    &sentence.text()[span.start.min(sentence.text().len())
+                        ..span.end.min(sentence.text().len())]
+                );
+                let fr_filter = rule.filter.as_ref().filter(|f| {
+                    f.class == crate::fr::suppress_misspelled::FRENCH_SUPPRESS_MISSPELLED_FILTER_CLASS
+                });
+                if let Some(filter) = fr_filter {
+                    let filtered =
+                        crate::fr::suppress_misspelled::accept_rule_match(m, &filter.args, &[]);
+                    match filtered {
+                        Some(m) => eprintln!(
+                            "    filtered: kept @{}..{} reps={:?}",
+                            m.offset() + sentence_start,
+                            m.offset() + sentence_start + m.length(),
+                            m.replacements()
+                                .iter()
+                                .map(|r| r.value().to_string())
+                                .collect::<Vec<_>>()
+                        ),
+                        None => eprintln!("    filtered: NULLED"),
+                    }
+                }
+            }
+        }
+    }
+}
+
+pub fn probe_dict(words: &[&str]) {
+    let tagger = FrenchPipeline::shared().tagger_ref();
+    let tagged = og_tagger::Tagger::tag(tagger, words);
+    for (word, atr) in words.iter().zip(tagged.iter()) {
+        let readings: Vec<String> = atr
+            .readings()
+            .iter()
+            .map(|r| format!("{}/{}", r.lemma().unwrap_or("-"), r.pos_tags().join("|")))
+            .collect();
+        eprintln!("  {word:?}: {}", readings.join(", "));
+    }
+}
+
+pub fn probe_tokens(texts: &[&str]) {
+    let pipeline = FrenchPipeline::shared();
+    for text in texts {
+        let tokens: Vec<String> = pipeline
+            .tokenizer_ref()
+            .tokenize(text)
+            .iter()
+            .map(|t| format!("{:?}", t.text()))
+            .collect();
+        eprintln!("TOKENS {text:?} => {}", tokens.join(" "));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    #[ignore]
+    fn trace_pre_disambiguation_residue_failures() {
+        for fragment in [
+            "Il faut tout",
+            "cache sous la table",
+            "passe sous la table",
+            "attent-il",
+            "repentir",
+            "ce</marker> lever",
+            "n'aurais pas",
+        ] {
+            super::probe(fragment);
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn trace_tokenizer_shape_residue_failures() {
+        for fragment in [
+            "32.1.1985",
+            "300.1.1985",
+            "3000.1.1985",
+            "31.4",
+            "30.2",
+            "31.2",
+            "29.2.1900",
+            "29.2.2100",
+            "8%</marker>",
+            "8,5%</marker>",
+            "51% des",
+            "est arrivé à l'hôtel",
+            "à la télévision",
+            "m'éclairer",
+        ] {
+            super::probe(fragment);
+        }
+        super::probe_tokens(&[
+            "Il est né le 32.1.1985.",
+            "Une croissance de 8%.",
+            "Une croissance de 8,5%.",
+            "Le candidat a obtenu 51% des voies.",
+            "-il est arrivé à l'hôtel hier.",
+            "Vas -tu les regarder à la télévision ?",
+            "Quelqu\"un peut -il m'éclairer et si possible en justifiant.",
+        ]);
+    }
+
+    #[test]
+    #[ignore]
+    fn trace_matcher_residue_failures() {
+        for fragment in [
+            "la fois :",
+            "203 de Schmutz",
+            "la pêcherie",
+            "post précédent",
+            "néo-post-castristes",
+            "post saison 14,3",
+            "tous vos",
+            "de mes",
+            "ni ami ni amie",
+            "nuance lilas",
+            "néo-impressionnisme",
+            "ou vous téléphonerai",
+            "d'énergie croissant",
+            "est donc né ce lieu",
+            "sites parles",
+            "Il fait frais",
+            "usage de son bras",
+            "de plus en plus",
+            "peut tourner sur 360",
+            "poursoi",
+            "négligé les enqêteurs",
+            "ne sé",
+            "D‘enfants",
+        ] {
+            super::probe(fragment);
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn trace_marker_offset_residue_failures() {
+        for fragment in ["il faut partir", "il est certain"] {
+            super::probe(fragment);
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn trace_style_residue_failure() {
+        super::probe("étudiant ou étudiante");
+    }
+
+    #[test]
+    #[ignore]
+    fn trace_dict_readings_of_suspect_words() {
+        super::probe_dict(&[
+            "néo-impressionnisme",
+            "néo-post-castristes",
+            "Diaz-Canel",
+            "post",
+            "précédent",
+            "castristes",
+            "saison",
+            "repas",
+            "mots",
+            "maux",
+            "voies",
+            "cache",
+            "lever",
+            "dire",
+            "poursoi",
+            "alors",
+        ]);
+    }
+}
