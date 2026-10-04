@@ -67,13 +67,18 @@ fn has_diacritics(s: &str) -> bool {
 }
 
 fn full_match(pattern: &str, value: &str) -> bool {
+    full_matcher(pattern).is_match(value)
+}
+
+fn full_matcher(pattern: &str) -> Regex {
     static CACHE: OnceLock<Mutex<HashMap<String, Regex>>> = OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     let mut guard = cache.lock().unwrap();
-    let re = guard
-        .entry(pattern.to_string())
-        .or_insert_with(|| Regex::new(&format!("^(?:{pattern})$")).unwrap());
-    re.is_match(value)
+    regex::Regex::clone(
+        guard
+            .entry(pattern.to_string())
+            .or_insert_with(|| Regex::new(&format!("^(?:{pattern})$")).unwrap()),
+    )
 }
 
 fn readings_match_pos_tag_regex(atr: &AnalyzedTokenReadings, pos_tag_regex: &str) -> bool {
@@ -574,6 +579,201 @@ pub fn portuguese_proclisis_filter(
     Some(rm)
 }
 
+fn marker_or_index(
+    spec: &str,
+    pattern_tokens: &[&AnalyzedTokenReadings],
+    rm_from: usize,
+) -> Option<usize> {
+    if let Some(suffix) = spec.strip_prefix("marker") {
+        let mut i = 0usize;
+        while i < pattern_tokens.len() && pattern_tokens[i].token().start() < rm_from {
+            i += 1;
+        }
+        i += 1;
+        let extra: usize = suffix.parse().unwrap_or(0);
+        let one_based = i + extra;
+        if one_based < 1 || one_based > pattern_tokens.len() {
+            return None;
+        }
+        Some(one_based - 1)
+    } else {
+        let n: usize = spec.parse().ok()?;
+        if n < 1 || n > pattern_tokens.len() {
+            return None;
+        }
+        Some(n - 1)
+    }
+}
+
+fn select_reading<'a>(atr: &'a AnalyzedTokenReadings, select: &str) -> (Option<&'a str>, &'a str) {
+    const UNKNOWN: &str = "UNKNOWN";
+    for reading in atr.readings() {
+        for tag in reading.pos_tags() {
+            if full_match(select, tag) {
+                return (reading.lemma(), tag);
+            }
+        }
+    }
+    match atr.readings().first() {
+        Some(reading) => (
+            reading.lemma(),
+            reading
+                .pos_tags()
+                .first()
+                .map(String::as_str)
+                .unwrap_or(UNKNOWN),
+        ),
+        None => (None, UNKNOWN),
+    }
+}
+
+fn composite_postag(
+    lemma_select: &str,
+    postag_select: &str,
+    original_postag: &str,
+    desired_postag: &str,
+    postag_replace: &str,
+) -> String {
+    let a = full_matcher(lemma_select).captures(original_postag);
+    let b = full_matcher(postag_select).captures(desired_postag);
+    let mut result = postag_replace.to_string();
+    if let (Some(a), Some(b)) = (a, b) {
+        for i in 1..=a.len() {
+            if let Some(g) = a.get(i) {
+                result = result.replace(&format!(r"\a{i}"), g.as_str());
+            }
+        }
+        for i in 1..=b.len() {
+            if let Some(g) = b.get(i) {
+                result = result.replace(&format!(r"\b{i}"), g.as_str());
+            }
+        }
+    }
+    result
+}
+
+fn move_pronoun_tag(source_tag: &str, destination_tag: &str) -> String {
+    let mut parts: Vec<&str> = source_tag.split(':').collect();
+    while parts.last().is_some_and(|p| p.is_empty()) {
+        parts.pop();
+    }
+    if parts.len() == 2 {
+        format!(
+            "{}:{}",
+            destination_tag.split(':').next().unwrap_or_default(),
+            parts[1]
+        )
+    } else {
+        destination_tag.to_string()
+    }
+}
+
+fn is_suggestion_exception_pt(token: &str, desired_postag: &str) -> bool {
+    (desired_postag == "VMIP1P0" || desired_postag == "VMIP2P0") && !token.ends_with('s')
+}
+
+pub fn advanced_synthesizer_filter(
+    synthesizer: Option<&LangSynthesizer>,
+    args: &str,
+    matched_texts: &[String],
+    matched_positions: &[usize],
+    tokens: &[&AnalyzedTokenReadings],
+    mut rm: RuleMatch,
+) -> Option<RuleMatch> {
+    let pattern_tokens = pattern_token_range(tokens, matched_positions);
+    if pattern_tokens.is_empty() {
+        return Some(rm);
+    }
+    let parsed = resolve_args(args, matched_texts);
+    let (Some(postag_select), Some(lemma_select), Some(postag_from_str), Some(lemma_from_str)) = (
+        parsed.get("postagSelect"),
+        parsed.get("lemmaSelect"),
+        parsed.get("postagFrom"),
+        parsed.get("lemmaFrom"),
+    ) else {
+        return Some(rm);
+    };
+    let new_lemma = parsed.get("newLemma").cloned().unwrap_or_default();
+    let postag_replace = parsed.get("postagReplace").cloned();
+    let lemma_from = marker_or_index(lemma_from_str, pattern_tokens, rm.offset())?;
+    let postag_from = marker_or_index(postag_from_str, pattern_tokens, rm.offset())?;
+    let (lemma, original_postag) = {
+        let (l, t) = select_reading(pattern_tokens[lemma_from], lemma_select);
+        (l.map(str::to_string), t.to_string())
+    };
+    let desired_postag = select_reading(pattern_tokens[postag_from], postag_select)
+        .1
+        .to_string();
+    let mut desired_lemma = lemma;
+    if !new_lemma.is_empty() {
+        if new_lemma.starts_with('_') {
+            desired_lemma = None;
+        } else {
+            desired_lemma = Some(new_lemma);
+        }
+    }
+    let desired_lemma = desired_lemma?;
+    let desired_postag = match postag_replace.as_deref() {
+        Some("keepPronoun") => move_pronoun_tag(&original_postag, &desired_postag),
+        Some(replace) => composite_postag(
+            lemma_select,
+            postag_select,
+            &original_postag,
+            &desired_postag,
+            replace,
+        ),
+        None => desired_postag,
+    };
+    let surface = pattern_tokens[lemma_from].token().token();
+    let is_word_capitalized = is_capitalized_word(surface);
+    let is_word_all_upper = is_all_uppercase(surface);
+    let Some(synthesizer) = synthesizer else {
+        return Some(rm);
+    };
+    let tag_regex = match Regex::new(&desired_postag) {
+        Ok(re) => re,
+        Err(_) => return Some(rm),
+    };
+    let replacements = synthesizer.synthesize(&desired_lemma, &tag_regex);
+    if replacements.is_empty() {
+        return Some(rm);
+    }
+    let mut list: Vec<String> = Vec::new();
+    let mut suggestion_used = false;
+    for r in rm.replacements().iter().map(|r| r.value().to_string()) {
+        for nr in &replacements {
+            if is_suggestion_exception_pt(nr, &desired_postag) {
+                continue;
+            }
+            if r.contains("{suggestion}")
+                || r.contains("{Suggestion}")
+                || r.contains("{SUGGESTION}")
+            {
+                suggestion_used = true;
+            }
+            let mut nr = nr.clone();
+            if is_word_capitalized {
+                nr = uppercase_first_char(&nr);
+            }
+            if is_word_all_upper {
+                nr = nr.to_uppercase();
+            }
+            let complete = r
+                .replace("{suggestion}", &nr)
+                .replace("{Suggestion}", &uppercase_first_char(&nr))
+                .replace("{SUGGESTION}", &nr.to_uppercase());
+            if !list.contains(&complete) {
+                list.push(complete);
+            }
+        }
+    }
+    if !suggestion_used {
+        list.extend(replacements.iter().cloned());
+    }
+    rm.set_replacements(list.into_iter().map(SuggestedReplacement::new).collect());
+    Some(rm)
+}
+
 pub fn is_pt_filter(class: &str) -> bool {
     matches!(
         class,
@@ -583,6 +783,7 @@ pub fn is_pt_filter(class: &str) -> bool {
             | "org.languagetool.rules.pt.RomanNumeralFilter"
             | "org.languagetool.rules.pt.PortugueseEnclisisFilter"
             | "org.languagetool.rules.pt.PortugueseProclisisFilter"
+            | "org.languagetool.rules.pt.AdvancedSynthesizerFilter"
     )
 }
 
@@ -624,6 +825,14 @@ pub fn apply_pt_filter(class: &str, call: PtFilterCall<'_>, rm: RuleMatch) -> Op
         "org.languagetool.rules.pt.PortugueseProclisisFilter" => {
             portuguese_proclisis_filter(call.synthesizer, call.tokens, call.matched_positions, rm)
         }
+        "org.languagetool.rules.pt.AdvancedSynthesizerFilter" => advanced_synthesizer_filter(
+            call.synthesizer,
+            call.args,
+            call.matched_texts,
+            call.matched_positions,
+            call.tokens,
+            rm,
+        ),
         _ => None,
     }
 }
@@ -1182,7 +1391,125 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_recognizes_exactly_the_six_java_filter_classes() {
+    fn move_pronoun_tag_ports_the_java_split_semantics() {
+        assert_eq!(
+            move_pronoun_tag("VMN0000:PP3MSN00", "VMIP3P0"),
+            "VMIP3P0:PP3MSN00"
+        );
+        assert_eq!(move_pronoun_tag("VMN0000", "VMIP3P0"), "VMIP3P0");
+        assert_eq!(
+            move_pronoun_tag("VMN0000:PP3MSN00:X", "VMIP3P0"),
+            "VMIP3P0",
+            "a three-part source tag is not a verb:pronoun pair"
+        );
+        assert_eq!(move_pronoun_tag("VMN0000:", "VMIP3P0"), "VMIP3P0");
+    }
+
+    #[test]
+    fn suggestion_exception_rejects_plural_without_s() {
+        assert!(is_suggestion_exception_pt("estudo", "VMIP1P0"));
+        assert!(is_suggestion_exception_pt("estudai", "VMIP2P0"));
+        assert!(!is_suggestion_exception_pt("estudamos", "VMIP1P0"));
+        assert!(!is_suggestion_exception_pt("estuda", "VMIP3S0"));
+    }
+
+    #[test]
+    fn advanced_synthesizer_composes_postag_replace_groups() {
+        assert_eq!(
+            composite_postag(
+                "V(.)N.*",
+                "V...(..).*",
+                "VMN0000",
+                "VMIP1S0",
+                r"V\a1(IP|IF)\b1."
+            ),
+            "VM(IP|IF)1S."
+        );
+        assert_eq!(
+            composite_postag("V.*", "NC(.)(.)000", "VMN0000", "NCFS000", "VMP00\\b2\\b1"),
+            "VMP00SF"
+        );
+        assert_eq!(
+            composite_postag("V.*", "NC.*", "AQ0MS0", "NCFS000", r"AQ0\b1\b20"),
+            "AQ0\\b1\\b20",
+            "without matching groups the replace text stays verbatim"
+        );
+    }
+
+    #[test]
+    fn advanced_synthesizer_synthesizes_from_the_lemma_and_postag_tokens() {
+        let tenho = atr("tenho", &[("ter", "VMIP1S0")]);
+        let pesquisado = atr("pesquisado", &[("pesquisar", "VMP00SM")]);
+        let tokens: Vec<&AnalyzedTokenReadings> = vec![&tenho, &pesquisado];
+        let synth = synthesizer().expect("pt synthesizer from the main dict");
+        let rm = base_rm("m", 3, 17, "{suggestion}");
+        let out = advanced_synthesizer_filter(
+            Some(&synth),
+            "lemmaFrom:2 lemmaSelect:V.* postagFrom:1 postagSelect:V.*",
+            &[],
+            &[0, 1],
+            &tokens,
+            rm,
+        )
+        .expect("filtered match");
+        assert_eq!(
+            out.replacements()
+                .iter()
+                .map(|r| r.value().to_string())
+                .collect::<Vec<String>>(),
+            vec!["pesquiso".to_string()],
+            "pesquisar synthesized with tenho's VMIP1S0"
+        );
+    }
+
+    #[test]
+    fn advanced_synthesizer_rejects_new_lemma_placeholders() {
+        let tenho = atr("tenho", &[("ter", "VMIP1S0")]);
+        let pesquisado = atr("pesquisado", &[("pesquisar", "VMP00SM")]);
+        let tokens: Vec<&AnalyzedTokenReadings> = vec![&tenho, &pesquisado];
+        let synth = synthesizer().expect("pt synthesizer from the main dict");
+        let rm = base_rm("m", 3, 17, "{suggestion}");
+        assert!(
+            advanced_synthesizer_filter(
+                Some(&synth),
+                "lemmaFrom:2 lemmaSelect:V.* postagFrom:1 postagSelect:V.* newLemma:_x",
+                &[],
+                &[0, 1],
+                &tokens,
+                rm,
+            )
+            .is_none(),
+            "pt does not override getNewLemma, so a '_' placeholder nulls the lemma"
+        );
+    }
+
+    #[test]
+    fn advanced_synthesizer_routes_through_the_dispatch() {
+        let tenho = atr("tenho", &[("ter", "VMIP1S0")]);
+        let pesquisado = atr("pesquisado", &[("pesquisar", "VMP00SM")]);
+        let tokens: Vec<&AnalyzedTokenReadings> = vec![&tenho, &pesquisado];
+        let synth = synthesizer().expect("pt synthesizer from the main dict");
+        let call = PtFilterCall {
+            variant: "pt-PT",
+            args: "lemmaFrom:2 lemmaSelect:V.* postagFrom:1 postagSelect:V.*",
+            matched_texts: &[],
+            matched_positions: &[0, 1],
+            tokens: &tokens,
+            regexp_groups: None,
+            synthesizer: Some(&synth),
+        };
+        let rm = base_rm("m", 3, 17, "{suggestion}");
+        let out = apply_pt_filter(
+            "org.languagetool.rules.pt.AdvancedSynthesizerFilter",
+            call,
+            rm,
+        )
+        .expect("synthesizer match");
+        assert_eq!(out.replacements()[0].value(), "pesquiso");
+    }
+
+    #[test]
+    fn dispatch_recognizes_exactly_the_seven_java_filter_classes() {
         for class in [
             "org.languagetool.rules.pt.ConfusionCheckFilter",
             "org.languagetool.rules.pt.BrazilianToponymFilter",
@@ -1190,11 +1517,15 @@ mod tests {
             "org.languagetool.rules.pt.RomanNumeralFilter",
             "org.languagetool.rules.pt.PortugueseEnclisisFilter",
             "org.languagetool.rules.pt.PortugueseProclisisFilter",
+            "org.languagetool.rules.pt.AdvancedSynthesizerFilter",
         ] {
             assert!(is_pt_filter(class), "{class} must route");
         }
         assert!(!is_pt_filter(
             "org.languagetool.rules.es.ConfusionCheckFilter"
+        ));
+        assert!(!is_pt_filter(
+            "org.languagetool.rules.es.AdvancedSynthesizerFilter"
         ));
         assert!(!is_pt_filter("org.languagetool.rules.pt.FutureDateFilter"));
         assert!(!is_pt_filter(""));
