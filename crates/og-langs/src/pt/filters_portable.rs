@@ -1,5 +1,7 @@
 use og_core::{AnalyzedTokenReadings, RuleMatch, SuggestedReplacement};
 use og_rules::postponed_adjective::LangSynthesizer;
+use og_xml::compiler::CompiledRule;
+use og_xml::types::XmlFilter;
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -854,4 +856,101 @@ pub fn apply_pt_filter(class: &str, call: PtFilterCall<'_>, rm: RuleMatch) -> Op
         ),
         _ => None,
     }
+}
+
+pub fn regexp_group_texts(
+    regexp: &og_xml::compiler::CompiledRuleRegexp,
+    text: &str,
+    offset: usize,
+    length: usize,
+) -> Option<Vec<String>> {
+    let end = offset + length;
+    let captured: Vec<Vec<Option<(usize, usize)>>> = if let Some(ref re) = regexp.regex {
+        re.captures_iter(text)
+            .map(|caps| {
+                (0..caps.len())
+                    .map(|i| caps.get(i).map(|m| (m.start(), m.end())))
+                    .collect()
+            })
+            .collect()
+    } else if let Some(ref re) = regexp.fancy_regex {
+        re.captures_iter(text)
+            .flatten()
+            .map(|caps| {
+                (0..caps.len())
+                    .map(|i| caps.get(i).map(|m| (m.start(), m.end())))
+                    .collect()
+            })
+            .collect()
+    } else {
+        return None;
+    };
+    captured
+        .into_iter()
+        .find(|groups| {
+            groups
+                .get(regexp.mark)
+                .and_then(|g| *g)
+                .or_else(|| groups.first().and_then(|g| *g))
+                .is_some_and(|(s, e)| s == offset && e == end)
+        })
+        .map(|groups| {
+            groups
+                .iter()
+                .map(|g| g.map(|(s, e)| text[s..e].to_string()).unwrap_or_default())
+                .collect()
+        })
+}
+
+pub fn apply_engine_pt_filter(
+    rule: &CompiledRule,
+    filter: &XmlFilter,
+    matched_texts: &[String],
+    matched_positions: &[usize],
+    tokens: &[&AnalyzedTokenReadings],
+    sentence_text: &str,
+    rm: RuleMatch,
+    synthesizer: Option<&LangSynthesizer>,
+    variant: &str,
+) -> Option<RuleMatch> {
+    let group_texts = rule
+        .regexp
+        .as_ref()
+        .and_then(|re| regexp_group_texts(re, sentence_text, rm.offset(), rm.length()));
+    let group_refs: Vec<&str> = group_texts
+        .iter()
+        .flat_map(|v| v.iter().map(String::as_str))
+        .collect();
+    apply_engine_pt_filter_with_groups(
+        filter,
+        &group_refs,
+        matched_texts,
+        matched_positions,
+        tokens,
+        rm,
+        synthesizer,
+        variant,
+    )
+}
+
+pub fn apply_engine_pt_filter_with_groups(
+    filter: &XmlFilter,
+    groups: &[&str],
+    matched_texts: &[String],
+    matched_positions: &[usize],
+    tokens: &[&AnalyzedTokenReadings],
+    rm: RuleMatch,
+    synthesizer: Option<&LangSynthesizer>,
+    variant: &str,
+) -> Option<RuleMatch> {
+    let call = PtFilterCall {
+        variant,
+        args: &filter.args,
+        matched_texts,
+        matched_positions,
+        tokens,
+        regexp_groups: (!groups.is_empty()).then_some(groups),
+        synthesizer,
+    };
+    apply_pt_filter(&filter.class, call, rm)
 }

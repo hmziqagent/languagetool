@@ -1,4 +1,4 @@
-use crate::pt::filters::{PtFilterCall, apply_pt_filter, is_pt_filter};
+use crate::pt::filters::{apply_engine_pt_filter, is_pt_filter};
 use crate::pt::test_support::PortuguesePipeline;
 use og_core::{AnalyzedSentence, AnalyzedTokenReadings, RuleMatch};
 use og_rules::pattern_rule::PatternRuleEngine;
@@ -225,50 +225,6 @@ pub(crate) fn matched_window(
     (matched, texts)
 }
 
-fn regexp_group_texts(
-    regexp: &og_xml::compiler::CompiledRuleRegexp,
-    text: &str,
-    offset: usize,
-    length: usize,
-) -> Option<Vec<String>> {
-    let end = offset + length;
-    let captured: Vec<Vec<Option<(usize, usize)>>> = if let Some(ref re) = regexp.regex {
-        re.captures_iter(text)
-            .map(|caps| {
-                (0..caps.len())
-                    .map(|i| caps.get(i).map(|m| (m.start(), m.end())))
-                    .collect()
-            })
-            .collect()
-    } else if let Some(ref re) = regexp.fancy_regex {
-        re.captures_iter(text)
-            .flatten()
-            .map(|caps| {
-                (0..caps.len())
-                    .map(|i| caps.get(i).map(|m| (m.start(), m.end())))
-                    .collect()
-            })
-            .collect()
-    } else {
-        return None;
-    };
-    captured
-        .into_iter()
-        .find(|groups| {
-            groups
-                .get(regexp.mark)
-                .and_then(|g| *g)
-                .or_else(|| groups.first().and_then(|g| *g))
-                .is_some_and(|(s, e)| s == offset && e == end)
-        })
-        .map(|groups| {
-            groups
-                .iter()
-                .map(|g| g.map(|(s, e)| text[s..e].to_string()).unwrap_or_default())
-                .collect()
-        })
-}
-
 pub(crate) fn apply_suite_filter(
     rule: &CompiledRule,
     filter: &og_xml::types::XmlFilter,
@@ -281,24 +237,17 @@ pub(crate) fn apply_suite_filter(
         return Some(m);
     }
     let (matched_positions, matched_texts) = matched_window(rule, tokens, &m);
-    let group_texts = rule
-        .regexp
-        .as_ref()
-        .and_then(|re| regexp_group_texts(re, sentence.text(), m.offset(), m.length()));
-    let group_refs: Vec<&str> = group_texts
-        .iter()
-        .flat_map(|v| v.iter().map(String::as_str))
-        .collect();
-    let call = PtFilterCall {
-        variant: "pt-PT",
-        args: &filter.args,
-        matched_texts: &matched_texts,
-        matched_positions: &matched_positions,
+    apply_engine_pt_filter(
+        rule,
+        filter,
+        &matched_texts,
+        &matched_positions,
         tokens,
-        regexp_groups: (!group_refs.is_empty()).then_some(group_refs.as_slice()),
+        sentence.text(),
+        m,
         synthesizer,
-    };
-    apply_pt_filter(&filter.class, call, m)
+        "pt-PT",
+    )
 }
 
 #[derive(PartialEq, Eq, Hash, Clone, Copy)]
