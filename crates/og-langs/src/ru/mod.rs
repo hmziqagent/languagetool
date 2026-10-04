@@ -1,9 +1,11 @@
 pub mod advanced_word_repeat;
 pub mod dash;
 pub mod filler_words;
+pub mod filters_portable;
 pub mod paragraph_repeat_beginning;
 pub mod specific_case;
 pub mod verb_conjugation;
+pub mod word_tokenizer;
 pub mod yo_speller;
 
 pub use advanced_word_repeat::RussianWordRepeatRule;
@@ -82,10 +84,101 @@ pub fn russian_simple_word_repeat_rule() -> WordRepeatRule {
         .with_ignore_single_letter_repeats()
 }
 
+// Java's switch matches the constant names RUSSIAN_SIMPLE_REPLACE_RULE and
+// RUSSIAN_SPECIFIC_CASE, never their values RU_SIMPLE_REPLACE/RU_SPECIFIC_CASE.
+pub fn russian_priority_for_id(id: &str) -> Option<i32> {
+    match id {
+        "RU_DASH_RULE" => Some(12),
+        "RU_COMPOUNDS" => Some(11),
+        "RUSSIAN_SIMPLE_REPLACE_RULE" => Some(10),
+        "RUSSIAN_SPECIFIC_CASE" => Some(9),
+        "MORFOLOGIC_RULE_RU_RU_YO" => Some(2),
+        "MORFOLOGIC_RULE_RU_RU" => Some(1),
+        "Word_root_repeat" => Some(-1),
+        "PUNCT_DPT_2" => Some(-2),
+        "TOO_LONG_PARAGRAPH" => Some(-15),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use og_core::rule::{Rule as _, TextLevelRule as _};
+
+    fn sentence_from_words(words: &[&str]) -> og_core::AnalyzedSentence {
+        let text = words.join(" ");
+        let mut sentence = og_core::AnalyzedSentence::new(&text, 0, text.len());
+        let mut tokens = vec![og_core::AnalyzedTokenReadings::new(
+            og_core::AnalyzedToken::new("<S>", 0, 0).with_pos_tags(vec!["SENT_START".to_string()]),
+        )];
+        let mut offset = 0;
+        for word in words {
+            let start = offset;
+            let end = start + word.len();
+            offset = end + 1;
+            tokens.push(og_core::AnalyzedTokenReadings::new(
+                og_core::AnalyzedToken::new(*word, start, end),
+            ));
+        }
+        sentence.set_tokens(tokens);
+        sentence
+    }
+
+    #[test]
+    fn russian_priority_table_matches_java() {
+        assert_eq!(russian_priority_for_id("RU_DASH_RULE"), Some(12));
+        assert_eq!(russian_priority_for_id("RU_COMPOUNDS"), Some(11));
+        assert_eq!(russian_priority_for_id("MORFOLOGIC_RULE_RU_RU_YO"), Some(2));
+        assert_eq!(russian_priority_for_id("MORFOLOGIC_RULE_RU_RU"), Some(1));
+        assert_eq!(russian_priority_for_id("Word_root_repeat"), Some(-1));
+        assert_eq!(russian_priority_for_id("PUNCT_DPT_2"), Some(-2));
+        assert_eq!(russian_priority_for_id("TOO_LONG_PARAGRAPH"), Some(-15));
+        assert_eq!(russian_priority_for_id("RU_SIMPLE_REPLACE"), None);
+        assert_eq!(russian_priority_for_id("RU_SPECIFIC_CASE"), None);
+        assert_eq!(russian_priority_for_id("SOMETHING_ELSE"), None);
+    }
+
+    #[test]
+    fn unpaired_brackets_fires_on_the_java_embedded_example() {
+        let rule = russian_unpaired_brackets_rule();
+        let text = "Самоотверженный поступок Оленина (подарок Лукашке коня вызывает лишь удивление и усиливает недоверие к нему станичников.";
+        let matches = rule.match_text(text, &[]);
+        assert!(
+            matches
+                .iter()
+                .any(|m| &text[m.offset()..m.offset() + m.length()] == "("),
+            "expected the unpaired ( to be flagged"
+        );
+    }
+
+    #[test]
+    fn simple_replace_suggests_on_the_java_embedded_example() {
+        let rule = russian_simple_replace_rule();
+        let sentence = sentence_from_words(&["Экспрессо", "–", "крепкий", "кофе."]);
+        let matches = rule.match_sentence(&sentence);
+        assert!(
+            matches
+                .iter()
+                .any(|m| m.replacements().iter().any(|r| r.value() == "эспрессо")),
+            "expected the экспрессо=эспрессо suggestion from replace.txt:309"
+        );
+    }
+
+    #[test]
+    fn compound_rule_fires_on_the_java_embedded_example() {
+        let rule = russian_compound_rule();
+        let sentence =
+            sentence_from_words(&["Собрание", "состоится", "в", "конференц", "зале", "."]);
+        let matches = rule.match_sentence(&sentence);
+        assert!(
+            matches.iter().any(|m| m
+                .replacements()
+                .iter()
+                .any(|r| r.value().contains("конференц-зал"))),
+            "expected the конференц-зале suggestion"
+        );
+    }
 
     #[test]
     fn russian_parameterized_natives_use_java_ids() {
@@ -129,21 +222,33 @@ mod tests {
             sentence.set_tokens(tokens);
             sentence
         };
-        let data = std::fs::read_to_string(
-            "languagetool/languagetool-language-modules/ru/src/main/resources/org/languagetool/rules/ru/coherency.txt",
-        )
-        .unwrap_or_default();
+        let data = filters_portable::ru_resource_dir()
+            .and_then(|dir| {
+                let path = dir
+                    .join("../../rules/ru/coherency.txt")
+                    .canonicalize()
+                    .ok()?;
+                std::fs::read_to_string(path).ok()
+            })
+            .unwrap_or_default();
         let pair = data
             .lines()
             .find(|l| !l.trim().is_empty() && !l.trim().starts_with('#'))
             .and_then(|l| l.trim().split_once(';'));
         let Some((a, b)) = pair else {
-            return;
+            panic!("coherency.txt must resolve with at least one data pair");
         };
         let s1 = mk(a.trim(), 0);
         let s2 = mk(b, a.len() + 1);
         let text = format!("{} {}", a.trim(), b);
         let matches = rule.match_text(&text, &[s1, s2]);
         assert!(!matches.is_empty(), "second variant must be flagged");
+    }
+
+    #[test]
+    fn engine_check_survives_russian_text_with_brackets() {
+        let engine = crate::engine::LanguageEngine::for_code("ru").unwrap();
+        let result = engine.check("Привет мир (тест).");
+        assert!(!result.matches.is_empty());
     }
 }
