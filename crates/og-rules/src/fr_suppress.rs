@@ -1,5 +1,5 @@
+use crate::spelling_support::{SpellerVariant, prepare_line_for_speller};
 use og_core::{AnalyzedToken, AnalyzedTokenReadings, RuleMatch};
-use og_rules::spelling_support::{SpellerVariant, prepare_line_for_speller};
 use og_spell::Dictionary;
 use std::collections::HashMap;
 use std::path::PathBuf;

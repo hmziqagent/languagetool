@@ -2811,6 +2811,9 @@ impl PatternRuleEngine {
             | "org.languagetool.rules.nl.DutchSuppressMisspelledSuggestionsFilter" => {
                 self.apply_suppress_misspelled_suggestions_filter(&filter.args, matched_texts, rm)
             }
+            "org.languagetool.rules.fr.FrenchSuppressMisspelledSuggestionsFilter" => {
+                crate::fr_suppress::accept_rule_match(rm, &filter.args, matched_texts)
+            }
             "org.languagetool.rules.en.EnglishNumberInWordFilter"
             | "org.languagetool.rules.de.GermanNumberInWordFilter" => {
                 self.apply_number_in_word_filter(&filter.args, matched_texts, rm)

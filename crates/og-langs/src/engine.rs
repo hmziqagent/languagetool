@@ -929,7 +929,12 @@ impl LanguageEngine {
             if !path.exists() {
                 continue;
             }
-            match engine.load_xml_file(&path) {
+            let outcome = if short == "fr" {
+                engine.load_xml_file_normalized(&path, crate::fr::normalize_fr_rules_xml)
+            } else {
+                engine.load_xml_file(&path)
+            };
+            match outcome {
                 Ok(count) => eprintln!("Loaded {} rules from {short}/{file}", count),
                 Err(e) => eprintln!("Warning: failed to load {short}/{file}: {e}"),
             }
@@ -1256,6 +1261,21 @@ impl LanguageEngine {
     pub fn load_xml_file(&mut self, path: &Path) -> Result<usize, String> {
         let xml = std::fs::read_to_string(path)
             .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
+        let source_file = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(str::to_string);
+        self.load_xml_rules_with_base(&xml, source_file.as_deref(), path.parent())
+    }
+
+    pub(crate) fn load_xml_file_normalized(
+        &mut self,
+        path: &Path,
+        normalize: for<'a> fn(&'a str) -> std::borrow::Cow<'a, str>,
+    ) -> Result<usize, String> {
+        let xml = std::fs::read_to_string(path)
+            .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
+        let xml = normalize(&xml);
         let source_file = path
             .file_name()
             .and_then(|n| n.to_str())

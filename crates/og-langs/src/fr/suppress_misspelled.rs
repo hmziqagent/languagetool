@@ -1,4 +1,4 @@
-pub use crate::fr::suppress_portable::*;
+pub use og_rules::fr_suppress::*;
 
 #[cfg(test)]
 mod tests {

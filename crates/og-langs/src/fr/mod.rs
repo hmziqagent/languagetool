@@ -9,7 +9,6 @@ pub mod repeated_words;
 pub(crate) mod residue_map;
 pub mod simple_replace;
 pub mod suppress_misspelled;
-pub mod suppress_portable;
 pub mod tagger;
 #[cfg(test)]
 pub(crate) mod test_support;
