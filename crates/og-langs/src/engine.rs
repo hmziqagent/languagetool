@@ -950,14 +950,16 @@ impl LanguageEngine {
             }
         }
 
-        if short != "nl" && short != "pl" {
+        if short != "nl" && short != "pl" && short != "ru" {
             engine.add_rules([
                 Arc::new(og_rules::native_rules::DoublePunctuationRule::new()) as Arc<dyn Rule>,
                 Arc::new(og_rules::native_rules::CommaWhitespaceRule::new()),
             ]);
+        } else if short == "ru" {
+            engine.add_rule(Arc::new(og_rules::native_rules::CommaWhitespaceRule::new()));
         }
         let brackets_rule: Option<Arc<dyn TextLevelRule>> =
-            if short == "es" || short == "be" || short == "nl" || short == "pl" {
+            if short == "es" || short == "be" || short == "nl" || short == "pl" || short == "ru" {
                 None
             } else if short == "pt" {
                 Some(Arc::new(
@@ -1197,6 +1199,12 @@ impl LanguageEngine {
                 engine.add_rule(Arc::new(
                     og_rules::text_level_rules::WhiteSpaceAtBeginOfParagraphRule::new(),
                 ) as Arc<dyn Rule>);
+                if let Some(model) = og_languagemodel::DiskLanguageModel::shared_for_language("ru")
+                {
+                    engine.add_rule(Arc::new(
+                        crate::confusion_probability::ConfusionRule::new_russian(model),
+                    ));
+                }
             }
             "ro" => {
                 engine.add_rules([
@@ -1763,6 +1771,7 @@ enum WordTokenizerBridge {
     Spanish(crate::es::word_tokenizer::SpanishWordTokenizer),
     Portuguese(Arc<crate::pt::word_tokenizer::PortugueseWordTokenizer>),
     Polish(Arc<crate::pl::word_tokenizer::PolishWordTokenizer>),
+    Russian(crate::ru::word_tokenizer::RussianWordTokenizer),
 }
 
 impl WordTokenizerBridge {
@@ -1799,6 +1808,9 @@ impl WordTokenizerBridge {
             return Self::Polish(Arc::new(
                 crate::pl::word_tokenizer::PolishWordTokenizer::new(tagger),
             ));
+        }
+        if code == "ru" {
+            return Self::Russian(crate::ru::word_tokenizer::RussianWordTokenizer::new());
         }
         if code != "fr" {
             return Self::Default(false);
@@ -1860,6 +1872,7 @@ impl WordTokenizer for WordTokenizerBridge {
                 return tz.tokenize(text, offset);
             }
             Self::Polish(tz) => tz.tokenize(text),
+            Self::Russian(tz) => tz.tokenize(text),
         };
         tokens
             .into_iter()

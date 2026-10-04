@@ -40,6 +40,7 @@ enum TestWordTokenizer {
     Spanish(og_langs::es::word_tokenizer::SpanishWordTokenizer),
     Portuguese(Arc<og_langs::pt::word_tokenizer::PortugueseWordTokenizer>),
     Polish(Arc<og_langs::pl::word_tokenizer::PolishWordTokenizer>),
+    Russian(og_langs::ru::word_tokenizer::RussianWordTokenizer),
 }
 
 impl WordTokenizer for TestWordTokenizer {
@@ -85,6 +86,7 @@ impl WordTokenizer for TestWordTokenizer {
                 return tz.tokenize(text, offset);
             }
             TestWordTokenizer::Polish(tz) => tz.tokenize(text),
+            TestWordTokenizer::Russian(tz) => tz.tokenize(text),
         };
         tokens
             .into_iter()
@@ -459,6 +461,9 @@ impl TestRunner {
                     )),
                     None => TestWordTokenizer::Default(false),
                 }
+            }
+            None if self.language == "ru" => {
+                TestWordTokenizer::Russian(og_langs::ru::word_tokenizer::RussianWordTokenizer::new())
             }
             None => TestWordTokenizer::Default(self.language == "en"),
         };

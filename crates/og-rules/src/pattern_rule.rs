@@ -2814,6 +2814,19 @@ impl PatternRuleEngine {
             "org.languagetool.rules.fr.FrenchSuppressMisspelledSuggestionsFilter" => {
                 crate::fr_suppress::accept_rule_match(rm, &filter.args, matched_texts)
             }
+            "org.languagetool.rules.ru.RussianSuppressMisspelledSuggestionsFilter" => {
+                crate::ru_filters::accept_rule_match(rm, &filter.args, matched_texts)
+            }
+            "org.languagetool.rules.ru.AdvancedSynthesizerFilter" => {
+                crate::ru_filters::advanced_synthesizer_filter(
+                    crate::ru_filters::RussianSynthesizer::shared(),
+                    &filter.args,
+                    matched_texts,
+                    matched_positions,
+                    tokens,
+                    rm,
+                )
+            }
             "org.languagetool.rules.en.EnglishNumberInWordFilter"
             | "org.languagetool.rules.de.GermanNumberInWordFilter" => {
                 self.apply_number_in_word_filter(&filter.args, matched_texts, rm)

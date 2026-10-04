@@ -1,7 +1,7 @@
 pub mod advanced_word_repeat;
 pub mod dash;
 pub mod filler_words;
-pub mod filters_portable;
+pub mod filters;
 pub mod paragraph_repeat_beginning;
 pub mod specific_case;
 pub mod verb_conjugation;
@@ -222,7 +222,7 @@ mod tests {
             sentence.set_tokens(tokens);
             sentence
         };
-        let data = filters_portable::ru_resource_dir()
+        let data = filters::ru_resource_dir()
             .and_then(|dir| {
                 let path = dir
                     .join("../../rules/ru/coherency.txt")
