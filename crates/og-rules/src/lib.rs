@@ -4,6 +4,7 @@ pub mod native_rules;
 pub mod pattern_rule;
 pub mod pattern_trace;
 pub mod postponed_adjective;
+pub mod pt_filters;
 pub mod spelling_support;
 pub mod text_level_rules;
 

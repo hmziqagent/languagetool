@@ -1,5 +1,5 @@
+use crate::postponed_adjective::LangSynthesizer;
 use og_core::{AnalyzedTokenReadings, RuleMatch, SuggestedReplacement};
-use og_rules::postponed_adjective::LangSynthesizer;
 use og_xml::compiler::CompiledRule;
 use og_xml::types::XmlFilter;
 use regex::Regex;

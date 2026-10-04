@@ -578,6 +578,36 @@ impl PatternRuleEngine {
             if let Some(ref short) = rule.short_message {
                 rm = rm.with_short_message(short);
             }
+            if let Some(ref filter) = rule.filter
+                && crate::pt_filters::is_pt_filter(&filter.class)
+            {
+                let tokens = sentence.non_whitespace_tokens();
+                let span_end = rm.offset() + rm.length();
+                let matched_positions: Vec<usize> = tokens
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, t)| t.token().start() < span_end && t.token().end() > rm.offset())
+                    .map(|(i, _)| i)
+                    .collect();
+                let matched_texts: Vec<String> = matched_positions
+                    .iter()
+                    .map(|&i| tokens[i].token().token().to_string())
+                    .collect();
+                let Some(rm) = crate::pt_filters::apply_engine_pt_filter_with_groups(
+                    filter,
+                    &group_texts,
+                    &matched_texts,
+                    &matched_positions,
+                    &tokens,
+                    rm,
+                    self.synthesizer.as_deref(),
+                    "pt-PT",
+                ) else {
+                    continue;
+                };
+                matches.push(rm);
+                continue;
+            }
             matches.push(rm);
         }
 
@@ -728,6 +758,7 @@ impl PatternRuleEngine {
 
         if let Some(ref filter) = rule.filter {
             return self.apply_filter(
+                rule,
                 filter,
                 &match_result.matched_texts,
                 &match_result.matched_positions,
@@ -2633,6 +2664,7 @@ impl Default for PatternRuleEngine {
 impl PatternRuleEngine {
     fn apply_filter(
         &self,
+        rule: &CompiledRule,
         filter: &og_xml::types::XmlFilter,
         matched_texts: &[String],
         matched_positions: &[usize],
@@ -2835,6 +2867,17 @@ impl PatternRuleEngine {
                     rm,
                 )
             }
+            c if crate::pt_filters::is_pt_filter(c) => crate::pt_filters::apply_engine_pt_filter(
+                rule,
+                filter,
+                matched_texts,
+                matched_positions,
+                tokens,
+                sentence.text(),
+                rm,
+                self.synthesizer.as_deref(),
+                "pt-PT",
+            ),
             _ => Some(rm),
         }
     }

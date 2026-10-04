@@ -3,7 +3,6 @@ pub mod compound;
 pub mod dash;
 pub mod filler_words;
 pub mod filters;
-pub mod filters_portable;
 pub mod readability;
 pub mod simple_replace;
 pub mod simple_replace2;
