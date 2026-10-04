@@ -287,6 +287,11 @@ async fn test_v2_languages_lists_only_implementable_languages() {
         "/v2/languages must advertise the implemented Russian engine"
     );
     assert!(
+        json.iter()
+            .any(|l| l["code"] == "nl" && l["longCode"] == "nl"),
+        "/v2/languages must advertise the implemented Dutch engine"
+    );
+    assert!(
         !json.iter().any(|l| l["code"] == "ca"),
         "/v2/languages must not advertise languages without an engine"
     );

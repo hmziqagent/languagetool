@@ -2775,7 +2775,8 @@ impl PatternRuleEngine {
             "org.languagetool.rules.de.ValidWordFilter" => {
                 self.apply_valid_word_filter(&filter.args, matched_texts, rm)
             }
-            "org.languagetool.rules.en.EnglishSuppressMisspelledSuggestionsFilter" => {
+            "org.languagetool.rules.en.EnglishSuppressMisspelledSuggestionsFilter"
+            | "org.languagetool.rules.nl.DutchSuppressMisspelledSuggestionsFilter" => {
                 self.apply_suppress_misspelled_suggestions_filter(&filter.args, matched_texts, rm)
             }
             "org.languagetool.rules.en.EnglishNumberInWordFilter"

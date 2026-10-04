@@ -879,7 +879,21 @@ impl LanguageEngine {
                 }
             }
         }
-        if !dict.is_empty() {
+        if short == "nl" {
+            if let (Some(core_resource_dir), Some(dictionary)) = (
+                find_lt_core_resource_dir(),
+                crate::nl::speller::shared_speller_dictionary(),
+            ) {
+                engine.spelling_support = Some(Arc::new(
+                    og_rules::spelling_support::SpellingSupport::new_for_language(
+                        dictionary,
+                        &core_resource_dir,
+                        &resource_dir,
+                        &short,
+                    ),
+                ));
+            }
+        } else if !dict.is_empty() {
             let dict = Arc::new(dict);
             engine.add_rule(Arc::new(
                 og_spell::SpellingCheckRule::new_shared(dict.clone(), config.1, HashSet::new())
@@ -914,67 +928,82 @@ impl LanguageEngine {
                 Err(e) => eprintln!("Warning: failed to load {short}/{file}: {e}"),
             }
         }
+        if short == "nl"
+            && let Some(variant_path) = crate::nl::variant_grammar_path()
+        {
+            match engine.load_xml_file(&variant_path) {
+                Ok(count) => eprintln!("Loaded {count} rules from nl/nl-NL/grammar.xml"),
+                Err(e) => eprintln!("Warning: failed to load nl/nl-NL/grammar.xml: {e}"),
+            }
+        }
 
-        engine.add_rules([
-            Arc::new(og_rules::native_rules::DoublePunctuationRule::new()) as Arc<dyn Rule>,
-            Arc::new(og_rules::native_rules::CommaWhitespaceRule::new()),
-        ]);
-        let brackets_rule: Option<Arc<dyn TextLevelRule>> = if short == "es" || short == "be" {
-            None
-        } else if short == "pt" {
-            Some(Arc::new(
-                og_rules::text_level_rules::GenericUnpairedBracketsRule::new().with_symbols(
-                    vec!["[", "(", "{", "\"", "“"],
-                    vec!["]", ")", "}", "\"", "”"],
-                ),
-            ))
-        } else if short == "da" {
-            Some(Arc::new(
-                og_rules::text_level_rules::GenericUnpairedBracketsRule::new().with_symbols(
-                    vec!["[", "(", "{", "\"", "”"],
-                    vec!["]", ")", "}", "\"", "”"],
-                ),
-            ))
-        } else if short == "el" {
-            Some(Arc::new(
-                og_rules::text_level_rules::GenericUnpairedBracketsRule::new()
-                    .with_id("EL_UNPAIRED_BRACKETS")
-                    .with_symbols(
-                        vec!["[", "(", "{", "“", "\"", "«"],
-                        vec!["]", ")", "}", "”", "\"", "»"],
+        if short != "nl" {
+            engine.add_rules([
+                Arc::new(og_rules::native_rules::DoublePunctuationRule::new()) as Arc<dyn Rule>,
+                Arc::new(og_rules::native_rules::CommaWhitespaceRule::new()),
+            ]);
+        }
+        let brackets_rule: Option<Arc<dyn TextLevelRule>> =
+            if short == "es" || short == "be" || short == "nl" {
+                None
+            } else if short == "pt" {
+                Some(Arc::new(
+                    og_rules::text_level_rules::GenericUnpairedBracketsRule::new().with_symbols(
+                        vec!["[", "(", "{", "\"", "“"],
+                        vec!["]", ")", "}", "\"", "”"],
                     ),
-            ))
-        } else if short == "it" || short == "ca" {
-            Some(Arc::new(
-                og_rules::text_level_rules::GenericUnpairedBracketsRule::new().with_symbols(
-                    vec!["[", "(", "{", "\u{bb}", "\u{ab}"],
-                    vec!["]", ")", "}", "\u{ab}", "\u{bb}"],
-                ),
-            ))
-        } else if short == "ar" {
-            Some(Arc::new(
-                og_rules::text_level_rules::GenericUnpairedBracketsRule::new().with_symbols(
-                    vec!["[", "(", "{", "«", "﴾", "\"", "'"],
-                    vec!["]", ")", "}", "»", "﴿", "\"", "'"],
-                ),
-            ))
-        } else if short == "sk" {
-            Some(Arc::new(
-                og_rules::text_level_rules::GenericUnpairedBracketsRule::new().with_symbols(
-                    vec!["[", "(", "{", "„", "»", "«", "\""],
-                    vec!["]", ")", "}", "“", "«", "»", "\""],
-                ),
-            ))
+                ))
+            } else if short == "da" {
+                Some(Arc::new(
+                    og_rules::text_level_rules::GenericUnpairedBracketsRule::new().with_symbols(
+                        vec!["[", "(", "{", "\"", "”"],
+                        vec!["]", ")", "}", "\"", "”"],
+                    ),
+                ))
+            } else if short == "el" {
+                Some(Arc::new(
+                    og_rules::text_level_rules::GenericUnpairedBracketsRule::new()
+                        .with_id("EL_UNPAIRED_BRACKETS")
+                        .with_symbols(
+                            vec!["[", "(", "{", "“", "\"", "«"],
+                            vec!["]", ")", "}", "”", "\"", "»"],
+                        ),
+                ))
+            } else if short == "it" || short == "ca" {
+                Some(Arc::new(
+                    og_rules::text_level_rules::GenericUnpairedBracketsRule::new().with_symbols(
+                        vec!["[", "(", "{", "\u{bb}", "\u{ab}"],
+                        vec!["]", ")", "}", "\u{ab}", "\u{bb}"],
+                    ),
+                ))
+            } else if short == "ar" {
+                Some(Arc::new(
+                    og_rules::text_level_rules::GenericUnpairedBracketsRule::new().with_symbols(
+                        vec!["[", "(", "{", "«", "﴾", "\"", "'"],
+                        vec!["]", ")", "}", "»", "﴿", "\"", "'"],
+                    ),
+                ))
+            } else if short == "sk" {
+                Some(Arc::new(
+                    og_rules::text_level_rules::GenericUnpairedBracketsRule::new().with_symbols(
+                        vec!["[", "(", "{", "„", "»", "«", "\""],
+                        vec!["]", ")", "}", "“", "«", "»", "\""],
+                    ),
+                ))
+            } else {
+                Some(Arc::new(
+                    og_rules::text_level_rules::GenericUnpairedBracketsRule::new(),
+                ))
+            };
+        let mut generic_text_level_rules: Vec<Arc<dyn TextLevelRule>> = if short == "nl" {
+            Vec::new()
         } else {
-            Some(Arc::new(
-                og_rules::text_level_rules::GenericUnpairedBracketsRule::new(),
-            ))
+            vec![
+                Arc::new(og_rules::text_level_rules::MultipleWhitespaceRule::new())
+                    as Arc<dyn TextLevelRule>,
+                Arc::new(og_rules::text_level_rules::SentenceWhitespaceRule::new()),
+            ]
         };
-        let mut generic_text_level_rules: Vec<Arc<dyn TextLevelRule>> = vec![
-            Arc::new(og_rules::text_level_rules::MultipleWhitespaceRule::new())
-                as Arc<dyn TextLevelRule>,
-            Arc::new(og_rules::text_level_rules::SentenceWhitespaceRule::new()),
-        ];
         generic_text_level_rules.extend(brackets_rule);
         engine.add_text_level_rules(generic_text_level_rules);
 
@@ -1037,6 +1066,14 @@ impl LanguageEngine {
                     ),
                 ]);
                 let native = crate::pt::shared_native_rules();
+                engine.add_rules(native.rules);
+                engine.add_text_level_rules(native.text_level_rules);
+            }
+            "nl" => {
+                if let Some(tagger) = crate::nl::tagger::DutchTagger::shared_arc() {
+                    engine.tagger = Some(tagger as Arc<dyn og_core::checker::Tagger>);
+                }
+                let native = crate::nl::dutch_native_rules();
                 engine.add_rules(native.rules);
                 engine.add_text_level_rules(native.text_level_rules);
             }
@@ -2094,6 +2131,59 @@ mod tests {
         );
         assert_eq!(pt_pt.language.code(), "pt-PT");
         assert_eq!(pt_br.language.code(), "pt-BR");
+    }
+
+    #[test]
+    fn dutch_engine_registers_native_rules_and_tagger() {
+        let engine =
+            LanguageEngine::for_code("nl").expect("Dutch engine must be registered via for_code");
+        assert!(
+            engine.rule_count() > 10,
+            "expected Dutch rules to load, got {}",
+            engine.rule_count()
+        );
+        assert!(engine.tagger.is_some(), "expected the Dutch tagger to load");
+        let ids: Vec<String> = engine.rules.iter().map(|r| r.id().to_string()).collect();
+        for expected in [
+            "MORFOLOGIK_RULE_NL_NL",
+            "NL_COMPOUNDS",
+            "NL_SIMPLE_REPLACE",
+            "DUTCH_WRONG_WORD_IN_CONTEXT",
+            "ALLEEN_NL",
+        ] {
+            assert!(
+                ids.contains(&expected.to_string()),
+                "missing {expected} in nl engine"
+            );
+        }
+        assert_eq!(
+            ids.iter()
+                .filter(|id| id.as_str() == "DOUBLE_PUNCTUATION")
+                .count(),
+            1,
+            "the generic and Dutch native sets must not duplicate DOUBLE_PUNCTUATION"
+        );
+        let text_level_ids: Vec<String> = engine
+            .text_level_rules
+            .iter()
+            .map(|r| r.id().to_string())
+            .collect();
+        assert!(
+            text_level_ids.contains(&"NL_WORD_COHERENCY".to_string()),
+            "missing NL_WORD_COHERENCY in nl engine text-level rules"
+        );
+        let result = engine.check("FoobarWrongxx");
+        let match_ids: Vec<&str> = result.matches.iter().map(|m| m.rule().id()).collect();
+        assert!(
+            match_ids.contains(&"MORFOLOGIK_RULE_NL_NL"),
+            "expected the Dutch speller to fire, got {match_ids:?}"
+        );
+        let result = engine.check("organogram, organigram");
+        let match_ids: Vec<&str> = result.matches.iter().map(|m| m.rule().id()).collect();
+        assert!(
+            match_ids.contains(&"NL_WORD_COHERENCY"),
+            "expected NL_WORD_COHERENCY to fire on mixed spelling, got {match_ids:?}"
+        );
     }
 
     #[test]

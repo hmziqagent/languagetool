@@ -746,6 +746,7 @@ fn fr_priority_table(id: &str) -> Option<i32> {
 }
 fn nl_priority_table(id: &str) -> Option<i32> {
     Some(match id {
+        "TOO_LONG_SENTENCE" => -1,
         "SINT_X" => 3,
         "ET_AL" => 1,
         "N_PERSOONS" => 1,
@@ -1013,6 +1014,12 @@ impl LanguageMatchFilter for DutchMatchFilter {
         }
         if let Some(priority) = nl_priority_table(id) {
             return priority;
+        }
+        if id.starts_with("AI_NL_HYDRA_LEO") {
+            if id.starts_with("AI_NL_HYDRA_LEO_MISSING_COMMA") {
+                return -51;
+            }
+            return -5;
         }
         base_priority_for_id(id)
     }

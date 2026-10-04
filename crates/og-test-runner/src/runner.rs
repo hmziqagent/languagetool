@@ -299,21 +299,25 @@ impl TestRunner {
                     })
                 } else if generic_multitoken && core_resource_dir.exists() {
                     let mut dict = og_spell::Dictionary::new();
-                    if let Ok(words) =
-                        std::fs::read_to_string(resource_dir.join("hunspell/spelling.txt"))
+                    if code == "nl"
+                        && let Some(shared) =
+                            og_tagger::generic_tagger::shared_dictionary(&resource_dir, "dutch")
                     {
-                        for line in words.lines() {
-                            let word = line.trim();
-                            if !word.is_empty() && !word.starts_with('#') {
-                                dict.add_word(word);
-                            }
-                        }
+                        dict = og_spell::Dictionary::from_shared_words(std::sync::Arc::new(
+                            og_spell::morfologik_view::MorfologikView::new(shared),
+                        ));
                     }
-                    if let Ok(words) = std::fs::read_to_string(resource_dir.join("added.txt")) {
-                        for line in words.lines() {
-                            let word = line.trim();
-                            if !word.is_empty() && !word.starts_with('#') {
-                                dict.add_word(word);
+                    for name in [
+                        "hunspell/spelling.txt",
+                        "spelling/spelling.txt",
+                        "added.txt",
+                    ] {
+                        if let Ok(words) = std::fs::read_to_string(resource_dir.join(name)) {
+                            for line in words.lines() {
+                                let word = line.trim();
+                                if !word.is_empty() && !word.starts_with('#') {
+                                    dict.add_word(word);
+                                }
                             }
                         }
                     }
