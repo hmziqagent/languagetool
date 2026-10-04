@@ -255,6 +255,11 @@ impl TestRunner {
                 {
                     return Some(chain);
                 }
+                if code == "fr"
+                    && let Some(chain) = og_langs::fr::build_fr_disambiguator(&resource_dir)
+                {
+                    return Some(chain);
+                }
                 let disambig_path = resource_dir.join("disambiguation.xml");
                 match std::fs::read_to_string(&disambig_path) {
                     Ok(xml) => match XmlDisambiguator::from_xml_with_english(&xml, None) {

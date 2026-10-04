@@ -835,6 +835,10 @@ impl LanguageEngine {
             && let Some(chain) = crate::es::build_es_disambiguator(&resource_dir)
         {
             engine.disambiguator = Some(chain);
+        } else if short == "fr"
+            && let Some(chain) = crate::fr::build_fr_disambiguator(&resource_dir)
+        {
+            engine.disambiguator = Some(chain);
         } else if disambig_path.exists()
             && let Ok(xml) = std::fs::read_to_string(&disambig_path)
             && let Ok(disambiguator) = XmlDisambiguator::from_xml(&xml)
