@@ -570,6 +570,51 @@ mod tests {
         out
     }
 
+    fn pt_filter_rule_matches(
+        rules_path: PathBuf,
+        rule_id: &str,
+        text: &str,
+    ) -> (usize, Vec<(usize, usize, Vec<String>)>) {
+        let engine = suite_engine();
+        let synthesizer = suite_synthesizer();
+        let pipeline = PortuguesePipeline::shared();
+        let mut raw = 0usize;
+        let mut filtered = Vec::new();
+        for rule in compiled_rules_from(rules_path).rules.iter() {
+            if rule.id != rule_id {
+                continue;
+            }
+            let Some(filter) = rule.filter.as_ref().filter(|f| is_pt_filter(&f.class)) else {
+                continue;
+            };
+            for (sentence, sentence_start) in pipeline.analyze_offset_text(text) {
+                let tokens: Vec<&AnalyzedTokenReadings> = sentence.non_whitespace_tokens();
+                for m in engine.match_rule(rule, &sentence) {
+                    raw += 1;
+                    let Some(m) = apply_suite_filter(
+                        rule,
+                        filter,
+                        &sentence,
+                        &tokens,
+                        synthesizer.as_ref(),
+                        m,
+                    ) else {
+                        continue;
+                    };
+                    filtered.push((
+                        m.offset() + sentence_start,
+                        m.length(),
+                        m.replacements()
+                            .iter()
+                            .map(|r| r.value().to_string())
+                            .collect(),
+                    ));
+                }
+            }
+        }
+        (raw, filtered)
+    }
+
     #[test]
     fn suite_filter_drives_the_style_synthesizer_rule_end_to_end() {
         let matches = filtered_rule_matches(
@@ -597,5 +642,90 @@ mod tests {
             vec![(18, 5, vec!["\u{2013}RJ".to_string()])],
             "the marked group 2 covers the optional space plus '(RJ)'"
         );
+    }
+
+    #[test]
+    fn suite_filter_nulls_the_ten_diacritics_runner_false_positives() {
+        for text in [
+            "Alguém fabrica aves que voam por entre as labaredas de azul.",
+            "Ninguém nos deu uma oportunidade.",
+            "Ninguém sabia disso a não ser o Tom.",
+            "Por isso a alma dele sofre.",
+            "Qualquer um seria melhor do que ninguém.",
+            "Enfim, na iminência da derrota total, teve ainda o desplante de declarar que nada ficaria na mesma depois do Apito, pois tinha conseguido incomodar e assustar... os inocentes.",
+            "Mas pq diabos uma figura dessas seria agora plasmada à imagem de um (ex)juiz em manifestações de rua?",
+            "Ninguém sabia nada sobre isso.",
+            "Uma pedra nos servia de assento.",
+            "Você nos incomoda com sua música.",
+        ] {
+            let (raw, filtered) = pt_filter_rule_matches(grammar_path(), "DIACRITICS", text);
+            assert!(raw > 0, "the engine must fire raw on '{text}'");
+            assert!(
+                filtered.is_empty(),
+                "ConfusionCheckFilter must null the correct example '{text}': {filtered:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn suite_filter_nulls_the_eight_separadores_runner_false_positives() {
+        let cases = [
+            (
+                "SEPARADORES_DE_ESTADOS_BRASILEIROS_MEIA_RISCA_PARENTESES",
+                "O candidato a prefeito Fernando Gabeira (RJ).",
+            ),
+            (
+                "SEPARADORES_DE_ESTADOS_BRASILEIROS_MEIA_RISCA_PONTUACAO_SIMPLES",
+                "Adaptador 135W AC com cabo de 3 pinos.",
+            ),
+            (
+                "SEPARADORES_DE_ESTADOS_BRASILEIROS_MEIA_RISCA_PONTUACAO_SIMPLES",
+                "Autônomo de Saneamento de Pelotas -PROCAP",
+            ),
+            (
+                "SEPARADORES_DE_ESTADOS_BRASILEIROS_MEIA_RISCA_PONTUACAO_SIMPLES",
+                "Cidade Alerta GO.",
+            ),
+            (
+                "SEPARADORES_DE_ESTADOS_BRASILEIROS_MEIA_RISCA_PONTUACAO_SIMPLES",
+                "Nasceu em Niterói–RJ.",
+            ),
+            (
+                "SEPARADORES_DE_ESTADOS_BRASILEIROS_MEIA_RISCA_PONTUACAO_SIMPLES",
+                "Nativo de Ooga Booga do Foo Bar/RJ.",
+            ),
+            (
+                "SEPARADORES_DE_ESTADOS_BRASILEIROS_MEIA_RISCA_PONTUACAO_SIMPLES",
+                "Nativo de Oogabooga/RJ.",
+            ),
+            (
+                "SEPARADORES_DE_ESTADOS_BRASILEIROS_MEIA_RISCA_PONTUACAO_SIMPLES",
+                "Foram 157 km2 de mata derrubados em nove Estados (AC, AM, AP, MA, MT, PA, TO, RO e RR).",
+            ),
+        ];
+        for (id, text) in cases {
+            let (raw, filtered) = pt_filter_rule_matches(grammar_path(), id, text);
+            assert!(raw > 0, "the engine must fire raw on '{text}' ({id})");
+            assert!(
+                filtered.is_empty(),
+                "BrazilianToponymFilter must null the correct example '{text}': {filtered:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn suite_filter_nulls_the_two_irregular_participle_runner_false_positives() {
+        for text in [
+            "Depois de ter discretamente limpado o carro, foi desculpado.",
+            "No totalitarismo, as liberdades do indivíduo eram suprimidas e o povo era subordinado ao poder sem limites do …",
+        ] {
+            let (raw, filtered) =
+                pt_filter_rule_matches(grammar_path(), "IRREGULAR_PAST_PARTICIPLES", text);
+            assert!(raw > 0, "the engine must fire raw on '{text}'");
+            assert!(
+                filtered.is_empty(),
+                "RegularIrregularParticipleFilter must null the correct example '{text}': {filtered:?}"
+            );
+        }
     }
 }
