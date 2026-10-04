@@ -39,6 +39,7 @@ enum TestWordTokenizer {
     Esperanto,
     Spanish(og_langs::es::word_tokenizer::SpanishWordTokenizer),
     Portuguese(Arc<og_langs::pt::word_tokenizer::PortugueseWordTokenizer>),
+    Polish(Arc<og_langs::pl::word_tokenizer::PolishWordTokenizer>),
 }
 
 impl WordTokenizer for TestWordTokenizer {
@@ -83,6 +84,7 @@ impl WordTokenizer for TestWordTokenizer {
             TestWordTokenizer::Portuguese(tz) => {
                 return tz.tokenize(text, offset);
             }
+            TestWordTokenizer::Polish(tz) => tz.tokenize(text),
         };
         tokens
             .into_iter()
@@ -150,6 +152,7 @@ pub enum AnyTagger {
     Spanish(Arc<og_langs::es::tagger::SpanishTagger>),
     Portuguese(Arc<og_langs::pt::tagger::PortugueseTagger>),
     French(Arc<og_langs::fr::tagger::FrenchTagger>),
+    Polish(Arc<og_langs::pl::tagger::PolishTagger>),
 }
 
 impl AnyTagger {
@@ -163,6 +166,7 @@ impl AnyTagger {
             AnyTagger::Spanish(t) => Tagger::tag(t.as_ref(), tokens),
             AnyTagger::Portuguese(t) => Tagger::tag(t.as_ref(), tokens),
             AnyTagger::French(t) => Tagger::tag(t.as_ref(), tokens),
+            AnyTagger::Polish(t) => Tagger::tag(t.as_ref(), tokens),
         }
     }
 }
@@ -215,6 +219,11 @@ impl TestRunner {
                 {
                     return AnyTagger::French(tagger);
                 }
+                if code == "pl"
+                    && let Some(tagger) = og_langs::pl::tagger::PolishTagger::shared_arc()
+                {
+                    return AnyTagger::Polish(tagger);
+                }
                 if let Some(stem) = generic_dict_stem(code)
                     && resource_dir.exists()
                 {
@@ -257,6 +266,11 @@ impl TestRunner {
                 }
                 if code == "fr"
                     && let Some(chain) = og_langs::fr::build_fr_disambiguator(&resource_dir)
+                {
+                    return Some(chain);
+                }
+                if code == "pl"
+                    && let Some(chain) = og_langs::pl::build_pl_disambiguator(&resource_dir)
                 {
                     return Some(chain);
                 }
@@ -437,6 +451,14 @@ impl TestRunner {
                 og_langs::pt::word_tokenizer::shared_portuguese_word_tokenizer()
                     .map(TestWordTokenizer::Portuguese)
                     .unwrap_or(TestWordTokenizer::Default(false))
+            }
+            None if self.language == "pl" => {
+                match og_langs::pl::tagger::PolishTagger::shared_arc() {
+                    Some(tagger) => TestWordTokenizer::Polish(Arc::new(
+                        og_langs::pl::word_tokenizer::PolishWordTokenizer::new(tagger),
+                    )),
+                    None => TestWordTokenizer::Default(false),
+                }
             }
             None => TestWordTokenizer::Default(self.language == "en"),
         };

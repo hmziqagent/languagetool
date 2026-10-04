@@ -1051,6 +1051,17 @@ impl LanguageMatchFilter for PortugueseMatchFilter {
     }
 }
 
+pub struct PolishMatchFilter;
+
+impl LanguageMatchFilter for PolishMatchFilter {
+    fn priority_for_id(&self, id: &str) -> i32 {
+        if id == "ZDANIA_ZLOZONE" {
+            return -1;
+        }
+        base_priority_for_id(id)
+    }
+}
+
 pub struct BelarusianMatchFilter;
 
 impl LanguageMatchFilter for BelarusianMatchFilter {
@@ -1075,6 +1086,7 @@ pub fn for_code(code: &str) -> Arc<dyn LanguageMatchFilter> {
         "fr" => Arc::new(FrenchMatchFilter),
         "nl" => Arc::new(DutchMatchFilter),
         "pt" => Arc::new(PortugueseMatchFilter),
+        "pl" => Arc::new(PolishMatchFilter),
         "be" => Arc::new(BelarusianMatchFilter),
         _ => Arc::new(BaseLanguageMatchFilter),
     }
@@ -1151,5 +1163,15 @@ mod tests {
             filter.priority_for_id("PORTUGUESE_OLD_SPELLING_INTERNAL"),
             -9
         );
+    }
+
+    #[test]
+    fn polish_priorities_match_java() {
+        let filter = for_code("pl");
+        assert_eq!(filter.priority_for_id("ZDANIA_ZLOZONE"), -1);
+        assert_eq!(filter.priority_for_id("TOO_LONG_SENTENCE"), -101);
+        assert_eq!(filter.priority_for_id("REPETITIONS_STYLE"), -55);
+        assert_eq!(filter.priority_for_id("SOME_STYLE_RULE"), -50);
+        assert_eq!(filter.priority_for_id("UNKNOWN_PL_RULE"), 0);
     }
 }

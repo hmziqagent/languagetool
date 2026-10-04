@@ -839,6 +839,10 @@ impl LanguageEngine {
             && let Some(chain) = crate::fr::build_fr_disambiguator(&resource_dir)
         {
             engine.disambiguator = Some(chain);
+        } else if short == "pl"
+            && let Some(chain) = crate::pl::build_pl_disambiguator(&resource_dir)
+        {
+            engine.disambiguator = Some(chain);
         } else if disambig_path.exists()
             && let Ok(xml) = std::fs::read_to_string(&disambig_path)
             && let Ok(disambiguator) = XmlDisambiguator::from_xml(&xml)
@@ -895,10 +899,12 @@ impl LanguageEngine {
             }
         } else if !dict.is_empty() {
             let dict = Arc::new(dict);
-            engine.add_rule(Arc::new(
-                og_spell::SpellingCheckRule::new_shared(dict.clone(), config.1, HashSet::new())
-                    .with_ignore_words(ignore_words),
-            ));
+            if short != "pl" {
+                engine.add_rule(Arc::new(
+                    og_spell::SpellingCheckRule::new_shared(dict.clone(), config.1, HashSet::new())
+                        .with_ignore_words(ignore_words),
+                ));
+            }
             if let Some(core_resource_dir) = find_lt_core_resource_dir() {
                 engine.spelling_support = Some(Arc::new(
                     og_rules::spelling_support::SpellingSupport::new_for_language(
@@ -937,14 +943,14 @@ impl LanguageEngine {
             }
         }
 
-        if short != "nl" {
+        if short != "nl" && short != "pl" {
             engine.add_rules([
                 Arc::new(og_rules::native_rules::DoublePunctuationRule::new()) as Arc<dyn Rule>,
                 Arc::new(og_rules::native_rules::CommaWhitespaceRule::new()),
             ]);
         }
         let brackets_rule: Option<Arc<dyn TextLevelRule>> =
-            if short == "es" || short == "be" || short == "nl" {
+            if short == "es" || short == "be" || short == "nl" || short == "pl" {
                 None
             } else if short == "pt" {
                 Some(Arc::new(
@@ -995,15 +1001,16 @@ impl LanguageEngine {
                     og_rules::text_level_rules::GenericUnpairedBracketsRule::new(),
                 ))
             };
-        let mut generic_text_level_rules: Vec<Arc<dyn TextLevelRule>> = if short == "nl" {
-            Vec::new()
-        } else {
-            vec![
-                Arc::new(og_rules::text_level_rules::MultipleWhitespaceRule::new())
-                    as Arc<dyn TextLevelRule>,
-                Arc::new(og_rules::text_level_rules::SentenceWhitespaceRule::new()),
-            ]
-        };
+        let mut generic_text_level_rules: Vec<Arc<dyn TextLevelRule>> =
+            if short == "nl" || short == "pl" {
+                Vec::new()
+            } else {
+                vec![
+                    Arc::new(og_rules::text_level_rules::MultipleWhitespaceRule::new())
+                        as Arc<dyn TextLevelRule>,
+                    Arc::new(og_rules::text_level_rules::SentenceWhitespaceRule::new()),
+                ]
+            };
         generic_text_level_rules.extend(brackets_rule);
         engine.add_text_level_rules(generic_text_level_rules);
 
@@ -1074,6 +1081,14 @@ impl LanguageEngine {
                     engine.tagger = Some(tagger as Arc<dyn og_core::checker::Tagger>);
                 }
                 let native = crate::nl::dutch_native_rules();
+                engine.add_rules(native.rules);
+                engine.add_text_level_rules(native.text_level_rules);
+            }
+            "pl" => {
+                if let Some(tagger) = crate::pl::tagger::PolishTagger::shared_arc() {
+                    engine.tagger = Some(tagger as Arc<dyn og_core::checker::Tagger>);
+                }
+                let native = crate::pl::polish_native_rules();
                 engine.add_rules(native.rules);
                 engine.add_text_level_rules(native.text_level_rules);
             }
@@ -1725,6 +1740,7 @@ enum WordTokenizerBridge {
     Esperanto,
     Spanish(crate::es::word_tokenizer::SpanishWordTokenizer),
     Portuguese(Arc<crate::pt::word_tokenizer::PortugueseWordTokenizer>),
+    Polish(Arc<crate::pl::word_tokenizer::PolishWordTokenizer>),
 }
 
 impl WordTokenizerBridge {
@@ -1754,6 +1770,13 @@ impl WordTokenizerBridge {
             return crate::pt::word_tokenizer::shared_portuguese_word_tokenizer()
                 .map(Self::Portuguese)
                 .unwrap_or(Self::Default(false));
+        }
+        if code == "pl"
+            && let Some(tagger) = crate::pl::tagger::PolishTagger::shared_arc()
+        {
+            return Self::Polish(Arc::new(
+                crate::pl::word_tokenizer::PolishWordTokenizer::new(tagger),
+            ));
         }
         if code != "fr" {
             return Self::Default(false);
@@ -1814,6 +1837,7 @@ impl WordTokenizer for WordTokenizerBridge {
             Self::Portuguese(tz) => {
                 return tz.tokenize(text, offset);
             }
+            Self::Polish(tz) => tz.tokenize(text),
         };
         tokens
             .into_iter()
@@ -2183,6 +2207,71 @@ mod tests {
         assert!(
             match_ids.contains(&"NL_WORD_COHERENCY"),
             "expected NL_WORD_COHERENCY to fire on mixed spelling, got {match_ids:?}"
+        );
+    }
+
+    #[test]
+    fn polish_engine_registers_native_rules_and_tagger() {
+        let engine =
+            LanguageEngine::for_code("pl").expect("Polish engine must be registered via for_code");
+        assert!(
+            engine.rule_count() > 10,
+            "expected Polish rules to load, got {}",
+            engine.rule_count()
+        );
+        assert!(
+            engine.tagger.is_some(),
+            "expected the Polish tagger to load"
+        );
+        let ids: Vec<String> = engine.rules.iter().map(|r| r.id().to_string()).collect();
+        for expected in [
+            "MORFOLOGIK_RULE_PL_PL",
+            "PL_COMPOUNDS",
+            "PL_SIMPLE_REPLACE",
+            "PL_DASH_RULE",
+            "PL_WORD_REPEAT",
+        ] {
+            assert!(
+                ids.contains(&expected.to_string()),
+                "missing {expected} in pl engine"
+            );
+        }
+        assert_eq!(
+            ids.iter()
+                .filter(|id| id.as_str() == "MORFOLOGIK_RULE_PL_PL")
+                .count(),
+            1,
+            "the generic speller block and the Polish native set must not duplicate MORFOLOGIK_RULE_PL_PL"
+        );
+        assert_eq!(
+            ids.iter()
+                .filter(|id| id.as_str() == "DOUBLE_PUNCTUATION")
+                .count(),
+            2,
+            "DOUBLE_PUNCTUATION must come only from grammar.xml's 2-sub-rule rulegroup; Java Polish.getRelevantRules (Polish.java:91-107) adds no native DoublePunctuationRule"
+        );
+        let text_level_ids: Vec<String> = engine
+            .text_level_rules
+            .iter()
+            .map(|r| r.id().to_string())
+            .collect();
+        for expected in ["PL_UNPAIRED_BRACKETS", "PL_WORD_COHERENCY"] {
+            assert!(
+                text_level_ids.contains(&expected.to_string()),
+                "missing {expected} in pl engine text-level rules"
+            );
+        }
+        let result = engine.check("To jest zdanie z bledem.");
+        let match_ids: Vec<&str> = result.matches.iter().map(|m| m.rule().id()).collect();
+        assert!(
+            match_ids.contains(&"MORFOLOGIK_RULE_PL_PL"),
+            "expected the Polish speller to fire, got {match_ids:?}"
+        );
+        let result = engine.check("Kupi\u{142}em grapefruity, a grejpfrut\u{f3}w nie lubi\u{119}.");
+        let match_ids: Vec<&str> = result.matches.iter().map(|m| m.rule().id()).collect();
+        assert!(
+            match_ids.contains(&"PL_WORD_COHERENCY"),
+            "expected PL_WORD_COHERENCY to fire on mixed spelling, got {match_ids:?}"
         );
     }
 
