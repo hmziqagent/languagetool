@@ -15,6 +15,8 @@ pub mod word_tokenizer;
 pub(crate) mod example_suite;
 #[cfg(test)]
 pub(crate) mod test_support;
+#[cfg(test)]
+pub(crate) mod trace;
 
 use crate::en::{WordCoherencyRule, WrongWordInContextRule};
 use og_core::rule::{Rule, TextLevelRule};

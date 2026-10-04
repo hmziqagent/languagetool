@@ -20,7 +20,7 @@ fn style_path() -> PathBuf {
     rules_dir().join("style.xml")
 }
 
-fn build_pattern_engine() -> PatternRuleEngine {
+pub(crate) fn suite_engine() -> PatternRuleEngine {
     let resource_dir = crate::pt::tagger::pt_resource_dir().expect("pt resource dir");
     let core_resource_dir = crate::engine::find_lt_core_resource_dir().expect("core resource dir");
     let mut dict = og_spell::Dictionary::new();
@@ -356,7 +356,7 @@ fn evaluate_examples_file(rules_path: &Path, file_label: &str, artifact: Option<
         .map(|g| g.first().map(|r| r.examples.len()).unwrap_or(0))
         .sum();
 
-    let engine = build_pattern_engine();
+    let engine = suite_engine();
     let synthesizer = suite_synthesizer();
     let pipeline = PortuguesePipeline::shared();
     og_rules::pattern_rule::set_test_date_hack(true);
@@ -537,7 +537,7 @@ mod tests {
             .iter()
             .find(|r| r.id == rule_id)
             .unwrap_or_else(|| panic!("rule {rule_id} not compiled"));
-        let engine = build_pattern_engine();
+        let engine = suite_engine();
         let synthesizer = suite_synthesizer();
         let pipeline = PortuguesePipeline::shared();
         let mut out = Vec::new();
