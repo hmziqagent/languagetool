@@ -1108,6 +1108,12 @@ impl LanguageEngine {
                     Arc::new(og_rules::native_rules::UppercaseSentenceStartRule::new()),
                     Arc::new(crate::it::ItalianWordRepeatRule::new()),
                 ]);
+                if let Some(model) = og_languagemodel::DiskLanguageModel::shared_for_language("it")
+                {
+                    engine.add_rule(Arc::new(
+                        crate::confusion_probability::ConfusionRule::new_italian(model),
+                    ));
+                }
             }
             "ast" => {
                 engine.add_rule(
@@ -2361,6 +2367,18 @@ mod tests {
         assert!(
             !ids.contains(&"ITALIAN_WORD_REPEAT_RULE"),
             "'via via' must be ignored, got {ids:?}"
+        );
+
+        assert!(
+            engine.synthesizer.is_some(),
+            "Italian.java:113-115 wires ItalianSynthesizer.INSTANCE over italian_synth.dict"
+        );
+
+        let result = engine.check("Lu\u{ec} 7 ottobre 2014");
+        let ids: Vec<&str> = result.matches.iter().map(|m| m.rule().id()).collect();
+        assert!(
+            ids.contains(&"DATE_WEEKDAY"),
+            "Java flags 'Lu\u{ec}' (startsWith lu -> Monday vs actual Tuesday), got {ids:?}"
         );
     }
 

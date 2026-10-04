@@ -250,6 +250,15 @@ impl ConfusionRule {
         }
     }
 
+    pub fn new_italian(model: Arc<dyn LanguageModel>) -> Self {
+        let data = confusion_data("it", &["confusion_sets.txt"]);
+        Self {
+            id_prefix: "CONFUSION_RULE".to_string(),
+            word_to_pairs: load_confusion_pairs(&data),
+            model,
+        }
+    }
+
     pub fn new_english_for_l2(model: Arc<dyn LanguageModel>, mother_tongue: &str) -> Self {
         let data = confusion_data("en", &[&format!("confusion_sets_l2_{mother_tongue}.txt")]);
         Self {
