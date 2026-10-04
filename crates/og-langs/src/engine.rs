@@ -843,6 +843,10 @@ impl LanguageEngine {
             && let Some(chain) = crate::pl::build_pl_disambiguator(&resource_dir)
         {
             engine.disambiguator = Some(chain);
+        } else if short == "br"
+            && let Some(disambiguator) = crate::br::build_br_disambiguator(&resource_dir)
+        {
+            engine.disambiguator = Some(Arc::new(disambiguator));
         } else if disambig_path.exists()
             && let Ok(xml) = std::fs::read_to_string(&disambig_path)
             && let Ok(disambiguator) = XmlDisambiguator::from_xml(&xml)
@@ -899,7 +903,7 @@ impl LanguageEngine {
             }
         } else if !dict.is_empty() {
             let dict = Arc::new(dict);
-            if short != "pl" && short != "ast" {
+            if short != "pl" && short != "ast" && short != "br" {
                 engine.add_rule(Arc::new(
                     og_spell::SpellingCheckRule::new_shared(dict.clone(), config.1, HashSet::new())
                         .with_ignore_words(ignore_words),
@@ -933,6 +937,8 @@ impl LanguageEngine {
                 engine.load_xml_file_normalized(&path, crate::fr::normalize_fr_rules_xml)
             } else if short == "pl" {
                 engine.load_xml_file_normalized(&path, crate::pl::normalize_pl_rules_xml)
+            } else if short == "br" {
+                engine.load_xml_file_normalized(&path, crate::br::normalize_br_rules_xml)
             } else {
                 engine.load_xml_file(&path)
             };
@@ -958,58 +964,63 @@ impl LanguageEngine {
         } else if short == "ru" {
             engine.add_rule(Arc::new(og_rules::native_rules::CommaWhitespaceRule::new()));
         }
-        let brackets_rule: Option<Arc<dyn TextLevelRule>> =
-            if short == "es" || short == "be" || short == "nl" || short == "pl" || short == "ru" {
-                None
-            } else if short == "pt" {
-                Some(Arc::new(
-                    og_rules::text_level_rules::GenericUnpairedBracketsRule::new().with_symbols(
-                        vec!["[", "(", "{", "\"", "“"],
-                        vec!["]", ")", "}", "\"", "”"],
+        let brackets_rule: Option<Arc<dyn TextLevelRule>> = if short == "es"
+            || short == "be"
+            || short == "br"
+            || short == "nl"
+            || short == "pl"
+            || short == "ru"
+        {
+            None
+        } else if short == "pt" {
+            Some(Arc::new(
+                og_rules::text_level_rules::GenericUnpairedBracketsRule::new().with_symbols(
+                    vec!["[", "(", "{", "\"", "“"],
+                    vec!["]", ")", "}", "\"", "”"],
+                ),
+            ))
+        } else if short == "da" {
+            Some(Arc::new(
+                og_rules::text_level_rules::GenericUnpairedBracketsRule::new().with_symbols(
+                    vec!["[", "(", "{", "\"", "”"],
+                    vec!["]", ")", "}", "\"", "”"],
+                ),
+            ))
+        } else if short == "el" {
+            Some(Arc::new(
+                og_rules::text_level_rules::GenericUnpairedBracketsRule::new()
+                    .with_id("EL_UNPAIRED_BRACKETS")
+                    .with_symbols(
+                        vec!["[", "(", "{", "“", "\"", "«"],
+                        vec!["]", ")", "}", "”", "\"", "»"],
                     ),
-                ))
-            } else if short == "da" {
-                Some(Arc::new(
-                    og_rules::text_level_rules::GenericUnpairedBracketsRule::new().with_symbols(
-                        vec!["[", "(", "{", "\"", "”"],
-                        vec!["]", ")", "}", "\"", "”"],
-                    ),
-                ))
-            } else if short == "el" {
-                Some(Arc::new(
-                    og_rules::text_level_rules::GenericUnpairedBracketsRule::new()
-                        .with_id("EL_UNPAIRED_BRACKETS")
-                        .with_symbols(
-                            vec!["[", "(", "{", "“", "\"", "«"],
-                            vec!["]", ")", "}", "”", "\"", "»"],
-                        ),
-                ))
-            } else if short == "it" || short == "ca" {
-                Some(Arc::new(
-                    og_rules::text_level_rules::GenericUnpairedBracketsRule::new().with_symbols(
-                        vec!["[", "(", "{", "\u{bb}", "\u{ab}"],
-                        vec!["]", ")", "}", "\u{ab}", "\u{bb}"],
-                    ),
-                ))
-            } else if short == "ar" {
-                Some(Arc::new(
-                    og_rules::text_level_rules::GenericUnpairedBracketsRule::new().with_symbols(
-                        vec!["[", "(", "{", "«", "﴾", "\"", "'"],
-                        vec!["]", ")", "}", "»", "﴿", "\"", "'"],
-                    ),
-                ))
-            } else if short == "sk" {
-                Some(Arc::new(
-                    og_rules::text_level_rules::GenericUnpairedBracketsRule::new().with_symbols(
-                        vec!["[", "(", "{", "„", "»", "«", "\""],
-                        vec!["]", ")", "}", "“", "«", "»", "\""],
-                    ),
-                ))
-            } else {
-                Some(Arc::new(
-                    og_rules::text_level_rules::GenericUnpairedBracketsRule::new(),
-                ))
-            };
+            ))
+        } else if short == "it" || short == "ca" {
+            Some(Arc::new(
+                og_rules::text_level_rules::GenericUnpairedBracketsRule::new().with_symbols(
+                    vec!["[", "(", "{", "\u{bb}", "\u{ab}"],
+                    vec!["]", ")", "}", "\u{ab}", "\u{bb}"],
+                ),
+            ))
+        } else if short == "ar" {
+            Some(Arc::new(
+                og_rules::text_level_rules::GenericUnpairedBracketsRule::new().with_symbols(
+                    vec!["[", "(", "{", "«", "﴾", "\"", "'"],
+                    vec!["]", ")", "}", "»", "﴿", "\"", "'"],
+                ),
+            ))
+        } else if short == "sk" {
+            Some(Arc::new(
+                og_rules::text_level_rules::GenericUnpairedBracketsRule::new().with_symbols(
+                    vec!["[", "(", "{", "„", "»", "«", "\""],
+                    vec!["]", ")", "}", "“", "«", "»", "\""],
+                ),
+            ))
+        } else {
+            Some(Arc::new(
+                og_rules::text_level_rules::GenericUnpairedBracketsRule::new(),
+            ))
+        };
         let mut generic_text_level_rules: Vec<Arc<dyn TextLevelRule>> =
             if short == "nl" || short == "pl" {
                 Vec::new()
@@ -1146,6 +1157,16 @@ impl LanguageEngine {
                 ]);
                 engine.add_rule(Arc::new(crate::be::belarusian_simple_replace_rule()));
                 engine.add_rule(Arc::new(crate::be::belarusian_specific_case_rule()));
+            }
+            "br" => {
+                if let Some(tagger) = crate::br::BretonTagger::shared_arc() {
+                    engine.tagger = Some(tagger);
+                }
+                engine.add_rules([
+                    crate::br::BretonSpellerRule::shared_arc() as Arc<dyn Rule>,
+                    Arc::new(og_rules::native_rules::UppercaseSentenceStartRule::new()),
+                    Arc::new(crate::br::breton_topo_replace_rule()),
+                ]);
             }
             "el" => {
                 engine.add_rule(
@@ -1786,6 +1807,7 @@ enum WordTokenizerBridge {
     Polish(Arc<crate::pl::word_tokenizer::PolishWordTokenizer>),
     Russian(crate::ru::word_tokenizer::RussianWordTokenizer),
     Belarusian(crate::be::word_tokenizer::BelarusianWordTokenizer),
+    Breton(crate::br::word_tokenizer::BretonWordTokenizer),
 }
 
 impl WordTokenizerBridge {
@@ -1828,6 +1850,9 @@ impl WordTokenizerBridge {
         }
         if code == "be" {
             return Self::Belarusian(crate::be::word_tokenizer::BelarusianWordTokenizer::new());
+        }
+        if code == "br" {
+            return Self::Breton(crate::br::word_tokenizer::BretonWordTokenizer::new());
         }
         if code != "fr" {
             return Self::Default(false);
@@ -1891,6 +1916,7 @@ impl WordTokenizer for WordTokenizerBridge {
             Self::Polish(tz) => tz.tokenize(text),
             Self::Russian(tz) => tz.tokenize(text),
             Self::Belarusian(tz) => tz.tokenize(text),
+            Self::Breton(tz) => tz.tokenize(text),
         };
         tokens
             .into_iter()
@@ -2499,6 +2525,52 @@ mod tests {
         assert_eq!(hit.offset(), 0);
         assert_eq!(hit.length(), "вар'ят".len());
         assert_eq!(hit.replacements()[0].value(), "Вар'ят");
+    }
+
+    #[test]
+    fn breton_engine_wires_java_relevant_natives() {
+        let engine =
+            LanguageEngine::for_code("br").expect("Breton engine must be registered via for_code");
+        let ids = engine.rule_ids();
+        for expected in [
+            "MORFOLOGIK_RULE_BR_FR",
+            "UPPERCASE_SENTENCE_START",
+            "DOUBLE_PUNCTUATION",
+            "COMMA_PARENTHESIS_WHITESPACE",
+            "BR_TOPO",
+        ] {
+            assert!(
+                ids.contains(&expected),
+                "expected {expected} in Breton natives, got {ids:?}"
+            );
+        }
+        assert_eq!(
+            ids.iter()
+                .filter(|id| **id == "MORFOLOGIK_RULE_BR_FR")
+                .count(),
+            1,
+            "the generic wordlist speller must stay excluded for br: {ids:?}"
+        );
+        let text_level_ids = engine.text_level_rule_ids();
+        assert!(
+            text_level_ids.contains(&"WHITESPACE_RULE")
+                && text_level_ids.contains(&"SENTENCE_WHITESPACE"),
+            "expected the shared whitespace text rules, got {text_level_ids:?}"
+        );
+        assert!(
+            !text_level_ids.contains(&"UNPAIRED_BRACKETS"),
+            "Breton.java registers no unpaired-brackets rule"
+        );
+
+        let result = engine.check("c’hlañvoc’h eo.");
+        let hit = result
+            .matches
+            .iter()
+            .find(|m| m.rule().id() == "UPPERCASE_SENTENCE_START")
+            .expect("UPPERCASE_SENTENCE_START must fire on the lowercase start");
+        assert_eq!(hit.offset(), 0);
+        assert_eq!(hit.length(), "c’hlañvoc’h".len());
+        assert_eq!(hit.replacements()[0].value(), "C’hlañvoc’h");
     }
 
     #[test]

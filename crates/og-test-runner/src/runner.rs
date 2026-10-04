@@ -42,6 +42,7 @@ enum TestWordTokenizer {
     Polish(Arc<og_langs::pl::word_tokenizer::PolishWordTokenizer>),
     Russian(og_langs::ru::word_tokenizer::RussianWordTokenizer),
     Belarusian(og_langs::be::word_tokenizer::BelarusianWordTokenizer),
+    Breton(og_langs::br::word_tokenizer::BretonWordTokenizer),
 }
 
 impl WordTokenizer for TestWordTokenizer {
@@ -89,6 +90,7 @@ impl WordTokenizer for TestWordTokenizer {
             TestWordTokenizer::Polish(tz) => tz.tokenize(text),
             TestWordTokenizer::Russian(tz) => tz.tokenize(text),
             TestWordTokenizer::Belarusian(tz) => tz.tokenize(text),
+            TestWordTokenizer::Breton(tz) => tz.tokenize(text),
         };
         tokens
             .into_iter()
@@ -157,6 +159,7 @@ pub enum AnyTagger {
     Portuguese(Arc<og_langs::pt::tagger::PortugueseTagger>),
     French(Arc<og_langs::fr::tagger::FrenchTagger>),
     Polish(Arc<og_langs::pl::tagger::PolishTagger>),
+    Breton(Arc<og_langs::br::BretonTagger>),
 }
 
 impl AnyTagger {
@@ -171,6 +174,7 @@ impl AnyTagger {
             AnyTagger::Portuguese(t) => Tagger::tag(t.as_ref(), tokens),
             AnyTagger::French(t) => Tagger::tag(t.as_ref(), tokens),
             AnyTagger::Polish(t) => Tagger::tag(t.as_ref(), tokens),
+            AnyTagger::Breton(t) => Tagger::tag(t.as_ref(), tokens),
         }
     }
 }
@@ -228,6 +232,11 @@ impl TestRunner {
                 {
                     return AnyTagger::Polish(tagger);
                 }
+                if code == "br"
+                    && let Some(tagger) = og_langs::br::BretonTagger::shared_arc()
+                {
+                    return AnyTagger::Breton(tagger);
+                }
                 if let Some(stem) = generic_dict_stem(code)
                     && resource_dir.exists()
                 {
@@ -277,6 +286,11 @@ impl TestRunner {
                     && let Some(chain) = og_langs::pl::build_pl_disambiguator(&resource_dir)
                 {
                     return Some(chain);
+                }
+                if code == "br"
+                    && let Some(disambiguator) = og_langs::br::build_br_disambiguator(&resource_dir)
+                {
+                    return Some(Arc::new(disambiguator));
                 }
                 let disambig_path = resource_dir.join("disambiguation.xml");
                 match std::fs::read_to_string(&disambig_path) {
@@ -424,7 +438,7 @@ impl TestRunner {
             )))
         });
 
-        let sentence_splitter = if matches!(code, "gl" | "eo" | "br" | "ca" | "zh") {
+        let sentence_splitter = if matches!(code, "gl" | "eo" | "ca" | "zh") {
             None
         } else {
             og_tokenizer::srx::srx_splitter(code)
@@ -470,6 +484,9 @@ impl TestRunner {
             None if self.language == "be" => TestWordTokenizer::Belarusian(
                 og_langs::be::word_tokenizer::BelarusianWordTokenizer::new(),
             ),
+            None if self.language == "br" => {
+                TestWordTokenizer::Breton(og_langs::br::word_tokenizer::BretonWordTokenizer::new())
+            }
             None => TestWordTokenizer::Default(self.language == "en"),
         };
         let mut sentence = AnalyzedSentence::new(text, 0, text.len());
@@ -947,6 +964,7 @@ pub mod test_support {
         let xml = match code {
             "fr" => og_langs::fr::normalize_fr_rules_xml(&xml).into_owned(),
             "pl" => og_langs::pl::normalize_pl_rules_xml(&xml).into_owned(),
+            "br" => og_langs::br::normalize_br_rules_xml(&xml).into_owned(),
             _ => xml,
         };
         let compiled: &'static CompiledRuleSet = Box::leak(Box::new(
