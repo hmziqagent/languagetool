@@ -2,6 +2,37 @@ use og_tagger::morfologik::MorfologikDictionary;
 use std::path::PathBuf;
 
 #[test]
+fn pinned_dict_gaps_block_the_eight_direct_ok_residue_rules() {
+    let tagger = crate::es::test_support::SpanishPipeline::shared().tagger_ref();
+    let primera = tagger.lookup("primera");
+    assert!(
+        primera.contains(&("1", "AO0FS0")),
+        "ordinal surface carries the numeric-lemma reading: {primera:?}"
+    );
+    assert!(
+        !primera
+            .iter()
+            .any(|(lemma, tag)| *lemma == "primero" && tag.starts_with("AO")),
+        "AGREEMENT_ORDINALS needs a word-lemma AO reading for inflected=yes (PatternToken.getTestToken tests the reading lemma); the pinned dict has none: {primera:?}"
+    );
+    let vigesimo = tagger.lookup("vigésimo");
+    assert!(
+        vigesimo.iter().all(|(lemma, _)| *lemma == "20"),
+        "ordinal decenas readings also carry numeric lemmas: {vigesimo:?}"
+    );
+    for (word, rule) in [
+        ("medio", "AGREEMENT_DET_NOUN"),
+        ("dos", "HACE_UN_MES_ATRAS"),
+    ] {
+        let readings = tagger.lookup(word);
+        assert!(
+            readings.iter().all(|(_, tag)| !tag.starts_with('D')),
+            "{rule} needs a D[^RN].* determiner reading for '{word}'; the pinned dict (and the fetched 460k snapshot) has none: {readings:?}"
+        );
+    }
+}
+
+#[test]
 #[ignore]
 fn compare_failing_words_across_spanish_dicts() {
     let resource_dir = crate::es::es_resource_dir().expect("es resource dir");

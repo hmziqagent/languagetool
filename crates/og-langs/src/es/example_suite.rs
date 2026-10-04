@@ -60,53 +60,164 @@ fn es_synth() -> Option<Arc<og_rules::postponed_adjective::LangSynthesizer>> {
         .clone()
 }
 
-fn reconstruct_matched_positions(
+fn token_matches(
+    token: &og_xml::compiler::CompiledPatternToken,
+    atr: &og_core::AnalyzedTokenReadings,
+) -> bool {
+    let surface = atr.token().token();
+    let text_ok = match &token.text {
+        Some(text) => {
+            let matched = if let Some(re) = &token.compiled_regexp_fancy {
+                re.is_match(surface).unwrap_or(false)
+            } else if token.case_sensitive {
+                token
+                    .compiled_regexp
+                    .as_ref()
+                    .is_some_and(|re| re.is_match(surface))
+                    || surface == text
+            } else {
+                token
+                    .compiled_regexp_ci
+                    .as_ref()
+                    .or(token.compiled_regexp.as_ref())
+                    .is_some_and(|re| re.is_match(surface))
+                    || surface.eq_ignore_ascii_case(text)
+            };
+            if token.negate { !matched } else { matched }
+        }
+        None => true,
+    };
+    let postag_ok = match &token.postag {
+        Some(postag) => {
+            let matched = atr
+                .readings()
+                .iter()
+                .flat_map(|r| r.pos_tags().iter())
+                .any(|t| {
+                    if let Some(re) = &token.compiled_postag_regexp_fancy {
+                        re.is_match(t).unwrap_or(false)
+                    } else if let Some(re) = &token.compiled_postag_regexp {
+                        re.is_match(t)
+                    } else {
+                        t == postag
+                    }
+                });
+            if token.negate_pos { !matched } else { matched }
+        }
+        None => true,
+    };
+    text_ok && postag_ok
+}
+
+fn element_satisfied(
+    element: &og_xml::compiler::CompiledPatternElement,
+    atr: &og_core::AnalyzedTokenReadings,
+) -> bool {
+    use og_xml::compiler::CompiledPatternElement;
+    match element {
+        CompiledPatternElement::Token(t) => token_matches(t, atr),
+        CompiledPatternElement::OrGroup(alts) => alts.iter().any(|t| token_matches(t, atr)),
+        CompiledPatternElement::AndGroup(all) => all.iter().all(|t| token_matches(t, atr)),
+    }
+}
+
+fn element_optional(element: &og_xml::compiler::CompiledPatternElement) -> bool {
+    use og_xml::compiler::CompiledPatternElement;
+    match element {
+        CompiledPatternElement::Token(t) => t.min == Some(0),
+        CompiledPatternElement::OrGroup(alts) => alts.iter().any(|t| t.min == Some(0)),
+        CompiledPatternElement::AndGroup(all) => all.iter().all(|t| t.min == Some(0)),
+    }
+}
+
+fn matched_window(
     rule: &og_xml::compiler::CompiledRule,
     tokens: &[&og_core::AnalyzedTokenReadings],
-    from: usize,
-    to: usize,
-) -> Option<Vec<usize>> {
-    let mut span: Vec<usize> = Vec::new();
-    for (i, t) in tokens.iter().enumerate() {
-        if t.token().end() > from && t.token().start() < to {
-            span.push(i);
+    rm: &og_core::RuleMatch,
+) -> (Vec<usize>, Vec<String>) {
+    let end = rm.offset() + rm.length();
+    let overlap: Vec<usize> = tokens
+        .iter()
+        .enumerate()
+        .filter(|(_, t)| t.token().start() < end && t.token().end() > rm.offset())
+        .map(|(i, _)| i)
+        .collect();
+    let texts_of = |positions: &[usize]| {
+        (
+            positions.to_vec(),
+            positions
+                .iter()
+                .map(|&i| tokens[i].token().token().to_string())
+                .collect::<Vec<String>>(),
+        )
+    };
+    let pattern = &rule.pattern;
+    let (Some(ms), Some(me)) = (pattern.marker_elem_start, pattern.marker_elem_end) else {
+        return texts_of(&overlap);
+    };
+    let marker_elements = me.saturating_sub(ms);
+    let (Some(&first), Some(&last)) = (overlap.first(), overlap.last()) else {
+        return texts_of(&overlap);
+    };
+    if marker_elements == 0 || overlap.len() != marker_elements {
+        return texts_of(&overlap);
+    }
+    let elements = &pattern.elements;
+    let mut start = first;
+    let mut k = ms;
+    while k > 0 {
+        k -= 1;
+        let Some(idx) = start.checked_sub(1).filter(|&i| i < tokens.len()) else {
+            break;
+        };
+        if element_satisfied(&elements[k], tokens[idx]) || !element_optional(&elements[k]) {
+            start = idx;
         }
     }
-    let first_span = *span.first()?;
-    let mut last = *span.last()?;
-    let pattern = &rule.pattern;
-    let (marker_start, marker_end, total) = if pattern.has_structured_elements {
-        (
-            pattern.marker_elem_start,
-            pattern.marker_elem_end,
-            pattern.elements.len(),
-        )
-    } else {
-        (
-            pattern.marker_start,
-            pattern.marker_end,
-            pattern.tokens.len(),
-        )
-    };
-    let is_plain = |slice: &[og_xml::compiler::CompiledPatternToken]| {
-        slice
-            .iter()
-            .all(|t| t.skip == 0 && t.min.unwrap_or(1) == 1 && t.max.unwrap_or(1) == 1)
-    };
-    let pre_count = marker_start.unwrap_or(0);
-    if pre_count > 0 && !is_plain(pattern.tokens.get(..pre_count)?) {
-        return None;
+    let mut stop = last;
+    let mut k = me;
+    while k < elements.len() {
+        let Some(idx) = stop.checked_add(1).filter(|&i| i < tokens.len()) else {
+            break;
+        };
+        if element_satisfied(&elements[k], tokens[idx]) || !element_optional(&elements[k]) {
+            stop = idx;
+            k += 1;
+        } else {
+            break;
+        }
     }
-    let post_count = marker_end.map_or(0, |end| total - end);
-    if post_count > 0 && !is_plain(pattern.tokens.get(marker_end?..)?) {
-        return None;
+    let positions: Vec<usize> = (start..=stop).collect();
+    let mut matched: Vec<usize> = Vec::with_capacity(positions.len());
+    let mut texts: Vec<String> = Vec::with_capacity(elements.len());
+    let mut cursor = 0usize;
+    for (ei, element) in elements.iter().enumerate() {
+        if ei == ms {
+            cursor = first - start;
+        } else if ei == me {
+            cursor = last - start + 1;
+        }
+        let consumed = if ei >= ms && ei < me {
+            positions.get(cursor).copied()
+        } else {
+            positions
+                .get(cursor)
+                .copied()
+                .filter(|&p| element_satisfied(element, tokens[p]) || !element_optional(element))
+        };
+        match consumed {
+            Some(p) => {
+                matched.push(p);
+                texts.push(tokens[p].token().token().to_string());
+                cursor += 1;
+            }
+            None => texts.push(texts.last().cloned().unwrap_or_default()),
+        }
     }
-    let first = first_span.checked_sub(pre_count)?;
-    last += post_count;
-    if first > last || last >= tokens.len() {
-        return None;
+    if matched.is_empty() {
+        return texts_of(&positions);
     }
-    Some((first..=last).collect())
+    (matched, texts)
 }
 
 fn apply_es_filters(
@@ -122,15 +233,7 @@ fn apply_es_filters(
     else {
         return Some(m);
     };
-    let from = m.offset();
-    let to = m.offset() + m.length();
-    let Some(matched_positions) = reconstruct_matched_positions(rule, tokens, from, to) else {
-        return Some(m);
-    };
-    let matched_texts: Vec<String> = matched_positions
-        .iter()
-        .map(|&i| tokens[i].token().token().to_string())
-        .collect();
+    let (matched_positions, matched_texts) = matched_window(rule, tokens, &m);
     let synthesizer = es_synth();
     let call = crate::es::filters::EsFilterCall {
         args: &filter.args,
@@ -169,6 +272,42 @@ fn spanish_grammar_examples_with_es_pipeline() {
         "grammar",
         "/tmp/test_failures_es_module.txt",
     );
+}
+
+#[test]
+fn dispatch_drives_the_compiled_comma_rule_end_to_end() {
+    let xml = std::fs::read_to_string(grammar_path()).expect("grammar.xml");
+    let rule_set = XmlCompiler::new()
+        .compile_file_with_base(&xml, grammar_path().parent())
+        .expect("compile");
+    let rule = rule_set
+        .rules
+        .iter()
+        .find(|r| {
+            r.id == "COMMA_MARCADOR_DISCURSIVO"
+                && r.filter
+                    .as_ref()
+                    .is_some_and(|f| f.class.ends_with("AddCommasFilter"))
+        })
+        .expect("COMMA_MARCADOR_DISCURSIVO rule carrying AddCommasFilter");
+    let engine = build_pattern_engine();
+    let pipeline = SpanishPipeline::shared();
+    let text = "En primer lugar hablaremos de un tema importante.";
+    for (sentence, _start) in pipeline.analyze_offset_text(text) {
+        let tokens: Vec<&og_core::AnalyzedTokenReadings> = sentence.non_whitespace_tokens();
+        for m in engine.match_rule(rule, &sentence) {
+            let out = apply_es_filters(rule, &tokens, sentence.text(), m).expect("match kept");
+            let values: Vec<String> = out
+                .replacements()
+                .iter()
+                .map(|r| r.value().to_string())
+                .collect();
+            assert_eq!(values, vec!["lugar,".to_string()]);
+            assert_eq!(&text[out.offset()..out.offset() + out.length()], "lugar");
+            return;
+        }
+    }
+    panic!("no match for {text}");
 }
 
 #[test]

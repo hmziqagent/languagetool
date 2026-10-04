@@ -490,3 +490,55 @@ fn probe_hace_un_mes_atras_no_match() {
     run_rule("HACE_UN_MES_ATRAS", "hace dos años atrás");
     dump("hace dos años atrás");
 }
+
+#[test]
+#[ignore]
+fn probe_agreement_ordinals_no_match() {
+    run_rule("AGREEMENT_ORDINALS", "vigésimo primera");
+    run_rule("AGREEMENT_ORDINALS", "vigésimo primeros");
+    dump("vigésimo primera");
+    dump("vigésimo primeros");
+    use crate::es::es_resource_dir;
+    let dir = es_resource_dir().expect("es dir");
+    let dict = og_tagger::morfologik::MorfologikDictionary::load(
+        &dir.join("spanish.dict"),
+        &dir.join("spanish.info"),
+    )
+    .expect("dict");
+    for w in ["vigésimo", "vigesimo", "primera", "primeros", "décimo"] {
+        eprintln!("lookup({w:?}) = {:?}", dict.lookup(w));
+    }
+    if let Some(fetched) = og_tagger::morfologik::MorfologikDictionary::load(
+        &std::path::PathBuf::from("/tmp/current_spanish.dict"),
+        &std::path::PathBuf::from("/tmp/current_spanish.info"),
+    ) {
+        for w in ["vigésimo", "primera", "primeros", "décimo"] {
+            eprintln!("fetched lookup({w:?}) = {:?}", fetched.lookup(w));
+        }
+    }
+}
+
+#[test]
+#[ignore]
+fn probe_agreement_det_noun_medio_no_match() {
+    run_rule("AGREEMENT_DET_NOUN", "medio millones de euros");
+    dump("medio millones de euros");
+    use crate::es::es_resource_dir;
+    let dir = es_resource_dir().expect("es dir");
+    let dict = og_tagger::morfologik::MorfologikDictionary::load(
+        &dir.join("spanish.dict"),
+        &dir.join("spanish.info"),
+    )
+    .expect("dict");
+    for w in ["medio", "millones", "millón"] {
+        eprintln!("lookup({w:?}) = {:?}", dict.lookup(w));
+    }
+    if let Some(fetched) = og_tagger::morfologik::MorfologikDictionary::load(
+        &std::path::PathBuf::from("/tmp/current_spanish.dict"),
+        &std::path::PathBuf::from("/tmp/current_spanish.info"),
+    ) {
+        for w in ["medio", "millones", "millón", "del", "dos"] {
+            eprintln!("fetched lookup({w:?}) = {:?}", fetched.lookup(w));
+        }
+    }
+}
