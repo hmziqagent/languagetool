@@ -5,6 +5,8 @@ pub(crate) mod diagnose;
 pub(crate) mod example_suite;
 pub mod question_whitespace;
 pub mod repeated_words;
+#[cfg(test)]
+pub(crate) mod residue_map;
 pub mod simple_replace;
 pub mod suppress_misspelled;
 pub mod suppress_portable;

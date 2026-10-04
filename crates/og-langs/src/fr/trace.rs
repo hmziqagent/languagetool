@@ -38,7 +38,10 @@ fn rules_owning_example(text: &str) -> Vec<(&'static CompiledRule, &'static str)
         (compiled_style(), "style.xml"),
     ] {
         for rule in &set.rules {
-            if rule.examples.iter().any(|e| e.text.contains(text)) {
+            if rule.examples.iter().any(|e| {
+                let clean = e.text.replace("<marker>", "").replace("</marker>", "");
+                e.text.contains(text) || clean.contains(text)
+            }) {
                 out.push((rule, label));
             }
         }
@@ -99,7 +102,10 @@ pub fn probe(example_fragment: &str) {
         let example = rule
             .examples
             .iter()
-            .find(|e| e.text.contains(example_fragment))
+            .find(|e| {
+                let clean = e.text.replace("<marker>", "").replace("</marker>", "");
+                e.text.contains(example_fragment) || clean.contains(example_fragment)
+            })
             .expect("example");
         let clean = example
             .text
@@ -178,6 +184,40 @@ pub fn probe_tokens(texts: &[&str]) {
     }
 }
 
+pub fn probe_inline_rule(rule_id: &str, text: &str) {
+    let engine = crate::fr::example_suite::build_pattern_engine();
+    let pipeline = FrenchPipeline::shared();
+    og_rules::pattern_rule::set_test_date_hack(true);
+    for (set, file) in [
+        (compiled_grammar(), "grammar.xml"),
+        (compiled_style(), "style.xml"),
+    ] {
+        for rule in &set.rules {
+            if rule.id != rule_id {
+                continue;
+            }
+            for (sentence, sentence_start) in pipeline.analyze_offset_text(text) {
+                let matches = engine.match_rule(rule, &sentence);
+                eprintln!(
+                    "INLINE [{file}] {} / {:?} => {} matches",
+                    rule.id,
+                    rule.sub_id,
+                    matches.len()
+                );
+                for m in &matches {
+                    eprintln!(
+                        "  match {}..{} '{}'",
+                        m.offset() + sentence_start,
+                        m.offset() + sentence_start + m.length(),
+                        &text[(m.offset() + sentence_start).min(text.len())
+                            ..(m.offset() + sentence_start + m.length()).min(text.len())]
+                    );
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -225,6 +265,9 @@ mod tests {
             "-il est arrivé à l'hôtel hier.",
             "Vas -tu les regarder à la télévision ?",
             "Quelqu\"un peut -il m'éclairer et si possible en justifiant.",
+            "D´enfants.",
+            "D‘enfants.",
+            "D′enfants.",
         ]);
     }
 
@@ -270,8 +313,37 @@ mod tests {
 
     #[test]
     #[ignore]
+    fn trace_unclassified_residue_failures() {
+        for fragment in [
+            "Antidote, le remède",
+            "Docteur délivrez",
+            "Il devient de plus en plus",
+            "écrirai ou vous téléphonerai",
+            "qu'aurait négligé",
+            "D‘",
+            "est par ordre de niveau",
+            "rencontre est donc né",
+            "peut-être élevé",
+            "étudiant ou étudiante",
+            "ni ami ni amie",
+            "nuance lilas",
+        ] {
+            super::probe(fragment);
+        }
+    }
+
+    #[test]
+    #[ignore]
     fn trace_style_residue_failure() {
         super::probe("étudiant ou étudiante");
+    }
+
+    #[test]
+    #[ignore]
+    fn trace_inline_residue_rules() {
+        super::probe_inline_rule("APOS_INCORRECT", "D‘enfants.");
+        super::probe_inline_rule("APOS_INCORRECT", "D´enfants.");
+        super::probe_inline_rule("APOS_INCORRECT", "D′enfants.");
     }
 
     #[test]
