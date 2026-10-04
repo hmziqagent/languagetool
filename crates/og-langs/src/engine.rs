@@ -1785,6 +1785,7 @@ enum WordTokenizerBridge {
     Portuguese(Arc<crate::pt::word_tokenizer::PortugueseWordTokenizer>),
     Polish(Arc<crate::pl::word_tokenizer::PolishWordTokenizer>),
     Russian(crate::ru::word_tokenizer::RussianWordTokenizer),
+    Belarusian(crate::be::word_tokenizer::BelarusianWordTokenizer),
 }
 
 impl WordTokenizerBridge {
@@ -1824,6 +1825,9 @@ impl WordTokenizerBridge {
         }
         if code == "ru" {
             return Self::Russian(crate::ru::word_tokenizer::RussianWordTokenizer::new());
+        }
+        if code == "be" {
+            return Self::Belarusian(crate::be::word_tokenizer::BelarusianWordTokenizer::new());
         }
         if code != "fr" {
             return Self::Default(false);
@@ -1886,6 +1890,7 @@ impl WordTokenizer for WordTokenizerBridge {
             }
             Self::Polish(tz) => tz.tokenize(text),
             Self::Russian(tz) => tz.tokenize(text),
+            Self::Belarusian(tz) => tz.tokenize(text),
         };
         tokens
             .into_iter()
@@ -2461,6 +2466,39 @@ mod tests {
             ids.contains(&"UPPERCASE_SENTENCE_START"),
             "expected UPPERCASE_SENTENCE_START on lowercase start, got {ids:?}"
         );
+    }
+
+    #[test]
+    fn belarusian_engine_wires_java_relevant_natives() {
+        let engine = LanguageEngine::for_code("be")
+            .expect("Belarusian engine must be registered via for_code");
+        let ids = engine.rule_ids();
+        for expected in [
+            "UPPERCASE_SENTENCE_START",
+            "DOUBLE_PUNCTUATION",
+            "COMMA_PARENTHESIS_WHITESPACE",
+            "BE_SIMPLE_REPLACE",
+            "BE_SPECIFIC_CASE",
+        ] {
+            assert!(
+                ids.contains(&expected),
+                "expected {expected} in Belarusian natives, got {ids:?}"
+            );
+        }
+        assert!(
+            !engine.text_level_rule_ids().contains(&"UNPAIRED_BRACKETS"),
+            "Belarusian.java registers no unpaired-brackets rule"
+        );
+
+        let result = engine.check("вар'ят вялікі.");
+        let hit = result
+            .matches
+            .iter()
+            .find(|m| m.rule().id() == "UPPERCASE_SENTENCE_START")
+            .expect("UPPERCASE_SENTENCE_START must fire on the lowercase start");
+        assert_eq!(hit.offset(), 0);
+        assert_eq!(hit.length(), "вар'ят".len());
+        assert_eq!(hit.replacements()[0].value(), "Вар'ят");
     }
 
     #[test]

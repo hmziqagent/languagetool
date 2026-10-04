@@ -477,6 +477,25 @@ async fn test_v2_check_asturian_engine_registered() {
 }
 
 #[tokio::test]
+async fn test_v2_check_belarusian_engine_registered() {
+    let app = app();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/check?language=be&text=%D0%9F%D1%80%D1%8B%D0%B2%D1%96%D1%82%D0%B0%D0%BD%D0%BD%D0%B5+%D1%81%D1%83%D1%81%D0%B2%D0%B5%D1%82.")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["language"]["code"].as_str(), Some("be"));
+    assert!(json["matches"].is_array());
+}
+
+#[tokio::test]
 async fn test_v2_languages_lists_all_registered_engines() {
     let json = check_response("/v2/languages").await;
     let codes: Vec<&str> = json
@@ -489,8 +508,8 @@ async fn test_v2_languages_lists_all_registered_engines() {
         })
         .unwrap_or_default();
     for code in [
-        "en-US", "de-DE", "fr", "es", "pt-BR", "pt-PT", "nl", "pl", "ru", "it", "ar", "ast", "el",
-        "gl", "ro", "sv",
+        "en-US", "de-DE", "fr", "es", "pt-BR", "pt-PT", "nl", "pl", "ru", "it", "ar", "ast", "be",
+        "el", "gl", "ro", "sv",
     ] {
         assert!(codes.contains(&code), "missing {code} in {codes:?}");
     }

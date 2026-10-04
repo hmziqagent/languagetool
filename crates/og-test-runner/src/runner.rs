@@ -41,6 +41,7 @@ enum TestWordTokenizer {
     Portuguese(Arc<og_langs::pt::word_tokenizer::PortugueseWordTokenizer>),
     Polish(Arc<og_langs::pl::word_tokenizer::PolishWordTokenizer>),
     Russian(og_langs::ru::word_tokenizer::RussianWordTokenizer),
+    Belarusian(og_langs::be::word_tokenizer::BelarusianWordTokenizer),
 }
 
 impl WordTokenizer for TestWordTokenizer {
@@ -87,6 +88,7 @@ impl WordTokenizer for TestWordTokenizer {
             }
             TestWordTokenizer::Polish(tz) => tz.tokenize(text),
             TestWordTokenizer::Russian(tz) => tz.tokenize(text),
+            TestWordTokenizer::Belarusian(tz) => tz.tokenize(text),
         };
         tokens
             .into_iter()
@@ -465,6 +467,9 @@ impl TestRunner {
             None if self.language == "ru" => {
                 TestWordTokenizer::Russian(og_langs::ru::word_tokenizer::RussianWordTokenizer::new())
             }
+            None if self.language == "be" => TestWordTokenizer::Belarusian(
+                og_langs::be::word_tokenizer::BelarusianWordTokenizer::new(),
+            ),
             None => TestWordTokenizer::Default(self.language == "en"),
         };
         let mut sentence = AnalyzedSentence::new(text, 0, text.len());
