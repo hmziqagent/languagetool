@@ -656,6 +656,552 @@ mod tests {
         probe_with_engine_trace("RYMY", "Tu wyl\u{105}dowa\u{142}y oddzia\u{142}y.");
     }
 
+    fn disambiguated_sentence(text: &str) -> og_core::AnalyzedSentence {
+        PolishPipeline::shared()
+            .analyze_offset_text(text)
+            .into_iter()
+            .next()
+            .map(|(s, _)| s)
+            .unwrap_or_else(|| PolishPipeline::shared().analyze_range(text, 0, text.len()))
+    }
+
+    #[ignore]
+    #[test]
+    fn probe_round16_badz_koordynacja_2_isolation() {
+        let resource_dir = crate::pl::tagger::pl_resource_dir().expect("pl resource dir");
+        let xml = std::fs::read_to_string(resource_dir.join("disambiguation.xml")).unwrap();
+        let normalized = crate::pl::normalize_disambiguation_xml(&xml);
+        let parsed = og_tagger::XmlDisambiguator::from_xml_with_english(&normalized, None)
+            .expect("parse disambiguation.xml");
+        let text = "Dojad\u{119} tam b\u{105}d\u{17a} rowerem b\u{105}d\u{17a} hulajnog\u{105}.";
+        let surowce_text = "Surowce zawieraj\u{105}ce te alkaloidy";
+        let beztlenowe_text =
+            "Beztlenowe bakterie magnetotaktyczna maj\u{105} funkcj\u{119} wykrywania tlenu.";
+        let snapshot = |s: &og_core::AnalyzedSentence| -> Vec<String> {
+            s.non_whitespace_tokens()
+                .iter()
+                .map(|t| {
+                    format!(
+                        "{:?}:{}",
+                        t.token().token(),
+                        t.readings()
+                            .iter()
+                            .map(|r| r.pos_tags().join("|"))
+                            .collect::<Vec<_>>()
+                            .join(",")
+                    )
+                })
+                .collect()
+        };
+        for wanted in [
+            "badz_koordynacja_2",
+            "inst_badz_inst",
+            "TAM_JEST",
+            "unify_adj_subst",
+            "MAJA_MAIC",
+        ] {
+            let rule_text = match wanted {
+                "unify_adj_subst" => surowce_text,
+                "MAJA_MAIC" => beztlenowe_text,
+                _ => text,
+            };
+            let indices: Vec<usize> = parsed
+                .rule_ids()
+                .iter()
+                .enumerate()
+                .filter(|(_, id)| **id == wanted)
+                .map(|(i, _)| i)
+                .collect();
+            for idx in indices {
+                eprintln!("== rule {wanted} (idx {idx}) in isolation ==");
+                eprintln!("{}", parsed.rule_debug(idx));
+                eprintln!("pattern: {}", parsed.rule_pattern_debug(idx));
+                let mut sentence =
+                    crate::pl::test_support::analyze_undisambiguated(rule_text, 0, rule_text.len());
+                let before = snapshot(&sentence);
+                let hits = parsed.debug_match_rule(&mut sentence, idx);
+                eprintln!("   debug_match_rule positions: {hits:?}");
+                parsed.apply_rule(&mut sentence, idx);
+                let after = snapshot(&sentence);
+                let mut diff = Vec::new();
+                for (b, a) in before.iter().zip(after.iter()) {
+                    if b != a {
+                        diff.push(format!("{b} -> {a}"));
+                    }
+                }
+                eprintln!("   isolated effect: {}", diff.join(" ;; "));
+                if wanted == "badz_koordynacja_2" {
+                    let with_comma = "Dojad\u{119} tam b\u{105}d\u{17a} rowerem, b\u{105}d\u{17a} hulajnog\u{105}.";
+                    let mut sentence = crate::pl::test_support::analyze_undisambiguated(
+                        with_comma,
+                        0,
+                        with_comma.len(),
+                    );
+                    let before = snapshot(&sentence);
+                    let hits = parsed.debug_match_rule(&mut sentence, idx);
+                    parsed.apply_rule(&mut sentence, idx);
+                    let after = snapshot(&sentence);
+                    let comma_diff: Vec<String> = before
+                        .iter()
+                        .zip(after.iter())
+                        .filter(|(b, a)| b != a)
+                        .map(|(b, a)| format!("{b} -> {a}"))
+                        .collect();
+                    eprintln!(
+                        "   comma-ful text: match {hits:?} effect {}",
+                        comma_diff.join(" ;; ")
+                    );
+                }
+            }
+        }
+    }
+
+    fn disambig_variant_effect(rule_id: &str, replacement_rule_xml: &str, text: &str) -> String {
+        let resource_dir = crate::pl::tagger::pl_resource_dir().expect("pl resource dir");
+        let xml = std::fs::read_to_string(resource_dir.join("disambiguation.xml")).unwrap();
+        let open = format!("<rule ");
+        let needle = format!("id=\"{rule_id}\"");
+        let id_pos = xml.find(&needle).unwrap_or_else(|| panic!("{rule_id}"));
+        let rule_start = xml[..id_pos].rfind(&open).expect("rule open");
+        let rule_end = xml[rule_start..]
+            .find("</rule>")
+            .unwrap_or_else(|| panic!("{rule_id} end"))
+            + rule_start
+            + "</rule>".len();
+        let mut variant = String::with_capacity(xml.len());
+        variant.push_str(&xml[..rule_start]);
+        variant.push_str(replacement_rule_xml);
+        variant.push_str(&xml[rule_end..]);
+        let normalized = crate::pl::normalize_disambiguation_xml(&variant);
+        let parsed = og_tagger::XmlDisambiguator::from_xml_with_english(&normalized, None)
+            .expect("parse variant");
+        let Some(idx) = parsed.rule_ids().iter().position(|id| *id == rule_id) else {
+            return "VARIANT RULE NOT FOUND".to_string();
+        };
+        let snapshot = |s: &og_core::AnalyzedSentence| -> Vec<String> {
+            s.non_whitespace_tokens()
+                .iter()
+                .map(|t| {
+                    format!(
+                        "{:?}:{}",
+                        t.token().token(),
+                        t.readings()
+                            .iter()
+                            .map(|r| r.pos_tags().join("|"))
+                            .collect::<Vec<_>>()
+                            .join(",")
+                    )
+                })
+                .collect()
+        };
+        let mut sentence = crate::pl::test_support::analyze_undisambiguated(text, 0, text.len());
+        let before = snapshot(&sentence);
+        let hits = parsed.debug_match_rule(&mut sentence, idx);
+        parsed.apply_rule(&mut sentence, idx);
+        let after = snapshot(&sentence);
+        let mut diff = Vec::new();
+        for (b, a) in before.iter().zip(after.iter()) {
+            if b != a {
+                diff.push(format!("{b} -> {a}"));
+            }
+        }
+        format!(
+            "match_positions={hits:?} effect={}",
+            if diff.is_empty() {
+                "<none>".to_string()
+            } else {
+                diff.join(" ;; ")
+            }
+        )
+    }
+
+    #[ignore]
+    #[test]
+    fn probe_round16_badz_koordynacja_2_variant_bisect() {
+        let text = "Dojad\u{119} tam b\u{105}d\u{17a} rowerem b\u{105}d\u{17a} hulajnog\u{105}.";
+        let original = r#"<rule name="Bądź i lub jako spójnik w konstrukcji „bądź x, bądź y”" id="badz_koordynacja_2">
+        <pattern>
+            <marker><token regexp="yes">bądź|lub</token></marker>
+            <unify>
+                <feature id="case"><type id="acc"/><type id="inst"/><type id="gen"/><type id="dat"/><type id="loc"/><type id="nom"/></feature>
+                <token postag="(?:adj|pact|ppas|subst|ger).*" postag_regexp="yes"><exception negate_pos="yes" postag_regexp="yes" postag="(?:adj|pact|ppas|subst|ger).*"/></token>
+                <unify-ignore>
+                    <token min="0" max="1">,</token>
+                    <token regexp="yes">bądź|lub</token>
+                </unify-ignore>
+                <token postag="(?:adj|pact|ppas|subs|ger).*" postag_regexp="yes"><exception negate_pos="yes" postag_regexp="yes" postag="(?:adj|pact|ppas|subst|ger).*"/></token>
+            </unify>
+        </pattern>
+        <disambig action="filter" postag="conj"/>
+    </rule>"#;
+        let no_marker = r#"<rule name="v" id="badz_koordynacja_2">
+        <pattern>
+            <token regexp="yes">bądź|lub</token>
+            <unify>
+                <feature id="case"><type id="acc"/><type id="inst"/><type id="gen"/><type id="dat"/><type id="loc"/><type id="nom"/></feature>
+                <token postag="(?:adj|pact|ppas|subst|ger).*" postag_regexp="yes"><exception negate_pos="yes" postag_regexp="yes" postag="(?:adj|pact|ppas|subst|ger).*"/></token>
+                <unify-ignore>
+                    <token min="0" max="1">,</token>
+                    <token regexp="yes">bądź|lub</token>
+                </unify-ignore>
+                <token postag="(?:adj|pact|ppas|subs|ger).*" postag_regexp="yes"><exception negate_pos="yes" postag_regexp="yes" postag="(?:adj|pact|ppas|subst|ger).*"/></token>
+            </unify>
+        </pattern>
+        <disambig action="filter" postag="conj"/>
+    </rule>"#;
+        let no_unify = r#"<rule name="v" id="badz_koordynacja_2">
+        <pattern>
+            <marker><token regexp="yes">bądź|lub</token></marker>
+            <token postag="(?:adj|pact|ppas|subst|ger).*" postag_regexp="yes"><exception negate_pos="yes" postag_regexp="yes" postag="(?:adj|pact|ppas|subst|ger).*"/></token>
+            <token min="0" max="1">,</token>
+            <token regexp="yes">bądź|lub</token>
+            <token postag="(?:adj|pact|ppas|subs|ger).*" postag_regexp="yes"><exception negate_pos="yes" postag_regexp="yes" postag="(?:adj|pact|ppas|subst|ger).*"/></token>
+        </pattern>
+        <disambig action="filter" postag="conj"/>
+    </rule>"#;
+        let no_optional_comma = r#"<rule name="v" id="badz_koordynacja_2">
+        <pattern>
+            <marker><token regexp="yes">bądź|lub</token></marker>
+            <unify>
+                <feature id="case"><type id="acc"/><type id="inst"/><type id="gen"/><type id="dat"/><type id="loc"/><type id="nom"/></feature>
+                <token postag="(?:adj|pact|ppas|subst|ger).*" postag_regexp="yes"><exception negate_pos="yes" postag_regexp="yes" postag="(?:adj|pact|ppas|subst|ger).*"/></token>
+                <unify-ignore>
+                    <token regexp="yes">bądź|lub</token>
+                </unify-ignore>
+                <token postag="(?:adj|pact|ppas|subs|ger).*" postag_regexp="yes"><exception negate_pos="yes" postag_regexp="yes" postag="(?:adj|pact|ppas|subst|ger).*"/></token>
+            </unify>
+        </pattern>
+        <disambig action="filter" postag="conj"/>
+    </rule>"#;
+        let no_ignore = r#"<rule name="v" id="badz_koordynacja_2">
+        <pattern>
+            <marker><token regexp="yes">bądź|lub</token></marker>
+            <unify>
+                <feature id="case"><type id="acc"/><type id="inst"/><type id="gen"/><type id="dat"/><type id="loc"/><type id="nom"/></feature>
+                <token postag="(?:adj|pact|ppas|subst|ger).*" postag_regexp="yes"><exception negate_pos="yes" postag_regexp="yes" postag="(?:adj|pact|ppas|subst|ger).*"/></token>
+                <token postag="(?:adj|pact|ppas|subs|ger).*" postag_regexp="yes"><exception negate_pos="yes" postag_regexp="yes" postag="(?:adj|pact|ppas|subst|ger).*"/></token>
+            </unify>
+        </pattern>
+        <disambig action="filter" postag="conj"/>
+    </rule>"#;
+        let marker_whole = r#"<rule name="v" id="badz_koordynacja_2">
+        <pattern>
+            <marker>
+            <token regexp="yes">bądź|lub</token>
+            <unify>
+                <feature id="case"><type id="acc"/><type id="inst"/><type id="gen"/><type id="dat"/><type id="loc"/><type id="nom"/></feature>
+                <token postag="(?:adj|pact|ppas|subst|ger).*" postag_regexp="yes"><exception negate_pos="yes" postag_regexp="yes" postag="(?:adj|pact|ppas|subst|ger).*"/></token>
+                <unify-ignore>
+                    <token min="0" max="1">,</token>
+                    <token regexp="yes">bądź|lub</token>
+                </unify-ignore>
+                <token postag="(?:adj|pact|ppas|subs|ger).*" postag_regexp="yes"><exception negate_pos="yes" postag_regexp="yes" postag="(?:adj|pact|ppas|subst|ger).*"/></token>
+            </unify>
+            </marker>
+        </pattern>
+        <disambig action="filter" postag="conj"/>
+    </rule>"#;
+        for (label, xml) in [
+            ("original", original),
+            ("no-marker", no_marker),
+            ("no-unify", no_unify),
+            ("no-optional-comma", no_optional_comma),
+            ("no-unify-ignore", no_ignore),
+            ("marker-whole-pattern", marker_whole),
+        ] {
+            eprintln!(
+                "== variant {label}: {}",
+                disambig_variant_effect("badz_koordynacja_2", xml, text)
+            );
+        }
+    }
+
+    #[ignore]
+    #[test]
+    fn probe_round16_wladce_rules_matching_surowce() {
+        let resource_dir = crate::pl::tagger::pl_resource_dir().expect("pl resource dir");
+        let xml = std::fs::read_to_string(resource_dir.join("disambiguation.xml")).unwrap();
+        let normalized = crate::pl::normalize_disambiguation_xml(&xml);
+        let parsed = og_tagger::XmlDisambiguator::from_xml_with_english(&normalized, None)
+            .expect("parse disambiguation.xml");
+        let text = "Surowce zawieraj\u{105}ce te alkaloidy";
+        for (idx, id) in parsed.rule_ids().iter().enumerate() {
+            let mut sentence =
+                crate::pl::test_support::analyze_undisambiguated(text, 0, text.len());
+            let hits = parsed.debug_match_rule(&mut sentence, idx);
+            let touches = hits.iter().any(|positions| positions.contains(&1))
+                || hits.iter().any(|positions| positions.first() == Some(&1));
+            if touches {
+                let before: Vec<String> = sentence
+                    .non_whitespace_tokens()
+                    .iter()
+                    .map(|t| {
+                        format!(
+                            "{:?}:{}",
+                            t.token().token(),
+                            t.readings()
+                                .iter()
+                                .map(|r| r.pos_tags().join("|"))
+                                .collect::<Vec<_>>()
+                                .join(",")
+                        )
+                    })
+                    .collect();
+                parsed.apply_rule(&mut sentence, idx);
+                let after: Vec<String> = sentence
+                    .non_whitespace_tokens()
+                    .iter()
+                    .map(|t| {
+                        format!(
+                            "{:?}:{}",
+                            t.token().token(),
+                            t.readings()
+                                .iter()
+                                .map(|r| r.pos_tags().join("|"))
+                                .collect::<Vec<_>>()
+                                .join(",")
+                        )
+                    })
+                    .collect();
+                let changed = before != after;
+                eprintln!("   rule {id} (idx {idx}) matches-at-Surowce {hits:?} changed={changed}");
+            }
+        }
+    }
+
+    #[ignore]
+    #[test]
+    fn probe_round16_zdania_fp_expansion_bisect() {
+        let resource_dir = crate::pl::tagger::pl_resource_dir().expect("pl resource dir");
+        let raw = std::fs::read_to_string(resource_dir.join("disambiguation.xml")).unwrap();
+        let with_expansion = crate::pl::normalize_disambiguation_xml(&raw);
+        let escaped = raw.replace(
+            "[\\p{Punct}-\u{2212}\u{2013}\u{2014}\u{2015}\u{201e}\u{00ab}\u{00bb}\u{2026}\u{201d}&amp;&amp;[^!\\.]",
+            "[\\p{Punct}\\-\u{2212}\u{2013}\u{2014}\u{2015}\u{201e}\u{00ab}\u{00bb}\u{2026}\u{201d}&amp;&amp;[^!\\.]",
+        );
+        let and_form = escaped.replace(
+            "<token><exception negate_pos=\"yes\" postag=\"SENT_END\">.</exception></token>",
+            "<and><token>.</token><token postag=\"SENT_END\"/></and>",
+        );
+        let wd_form = and_form.replace(
+            "<disambig postag=\"replace\">",
+            "<disambig action=\"replace\">",
+        );
+        let filtered = crate::pl::append_sent_end_to_filter_postags(&wd_form).unwrap_or(wd_form);
+        let class_fixed = crate::pl::rewrite_java_regex_classes(&filtered).unwrap_or(filtered);
+        let maja_fixed = crate::pl::maja_maic_match_filter_to_remove(&class_fixed);
+        let without_expansion = crate::pl::wildcard_lemma_only_remove_wds(&maja_fixed);
+        let parsed_with =
+            og_tagger::XmlDisambiguator::from_xml_with_english(&with_expansion, None).unwrap();
+        let parsed_without =
+            og_tagger::XmlDisambiguator::from_xml_with_english(&without_expansion, None).unwrap();
+        let texts = [
+            "Nast\u{105}pi\u{142}o g\u{142}osowanie i Wilczur zosta\u{142} wybrany.",
+            "Musz\u{119} tam czeka\u{107} \u{15b}mierci, gdy\u{17c} jestem stary i nerwy moje s\u{105} chore.",
+        ];
+        for text in texts {
+            eprintln!("=== '{text}' ===");
+            let mut with_sentence =
+                crate::pl::test_support::analyze_undisambiguated(text, 0, text.len());
+            let mut without_sentence =
+                crate::pl::test_support::analyze_undisambiguated(text, 0, text.len());
+            let fmt = |s: &og_core::AnalyzedSentence| -> Vec<String> {
+                s.non_whitespace_tokens()
+                    .iter()
+                    .map(|t| {
+                        format!(
+                            "{:?}:{}",
+                            t.token().token(),
+                            t.readings()
+                                .iter()
+                                .map(|r| r.pos_tags().join("|"))
+                                .collect::<Vec<_>>()
+                                .join(",")
+                        )
+                    })
+                    .collect()
+            };
+            for (idx, id) in parsed_with.rule_ids().iter().enumerate() {
+                let before = fmt(&with_sentence);
+                parsed_with.apply_rule(&mut with_sentence, idx);
+                let after = fmt(&with_sentence);
+                if before != after {
+                    let mut diffs = Vec::new();
+                    for (b, a) in before.iter().zip(after.iter()) {
+                        if b != a {
+                            diffs.push(format!("{b} -> {a}"));
+                        }
+                    }
+                    eprintln!("   [with] rule {id} (idx {idx}): {}", diffs.join(" ;; "));
+                }
+            }
+            for (idx, id) in parsed_without.rule_ids().iter().enumerate() {
+                parsed_without.apply_rule(&mut without_sentence, idx);
+            }
+            let with_final = fmt(&with_sentence);
+            let without_final = fmt(&without_sentence);
+            for (w, wo) in with_final.iter().zip(without_final.iter()) {
+                if w != wo {
+                    eprintln!("   DIFF {w} vs {wo}");
+                }
+            }
+        }
+    }
+
+    #[ignore]
+    #[test]
+    fn probe_round16_wladce_surowce_disambig_trace() {
+        let resource_dir = crate::pl::tagger::pl_resource_dir().expect("pl resource dir");
+        let xml = std::fs::read_to_string(resource_dir.join("disambiguation.xml")).unwrap();
+        let normalized = crate::pl::normalize_disambiguation_xml(&xml);
+        let parsed = og_tagger::XmlDisambiguator::from_xml_with_english(&normalized, None)
+            .expect("parse disambiguation.xml");
+        let text = "Surowce zawieraj\u{105}ce te alkaloidy";
+        let watched = "Surowce";
+        let snapshot = |s: &og_core::AnalyzedSentence, w: &str| -> Vec<String> {
+            s.non_whitespace_tokens()
+                .iter()
+                .filter(|t| t.token().token() == w)
+                .map(|t| {
+                    t.readings()
+                        .iter()
+                        .map(|r| {
+                            format!("{}[{}]", r.lemma().unwrap_or("-"), r.pos_tags().join("+"))
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                })
+                .collect()
+        };
+        eprintln!("=== '{text}' watching {watched:?} ===");
+        let resource_dir2 = crate::pl::tagger::pl_resource_dir().expect("pl resource dir");
+        if let Some(dict) = og_tagger::generic_tagger::shared_dictionary(&resource_dir2, "polish") {
+            for w in ["Surowce", "surowce", "Surowcem", "surowcem"] {
+                let readings: Vec<String> = dict
+                    .lookup(w)
+                    .iter()
+                    .map(|(lemma, pos)| format!("{lemma}/{pos}"))
+                    .collect();
+                eprintln!("   dict[{w}] = {}", readings.join(", "));
+            }
+        }
+        let mut sentence = crate::pl::test_support::analyze_undisambiguated(text, 0, text.len());
+        eprintln!("   pre  {watched:?}: {:?}", snapshot(&sentence, watched));
+        for (idx, id) in parsed.rule_ids().iter().enumerate() {
+            let before = snapshot(&sentence, watched);
+            parsed.apply_rule(&mut sentence, idx);
+            let after = snapshot(&sentence, watched);
+            if before != after {
+                eprintln!("   rule {id} (idx {idx}): {before:?} -> {after:?}");
+            }
+        }
+        eprintln!("   post {watched:?}: {:?}", snapshot(&sentence, watched));
+        eprintln!("   full pipeline post: {:?}", {
+            let s = disambiguated_sentence(text);
+            s.non_whitespace_tokens()
+                .into_iter()
+                .find(|t| t.token().token() == watched)
+                .map(|t| {
+                    t.readings()
+                        .iter()
+                        .map(|r| {
+                            format!("{}[{}]", r.lemma().unwrap_or("-"), r.pos_tags().join("+"))
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                })
+        });
+    }
+
+    fn adj_rule_variant_xml(rule_id: &str, strip: &[usize]) -> (String, usize) {
+        let path = crate::pl::pl_rules_dir()
+            .expect("pl rules dir")
+            .join("grammar.xml");
+        let xml = std::fs::read_to_string(&path).expect("grammar.xml");
+        let xml = crate::pl::normalize_pl_rules_xml(&xml);
+        let needle = format!("<rule id=\"{rule_id}\"");
+        let rule_start = xml
+            .find(&needle)
+            .unwrap_or_else(|| panic!("{rule_id} start"));
+        let rule_end_rel = xml[rule_start..]
+            .find("</rule>")
+            .unwrap_or_else(|| panic!("{rule_id} end"));
+        let rule_end = rule_start + rule_end_rel + "</rule>".len();
+        let rule_text = &xml[rule_start..rule_end];
+        let mut spans = Vec::new();
+        let mut search = 0usize;
+        while let Some(rel) = rule_text[search..].find("<antipattern") {
+            let start = search + rel;
+            let end_rel = rule_text[start..]
+                .find("</antipattern>")
+                .unwrap_or_else(|| panic!("antipattern end in {rule_id}"));
+            let end = start + end_rel + "</antipattern>".len();
+            spans.push((start, end));
+            search = end;
+        }
+        let mut out = String::with_capacity(xml.len());
+        out.push_str(&xml[..rule_start]);
+        let mut cursor = 0usize;
+        for (i, &(s, e)) in spans.iter().enumerate() {
+            if strip.contains(&i) {
+                out.push_str(&rule_text[cursor..s]);
+                cursor = e;
+            }
+        }
+        out.push_str(&rule_text[cursor..]);
+        out.push_str(&xml[rule_end..]);
+        (out, spans.len())
+    }
+
+    fn adj_variant_match_count(rule_id: &str, text: &str, strip: &[usize]) -> (usize, usize) {
+        let (xml, span_count) = adj_rule_variant_xml(rule_id, strip);
+        let path = crate::pl::pl_rules_dir()
+            .expect("pl rules dir")
+            .join("grammar.xml");
+        let rule_set = XmlCompiler::new()
+            .compile_file_with_base(xml.as_str(), path.parent())
+            .expect("compile variant");
+        let engine = trace_engine();
+        let pipeline = PolishPipeline::shared();
+        let mut count = 0usize;
+        for rule in rule_set.rules.iter().filter(|r| r.id == rule_id) {
+            for (sentence, sentence_start) in pipeline.analyze_offset_text(text) {
+                for m in engine.match_rule(rule, &sentence) {
+                    eprintln!(
+                        "      strip {strip:?}: match off {} len {} sub {:?}",
+                        m.offset() + sentence_start,
+                        m.length(),
+                        rule.sub_id
+                    );
+                    count += 1;
+                }
+            }
+        }
+        (count, span_count)
+    }
+
+    #[ignore]
+    #[test]
+    fn probe_round16_adj_subst_adj_unify_antipattern_bisect() {
+        let rule_id = "ADJ_SUBST_ADJ_UNIFY";
+        let text =
+            "Beztlenowe bakterie magnetotaktyczna maj\u{105} funkcj\u{119} wykrywania tlenu.";
+        let (base_count, span_count) = adj_variant_match_count(rule_id, text, &[]);
+        eprintln!("== {rule_id}: {span_count} antipattern spans, intact matches: {base_count} ==");
+        let (stripped_count, _) =
+            adj_variant_match_count(rule_id, text, &(0..span_count).collect::<Vec<_>>());
+        eprintln!("== all antipatterns stripped: {stripped_count} matches ==");
+        if stripped_count > 0 && base_count == 0 {
+            for i in 0..span_count {
+                let keep_only = (0..span_count).filter(|j| *j != i).collect::<Vec<_>>();
+                let (count, _) = adj_variant_match_count(rule_id, text, &keep_only);
+                eprintln!("   antipattern #{i} kept alone (all others stripped): {count}");
+            }
+        }
+        pattern_of(rule_id);
+        probe_with_engine_trace(rule_id, text);
+    }
+
     #[test]
     fn regex_crate_rejects_java_octal_and_inline_unicode_flag_negation() {
         let brak_kropki_exception_class = "[?\\.!,:;…\u{201d}\"\\02]";

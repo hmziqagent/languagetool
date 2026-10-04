@@ -260,7 +260,154 @@ fn normalize_disambiguation_xml(xml: &str) -> String {
     );
     let filtered = append_sent_end_to_filter_postags(&wd_form).unwrap_or(wd_form);
     let class_fixed = rewrite_java_regex_classes(&filtered).unwrap_or(filtered);
-    wildcard_lemma_only_remove_wds(&class_fixed)
+    let maja_fixed = maja_maic_match_filter_to_remove(&class_fixed);
+    let expanded = expand_optional_unify_ignore_tokens(&maja_fixed);
+    wildcard_lemma_only_remove_wds(&expanded)
+}
+
+fn maja_maic_match_filter_to_remove(xml: &str) -> String {
+    let needle = "<disambig action=\"filter\"><match no=\"1\">mie\u{107}</match></disambig>";
+    let Some(pos) = xml.find(needle) else {
+        return xml.to_string();
+    };
+    let Some(rule_start) = xml[..pos].rfind("<rule ") else {
+        return xml.to_string();
+    };
+    let Some(end_rel) = xml[rule_start..].find("</rule>") else {
+        return xml.to_string();
+    };
+    let rule_end = rule_start + end_rel + "</rule>".len();
+    let rule_text = &xml[rule_start..rule_end];
+    let first = rule_text.replace(
+        needle,
+        "<disambig action=\"remove\"><wd lemma=\"mai\u{107}\" pos=\".*\"/></disambig>",
+    );
+    let second = rule_text.replace(
+        needle,
+        "<disambig action=\"remove\"><wd lemma=\"maja\" pos=\".*\"/></disambig>",
+    );
+    let mut out = String::with_capacity(xml.len() + rule_text.len() + 16);
+    out.push_str(&xml[..rule_start]);
+    out.push_str(&first);
+    out.push('\n');
+    out.push_str(&second);
+    out.push_str(&xml[rule_end..]);
+    out
+}
+
+fn next_rule_open(xml: &str) -> Option<usize> {
+    let with_attrs = xml.find("<rule ");
+    let bare = xml.find("<rule>");
+    match (with_attrs, bare) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (Some(a), None) => Some(a),
+        (None, Some(b)) => Some(b),
+        (None, None) => None,
+    }
+}
+
+fn has_optional_unify_ignore_token(rule: &str) -> bool {
+    let mut scan = 0;
+    while let Some(rel) = rule[scan..].find("<unify-ignore>") {
+        let body_start = scan + rel + "<unify-ignore>".len();
+        let Some(end_rel) = rule[body_start..].find("</unify-ignore>") else {
+            return false;
+        };
+        let body = &rule[body_start..body_start + end_rel];
+        if body.contains("min=\"0\"")
+            && body.contains("<token min=\"0\" max=\"1\">,</token>")
+            && !body.contains("<marker>")
+        {
+            return true;
+        }
+        scan = body_start + end_rel;
+    }
+    false
+}
+
+fn strip_optional_unify_ignore_tokens(rule: &str) -> String {
+    let mut out = String::with_capacity(rule.len());
+    let mut scan = 0;
+    while let Some(rel) = rule[scan..].find("<unify-ignore>") {
+        let open_start = scan + rel;
+        let open_end = open_start + "<unify-ignore>".len();
+        let Some(end_rel) = rule[open_end..].find("</unify-ignore>") else {
+            out.push_str(&rule[scan..]);
+            return out;
+        };
+        let close_start = open_end + end_rel;
+        out.push_str(&rule[scan..open_end]);
+        let body = &rule[open_end..close_start];
+        let mut body_scan = 0;
+        while let Some(token_rel) = body[body_scan..].find("<token") {
+            let token_start = body_scan + token_rel;
+            let Some(open_tag_end_rel) = body[token_start..].find('>') else {
+                break;
+            };
+            let open_tag_end = token_start + open_tag_end_rel + 1;
+            let attrs = &body[token_start..open_tag_end];
+            let self_closing = attrs.ends_with("/>");
+            if !attrs.contains("min=\"0\"") {
+                out.push_str(&body[body_scan..open_tag_end]);
+                body_scan = open_tag_end;
+                continue;
+            }
+            out.push_str(&body[body_scan..token_start]);
+            if self_closing {
+                body_scan = open_tag_end;
+            } else {
+                let Some(close_rel) = body[open_tag_end..].find("</token>") else {
+                    body_scan = open_tag_end;
+                    break;
+                };
+                body_scan = open_tag_end + close_rel + "</token>".len();
+            }
+        }
+        out.push_str(&body[body_scan..]);
+        out.push_str("</unify-ignore>");
+        scan = close_start + "</unify-ignore>".len();
+    }
+    out.push_str(&rule[scan..]);
+    out
+}
+
+fn expand_optional_unify_ignore_tokens(xml: &str) -> String {
+    let mut comments: Vec<(usize, usize)> = Vec::new();
+    let mut comment_scan = 0;
+    while let Some(rel) = xml[comment_scan..].find("<!--") {
+        let start = comment_scan + rel;
+        let Some(end_rel) = xml[start..].find("-->") else {
+            break;
+        };
+        let end = start + end_rel + "-->".len();
+        comments.push((start, end));
+        comment_scan = end;
+    }
+    let mut out = String::with_capacity(xml.len() + 16384);
+    let mut pos = 0;
+    while let Some(rel) = next_rule_open(&xml[pos..]) {
+        let rule_start = pos + rel;
+        out.push_str(&xml[pos..rule_start]);
+        let Some(end_rel) = xml[rule_start..].find("</rule>") else {
+            out.push_str(&xml[rule_start..]);
+            return out;
+        };
+        let rule_end = rule_start + end_rel + "</rule>".len();
+        let rule_text = &xml[rule_start..rule_end];
+        let commented = comments
+            .iter()
+            .any(|(s, e)| *s <= rule_start && rule_start < *e);
+        if commented || !has_optional_unify_ignore_token(rule_text) {
+            out.push_str(rule_text);
+        } else {
+            out.push_str(rule_text);
+            out.push_str("\n");
+            out.push_str(&strip_optional_unify_ignore_tokens(rule_text));
+        }
+        pos = rule_end;
+    }
+    out.push_str(&xml[pos..]);
+    out
 }
 
 fn wildcard_lemma_only_remove_wds(xml: &str) -> String {
@@ -453,11 +600,15 @@ mod tests {
         assert_eq!(self_closing.find_iter(&normalized).count(), 0);
         assert_eq!(empty_text.find_iter(&normalized).count(), 0);
         assert_eq!(xml.matches(" pos=\".*\"").count(), 0);
-        assert_eq!(normalized.matches(" pos=\".*\"").count(), 92);
+        assert_eq!(
+            normalized.matches(" pos=\".*\"").count(),
+            94,
+            "92 wildcard rewrites plus the 2 explicit pos wds of the MAJA_MAIC bridge"
+        );
         assert_eq!(
             normalized.matches("<wd ").count(),
-            xml.matches("<wd ").count(),
-            "the rewrite must not create or drop wd elements"
+            xml.matches("<wd ").count() + 2,
+            "only the MAJA_MAIC bridge may add wd elements"
         );
         assert!(normalized.contains("<wd lemma=\"ko\u{142}o\" pos=\".*\"/>"));
         assert!(normalized.contains("<wd lemma=\"mi\" pos=\".*\"></wd>"));
@@ -468,6 +619,142 @@ mod tests {
             2,
             "wds that already carry pos stay untouched"
         );
+    }
+
+    #[test]
+    fn normalize_disambiguation_xml_expands_optional_unify_ignore_rules() {
+        let xml = std::fs::read_to_string(
+            crate::pl::tagger::pl_resource_dir()
+                .expect("pl resource dir")
+                .join("disambiguation.xml"),
+        )
+        .expect("disambiguation.xml");
+        let normalized = normalize_disambiguation_xml(&xml);
+        let rule_count = |s: &str| s.matches("<rule ").count() + s.matches("<rule>").count();
+        assert_eq!(
+            rule_count(&normalized) - rule_count(&xml),
+            3,
+            "the two comma-optional badz_koordynacja rules gain duplicates plus the split MAJA_MAIC"
+        );
+        assert_eq!(xml.matches("id=\"badz_koordynacja_2\"").count(), 1);
+        assert_eq!(normalized.matches("id=\"badz_koordynacja_2\"").count(), 2);
+        let first_id = normalized.find("id=\"badz_koordynacja_2\"").expect("first");
+        let original_start = normalized[..first_id]
+            .rfind("<rule ")
+            .expect("original start");
+        let original_end =
+            normalized[original_start..].find("</rule>").expect("oend") + original_start;
+        assert!(
+            normalized[original_start..original_end].contains("min=\"0\""),
+            "the original optional-comma rule stays"
+        );
+        let variant_start =
+            normalized[original_end..].find("<rule ").expect("variant") + original_end;
+        let variant_end =
+            normalized[variant_start..].find("</rule>").expect("vend") + variant_start;
+        assert!(
+            !normalized[variant_start..variant_end].contains("min=\"0\""),
+            "the duplicate drops the optional token"
+        );
+    }
+
+    #[test]
+    fn normalize_disambiguation_xml_rewrites_maja_maic_match_filter() {
+        let xml = std::fs::read_to_string(
+            crate::pl::tagger::pl_resource_dir()
+                .expect("pl resource dir")
+                .join("disambiguation.xml"),
+        )
+        .expect("disambiguation.xml");
+        assert_eq!(
+            xml.matches(
+                "<disambig action=\"filter\"><match no=\"1\">mie\u{107}</match></disambig>"
+            )
+            .count(),
+            1
+        );
+        let normalized = normalize_disambiguation_xml(&xml);
+        assert_eq!(
+            normalized
+                .matches("<disambig action=\"filter\"><match no=\"1\">")
+                .count(),
+            0
+        );
+        assert!(normalized.contains("<wd lemma=\"mai\u{107}\" pos=\".*\"/>"));
+        assert!(normalized.contains("<wd lemma=\"maja\" pos=\".*\"/>"));
+    }
+
+    #[test]
+    fn pipeline_pins_badz_conj_and_maja_miec_like_java() {
+        let pipeline = crate::pl::test_support::PolishPipeline::shared();
+        let badz_text =
+            "Dojad\u{119} tam b\u{105}d\u{17a} rowerem b\u{105}d\u{17a} hulajnog\u{105}.";
+        let badz_sentence = pipeline.analyze_range(badz_text, 0, badz_text.len());
+        let badz_readings: Vec<Vec<String>> = badz_sentence
+            .non_whitespace_tokens()
+            .into_iter()
+            .filter(|t| t.token().token() == "b\u{105}d\u{17a}")
+            .map(|t| {
+                t.readings()
+                    .iter()
+                    .map(|r| r.pos_tags().join("|"))
+                    .collect()
+            })
+            .collect();
+        assert_eq!(
+            badz_readings,
+            vec![vec!["conj".to_string()], vec!["conj".to_string()]],
+            "badz_koordynacja_2's own example pins the first bądź to conj, which also keeps \\
+             TAM_JEST from stripping it"
+        );
+        let maja_text =
+            "Beztlenowe bakterie magnetotaktyczna maj\u{105} funkcj\u{119} wykrywania tlenu.";
+        let maja_sentence = pipeline.analyze_range(maja_text, 0, maja_text.len());
+        let maja_lemmas: Vec<String> = maja_sentence
+            .non_whitespace_tokens()
+            .into_iter()
+            .find(|t| t.token().token() == "maj\u{105}")
+            .expect("mają token")
+            .readings()
+            .iter()
+            .filter_map(|r| r.lemma().map(str::to_string))
+            .collect();
+        assert_eq!(
+            maja_lemmas,
+            vec!["mie\u{107}".to_string()],
+            "MAJA_MAIC's outputform pins mają to the mieć lemma only"
+        );
+    }
+
+    #[test]
+    fn grammar_rules_match_the_two_recovered_examples() {
+        let engine = crate::pl::example_suite::suite_engine();
+        let pipeline = crate::pl::test_support::PolishPipeline::shared();
+        for (rule_id, text) in [
+            (
+                "BRAK_PRZECINKA_ANI",
+                "Dojad\u{119} tam b\u{105}d\u{17a} rowerem b\u{105}d\u{17a} hulajnog\u{105}.",
+            ),
+            (
+                "ADJ_SUBST_ADJ_UNIFY",
+                "Beztlenowe bakterie magnetotaktyczna maj\u{105} funkcj\u{119} wykrywania tlenu.",
+            ),
+        ] {
+            let mut matches = 0usize;
+            for rule in crate::pl::trace::compiled_rules()
+                .rules
+                .iter()
+                .filter(|r| r.id == rule_id)
+            {
+                for (sentence, _) in pipeline.analyze_offset_text(text) {
+                    matches += engine.match_rule(rule, &sentence).len();
+                }
+            }
+            assert!(
+                matches > 0,
+                "{rule_id} must match its incorrect example after the disambiguation bridges"
+            );
+        }
     }
 
     #[test]
