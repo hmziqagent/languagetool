@@ -437,3 +437,19 @@ fn perifrasis_verbal_addchunk_rules_do_not_strip_interim_readings() {
         ido.readings()
     );
 }
+#[test]
+#[ignore]
+fn probe_mydia01_fp() {
+    run_rule(
+        "MYDIA01",
+        "Sin embargo, si capitulo, es en verdad por pura debilidad;",
+    );
+    dump("Sin embargo, si capitulo, es en verdad por pura debilidad;");
+}
+
+#[test]
+#[ignore]
+fn probe_diacritics02_no_match() {
+    run_rule("DIACRITICS_02", "Maquina de pelar patatas.");
+    dump_stages("Maquina de pelar patatas.");
+}

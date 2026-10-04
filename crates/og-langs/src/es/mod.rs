@@ -9,6 +9,7 @@ pub mod replace_verbs;
 #[cfg(test)]
 pub(crate) mod residue_analysis;
 pub mod simple_replace;
+pub mod speller;
 pub mod tagger;
 #[cfg(test)]
 pub(crate) mod trace;

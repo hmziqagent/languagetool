@@ -31,8 +31,7 @@ fn build_pattern_engine() -> PatternRuleEngine {
         &resource_dir,
         "es",
     );
-    let synth = og_rules::postponed_adjective::LangSynthesizer::for_language(&resource_dir, "es")
-        .map(Arc::new);
+    let synth = es_synth();
     let mut engine = PatternRuleEngine::new().with_spelling_support(Arc::new(support));
     if let Some(synth) = synth {
         engine = engine
@@ -40,6 +39,102 @@ fn build_pattern_engine() -> PatternRuleEngine {
             .with_suggestion_synthesizer(synth);
     }
     engine
+}
+
+fn es_synth() -> Option<Arc<og_rules::postponed_adjective::LangSynthesizer>> {
+    static CACHE: std::sync::OnceLock<Option<Arc<og_rules::postponed_adjective::LangSynthesizer>>> =
+        std::sync::OnceLock::new();
+    CACHE
+        .get_or_init(|| {
+            crate::es::es_resource_dir().and_then(|dir| {
+                og_rules::postponed_adjective::LangSynthesizer::for_language(&dir, "es")
+                    .map(Arc::new)
+            })
+        })
+        .clone()
+}
+
+fn reconstruct_matched_positions(
+    rule: &og_xml::compiler::CompiledRule,
+    tokens: &[&og_core::AnalyzedTokenReadings],
+    from: usize,
+    to: usize,
+) -> Option<Vec<usize>> {
+    let mut span: Vec<usize> = Vec::new();
+    for (i, t) in tokens.iter().enumerate() {
+        if t.token().end() > from && t.token().start() < to {
+            span.push(i);
+        }
+    }
+    let first_span = *span.first()?;
+    let mut last = *span.last()?;
+    let pattern = &rule.pattern;
+    let (marker_start, marker_end, total) = if pattern.has_structured_elements {
+        (
+            pattern.marker_elem_start,
+            pattern.marker_elem_end,
+            pattern.elements.len(),
+        )
+    } else {
+        (
+            pattern.marker_start,
+            pattern.marker_end,
+            pattern.tokens.len(),
+        )
+    };
+    let is_plain = |slice: &[og_xml::compiler::CompiledPatternToken]| {
+        slice
+            .iter()
+            .all(|t| t.skip == 0 && t.min.unwrap_or(1) == 1 && t.max.unwrap_or(1) == 1)
+    };
+    let pre_count = marker_start.unwrap_or(0);
+    if pre_count > 0 && !is_plain(pattern.tokens.get(..pre_count)?) {
+        return None;
+    }
+    let post_count = marker_end.map_or(0, |end| total - end);
+    if post_count > 0 && !is_plain(pattern.tokens.get(marker_end?..)?) {
+        return None;
+    }
+    let first = first_span.checked_sub(pre_count)?;
+    last += post_count;
+    if first > last || last >= tokens.len() {
+        return None;
+    }
+    Some((first..=last).collect())
+}
+
+fn apply_es_filters(
+    rule: &og_xml::compiler::CompiledRule,
+    tokens: &[&og_core::AnalyzedTokenReadings],
+    sentence_text: &str,
+    m: og_core::RuleMatch,
+) -> Option<og_core::RuleMatch> {
+    let Some(filter) = rule
+        .filter
+        .as_ref()
+        .filter(|f| crate::es::filters::is_es_filter(&f.class))
+    else {
+        return Some(m);
+    };
+    let from = m.offset();
+    let to = m.offset() + m.length();
+    let Some(matched_positions) = reconstruct_matched_positions(rule, tokens, from, to) else {
+        return Some(m);
+    };
+    let matched_texts: Vec<String> = matched_positions
+        .iter()
+        .map(|&i| tokens[i].token().token().to_string())
+        .collect();
+    let synthesizer = es_synth();
+    let call = crate::es::filters::EsFilterCall {
+        args: &filter.args,
+        matched_texts: &matched_texts,
+        matched_positions: &matched_positions,
+        tokens,
+        sentence_text,
+        synthesizer: synthesizer.as_deref(),
+    };
+    crate::es::filters::apply_es_filter(&filter.class, call, m)
 }
 
 fn extract_marker(text: &str) -> (String, Option<(usize, usize)>) {
@@ -106,7 +201,12 @@ fn spanish_grammar_examples_with_es_pipeline() {
             let mut matches = Vec::new();
             for aux in group.iter() {
                 for (sentence, sentence_start) in pipeline.analyze_offset_text(&clean_text) {
-                    for mut m in engine.match_rule(aux, &sentence) {
+                    let tokens: Vec<&og_core::AnalyzedTokenReadings> =
+                        sentence.non_whitespace_tokens();
+                    for m in engine.match_rule(aux, &sentence) {
+                        let Some(mut m) = apply_es_filters(aux, &tokens, sentence.text(), m) else {
+                            continue;
+                        };
                         m.set_offset_length(m.offset() + sentence_start, m.length());
                         matches.push(m);
                     }

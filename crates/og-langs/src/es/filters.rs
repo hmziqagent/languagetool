@@ -482,6 +482,318 @@ pub fn advanced_synthesizer_filter(
     Some(rm)
 }
 
+fn equal_without_diacritics(s: &str, t: &str) -> bool {
+    let a: Vec<char> = s.chars().map(crate::es::speller::nfd_base).collect();
+    let b: Vec<char> = t.chars().map(crate::es::speller::nfd_base).collect();
+    a.len() == b.len()
+        && a.iter()
+            .zip(b.iter())
+            .all(|(x, y)| x.to_lowercase().eq(y.to_lowercase()))
+}
+
+pub fn find_suggestions_filter(
+    args: &str,
+    matched_texts: &[String],
+    matched_positions: &[usize],
+    tokens: &[&AnalyzedTokenReadings],
+    sentence_text: &str,
+    mut rm: RuleMatch,
+) -> Option<RuleMatch> {
+    const MAX_SUGGESTIONS: usize = 10;
+    let pattern_tokens = pattern_token_range(tokens, matched_positions);
+    let parsed = resolve_args(args, matched_texts);
+    let (Some(word_from), Some(desired_postag)) =
+        (parsed.get("wordFrom"), parsed.get("desiredPostag"))
+    else {
+        return Some(rm);
+    };
+    let priority_postag = parsed.get("priorityPostag");
+    let remove_suggestions_regexp = parsed.get("removeSuggestionsRegexp");
+    let suppress_match = parsed
+        .get("suppressMatch")
+        .is_some_and(|v| v.eq_ignore_ascii_case("true"));
+    let diacritics_mode = parsed.get("Mode").is_some_and(|m| m == "diacritics");
+    let Some(tagger) = crate::es::tagger::SpanishTagger::shared() else {
+        return Some(rm);
+    };
+
+    let original_error_str = {
+        let from = rm.offset().min(sentence_text.len());
+        let to = (rm.offset() + rm.length()).min(sentence_text.len());
+        sentence_text.get(from..to).unwrap_or("").to_string()
+    };
+    let word = if word_from == "inmarker" {
+        original_error_str.replace(' ', "")
+    } else {
+        let index = marker_or_index(word_from, pattern_tokens, rm.offset())?;
+        pattern_tokens
+            .get(index)
+            .map(|atr| atr.token().token().to_string())?
+    };
+
+    let is_word_capitalized = is_capitalized_word(&word);
+    let is_word_all_upper = is_all_uppercase(&word);
+    let original_tagged = og_tagger::Tagger::tag(tagger, &[word.as_str()]);
+    if diacritics_mode
+        && original_tagged
+            .iter()
+            .any(|atr| readings_match_pos_tag_regex(atr, desired_postag))
+    {
+        return None;
+    }
+
+    let mut replacements: Vec<String> = Vec::new();
+    let mut used_priority_pos = 0usize;
+    for suggestion in crate::es::speller::find_similar_words(&word) {
+        if replacements.len() >= 2 * MAX_SUGGESTIONS {
+            break;
+        }
+        let suggestion = suggestion.as_str();
+        let analyzed = og_tagger::Tagger::tag(tagger, &[suggestion]);
+        for atr in &analyzed {
+            if suggestion != word && readings_match_pos_tag_regex(atr, desired_postag) {
+                let not_present = replacements
+                    .iter()
+                    .all(|r| r != suggestion && r != &suggestion.to_lowercase());
+                if not_present
+                    && (!diacritics_mode || equal_without_diacritics(suggestion, &word))
+                    && remove_suggestions_regexp
+                        .as_ref()
+                        .is_none_or(|pattern| !full_match(pattern, suggestion))
+                {
+                    let mut replacement = suggestion.to_string();
+                    if is_word_all_upper {
+                        replacement = replacement.to_uppercase();
+                    }
+                    if is_word_capitalized {
+                        replacement = uppercase_first_char(&replacement);
+                    }
+                    if priority_postag.is_some_and(|p| readings_match_pos_tag_regex(atr, p)) {
+                        replacements.insert(used_priority_pos, replacement);
+                        used_priority_pos += 1;
+                    } else {
+                        replacements.push(replacement);
+                    }
+                }
+            }
+        }
+    }
+
+    let match_contains_some_finished_suggestion = rm
+        .replacements()
+        .iter()
+        .any(|k| !k.value().to_lowercase().contains("{suggestion}"));
+    if diacritics_mode && replacements.is_empty() && !match_contains_some_finished_suggestion {
+        return None;
+    }
+    if replacements.is_empty() && suppress_match && !match_contains_some_finished_suggestion {
+        return None;
+    }
+
+    let mut definitive: Vec<String> = Vec::new();
+    let mut replacements_used = false;
+    for s in rm.replacements().iter().map(|r| r.value().to_string()) {
+        if s.contains("{suggestion}") || s.contains("{Suggestion}") || s.contains("{SUGGESTION}") {
+            replacements_used = true;
+            for s2 in &replacements {
+                if definitive.len() >= MAX_SUGGESTIONS {
+                    break;
+                }
+                if s.contains("{suggestion}") {
+                    let candidate = s.replace("{suggestion}", s2);
+                    if !definitive.contains(&candidate) {
+                        definitive.push(candidate);
+                    }
+                } else if s.contains("{Suggestion}") {
+                    let candidate = s.replace("{Suggestion}", &uppercase_first_char(s2));
+                    if !definitive.contains(&candidate) {
+                        definitive.push(candidate);
+                    }
+                } else {
+                    let candidate = s.replace("{SUGGESTION}", &s2.to_uppercase());
+                    if !definitive.contains(&candidate) {
+                        definitive.push(candidate);
+                    }
+                }
+            }
+        } else if !definitive.contains(&s) {
+            definitive.push(s);
+        }
+    }
+    if !replacements_used {
+        for replacement in &replacements {
+            if definitive.len() >= MAX_SUGGESTIONS {
+                break;
+            }
+            if !definitive.contains(replacement) {
+                definitive.push(replacement.clone());
+            }
+        }
+    }
+    if let Some(pos) = definitive.iter().position(|d| d == &original_error_str) {
+        definitive.remove(pos);
+    }
+    let distinct: Vec<String> = {
+        let mut seen = std::collections::HashSet::new();
+        definitive
+            .into_iter()
+            .filter(|d| seen.insert(d.clone()))
+            .collect()
+    };
+    rm.set_replacements(
+        distinct
+            .into_iter()
+            .map(SuggestedReplacement::new)
+            .collect(),
+    );
+    Some(rm)
+}
+
+pub fn spanish_suppress_misspelled_filter(
+    mut rm: RuleMatch,
+    args: &str,
+    matched_texts: &[String],
+) -> Option<RuleMatch> {
+    let parsed = resolve_args(args, matched_texts);
+    let suppress_match = parsed
+        .get("suppressMatch")
+        .is_none_or(|v| !v.eq_ignore_ascii_case("false"));
+    let suppress_postag = parsed.get("SuppressPostag").cloned();
+    let filter_postag = parsed.get("FilterPostag").cloned();
+    let tagged = if suppress_postag.is_some() || filter_postag.is_some() {
+        crate::es::tagger::SpanishTagger::shared().map(|tagger| {
+            let refs: Vec<&str> = rm.replacements().iter().map(|r| r.value()).collect();
+            og_tagger::Tagger::tag(tagger, &refs)
+        })
+    } else {
+        None
+    };
+    let mut kept: Vec<SuggestedReplacement> = Vec::new();
+    for (i, repl) in rm.replacements().iter().enumerate() {
+        let value = repl.value();
+        if crate::es::speller::replacement_is_misspelled(value) {
+            continue;
+        }
+        if let Some(sp) = suppress_postag.as_deref()
+            && tagged
+                .as_ref()
+                .and_then(|t| t.get(i))
+                .is_some_and(|atr| readings_match_pos_tag_regex(atr, sp))
+        {
+            continue;
+        }
+        if let Some(fp) = filter_postag.as_deref()
+            && tagged
+                .as_ref()
+                .and_then(|t| t.get(i))
+                .is_some_and(|atr| !readings_match_pos_tag_regex(atr, fp))
+        {
+            continue;
+        }
+        kept.push(repl.clone());
+    }
+    if kept.is_empty() && suppress_match {
+        return None;
+    }
+    rm.set_replacements(kept);
+    Some(rm)
+}
+
+pub fn spanish_number_in_word_filter(
+    args: &str,
+    matched_texts: &[String],
+    mut rm: RuleMatch,
+) -> Option<RuleMatch> {
+    let parsed = resolve_args(args, matched_texts);
+    let Some(word) = parsed.get("word") else {
+        return Some(rm);
+    };
+    let word_replacing_zero_o = word.replace('0', "o");
+    let word_without_number: String = word.chars().filter(|c| !c.is_ascii_digit()).collect();
+    let mut replacements: Vec<String> = Vec::new();
+    if !crate::es::speller::is_misspelled(&word_replacing_zero_o) && word != &word_replacing_zero_o
+    {
+        replacements.push(word_replacing_zero_o);
+    }
+    if !crate::es::speller::is_misspelled(&word_without_number) {
+        replacements.push(word_without_number.clone());
+    }
+    if replacements.is_empty() {
+        replacements = crate::es::speller::find_similar_words(&word_without_number);
+    }
+    if replacements.is_empty() {
+        return None;
+    }
+    rm.set_replacements(
+        replacements
+            .into_iter()
+            .map(SuggestedReplacement::new)
+            .collect(),
+    );
+    Some(rm)
+}
+
+pub fn is_es_filter(class: &str) -> bool {
+    matches!(
+        class,
+        "org.languagetool.rules.es.ConfusionCheckFilter"
+            | "org.languagetool.rules.AddCommasFilter"
+            | "org.languagetool.rules.AdaptSuggestionsFilter"
+            | "org.languagetool.rules.es.AdvancedSynthesizerFilter"
+            | "org.languagetool.rules.es.FindSuggestionsFilter"
+            | "org.languagetool.rules.es.SpanishSuppressMisspelledSuggestionsFilter"
+            | "org.languagetool.rules.es.SpanishNumberInWordFilter"
+    )
+}
+
+pub struct EsFilterCall<'a> {
+    pub args: &'a str,
+    pub matched_texts: &'a [String],
+    pub matched_positions: &'a [usize],
+    pub tokens: &'a [&'a AnalyzedTokenReadings],
+    pub sentence_text: &'a str,
+    pub synthesizer: Option<&'a og_rules::postponed_adjective::LangSynthesizer>,
+}
+
+pub fn apply_es_filter(class: &str, call: EsFilterCall<'_>, rm: RuleMatch) -> Option<RuleMatch> {
+    match class {
+        "org.languagetool.rules.es.ConfusionCheckFilter" => confusion_check_filter(
+            call.args,
+            call.matched_texts,
+            call.matched_positions,
+            call.tokens,
+            rm,
+        ),
+        "org.languagetool.rules.AddCommasFilter" => {
+            add_commas_filter(call.tokens, 0, call.sentence_text, rm, call.args)
+        }
+        "org.languagetool.rules.AdaptSuggestionsFilter" => adapt_suggestions_filter(rm),
+        "org.languagetool.rules.es.AdvancedSynthesizerFilter" => advanced_synthesizer_filter(
+            call.synthesizer,
+            call.args,
+            call.matched_texts,
+            call.matched_positions,
+            call.tokens,
+            rm,
+        ),
+        "org.languagetool.rules.es.FindSuggestionsFilter" => find_suggestions_filter(
+            call.args,
+            call.matched_texts,
+            call.matched_positions,
+            call.tokens,
+            call.sentence_text,
+            rm,
+        ),
+        "org.languagetool.rules.es.SpanishSuppressMisspelledSuggestionsFilter" => {
+            spanish_suppress_misspelled_filter(rm, call.args, call.matched_texts)
+        }
+        "org.languagetool.rules.es.SpanishNumberInWordFilter" => {
+            spanish_number_in_word_filter(call.args, call.matched_texts, rm)
+        }
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -831,5 +1143,217 @@ mod tests {
         )
         .expect("match kept");
         assert_eq!(out.replacements()[0].value(), "{suggestion}");
+    }
+
+    fn bare_rm(message: &str, offset: usize, length: usize) -> RuleMatch {
+        RuleMatch::new(
+            message,
+            offset,
+            length,
+            og_core::RuleMatchRule::new("X", "d"),
+            og_core::RuleMatchContext::new("", 0, 0),
+        )
+    }
+
+    #[test]
+    fn find_suggestions_pins_the_inmarker_apostrophe_example() {
+        let pipeline = SpanishPipeline::shared();
+        let engine = PatternRuleEngine::new();
+        let rule_set = compiled_rules();
+        let text = "Est`n aquí.";
+        let sentence = &pipeline.analyze_text(text)[0];
+        let tokens: Vec<&og_core::AnalyzedTokenReadings> = sentence.non_whitespace_tokens();
+        let rule = rule_set
+            .rules
+            .iter()
+            .filter(|r| r.id == "APOSTROFO_ACENTO")
+            .find(|r| {
+                r.filter
+                    .as_ref()
+                    .is_some_and(|f| f.args.contains("wordFrom:inmarker"))
+            })
+            .expect("inmarker subrule");
+        let raw = engine
+            .match_rule(rule, sentence)
+            .into_iter()
+            .next()
+            .expect("raw match on Est`n");
+        assert!(
+            raw.replacements().is_empty(),
+            "the rule has no <suggestion> element"
+        );
+        let matched_positions = vec![1usize, 2, 3];
+        let matched_texts: Vec<String> = matched_positions
+            .iter()
+            .map(|&i| tokens[i].token().token().to_string())
+            .collect();
+        let out = find_suggestions_filter(
+            "wordFrom:inmarker desiredPostag:.* suppressMatch:true",
+            &matched_texts,
+            &matched_positions,
+            &tokens,
+            sentence.text(),
+            raw,
+        )
+        .expect("match kept with suggestions");
+        let values: Vec<String> = out
+            .replacements()
+            .iter()
+            .map(|r| r.value().to_string())
+            .collect();
+        assert!(
+            values.starts_with(&["Están".to_string(), "Estén".to_string()]),
+            "correction pair must lead the suggestions: {values:?}"
+        );
+    }
+
+    #[test]
+    fn find_suggestions_suppresses_when_no_dictionary_candidate() {
+        let start = sent_start();
+        let word = atr_at("O’neill", 0, 7, &[]);
+        let tokens: Vec<&AnalyzedTokenReadings> = vec![&start, &word];
+        let rm = bare_rm("Posible error de ortografía.", 1, 6);
+        let out = find_suggestions_filter(
+            "wordFrom:inmarker desiredPostag:.* suppressMatch:true",
+            &["O’neill".to_string()],
+            &[1],
+            &tokens,
+            "O’neill",
+            rm,
+        );
+        assert!(out.is_none(), "no candidates in the dict means no match");
+    }
+
+    #[test]
+    fn suppress_misspelled_drops_joined_and_keeps_known_suggestions() {
+        let rm = base_rm("m", 0, 5, "imporntate");
+        assert!(spanish_suppress_misspelled_filter(rm, "suppressMatch:true", &[]).is_none());
+        let rm = base_rm("m", 0, 5, "importante");
+        let kept = spanish_suppress_misspelled_filter(rm, "suppressMatch:true", &[])
+            .expect("known suggestion kept");
+        assert_eq!(kept.replacements()[0].value(), "importante");
+        let rm = base_rm("m", 0, 5, "x").with_replacements(vec![
+            SuggestedReplacement::new("imporntate"),
+            SuggestedReplacement::new("importante"),
+        ]);
+        let kept = spanish_suppress_misspelled_filter(rm, "suppressMatch:true", &[])
+            .expect("match kept while a suggestion survives");
+        assert_eq!(kept.replacements().len(), 1);
+        assert_eq!(kept.replacements()[0].value(), "importante");
+    }
+
+    #[test]
+    fn number_in_word_pins_the_buen0s_example() {
+        let pipeline = SpanishPipeline::shared();
+        let engine = PatternRuleEngine::new();
+        let rule_set = compiled_rules();
+        let text = "¡Buen0s días!";
+        let sentence = &pipeline.analyze_text(text)[0];
+        let rule = rule_set
+            .rules
+            .iter()
+            .find(|r| r.id == "NUMBERS_IN_WORDS")
+            .expect("NUMBERS_IN_WORDS rule");
+        let raw = engine
+            .match_rule(rule, sentence)
+            .into_iter()
+            .next()
+            .expect("raw match on Buen0s");
+        let out = spanish_number_in_word_filter("word:\\1", &["Buen0s".to_string()], raw)
+            .expect("match kept");
+        let values: Vec<String> = out
+            .replacements()
+            .iter()
+            .map(|r| r.value().to_string())
+            .collect();
+        assert_eq!(values, vec!["Buenos".to_string()]);
+    }
+
+    #[test]
+    fn dispatch_recognizes_exactly_the_seven_es_filter_classes() {
+        for class in [
+            "org.languagetool.rules.es.ConfusionCheckFilter",
+            "org.languagetool.rules.AddCommasFilter",
+            "org.languagetool.rules.AdaptSuggestionsFilter",
+            "org.languagetool.rules.es.AdvancedSynthesizerFilter",
+            "org.languagetool.rules.es.FindSuggestionsFilter",
+            "org.languagetool.rules.es.SpanishSuppressMisspelledSuggestionsFilter",
+            "org.languagetool.rules.es.SpanishNumberInWordFilter",
+        ] {
+            assert!(is_es_filter(class), "{class} must route");
+        }
+        assert!(!is_es_filter(
+            "org.languagetool.rules.pt.ConfusionCheckFilter"
+        ));
+        assert!(!is_es_filter(
+            "org.languagetool.rules.fr.FindSuggestionsFilter"
+        ));
+        assert!(!is_es_filter(
+            "org.languagetool.rules.es.PostponedAdjectiveConcordanceFilter"
+        ));
+        assert!(!is_es_filter(""));
+    }
+
+    #[test]
+    fn dispatch_routes_the_three_new_filters() {
+        let start = sent_start();
+        let word = atr_at("Buen0s", 0, 6, &[("Buen0s", "UNKNOWN")]);
+        let tokens: Vec<&AnalyzedTokenReadings> = vec![&start, &word];
+        let rm = base_rm("Posible error ortográfico.", 1, 5, "x");
+        let out = apply_es_filter(
+            "org.languagetool.rules.es.SpanishNumberInWordFilter",
+            EsFilterCall {
+                args: "word:\\1",
+                matched_texts: &["Buen0s".to_string()],
+                matched_positions: &[1],
+                tokens: &tokens,
+                sentence_text: "Buen0s",
+                synthesizer: None,
+            },
+            rm,
+        )
+        .expect("match kept");
+        assert_eq!(out.replacements()[0].value(), "Buenos");
+
+        let rm = base_rm("m", 0, 5, "imporntate");
+        let out = apply_es_filter(
+            "org.languagetool.rules.es.SpanishSuppressMisspelledSuggestionsFilter",
+            EsFilterCall {
+                args: "suppressMatch:true",
+                matched_texts: &[],
+                matched_positions: &[],
+                tokens: &tokens,
+                sentence_text: "imporntate",
+                synthesizer: None,
+            },
+            rm,
+        );
+        assert!(out.is_none());
+
+        let word = atr_at("Est`n", 0, 5, &[]);
+        let tokens: Vec<&AnalyzedTokenReadings> = vec![&start, &word];
+        let rm = bare_rm("Posible error de ortografía.", 0, 5);
+        let out = apply_es_filter(
+            "org.languagetool.rules.es.FindSuggestionsFilter",
+            EsFilterCall {
+                args: "wordFrom:inmarker desiredPostag:.* suppressMatch:true",
+                matched_texts: &["Est`n".to_string()],
+                matched_positions: &[1],
+                tokens: &tokens,
+                sentence_text: "Est`n",
+                synthesizer: None,
+            },
+            rm,
+        )
+        .expect("match kept");
+        let values: Vec<String> = out
+            .replacements()
+            .iter()
+            .map(|r| r.value().to_string())
+            .collect();
+        assert!(
+            values.starts_with(&["Están".to_string(), "Estén".to_string()]),
+            "correction pair must lead the suggestions: {values:?}"
+        );
     }
 }
