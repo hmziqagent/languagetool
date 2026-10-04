@@ -536,10 +536,15 @@ mod tests {
             let Some(filter) = rule.filter.as_ref().filter(|f| is_pt_filter(&f.class)) else {
                 continue;
             };
+            let bare = {
+                let mut b = rule.clone();
+                b.filter = None;
+                b
+            };
             for (sentence, sentence_start) in pipeline.analyze_offset_text(text) {
+                raw += engine.match_rule(&bare, &sentence).len();
                 let tokens: Vec<&AnalyzedTokenReadings> = sentence.non_whitespace_tokens();
                 for m in engine.match_rule(rule, &sentence) {
-                    raw += 1;
                     let Some(m) = apply_suite_filter(
                         rule,
                         filter,

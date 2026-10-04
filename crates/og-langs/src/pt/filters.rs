@@ -66,6 +66,12 @@ mod tests {
             .unwrap_or_else(|| panic!("rule {id} not compiled"))
     }
 
+    fn bare(rule: &CompiledRule) -> CompiledRule {
+        let mut b = rule.clone();
+        b.filter = None;
+        b
+    }
+
     #[test]
     fn confusion_pairs_data_parses_clean_and_accumulates() {
         for (brazilian, variant_file) in [(false, "pt-PT"), (true, "pt-BR")] {
@@ -297,7 +303,7 @@ mod tests {
         for (id, text, expected) in cases {
             let rule = first_rule(id);
             let sentence = &pipeline.analyze_text(text)[0];
-            let raw = engine.match_rule(rule, sentence);
+            let raw = engine.match_rule(&bare(rule), sentence);
             let regexp = rule.regexp.as_ref().expect("regexp rule");
             let capture_sets: Vec<Vec<String>> = if let Some(re) = regexp.regex.as_ref() {
                 re.captures_iter(sentence.text())
@@ -403,7 +409,7 @@ mod tests {
         let sentence = &pipeline.analyze_text(text)[0];
         let tokens: Vec<&og_core::AnalyzedTokenReadings> = sentence.non_whitespace_tokens();
         let raw = engine
-            .match_rule(rule, sentence)
+            .match_rule(&bare(rule), sentence)
             .into_iter()
             .next()
             .expect("raw pattern match on 'foi gastado'");
@@ -453,7 +459,7 @@ mod tests {
         ] {
             let sentence = &pipeline.analyze_text(text)[0];
             let raw = engine
-                .match_rule(rule, sentence)
+                .match_rule(&bare(rule), sentence)
                 .into_iter()
                 .next()
                 .unwrap_or_else(|| panic!("raw match on {text}"));
@@ -766,7 +772,7 @@ mod tests {
         let text = "Um erro nos tramites.";
         let sentence = &pipeline.analyze_text(text)[0];
         let raw = engine
-            .match_rule(rule, sentence)
+            .match_rule(&bare(rule), sentence)
             .into_iter()
             .next()
             .expect("raw pattern match on 'nos tramites'");
