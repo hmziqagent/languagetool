@@ -453,3 +453,40 @@ fn probe_diacritics02_no_match() {
     run_rule("DIACRITICS_02", "Maquina de pelar patatas.");
     dump_stages("Maquina de pelar patatas.");
 }
+
+#[test]
+#[ignore]
+fn probe_el_tilde_fp() {
+    run_rule(
+        "EL_TILDE",
+        "ni siquiera el anime era lo suficientemente expresivo",
+    );
+    dump("ni siquiera el anime era lo suficientemente expresivo");
+}
+
+#[test]
+#[ignore]
+fn probe_que_tilde2_fp() {
+    run_rule(
+        "QUE_TILDE2",
+        "con la salvedad de que dicha comunicación de datos este amparada en una obligación legal",
+    );
+    dump(
+        "con la salvedad de que dicha comunicación de datos este amparada en una obligación legal",
+    );
+}
+
+#[test]
+#[ignore]
+fn probe_no_separado_fp() {
+    run_rule("NO_SEPARADO", "en la tonalidad de re bemol menor.");
+    run_rule("NO_SEPARADO", "Se re activa.");
+    dump("en la tonalidad de re bemol menor.");
+}
+
+#[test]
+#[ignore]
+fn probe_hace_un_mes_atras_no_match() {
+    run_rule("HACE_UN_MES_ATRAS", "hace dos años atrás");
+    dump("hace dos años atrás");
+}

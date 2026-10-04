@@ -93,3 +93,73 @@ fn compare_failing_words_across_spanish_dicts() {
         );
     }
 }
+
+#[test]
+#[ignore]
+fn probe_suppress_misspelled_suggestion_words() {
+    let resource_dir = crate::es::es_resource_dir().expect("es resource dir");
+    let dict = MorfologikDictionary::load(
+        &resource_dir.join("spanish.dict"),
+        &resource_dir.join("spanish.info"),
+    )
+    .expect("spanish.dict");
+    for w in [
+        "nanotecnología",
+        "revictimización",
+        "cofundador",
+        "intersectorial",
+        "sacaleches",
+        "betalactámicos",
+        "antirruso",
+        "antirrusas",
+        "cazarecompensas",
+        "postrevolucionario",
+        "cibercomercio",
+        "prodemócrata",
+        "prerebajas",
+        "macroredada",
+        "neurobiología",
+        "astroturismo",
+        "excolonias",
+        "hidroalcohólico",
+        "coexpositores",
+        "mayahablantes",
+        "cubrebocas",
+        "microrracismo",
+        "pseudorreferéndum",
+        "seudorreferéndum",
+        "nacionalpopulismo",
+        "nacionalpopulistas",
+        "reactiva",
+        "autocuración",
+        "rebemol",
+        "conhablantes",
+    ] {
+        eprintln!("{w}: {}", !dict.lookup(w).is_empty());
+    }
+}
+
+#[test]
+#[ignore]
+fn probe_style_failure_words() {
+    let resource_dir = crate::es::es_resource_dir().expect("es resource dir");
+    let dict = MorfologikDictionary::load(
+        &resource_dir.join("spanish.dict"),
+        &resource_dir.join("spanish.info"),
+    )
+    .expect("spanish.dict");
+    for w in [
+        "complejizó",
+        "complejizar",
+        "Cantaba",
+        "desafinó",
+        "cantó",
+        "casas",
+        "casa",
+        "rojas",
+        "árbol",
+        "rojo",
+    ] {
+        eprintln!("{w}: {}", !dict.lookup(w).is_empty());
+    }
+}

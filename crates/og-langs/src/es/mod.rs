@@ -10,6 +10,8 @@ pub mod replace_verbs;
 pub(crate) mod residue_analysis;
 pub mod simple_replace;
 pub mod speller;
+#[cfg(test)]
+pub(crate) mod suppress;
 pub mod tagger;
 #[cfg(test)]
 pub(crate) mod trace;

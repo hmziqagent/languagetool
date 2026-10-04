@@ -136,9 +136,18 @@ fn compare_failing_word_readings_across_dicts() {
 #[test]
 #[ignore]
 fn classify_failures_by_direct_dict_lookup() {
+    classify_artifact_by_direct_dict_lookup("/tmp/test_failures_es_module.txt");
+}
+
+#[test]
+#[ignore]
+fn classify_style_failures_by_direct_dict_lookup() {
+    classify_artifact_by_direct_dict_lookup("/tmp/test_failures_es_style_module.txt");
+}
+
+fn classify_artifact_by_direct_dict_lookup(path: &str) {
     use og_tagger::morfologik::MorfologikDictionary;
-    let artifact =
-        std::fs::read_to_string("/tmp/test_failures_es_module.txt").expect("failure artifact");
+    let artifact = std::fs::read_to_string(path).expect("failure artifact");
     let dir = crate::es::es_resource_dir().expect("es dir");
     let dict = MorfologikDictionary::load(&dir.join("spanish.dict"), &dir.join("spanish.info"))
         .expect("dict");

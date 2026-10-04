@@ -11,6 +11,12 @@ fn grammar_path() -> PathBuf {
     )
 }
 
+fn style_path() -> PathBuf {
+    PathBuf::from(
+        "/home/agent/opengrammar-rs/languagetool/languagetool-language-modules/es/src/main/resources/org/languagetool/rules/es/style.xml",
+    )
+}
+
 fn build_pattern_engine() -> PatternRuleEngine {
     let resource_dir = crate::es::es_resource_dir().expect("es resource dir");
     let core_resource_dir = crate::engine::find_lt_core_resource_dir().expect("core resource dir");
@@ -158,11 +164,31 @@ enum Outcome {
 #[test]
 #[ignore]
 fn spanish_grammar_examples_with_es_pipeline() {
-    let xml = std::fs::read_to_string(grammar_path()).expect("grammar.xml");
+    evaluate_examples_file(
+        &grammar_path(),
+        "grammar",
+        "/tmp/test_failures_es_module.txt",
+    );
+}
+
+#[test]
+#[ignore]
+fn spanish_style_examples_with_es_pipeline() {
+    evaluate_examples_file(
+        &style_path(),
+        "style",
+        "/tmp/test_failures_es_style_module.txt",
+    );
+}
+
+fn evaluate_examples_file(path: &std::path::Path, label: &str, artifact: &str) {
+    let xml = std::fs::read_to_string(path).expect("rules file");
     let raw_example_count = xml.matches("<example").count();
+    let stripped = strip_xml_comments(&xml);
+    let commented_example_count = raw_example_count - stripped.matches("<example").count();
     let rule_set = XmlCompiler::new()
-        .compile_file_with_base(&xml, grammar_path().parent())
-        .expect("compile grammar.xml");
+        .compile_file_with_base(&xml, path.parent())
+        .expect("compile rules file");
 
     let mut group_index: HashMap<(String, Option<String>), usize> = HashMap::new();
     let mut groups: Vec<Vec<&og_xml::compiler::CompiledRule>> = Vec::new();
@@ -269,7 +295,7 @@ fn spanish_grammar_examples_with_es_pipeline() {
     }
 
     eprintln!(
-        "es module pipeline: {}/{} passed ({:.1}%) - no_match: {}, fp: {}, marker: {} [{:.1}s]",
+        "es module {label} pipeline: {}/{} passed ({:.1}%) - no_match: {}, fp: {}, marker: {} [{:.1}s]",
         passed,
         passed + failed,
         100.0 * passed as f64 / (passed + failed).max(1) as f64,
@@ -284,10 +310,26 @@ fn spanish_grammar_examples_with_es_pipeline() {
     let all_compiled_examples: usize = rule_set.rules.iter().map(|r| r.examples.len()).sum();
     let non_first_examples = all_compiled_examples - compiled_example_count;
     eprintln!(
-        "accepted-excluded residue: {raw_example_count} <example> tags in grammar.xml (112 inside XML comments), {all_compiled_examples} on compiled rules, {non_first_examples} on non-first rules of duplicate (id,sub_id) groups, {compiled_example_count} evaluated",
+        "accepted-excluded residue: {raw_example_count} <example> tags in {label} rules ({commented_example_count} inside XML comments), {all_compiled_examples} on compiled rules, {non_first_examples} on non-first rules of duplicate (id,sub_id) groups, {compiled_example_count} evaluated",
     );
-    let _ = std::fs::write(
-        "/tmp/test_failures_es_module.txt",
-        fail_lines.join("\n") + "\n",
-    );
+    let _ = std::fs::write(artifact, fail_lines.join("\n") + "\n");
+}
+
+fn strip_xml_comments(xml: &str) -> String {
+    let mut out = String::with_capacity(xml.len());
+    let mut rest = xml;
+    while let Some(start) = rest.find("<!--") {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + 4..];
+        match after.find("-->") {
+            Some(end) => {
+                rest = &after[end + 3..];
+            }
+            None => {
+                rest = "";
+            }
+        }
+    }
+    out.push_str(rest);
+    out
 }
