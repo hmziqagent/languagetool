@@ -1,3 +1,8 @@
+pub mod word_tokenizer;
+
+#[cfg(test)]
+mod example_suite;
+
 pub fn belarusian_simple_replace_rule() -> crate::pt::simple_replace2::SimpleReplace2Rule {
     let mut rule = crate::pt::simple_replace2::SimpleReplace2Rule::new(
         "BE_SIMPLE_REPLACE",
