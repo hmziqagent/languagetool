@@ -163,11 +163,7 @@ fn rule_groups(rule_set: &CompiledRuleSet) -> Vec<Vec<&CompiledRule>> {
 }
 
 fn rule_needs_tags(rule: &CompiledRule) -> bool {
-    rule.pattern
-        .tokens
-        .iter()
-        .any(|t| t.postag.is_some() || t.compiled_postag_regexp.is_some())
-        || !rule.pattern.unify_groups.is_empty()
+    super::trace::rule_needs_readings(rule)
 }
 
 #[test]
@@ -282,7 +278,7 @@ fn catalan_grammar_examples_with_ca_pipeline() {
         started.elapsed().as_secs_f64(),
     );
     eprintln!(
-        "residue attribution: {} failures on tag-dependent rules (need the missing ca-ES.dict), {} on surface-only rules",
+        "residue attribution: {} failures on dict-dependent rules (postag or inflected tokens in the pattern - need the missing ca-ES.dict), {} on surface-only rules",
         tag_starved, engine_side
     );
     let mut top_rules: Vec<(String, usize)> = fail_by_rule.into_iter().collect();

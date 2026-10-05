@@ -14,6 +14,9 @@ pub mod word_tokenizer;
 #[cfg(test)]
 mod example_suite;
 
+#[cfg(test)]
+pub(crate) mod trace;
+
 pub use tagger::CatalanTagger;
 
 use og_core::AnalyzedSentence;
