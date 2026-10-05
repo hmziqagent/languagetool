@@ -627,6 +627,87 @@ mod tests {
     }
 
     #[test]
+    fn zdania_zlozone_residue_pin_scope_next_window_overvetoes_java_landing_candidate() {
+        let pipeline = PolishPipeline::shared();
+        let engine = trace_engine();
+        let text = "Romuald odpowiedzia\u{142} z wa\u{17c}n\u{105} i tajemnicz\u{105} min\u{105} zwielokrotniaj\u{105}c g\u{142}osk\u{119}.";
+        let mut matches = 0usize;
+        for rule in compiled_rules()
+            .rules
+            .iter()
+            .filter(|r| r.id == "ZDANIA_ZLOZONE")
+        {
+            for (sentence, _) in pipeline.analyze_offset_text(text) {
+                matches += engine.match_rule(rule, &sentence).len();
+            }
+        }
+        assert_eq!(
+            matches, 0,
+            "the ZDANIA_ZLOZONE no_match family (12 of the 16 residues): on this sentence the \
+             engine trace stops exploring element 1 candidates after 'wa\u{17c}n\u{105}' because \
+             every landing candidate whose (token_idx+1)..=after window (pattern_rule.rs:\
+             1380-1388, :1430-1437) contains 'i'[comp:comma] is vetoed by element 0's scope=next \
+             exception SENT_END|<ELLIPSIS>|interp:comma|comp:comma, so 'zwielokrotniaj\u{105}c' \
+             [pcon:imperf] is never reached; Java matches this example via \
+             AbstractPatternRulePerformer.java:169-193, whose prevMatched logic (reset per \
+             element at :106, accumulated at :181-191, sticky across the candidate loop) is the \
+             reference the shared engine must reproduce - this pin flips to >0 when it does"
+        );
+    }
+
+    #[test]
+    fn zdanie_podrzepne_residue_pin_overfires_where_java_sticky_veto_rejects() {
+        let pipeline = PolishPipeline::shared();
+        let engine = trace_engine();
+        let text = "Nic, nawet d\u{119}bu, po kt\u{f3}rego stuletniej korze ze\u{15b}lizgiwa\u{142}y si\u{119} wst\u{119}gi piorun\u{f3}w.";
+        let mut matches = 0usize;
+        for rule in compiled_rules()
+            .rules
+            .iter()
+            .filter(|r| r.id == "ZDANIE_PODRZEDNE_Z_KTORY_LUB_JAKI")
+        {
+            for (sentence, _) in pipeline.analyze_offset_text(text) {
+                matches += engine.match_rule(rule, &sentence).len();
+            }
+        }
+        assert_eq!(
+            matches, 1,
+            "the ZDANIE_PODRZEDNE_Z_KTORY_LUB_JAKI fp pair (2 of the 16 residues): our engine \
+             matches this correct example where Java rejects it, so some Java-side veto is \
+             missing - the same AbstractPatternRulePerformer.java:106,169-193 prevMatched \
+             machinery (per-element reset, per-reading accumulation, stickiness across the \
+             candidate loop) is the reference - this pin flips to 0 when the shared engine \
+             reproduces it"
+        );
+    }
+
+    #[test]
+    fn wladce_residue_pin_still_fires_the_false_positive() {
+        let pipeline = PolishPipeline::shared();
+        let engine = trace_engine();
+        let text = "Surowce zawieraj\u{105}ce te alkaloidy";
+        let mut matches = 0usize;
+        for rule in compiled_rules().rules.iter().filter(|r| r.id == "WLADCE") {
+            for (sentence, _) in pipeline.analyze_offset_text(text) {
+                matches += engine.match_rule(rule, &sentence).len();
+            }
+        }
+        assert_eq!(
+            matches, 1,
+            "the WLADCE fp (1 of the 16 residues): the exact-case Surowiec/depr:pl:nom:m2 \
+             reading survives the whole module pipeline and no normalized disambiguation.xml \
+             rule touches it even applied individually (probe_round18_wladce_individual_rule_\
+             effects), so the Java-side drop must live in an og-tagger matcher path our engine \
+             does not reproduce - the count-guard family is a proven divergence in both \
+             directions (DisambiguationPatternRuleReplacer.java:171-173 no-ops unify_adj_subst \
+             sub-rule 4, whose 2 unified elements face 3 matched elements, while our engine \
+             applies it and drops zawieraj\u{105}ce's pact:sg reading), and the 90 scope=next \
+             exceptions plus filterall matched-readings semantics are the other unverified \
+             families - this pin flips to 0 when the shared engine reproduces the Java drop"
+        );
+    }
+
+    #[test]
     fn quote_class_survives_java_ci_compilation() {
         let plain = regex::RegexBuilder::new("^(?:[\u{2018}\u{201e}])$")
             .case_insensitive(true)
@@ -1159,6 +1240,79 @@ mod tests {
             }
         }
         eprintln!("   final Surowce: {}", surowce_reading(&sentence));
+    }
+
+    #[ignore]
+    #[test]
+    fn probe_round18_unify_adj_subst_subrules() {
+        let resource_dir = crate::pl::tagger::pl_resource_dir().expect("pl resource dir");
+        let xml = std::fs::read_to_string(resource_dir.join("disambiguation.xml")).unwrap();
+        let normalized = crate::pl::normalize_disambiguation_xml(&xml);
+        let parsed = og_tagger::XmlDisambiguator::from_xml_with_english(&normalized, None)
+            .expect("parse disambiguation.xml");
+        for (idx, id) in parsed.rule_ids().iter().enumerate() {
+            if *id != "unify_adj_subst" {
+                continue;
+            }
+            eprintln!("== idx {idx} ==\n{}", parsed.rule_debug(idx));
+        }
+    }
+
+    #[ignore]
+    #[test]
+    fn probe_round18_wladce_control_examples() {
+        for text in [
+            "Tylko rodzice potrafi\u{105} ich odr\u{f3}\u{17c}ni\u{107}.",
+            "Wo\u{17a}nice odebrali ma\u{142}ym konikom worki z obrokiem.",
+            "Uwielbiam tego gruzi\u{144}skiego tw\u{f3}rce ludowego.",
+        ] {
+            probe("WLADCE", text);
+        }
+    }
+
+    #[ignore]
+    #[test]
+    fn probe_round18_wladce_individual_rule_effects() {
+        let resource_dir = crate::pl::tagger::pl_resource_dir().expect("pl resource dir");
+        let xml = std::fs::read_to_string(resource_dir.join("disambiguation.xml")).unwrap();
+        let normalized = crate::pl::normalize_disambiguation_xml(&xml);
+        let parsed = og_tagger::XmlDisambiguator::from_xml_with_english(&normalized, None)
+            .expect("parse disambiguation.xml");
+        let text = "Surowce zawieraj\u{105}ce te alkaloidy";
+        let snapshot = |s: &og_core::AnalyzedSentence| -> Vec<String> {
+            s.non_whitespace_tokens()
+                .iter()
+                .map(|t| {
+                    format!(
+                        "{:?}:{}",
+                        t.token().token(),
+                        t.readings()
+                            .iter()
+                            .map(|r| r.pos_tags().join("|"))
+                            .collect::<Vec<_>>()
+                            .join(",")
+                    )
+                })
+                .collect()
+        };
+        for (idx, id) in parsed.rule_ids().iter().enumerate() {
+            let mut sentence =
+                crate::pl::test_support::analyze_undisambiguated(text, 0, text.len());
+            let hits = parsed.debug_match_rule(&mut sentence, idx);
+            let before = snapshot(&sentence);
+            parsed.apply_rule(&mut sentence, idx);
+            let after = snapshot(&sentence);
+            if before != after {
+                let diffs = before
+                    .iter()
+                    .zip(after.iter())
+                    .filter(|(b, a)| b != a)
+                    .map(|(b, a)| format!("{b} -> {a}"))
+                    .collect::<Vec<_>>()
+                    .join(" ;; ");
+                eprintln!("rule {id} (idx {idx}) hits={hits:?}: {diffs}");
+            }
+        }
     }
 
     fn adj_rule_variant_xml(rule_id: &str, strip: &[usize]) -> (String, usize) {
