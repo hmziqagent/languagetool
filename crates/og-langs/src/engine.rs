@@ -830,6 +830,9 @@ impl LanguageEngine {
         if short == "ru" {
             engine.post_chunker = Some(og_tagger::russian_chunker::shared_russian_chunker());
         }
+        if short == "ca" {
+            engine.post_chunker = Some(Arc::new(crate::ca::gv_chunker::CatalanGVChunker));
+        }
         let disambig_path = resource_dir.join("disambiguation.xml");
         if short == "es"
             && let Some(chain) = crate::es::build_es_disambiguator(&resource_dir)
@@ -995,7 +998,9 @@ impl LanguageEngine {
                         vec!["]", ")", "}", "”", "\"", "»"],
                     ),
             ))
-        } else if short == "it" || short == "ca" {
+        } else if short == "ca" {
+            Some(Arc::new(crate::ca::catalan_unpaired_brackets_rule()) as Arc<dyn TextLevelRule>)
+        } else if short == "it" {
             Some(Arc::new(
                 og_rules::text_level_rules::GenericUnpairedBracketsRule::new().with_symbols(
                     vec!["[", "(", "{", "\u{bb}", "\u{ab}"],
@@ -2489,8 +2494,10 @@ mod tests {
             "CATALAN_WRONG_WORD_IN_CONTEXT",
             "CA_SIMPLE_REPLACE_SIMPLE",
             "CA_SIMPLE_REPLACE_MULTIWORDS",
+            "PRONOMS_FEBLES_DUPLICATS",
             "CA_CHECKCASE",
             "ADVERBIS_MENT",
+            "CA_COMPOUNDS",
             "CA_SIMPLE_REPLACE_DNV",
         ] {
             assert!(
@@ -2509,7 +2516,10 @@ mod tests {
             "TOO_LONG_SENTENCE",
             "CA_UNPAIRED_QUESTION",
             "CA_UNPAIRED_EXCLAMATION",
+            "CATALAN_WORD_REPEAT_BEGINNING_RULE",
             "CA_WORD_COHERENCY",
+            "CA_REMOTE_RULE",
+            "CA_SPLIT_LONG_SENTENCE",
             "PUNCTUATION_PARAGRAPH_END2",
             "IGNORE_PROPER_NOUNS",
         ] {
@@ -2530,6 +2540,30 @@ mod tests {
             ids.contains(&"CA_MULTITOKEN_SPELLING_FOUR"),
             "with the manual added.txt dictionary every common word stays UNKNOWN, so the \
              multitoken-spelling rules fire exactly like the module pipeline: {ids:?}"
+        );
+        let result = engine.check("Aix\u{f2} \u{e9}s (impossible. ");
+        let brackets: Vec<_> = result
+            .matches
+            .iter()
+            .filter(|m| m.rule().id() == "UNPAIRED_BRACKETS")
+            .collect();
+        assert_eq!(
+            brackets.len(),
+            1,
+            "Catalan.java:118 registers CatalanUnpairedBracketsRule: {:?}",
+            result.matches
+        );
+        assert!(
+            brackets[0].message().contains("S\u{ed}mbol sense parella"),
+            "the ca rule carries the Catalan message, not the generic engine one: {}",
+            brackets[0].message()
+        );
+        let result = engine.check("\u{bb}Aix\u{f2} em porta a demanar-t'ho.");
+        let ids: Vec<&str> = result.matches.iter().map(|m| m.rule().id()).collect();
+        assert!(
+            !ids.contains(&"UNPAIRED_BRACKETS"),
+            "the ca i==1 leading-closed-guillemet exemption holds in the engine frame (the old \
+             shared crossed-guillemet set fired it): {ids:?}"
         );
     }
 
