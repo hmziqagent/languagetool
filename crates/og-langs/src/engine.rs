@@ -2589,21 +2589,20 @@ mod tests {
             catalan,
             vec![
                 "Emporta",
-                "-",
-                "te",
+                "-te",
                 "'ls",
                 " ",
                 "a",
                 " ",
-                "l",
-                "'",
+                "l'",
                 "observatori",
                 " ",
                 "de",
                 "ls",
                 " ",
                 "mars"
-            ]
+            ],
+            "CatalanWordTokenizerTest.java:65 expects the closed clitic class whole"
         );
         let generic = texts("xx");
         assert_ne!(catalan, generic);
