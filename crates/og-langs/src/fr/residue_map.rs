@@ -60,7 +60,7 @@ impl Family {
                 "grammar.xml:10022-10032 AGREEMENT_PARTICULAR antipattern [JN][C?][P?][D?][N s?p|N f .][and V ppr + J m s][punct] aligns niveau/d'/énergie/croissant/. and suppresses the rule"
             }
             Self::Differential => {
-                "needs a JVM differential trace; probe evidence pinned in fr/trace.rs"
+                "poursoi: 'poursoi' is a dict word (poursoi/N m s in both engines - FrenchTagger.java:100-101 nulls only non-dict words, pinned by FrenchTaggerTest.java:54 'nonexistingword'->[null]null), the sole blocker is <token postag=\"[DP].*\"/> against the sentence-final '.' whose readings are M fin,M fin,SENT_END (dict + JLanguageTool.java:1842-1850) and PatternToken.java:352-362 rejects that exactly like Rust does; upstream master ships the identical rule+example and its GitHub workflows run no tests, so only a JVM trace can show what Java does. nuance lilas: the fp is ADJ_ADJ_SENT_END sub-rule 5 (grammar.xml:14621) matching [J m sp]lilas/[et]/[A]très/[J f p]parfumées/'.' on readings identical in both engines (roses filtered to J e p by RP-ETRE_ADJ_AMBIG disambiguation.xml:8681-8690 in both); all 66 antipatterns (58 group-shared + 8 local) were aligned by hand and none matches - every near-miss dies on 'très' (A) sitting between 'et' and the final J, or on the sentence-final '.' where a trailing P/punct is required"
             }
         }
     }
@@ -101,7 +101,9 @@ impl Family {
             Self::AndGroupAntipatternParse => {
                 "og-xml/src/parser.rs: the standalone equivalent of the antipattern fails to COMPILE with IllFormed(MismatchedEndTag { expected: \"token\", found: \"pattern\" }) on 4/4 runs (optionals + and-group + text-bearing token), and a neighbor shape flipped across runs - parse is shape-sensitive and nondeterministic for these constructs"
             }
-            Self::Differential => "unresolved",
+            Self::Differential => {
+                "unresolved: poursoi = the required [DP].* next-token postag at sentence end (if a JVM trace shows Java matching, the fix site is og-rules pattern_rule.rs end-of-sentence semantics for a required next-token element; if Java fails it too, the example is upstream-broken and the residue becomes accepted-excluded material); nuance lilas = whichever Java-side mechanism suppresses ADJ_ADJ_SENT_END sub 5 - the 66 antipatterns carry no static candidate, so the trace must name it"
+            }
         }
     }
 
@@ -431,7 +433,16 @@ mod tests {
         assert_eq!(
             differential.len(),
             2,
-            "unresolved differential residues (ADJ_ADJ_SENT_END 'nuance lilas': no sub-5 antipattern fits once RP-ETRE_ADJ_AMBIG disambiguation.xml:8680-8690 filters 'roses' to J e p in both engines; MOTS_COLLES_OU_SEPARES 'poursoi': Java FrenchTagger.java:100 leaves the unknown word null-postag while the Rust tagger emits poursoi/N m s, and the required next-token postag [DP].* cannot match '.' = M fin,M fin,SENT_END in either engine - both need a JVM differential): {differential:?}"
+            "unresolved differential residues (ADJ_ADJ_SENT_END 'nuance lilas': exactly sub-rule 5 \
+             grammar.xml:14621 fires, span 48..73 over lilas/et/très/parfumées, on readings \
+             identical in both engines - roses is J e p in both after RP-ETRE_ADJ_AMBIG \
+             disambiguation.xml:8681-8690 - and none of the 66 antipatterns (58 group-shared + \
+             8 local) aligns by static reading; MOTS_COLLES_OU_SEPARES 'poursoi': 'poursoi' is a \
+             dict word poursoi/N m s in both engines, sub-rule 30 grammar.xml:47526-47536 matches \
+             11..18 whenever a real [DP] token follows, and the only blocker is <token \
+             postag=\"[DP].*\"/> against the sentence-final '.' = M fin,M fin,SENT_END, which \
+             PatternToken.java:352-362 rejects in Java exactly as in Rust - both need a JVM \
+             differential to name the Java-side behavior): {differential:?}"
         );
     }
 
@@ -475,6 +486,35 @@ mod tests {
         og_xml::compiler::XmlCompiler::new()
             .compile_file_with_base(xml, dir.as_deref())
             .map_err(|err| format!("{err:?}"))
+    }
+
+    fn sub_rule(rule_id: &str, sub_id: &str) -> og_xml::compiler::CompiledRule {
+        let dir = fr_rules_dir().expect("fr rules dir");
+        let raw = std::fs::read_to_string(dir.join("grammar.xml")).expect("grammar.xml");
+        let xml = crate::fr::normalize_fr_rules_xml(&raw);
+        let set = og_xml::compiler::XmlCompiler::new()
+            .compile_file_with_base(&xml, Some(&dir))
+            .expect("compile grammar.xml");
+        set.rules
+            .into_iter()
+            .find(|r| r.id == rule_id && r.sub_id.as_deref() == Some(sub_id))
+            .unwrap_or_else(|| panic!("{rule_id}[{sub_id}] in grammar.xml"))
+    }
+
+    fn rule_match_spans(rule: &og_xml::compiler::CompiledRule, text: &str) -> Vec<(usize, usize)> {
+        let engine = crate::fr::example_suite::build_pattern_engine();
+        let pipeline = crate::fr::test_support::FrenchPipeline::shared();
+        og_rules::pattern_rule::set_test_date_hack(true);
+        let mut out = Vec::new();
+        for (sentence, sentence_start) in pipeline.analyze_offset_text(text) {
+            for m in engine.match_rule(rule, &sentence) {
+                out.push((
+                    m.offset() + sentence_start,
+                    m.offset() + sentence_start + m.length(),
+                ));
+            }
+        }
+        out
     }
 
     const UNIFICATION_DEFS: &str = r#"
@@ -612,6 +652,55 @@ mod tests {
             "the OU owning rule needs the suj reading here; Rust keeps suj+obj after \
              disambiguation, so the FP is either a Java disambiguator rule the Rust chain \
              misses or a combined postag+regexp+(?-i) element divergence"
+        );
+    }
+
+    #[test]
+    fn poursoi_sub30_matches_with_dp_follower_but_not_sentence_end() {
+        let rule = sub_rule("MOTS_COLLES_OU_SEPARES", "30");
+        assert_eq!(
+            rule_match_spans(&rule, "Il le fait poursoi le chemin."),
+            vec![(11, 18)],
+            "sub-rule 30 (grammar.xml:47526-47536) is <token case_sensitive=\"yes\">poursoi</token> \
+             + <token postag=\"[DP].*\" postag_regexp=\"yes\"/>: with 'le' (D f s) following, the \
+             case-sensitive text match, the scope=previous 's'' exception and the postag element \
+             all work, and 'poursoi' itself is a dict word (poursoi/N m s) in both engines - the \
+             round-21 FrenchTagger.java:100 null-tagging theory is retired (that path fires only \
+             for non-dict words, pinned by FrenchTaggerTest.java:54)"
+        );
+        assert!(
+            rule_match_spans(&rule, "Il le fait poursoi.").is_empty(),
+            "the sole blocker is the sentence-final '.': its readings are M fin,M fin,SENT_END \
+             (dict + JLanguageTool.java:1842-1850) and PatternToken.java:352-362 rejects them for \
+             the exact [DP].* postag exactly like the Rust engine does - by static reading Java \
+             cannot match this example either; the pin flips only if the shared matcher gains \
+             sentence-end semantics that satisfy a required next-token postag"
+        );
+    }
+
+    #[test]
+    fn adj_adj_sub5_nuance_lilas_fp_carries_only_dead_antipatterns() {
+        let rule = sub_rule("ADJ_ADJ_SENT_END", "5");
+        assert_eq!(
+            rule.antipatterns.len(),
+            66,
+            "58 rulegroup-shared antipatterns (grammar.xml:13699-14181) must be attached to \
+             sub-rule 5 ahead of its 8 local ones (parser.rs:883-887 group antipattern \
+             inheritance, Java AbstractPatternRule.setAntiPatterns)"
+        );
+        assert_eq!(
+            rule_match_spans(
+                &rule,
+                "Ses grandes fleurs doubles sont roses à nuance lilas et très parfumées."
+            ),
+            vec![(48, 73)],
+            "the fp is exactly sub-rule 5 (grammar.xml:14621) aligning [J m sp]lilas / et / \
+             [A]très / [J f p]parfumées / '.' - readings identical in both engines, roses being \
+             J e p in both after RP-ETRE_ADJ_AMBIG (disambiguation.xml:8681-8690); every one of \
+             the 66 antipatterns misses by static alignment (the near-misses die on 'très' \
+             between 'et' and the final J, or on the sentence-final '.' where a trailing \
+             P/punct/match-interpolation is required) - the pin flips when the Java-side \
+             suppressor named by a JVM trace is implemented in the shared engine"
         );
     }
 

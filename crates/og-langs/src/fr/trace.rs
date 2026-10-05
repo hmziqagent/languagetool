@@ -369,6 +369,19 @@ mod tests {
 
     #[test]
     #[ignore]
+    fn trace_poursoi_variants() {
+        for text in [
+            "Il le fait poursoi.",
+            "Il le fait poursoi le chemin.",
+            "Ils le font ensuivant le chemin.",
+            "Ils le font ensuivant.",
+        ] {
+            super::probe_inline_rule("MOTS_COLLES_OU_SEPARES", text);
+        }
+    }
+
+    #[test]
+    #[ignore]
     fn trace_dict_readings_of_suspect_words() {
         super::probe_dict(&[
             "néo-impressionnisme",
@@ -387,6 +400,26 @@ mod tests {
             "dire",
             "poursoi",
             "alors",
+        ]);
+    }
+
+    #[test]
+    #[ignore]
+    fn trace_nuance_lilas_dict_readings() {
+        super::probe_dict(&[
+            "Ses",
+            "grandes",
+            "fleurs",
+            "doubles",
+            "sont",
+            "roses",
+            "à",
+            "nuance",
+            "lilas",
+            "et",
+            "très",
+            "parfumées",
+            ".",
         ]);
     }
 }
