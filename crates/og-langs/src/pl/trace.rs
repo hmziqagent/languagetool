@@ -1522,10 +1522,14 @@ mod tests {
                 m.text.is_none() && m.compiled_regexp.is_none() && m.compiled_regexp_fancy.is_none()
             }),
             "the shared compiler drops the token-level <match no=\"0\" regexp_match=...> \\
-             transform, so RYMY's <and> branch can never match - this pin flips when the \\
-             engine gains the Java runtime rewrite (PatternTokenMatcher.java:55-63 \\
-             resolveReference -> PatternToken.java:502-515 doCompile -> MatchState.java:221-227 \\
-             toFinalString replaceAll)"
+             transform, so RYMY's <and> branch can never match: og-xml parser.rs:420-450 has \\
+             arms for no/postag/postag_regexp/postag_replace/setpos but none for \\
+             regexp_match/regexp_replace, and the runtime fallback in og-rules \\
+             pattern_rule.rs:1123-1134 (backreference_matches tail) degenerates to plain \\
+             text equality against the referenced token ('oddziały' != 'wylądowały') - this \\
+             pin flips when the engine gains the Java runtime rewrite \\
+             (PatternTokenMatcher.java:55-63 resolveReference -> PatternToken.java:502-515 \\
+             doCompile -> MatchState.java:221-227 toFinalString replaceAll)"
         );
     }
 }
