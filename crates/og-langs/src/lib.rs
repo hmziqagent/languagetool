@@ -9,6 +9,7 @@ pub mod ar;
 pub mod ast;
 pub mod be;
 pub mod br;
+pub mod ca;
 pub mod confusion_probability;
 pub mod de;
 pub mod detection;
