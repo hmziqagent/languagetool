@@ -189,6 +189,24 @@ fn rule_match_probe() {
 }
 
 fn disambig_bisect_probe() {
+    disambig_bisect(
+        "Il a décidé de ce lever tôt.",
+        &["ce", "lever", "cache"],
+        &["ce", "lever"],
+    );
+    disambig_bisect(
+        "Je vous écrirai ou vous téléphonerai la semaine prochaine.",
+        &["vous", "écrirai", "téléphonerai"],
+        &["vous", "écrirai", "téléphonerai"],
+    );
+    disambig_bisect(
+        "Ses grandes fleurs doubles sont roses à nuance lilas et très parfumées.",
+        &["roses"],
+        &["roses"],
+    );
+}
+
+fn disambig_bisect(text: &str, show_tokens: &[&str], watch_tokens: &[&str]) {
     use og_core::checker::Disambiguator as _;
     use og_core::{AnalyzedSentence, AnalyzedToken, AnalyzedTokenReadings};
     use og_tagger::multiword_chunker::{ChunkerParams, MultiWordChunkerDisambiguator};
@@ -197,7 +215,6 @@ fn disambig_bisect_probe() {
     let resource_dir = crate::fr::test_support::fr_resource_dir().expect("fr resource dir");
     let core = crate::engine::find_lt_core_resource_dir().expect("core resource dir");
     let pipeline = FrenchPipeline::shared();
-    let text = "Il a décidé de ce lever tôt.";
     let mut sentence = {
         let mut s = AnalyzedSentence::new(text, 0, text.len());
         let mut tokens = vec![AnalyzedTokenReadings::new(
@@ -251,10 +268,11 @@ fn disambig_bisect_probe() {
     };
     let show = |stage: &str, s: &AnalyzedSentence| {
         for t in s.tokens() {
-            if matches!(t.token().token(), "ce" | "lever" | "cache") {
+            if show_tokens.contains(&t.token().token()) {
                 println!(
-                    "{stage} {:?} => {}",
+                    "{stage} {:?}@{} => {}",
                     t.token().token(),
+                    t.token().start(),
                     t.readings()
                         .iter()
                         .map(|r| format!(
@@ -268,6 +286,7 @@ fn disambig_bisect_probe() {
             }
         }
     };
+    println!("BISECT {text:?}");
     show("TAGGED", &sentence);
     let global = MultiWordChunkerDisambiguator::from_params(
         &core.join("spelling_global.txt"),
@@ -303,11 +322,12 @@ fn disambig_bisect_probe() {
         String::new()
             + &s.tokens()
                 .iter()
-                .filter(|t| matches!(t.token().token(), "ce" | "lever"))
+                .filter(|t| watch_tokens.contains(&t.token().token()))
                 .map(|t| {
                     format!(
-                        "{}={}",
+                        "{}@{}={}",
                         t.token().token(),
+                        t.token().start(),
                         t.readings()
                             .iter()
                             .map(|r| r.pos_tags().first().map_or("?".to_string(), |p| p.clone()))
@@ -330,12 +350,244 @@ fn disambig_bisect_probe() {
             prev = now;
         }
     }
+    println!();
+}
+
+fn tagger_only_readings(words: &[&str]) -> Vec<String> {
+    og_tagger::Tagger::tag(FrenchPipeline::shared().tagger_ref(), words)
+        .into_iter()
+        .map(|atr| {
+            format!(
+                "{}={}",
+                atr.token().token(),
+                atr.readings()
+                    .iter()
+                    .map(|r| format!("{}/{}", r.lemma().unwrap_or("null"), r.pos_tags().join(" ")))
+                    .collect::<Vec<_>>()
+                    .join("|")
+            )
+        })
+        .collect()
+}
+
+fn dump_token_readings(text: &str, focus: &[&str]) {
+    let pipeline = FrenchPipeline::shared();
+    for sentence in pipeline.analyze_text(text) {
+        for t in sentence.non_whitespace_tokens() {
+            if focus.contains(&t.token().token()) {
+                println!(
+                    "  {:?} => {}",
+                    t.token().token(),
+                    t.readings()
+                        .iter()
+                        .map(|r| format!(
+                            "{}/{}",
+                            r.lemma().unwrap_or("null"),
+                            r.pos_tags().join(" ")
+                        ))
+                        .collect::<Vec<_>>()
+                        .join(" | ")
+                );
+            }
+        }
+    }
+}
+
+fn adj_adj_fps_probe() {
+    println!("TAGGER-ONLY:");
+    for line in tagger_only_readings(&["roses", "croissant", "vous", "poursoi"]) {
+        println!("  {line}");
+    }
+    println!("PIPELINE 'Ses grandes fleurs doubles sont roses à nuance lilas et très parfumées.':");
+    dump_token_readings(
+        "Ses grandes fleurs doubles sont roses à nuance lilas et très parfumées.",
+        &["roses", "nuance", "lilas", "parfumées"],
+    );
+    println!(
+        "PIPELINE 'Sa configuration électronique est par ordre de niveau d'énergie croissant.':"
+    );
+    dump_token_readings(
+        "Sa configuration électronique est par ordre de niveau d'énergie croissant.",
+        &["croissant", "niveau"],
+    );
+    println!("PIPELINE 'Je vous écrirai ou vous téléphonerai la semaine prochaine.':");
+    dump_token_readings(
+        "Je vous écrirai ou vous téléphonerai la semaine prochaine.",
+        &["vous", "écrirai", "téléphonerai"],
+    );
+    println!("PIPELINE 'Il le fait poursoi.':");
+    dump_token_readings("Il le fait poursoi.", &["poursoi", "."]);
+}
+
+fn suppressor_pattern_probe() {
+    let unification_defs = r#"
+    <unification feature="number">
+        <equivalence type="sg"><token postag=".* sp?" postag_regexp="yes"/></equivalence>
+        <equivalence type="pl"><token postag=".* s?p" postag_regexp="yes"/></equivalence>
+    </unification>
+    <unification feature="person">
+        <equivalence type="p1"><token postag=".* 1 .*" postag_regexp="yes"/></equivalence>
+        <equivalence type="p2"><token postag=".* 2 .*" postag_regexp="yes"/></equivalence>
+        <equivalence type="p3"><token postag=".* 3 .*" postag_regexp="yes"/></equivalence>
+    </unification>"#;
+    let probes: &[(&str, &str, &str)] = &[
+        (
+            "PROBE_OU_UNIFY_SKIP",
+            r#"<pattern>
+                <unify>
+                    <feature id="person"/>
+                    <feature id="number"/>
+                    <unify-ignore>
+                        <token postag="R pers suj.*" postag_regexp="yes"/>
+                        <token postag="R pers obj.*" postag_regexp="yes" min="0" max="3"/>
+                        <token inflected="yes" min="0" max="1" regexp="yes">ne|en</token>
+                    </unify-ignore>
+                    <token postag="V.*" postag_regexp="yes" skip="-1"/>
+                    <unify-ignore>
+                        <token>ou</token>
+                        <token postag="R pers suj.*" postag_regexp="yes"/>
+                        <token postag="R pers obj.*" postag_regexp="yes" min="0" max="3"/>
+                        <token inflected="yes" min="0" max="1">ne</token>
+                    </unify-ignore>
+                    <token postag="V.*" postag_regexp="yes"/>
+                </unify>
+            </pattern>"#,
+            "Je vous écrirai ou vous téléphonerai la semaine prochaine.",
+        ),
+        (
+            "PROBE_AGREEMENT_AND_OPTIONALS",
+            r#"<pattern>
+                <token postag="[JN].*" postag_regexp="yes"/>
+                <token postag="C.*" postag_regexp="yes" min="0" max="1"/>
+                <token postag="P.*" postag_regexp="yes" min="0" max="1"/>
+                <token postag="D.*" postag_regexp="yes" min="0" max="1"/>
+                <token postag="N.* s?p|N f ." postag_regexp="yes"/>
+                <and>
+                    <token postag="V ppr"/>
+                    <token postag="J m s"/>
+                </and>
+                <token regexp="yes">[,\.\;\:\!\?]"/>
+            </pattern>"#,
+            "Sa configuration électronique est par ordre de niveau d'énergie croissant.",
+        ),
+        (
+            "PROBE_MATCHNO0_ANTIPATTERN",
+            r#"<pattern>
+                <token postag="J m s"/>
+                <token regexp="yes">et|ni|ou</token>
+                <token><match no="0"/>e</token>
+            </pattern>"#,
+            "Quand Ddaykha étudiait à l'université, elle n'avait ni ami ni amie.",
+        ),
+    ];
+    let isolation: &[(&str, &str)] = &[
+        (
+            "ISO_AND_ONLY",
+            r#"<pattern><and><token postag="V ppr"/><token postag="J m s"/></and></pattern>"#,
+        ),
+        (
+            "ISO_AND_PLUS_PUNCT",
+            r#"<pattern><and><token postag="V ppr"/><token postag="J m s"/></and><token regexp="yes">[,.]</token></pattern>"#,
+        ),
+        (
+            "ISO_OPTIONALS_THEN_AND",
+            r#"<pattern><token postag="C.*" postag_regexp="yes" min="0" max="1"/><token postag="N.*" postag_regexp="yes"/><and><token postag="V ppr"/><token postag="J m s"/></and></pattern>"#,
+        ),
+        (
+            "ISO_TEXT_REGEX_ONLY",
+            r#"<pattern><token postag="J m s"/><token regexp="yes">[,\.\;\:\!\?]</token></pattern>"#,
+        ),
+        (
+            "ISO_PIPE_POSTAG",
+            r#"<pattern><token postag="N.* s?p|N f ." postag_regexp="yes"/></pattern>"#,
+        ),
+        (
+            "ISO_FULL_NO_PUNCT",
+            r#"<pattern><token postag="[JN].*" postag_regexp="yes"/><token postag="C.*" postag_regexp="yes" min="0" max="1"/><token postag="P.*" postag_regexp="yes" min="0" max="1"/><token postag="D.*" postag_regexp="yes" min="0" max="1"/><token postag="N.* s?p|N f ." postag_regexp="yes"/><and><token postag="V ppr"/><token postag="J m s"/></and></pattern>"#,
+        ),
+        (
+            "ISO_FULL_NO_AND",
+            r#"<pattern><token postag="[JN].*" postag_regexp="yes"/><token postag="C.*" postag_regexp="yes" min="0" max="1"/><token postag="P.*" postag_regexp="yes" min="0" max="1"/><token postag="D.*" postag_regexp="yes" min="0" max="1"/><token postag="N.* s?p|N f ." postag_regexp="yes"/><token regexp="yes">[,\.\;\:\!\?]</token></pattern>"#,
+        ),
+        (
+            "ISO_ONE_OPT_PLUS_TEXT",
+            r#"<pattern><token postag="C.*" postag_regexp="yes" min="0" max="1"/><token regexp="yes">[,\.\;\:\!\?]</token></pattern>"#,
+        ),
+        (
+            "ISO_TWO_OPT_PLUS_TEXT",
+            r#"<pattern><token postag="C.*" postag_regexp="yes" min="0" max="1"/><token postag="P.*" postag_regexp="yes" min="0" max="1"/><token regexp="yes">[,\.\;\:\!\?]</token></pattern>"#,
+        ),
+        (
+            "ISO_TWO_OPT_PLUS_PLAINTEXT",
+            r#"<pattern><token postag="C.*" postag_regexp="yes" min="0" max="1"/><token postag="P.*" postag_regexp="yes" min="0" max="1"/><token>abc</token></pattern>"#,
+        ),
+    ];
+    for (id, pattern) in isolation {
+        let xml = format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<rules lang=\"fr\">{unification_defs}\n\
+             <rule id=\"{id}\">{pattern}<message>iso probe</message></rule>\n</rules>"
+        );
+        match XmlCompiler::new()
+            .compile_file_with_base(&xml, crate::fr::test_support::fr_rules_dir().as_deref())
+        {
+            Ok(_) => println!("ISOLATION {id} OK"),
+            Err(err) => println!("ISOLATION {id} ERR: {err:?}"),
+        }
+    }
+    let engine = build_pattern_engine();
+    let pipeline = FrenchPipeline::shared();
+    og_rules::pattern_rule::set_test_date_hack(true);
+    for (id, pattern, text) in probes {
+        let xml = format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<rules lang=\"fr\">{unification_defs}\n\
+             <rule id=\"{id}\">{pattern}<message>suppressor probe</message></rule>\n</rules>"
+        );
+        let compiled = XmlCompiler::new()
+            .compile_file_with_base(&xml, crate::fr::test_support::fr_rules_dir().as_deref());
+        let rule_set = match compiled {
+            Ok(set) => set,
+            Err(err) => {
+                println!("SUPPRESSOR {id} COMPILE ERROR: {err:?}");
+                continue;
+            }
+        };
+        let mut hits = 0usize;
+        for rule in &rule_set.rules {
+            for (sentence, sentence_start) in pipeline.analyze_offset_text(text) {
+                for m in engine.match_rule(rule, &sentence) {
+                    hits += 1;
+                    println!(
+                        "SUPPRESSOR {id} MATCH {}..{} '{}'",
+                        m.offset() + sentence_start,
+                        m.offset() + sentence_start + m.length(),
+                        &text[(m.offset() + sentence_start).min(text.len())
+                            ..(m.offset() + sentence_start + m.length()).min(text.len())]
+                    );
+                }
+            }
+        }
+        if hits == 0 {
+            println!("SUPPRESSOR {id} NO MATCH on {text:?}");
+        }
+    }
 }
 
 #[test]
 #[ignore]
 fn fr_diagnose_tokenizer() {
     tokenizer_probe();
+}
+
+#[test]
+#[ignore]
+fn fr_diagnose_suppressor_patterns() {
+    suppressor_pattern_probe();
+}
+
+#[test]
+#[ignore]
+fn fr_diagnose_adj_adj_fps() {
+    adj_adj_fps_probe();
 }
 
 #[test]

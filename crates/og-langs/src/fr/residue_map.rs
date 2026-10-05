@@ -14,6 +14,9 @@ pub enum Family {
     ScopeNextExceptionReadingZero,
     MatchNoZeroTextInterpolation,
     ApostropheNormalizationAsymmetry,
+    ChunkInteriorLeadingSpacePos,
+    UnifySkipAntipattern,
+    AndGroupAntipatternParse,
     Differential,
 }
 
@@ -46,6 +49,15 @@ impl Family {
             }
             Self::ApostropheNormalizationAsymmetry => {
                 "Java pattern matching normalizes no apostrophes (no U+2018 handling in PatternToken.java or StringMatcher.java); the class [´‘′`] matches the raw token '‘'"
+            }
+            Self::ChunkInteriorLeadingSpacePos => {
+                "MultiWordChunker.java:379-405 removePreviousTags rewrites every token of a chunk with the clean tag (getNextPosTag :449-458 returns 'A' for 'A'), so all four tokens of 'de plus en plus' carry exactly A"
+            }
+            Self::UnifySkipAntipattern => {
+                "grammar.xml:30276-30294 OU sub-rule antipattern: unify person+number over [V.* skip=-1] ... [V.*] with the pronouns in unify-ignore aligns Je/vous/écrirai/ou/vous/téléphonerai sequentially and the two 1 s verbs unify, suppressing the rule"
+            }
+            Self::AndGroupAntipatternParse => {
+                "grammar.xml:10022-10032 AGREEMENT_PARTICULAR antipattern [JN][C?][P?][D?][N s?p|N f .][and V ppr + J m s][punct] aligns niveau/d'/énergie/croissant/. and suppresses the rule"
             }
             Self::Differential => {
                 "needs a JVM differential trace; probe evidence pinned in fr/trace.rs"
@@ -80,6 +92,15 @@ impl Family {
             Self::ApostropheNormalizationAsymmetry => {
                 "og-xml/src/unifier.rs:8-13 + og-rules/src/pattern_rule.rs:2164-2188; not shim-able from fr: U+2018 maps to the typewriter apostrophe the Java class deliberately excludes, so normalizing the pattern side would create false positives on correct examples"
             }
+            Self::ChunkInteriorLeadingSpacePos => {
+                "og-tagger multiword chunker remove-previous-tags path: the fr dump shows chunk tokens 1 and 3 ('de', 'en') carrying pos ' A' with a leading space while tokens 2 and 4 carry 'A', so exact postag=\"A\" elements (IL_DEVIENT_QUOI grammar.xml:125137) never match them"
+            }
+            Self::UnifySkipAntipattern => {
+                "og-rules/src/pattern_rule.rs antipattern evaluation: the standalone suppressor (probe in fr/diagnose.rs fr_diagnose_suppressor_patterns) never matches, so unify + skip=-1 + unify-ignore inside antipatterns is not evaluated (antipattern_unify_satisfied pattern_rule.rs:2399 exists but this shape stays dead)"
+            }
+            Self::AndGroupAntipatternParse => {
+                "og-xml/src/parser.rs: the standalone equivalent of the antipattern fails to COMPILE with IllFormed(MismatchedEndTag { expected: \"token\", found: \"pattern\" }) on 4/4 runs (optionals + and-group + text-bearing token), and a neighbor shape flipped across runs - parse is shape-sensitive and nondeterministic for these constructs"
+            }
             Self::Differential => "unresolved",
         }
     }
@@ -95,6 +116,9 @@ impl Family {
             Self::ScopeNextExceptionReadingZero => "scope-next exception reading-0",
             Self::MatchNoZeroTextInterpolation => "<match no=\"0\"/> text interpolation",
             Self::ApostropheNormalizationAsymmetry => "apostrophe normalization asymmetry",
+            Self::ChunkInteriorLeadingSpacePos => "chunk-interior leading-space pos",
+            Self::UnifySkipAntipattern => "unify+skip antipattern",
+            Self::AndGroupAntipatternParse => "and-group antipattern parse",
             Self::Differential => "differential",
         }
     }
@@ -114,7 +138,7 @@ const GRAMMAR_RESIDUES: &[(&str, &str, Family)] = &[
     (
         "IL_DEVIENT_QUOI",
         "Il devient de plus en plus.",
-        Family::Differential,
+        Family::ChunkInteriorLeadingSpacePos,
     ),
     (
         "ALORS",
@@ -129,12 +153,12 @@ const GRAMMAR_RESIDUES: &[(&str, &str, Family)] = &[
     (
         "AGREEMENT_PARTICULAR",
         "Sa configuration électronique est par ordre de niveau d'énergie croissant.",
-        Family::Differential,
+        Family::AndGroupAntipatternParse,
     ),
     (
         "ADJ_ADJ_SENT_END",
         "Quand Ddaykha étudiait à l'université, elle n'avait ni ami ni amie.",
-        Family::Differential,
+        Family::MatchNoZeroTextInterpolation,
     ),
     (
         "ADJ_ADJ_SENT_END",
@@ -154,7 +178,7 @@ const GRAMMAR_RESIDUES: &[(&str, &str, Family)] = &[
     (
         "OU",
         "Je vous écrirai ou vous téléphonerai la semaine prochaine.",
-        Family::Differential,
+        Family::UnifySkipAntipattern,
     ),
     (
         "CE_SE",
@@ -406,8 +430,170 @@ mod tests {
             .collect();
         assert_eq!(
             differential.len(),
-            6,
-            "unresolved differential residues: {differential:?}"
+            2,
+            "unresolved differential residues (ADJ_ADJ_SENT_END 'nuance lilas': no sub-5 antipattern fits once RP-ETRE_ADJ_AMBIG disambiguation.xml:8680-8690 filters 'roses' to J e p in both engines; MOTS_COLLES_OU_SEPARES 'poursoi': Java FrenchTagger.java:100 leaves the unknown word null-postag while the Rust tagger emits poursoi/N m s, and the required next-token postag [DP].* cannot match '.' = M fin,M fin,SENT_END in either engine - both need a JVM differential): {differential:?}"
+        );
+    }
+
+    #[test]
+    fn il_devient_quoi_chunk_tokens_carry_leading_space_pos() {
+        let sentence = &crate::fr::test_support::analyze_french("Il devient de plus en plus.")[0];
+        let surface_pos: Vec<(&str, Vec<String>)> = sentence
+            .non_whitespace_tokens()
+            .iter()
+            .filter(|t| matches!(t.token().token(), "de" | "plus" | "en"))
+            .map(|t| {
+                (
+                    t.token().token(),
+                    t.readings()
+                        .iter()
+                        .map(|r| r.pos_tags().join(" "))
+                        .collect(),
+                )
+            })
+            .collect();
+        let expected: Vec<(&str, Vec<String>)> = [
+            ("de", vec![" A".to_string()]),
+            ("plus", vec!["A".to_string()]),
+            ("en", vec![" A".to_string()]),
+            ("plus", vec!["A".to_string()]),
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(
+            surface_pos, expected,
+            "Java MultiWordChunker.java:379-405 removePreviousTags + getNextPosTag :449-458 give \
+             every token of the chunk the clean tag 'A'; the Rust chunker emits ' A' (leading \
+             space) on chunk tokens 1 and 3, so the exact postag=\"A\" element of IL_DEVIENT_QUOI \
+             (grammar.xml:125137) can never match them - this pin flips when the og-tagger \
+             chunker normalizes the interior tag"
+        );
+    }
+
+    fn compile_inline(xml: &str) -> Result<og_xml::compiler::CompiledRuleSet, String> {
+        let dir = fr_rules_dir();
+        og_xml::compiler::XmlCompiler::new()
+            .compile_file_with_base(xml, dir.as_deref())
+            .map_err(|err| format!("{err:?}"))
+    }
+
+    const UNIFICATION_DEFS: &str = r#"
+    <unification feature="number">
+        <equivalence type="sg"><token postag=".* sp?" postag_regexp="yes"/></equivalence>
+        <equivalence type="pl"><token postag=".* s?p" postag_regexp="yes"/></equivalence>
+    </unification>
+    <unification feature="person">
+        <equivalence type="p1"><token postag=".* 1 .*" postag_regexp="yes"/></equivalence>
+        <equivalence type="p2"><token postag=".* 2 .*" postag_regexp="yes"/></equivalence>
+        <equivalence type="p3"><token postag=".* 3 .*" postag_regexp="yes"/></equivalence>
+    </unification>"#;
+
+    fn wrap_pattern(id: &str, pattern: &str) -> String {
+        format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<rules lang=\"fr\">{UNIFICATION_DEFS}\n\
+             <rule id=\"{id}\">{pattern}<message>probe</message></rule>\n</rules>"
+        )
+    }
+
+    #[test]
+    fn ou_suppressor_unify_skip_shape_stays_dead_in_rust() {
+        let pattern = r#"<pattern>
+                <unify>
+                    <feature id="person"/>
+                    <feature id="number"/>
+                    <unify-ignore>
+                        <token postag="R pers suj.*" postag_regexp="yes"/>
+                        <token postag="R pers obj.*" postag_regexp="yes" min="0" max="3"/>
+                        <token inflected="yes" min="0" max="1" regexp="yes">ne|en</token>
+                    </unify-ignore>
+                    <token postag="V.*" postag_regexp="yes" skip="-1"/>
+                    <unify-ignore>
+                        <token>ou</token>
+                        <token postag="R pers suj.*" postag_regexp="yes"/>
+                        <token postag="R pers obj.*" postag_regexp="yes" min="0" max="3"/>
+                        <token inflected="yes" min="0" max="1">ne</token>
+                    </unify-ignore>
+                    <token postag="V.*" postag_regexp="yes"/>
+                </unify>
+            </pattern>"#;
+        let set = compile_inline(&wrap_pattern("PROBE_OU", pattern)).expect("compiles");
+        let engine = crate::fr::example_suite::build_pattern_engine();
+        let pipeline = crate::fr::test_support::FrenchPipeline::shared();
+        og_rules::pattern_rule::set_test_date_hack(true);
+        let text = "Je vous écrirai ou vous téléphonerai la semaine prochaine.";
+        let mut matches = 0usize;
+        for (sentence, _) in pipeline.analyze_offset_text(text) {
+            for rule in &set.rules {
+                matches += engine.match_rule(rule, &sentence).len();
+            }
+        }
+        assert_eq!(
+            matches, 0,
+            "this is the grammar.xml:30276-30294 OU antipattern body: in Java it aligns \
+             Je(ignored R suj)/vous(ignored R obj)/écrirai(V,unified 1 s)/ou(ignored)/\
+             vous(ignored R suj)/téléphonerai(V,unified 1 s) and person=1+number=s unify, \
+             suppressing the OU sub-rule that false-positives in Rust - the pin flips when \
+             og-rules evaluates unify + skip=-1 + unify-ignore inside antipatterns"
+        );
+    }
+
+    #[test]
+    fn agreement_particular_suppressor_shape_fails_to_compile() {
+        let pattern = r#"<pattern>
+                <token postag="[JN].*" postag_regexp="yes"/>
+                <token postag="C.*" postag_regexp="yes" min="0" max="1"/>
+                <token postag="P.*" postag_regexp="yes" min="0" max="1"/>
+                <token postag="D.*" postag_regexp="yes" min="0" max="1"/>
+                <token postag="N.* s?p|N f ." postag_regexp="yes"/>
+                <and>
+                    <token postag="V ppr"/>
+                    <token postag="J m s"/>
+                </and>
+                <token regexp="yes">[,\.\;\:\!\?]"/>
+            </pattern>"#;
+        let result = compile_inline(&wrap_pattern("PROBE_AGREEMENT", pattern));
+        assert!(
+            result.is_err(),
+            "this is the grammar.xml:10022-10032 AGREEMENT_PARTICULAR antipattern body: in \
+             Java it aligns niveau(N)/d'(P)/énergie(N f s)/croissant(and V ppr + J m s)/'.' \
+             and suppresses the sub-rule that false-positives in Rust; the Rust og-xml parser \
+             currently rejects the shape with IllFormed(MismatchedEndTag) and a neighbor shape \
+             flipped across runs - the pin flips when the parser compiles optionals + and-group \
+             + text-bearing token deterministically"
+        );
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("MismatchedEndTag"),
+            "expected the MismatchedEndTag signature, got: {err}"
+        );
+    }
+
+    #[test]
+    fn adj_adj_matchno0_suppressor_shape_stays_dead_in_rust() {
+        let pattern = r#"<pattern>
+                <token postag="J m s"/>
+                <token regexp="yes">et|ni|ou</token>
+                <token><match no="0"/>e</token>
+            </pattern>"#;
+        let set = compile_inline(&wrap_pattern("PROBE_MATCHNO0", pattern))
+            .expect("the match-no-0 shape compiles");
+        let engine = crate::fr::example_suite::build_pattern_engine();
+        let pipeline = crate::fr::test_support::FrenchPipeline::shared();
+        og_rules::pattern_rule::set_test_date_hack(true);
+        let text = "Quand Ddaykha étudiait à l'université, elle n'avait ni ami ni amie.";
+        let mut matches = 0usize;
+        for (sentence, _) in pipeline.analyze_offset_text(text) {
+            for rule in &set.rules {
+                matches += engine.match_rule(rule, &sentence).len();
+            }
+        }
+        assert_eq!(
+            matches, 0,
+            "this is the grammar.xml:13897-13901 ADJ_ADJ_SENT_END rulegroup antipattern: in \
+             Java <match no=\"0\"/> interpolates the referenced token text so 'ami' + 'ni' + \
+             'amie' (= <match no=\"0\"/>e) suppresses the sub-rule that false-positives in \
+             Rust - same engine gap as the ECRITURE_INCLUSIVE style residue, flips when the \
+             token-level match-no-0 interpolation lands"
         );
     }
 

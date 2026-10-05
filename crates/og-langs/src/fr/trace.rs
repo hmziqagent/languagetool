@@ -345,6 +345,22 @@ mod tests {
 
     #[test]
     #[ignore]
+    fn trace_il_devient_quoi_variants() {
+        for text in [
+            "Il devient grand.",
+            "Il devient vraiment grand.",
+            "Il devient vraiment très grand.",
+            "Il devient vraiment très très grand.",
+            "Il devient de plus en plus.",
+            "Il reste grand.",
+            "Il semble grand.",
+        ] {
+            super::probe_inline_rule("IL_DEVIENT_QUOI", text);
+        }
+    }
+
+    #[test]
+    #[ignore]
     fn trace_inline_residue_rules() {
         super::probe_inline_rule("APOS_INCORRECT", "D‘enfants.");
         super::probe_inline_rule("APOS_INCORRECT", "D´enfants.");
