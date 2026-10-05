@@ -43,6 +43,7 @@ enum TestWordTokenizer {
     Russian(og_langs::ru::word_tokenizer::RussianWordTokenizer),
     Belarusian(og_langs::be::word_tokenizer::BelarusianWordTokenizer),
     Breton(og_langs::br::word_tokenizer::BretonWordTokenizer),
+    Catalan(og_langs::ca::word_tokenizer::CatalanWordTokenizer),
 }
 
 impl WordTokenizer for TestWordTokenizer {
@@ -91,6 +92,7 @@ impl WordTokenizer for TestWordTokenizer {
             TestWordTokenizer::Russian(tz) => tz.tokenize(text),
             TestWordTokenizer::Belarusian(tz) => tz.tokenize(text),
             TestWordTokenizer::Breton(tz) => tz.tokenize(text),
+            TestWordTokenizer::Catalan(tz) => og_tokenizer::WordTokenizer::tokenize(tz, text),
         };
         tokens
             .into_iter()
@@ -160,6 +162,7 @@ pub enum AnyTagger {
     French(Arc<og_langs::fr::tagger::FrenchTagger>),
     Polish(Arc<og_langs::pl::tagger::PolishTagger>),
     Breton(Arc<og_langs::br::BretonTagger>),
+    Catalan(Arc<og_langs::ca::CatalanTagger>),
 }
 
 impl AnyTagger {
@@ -175,6 +178,7 @@ impl AnyTagger {
             AnyTagger::French(t) => Tagger::tag(t.as_ref(), tokens),
             AnyTagger::Polish(t) => Tagger::tag(t.as_ref(), tokens),
             AnyTagger::Breton(t) => Tagger::tag(t.as_ref(), tokens),
+            AnyTagger::Catalan(t) => Tagger::tag(t.as_ref(), tokens),
         }
     }
 }
@@ -236,6 +240,11 @@ impl TestRunner {
                     && let Some(tagger) = og_langs::br::BretonTagger::shared_arc()
                 {
                     return AnyTagger::Breton(tagger);
+                }
+                if code == "ca"
+                    && let Some(tagger) = og_langs::ca::CatalanTagger::shared_arc()
+                {
+                    return AnyTagger::Catalan(tagger);
                 }
                 if let Some(stem) = generic_dict_stem(code)
                     && resource_dir.exists()
@@ -438,7 +447,7 @@ impl TestRunner {
             )))
         });
 
-        let sentence_splitter = if matches!(code, "gl" | "eo" | "ca" | "zh") {
+        let sentence_splitter = if matches!(code, "gl" | "eo" | "zh") {
             None
         } else {
             og_tokenizer::srx::srx_splitter(code)
@@ -486,6 +495,9 @@ impl TestRunner {
             ),
             None if self.language == "br" => {
                 TestWordTokenizer::Breton(og_langs::br::word_tokenizer::BretonWordTokenizer::new())
+            }
+            None if self.language == "ca" => {
+                TestWordTokenizer::Catalan(og_langs::ca::word_tokenizer::CatalanWordTokenizer::new())
             }
             None => TestWordTokenizer::Default(self.language == "en"),
         };

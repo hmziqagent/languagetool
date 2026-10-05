@@ -515,6 +515,25 @@ async fn test_v2_check_breton_engine_registered() {
 }
 
 #[tokio::test]
+async fn test_v2_check_catalan_engine_registered() {
+    let app = app();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/check?language=ca&text=La+casa+%C3%A9s+gran.")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["language"]["code"].as_str(), Some("ca"));
+    assert!(json["matches"].is_array());
+}
+
+#[tokio::test]
 async fn test_v2_languages_lists_all_registered_engines() {
     let json = check_response("/v2/languages").await;
     let codes: Vec<&str> = json
@@ -528,7 +547,7 @@ async fn test_v2_languages_lists_all_registered_engines() {
         .unwrap_or_default();
     for code in [
         "en-US", "de-DE", "fr", "es", "pt-BR", "pt-PT", "nl", "pl", "ru", "it", "ar", "ast", "be",
-        "br", "el", "gl", "ro", "sv",
+        "br", "ca", "el", "gl", "ro", "sv",
     ] {
         assert!(codes.contains(&code), "missing {code} in {codes:?}");
     }

@@ -36,8 +36,8 @@ impl AppState {
 
 pub const ENGINE_CODES: &[&str] = &[
     "en", "en-US", "en-GB", "en-CA", "en-AU", "en-NZ", "en-ZA", "de", "de-DE", "de-AT", "de-CH",
-    "fr", "es", "pt", "pt-BR", "pt-PT", "nl", "pl", "ru", "it", "ar", "ast", "be", "br", "da",
-    "el", "gl", "ro", "sv",
+    "fr", "es", "pt", "pt-BR", "pt-PT", "nl", "pl", "ru", "it", "ar", "ast", "be", "br", "ca",
+    "da", "el", "gl", "ro", "sv",
 ];
 
 enum EngineSource {
@@ -73,6 +73,7 @@ fn engine_source(code: &str) -> Option<EngineSource> {
         "ast" => Some(EngineSource::Generic("ast")),
         "be" => Some(EngineSource::Generic("be")),
         "br" => Some(EngineSource::Generic("br")),
+        "ca" => Some(EngineSource::Generic("ca")),
         "el" => Some(EngineSource::Generic("el")),
         "gl" => Some(EngineSource::Generic("gl")),
         "ro" => Some(EngineSource::Generic("ro")),
@@ -234,10 +235,9 @@ mod tests {
         let state = AppState::new();
         let codes = state.language_codes();
         for code in [
-            "en", "en-US", "en-GB", "de", "de-DE", "fr", "es", "pt", "nl", "pl", "ru",
+            "en", "en-US", "en-GB", "de", "de-DE", "fr", "es", "pt", "nl", "pl", "ru", "ca",
         ] {
             assert!(codes.contains(&code), "missing {code}");
         }
-        assert!(!codes.contains(&"ca"));
     }
 }

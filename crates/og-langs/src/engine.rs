@@ -1178,16 +1178,22 @@ impl LanguageEngine {
                 ) as Arc<dyn TextLevelRule>]);
             }
             "ca" => {
+                if let Some(tagger) = crate::ca::CatalanTagger::shared_arc() {
+                    engine.tagger = Some(tagger);
+                }
                 engine.add_rule(
                     Arc::new(og_rules::native_rules::UppercaseSentenceStartRule::new())
                         as Arc<dyn Rule>,
                 );
-                engine.add_text_level_rules([
-                    Arc::new(og_rules::text_level_rules::LongSentenceRule::new(60))
-                        as Arc<dyn TextLevelRule>,
-                    Arc::new(og_rules::text_level_rules::PunctuationMarkAtParagraphEnd2Rule::new())
-                        as Arc<dyn TextLevelRule>,
-                ]);
+                let native = crate::ca::catalan_native_rules();
+                engine.add_rules(native.rules);
+                engine.add_text_level_rule(Arc::new(
+                    og_rules::text_level_rules::LongSentenceRule::new(60),
+                ));
+                engine.add_text_level_rules(native.text_level_rules);
+                engine.add_text_level_rule(Arc::new(
+                    og_rules::text_level_rules::PunctuationMarkAtParagraphEnd2Rule::new(),
+                ));
             }
             "ru" => {
                 engine.add_rules([
@@ -1808,6 +1814,7 @@ enum WordTokenizerBridge {
     Russian(crate::ru::word_tokenizer::RussianWordTokenizer),
     Belarusian(crate::be::word_tokenizer::BelarusianWordTokenizer),
     Breton(crate::br::word_tokenizer::BretonWordTokenizer),
+    Catalan(crate::ca::word_tokenizer::CatalanWordTokenizer),
 }
 
 impl WordTokenizerBridge {
@@ -1853,6 +1860,9 @@ impl WordTokenizerBridge {
         }
         if code == "br" {
             return Self::Breton(crate::br::word_tokenizer::BretonWordTokenizer::new());
+        }
+        if code == "ca" {
+            return Self::Catalan(crate::ca::word_tokenizer::CatalanWordTokenizer::new());
         }
         if code != "fr" {
             return Self::Default(false);
@@ -1917,6 +1927,7 @@ impl WordTokenizer for WordTokenizerBridge {
             Self::Russian(tz) => tz.tokenize(text),
             Self::Belarusian(tz) => tz.tokenize(text),
             Self::Breton(tz) => tz.tokenize(text),
+            Self::Catalan(tz) => og_tokenizer::WordTokenizer::tokenize(tz, text),
         };
         tokens
             .into_iter()
@@ -2474,24 +2485,88 @@ mod tests {
             "UPPERCASE_SENTENCE_START",
             "DOUBLE_PUNCTUATION",
             "COMMA_PARENTHESIS_WHITESPACE",
+            "CATALAN_WORD_REPEAT_RULE",
+            "CATALAN_WRONG_WORD_IN_CONTEXT",
+            "CA_SIMPLE_REPLACE_SIMPLE",
+            "CA_SIMPLE_REPLACE_MULTIWORDS",
+            "CA_CHECKCASE",
+            "ADVERBIS_MENT",
+            "CA_SIMPLE_REPLACE_DNV",
         ] {
             assert!(
                 ids.contains(&expected),
                 "expected {expected} in Catalan natives, got {ids:?}"
             );
         }
-        let text_level_ids = engine.text_level_rule_ids();
         assert!(
-            text_level_ids.contains(&"UNPAIRED_BRACKETS")
-                && text_level_ids.contains(&"SENTENCE_WHITESPACE"),
-            "expected brackets and sentence-whitespace text rules, got {text_level_ids:?}"
+            !ids.contains(&"MORFOLOGIK_RULE_CA_ES"),
+            "no morfologik dict for ca in this tree, the wordlist speller must stay off: {ids:?}"
         );
-        let result = engine.check("la casa és gran.");
+        let text_level_ids = engine.text_level_rule_ids();
+        for expected in [
+            "UNPAIRED_BRACKETS",
+            "SENTENCE_WHITESPACE",
+            "TOO_LONG_SENTENCE",
+            "CA_UNPAIRED_QUESTION",
+            "CA_UNPAIRED_EXCLAMATION",
+            "CA_WORD_COHERENCY",
+            "PUNCTUATION_PARAGRAPH_END2",
+            "IGNORE_PROPER_NOUNS",
+        ] {
+            assert!(
+                text_level_ids.contains(&expected),
+                "expected {expected} in Catalan text-level natives, got {text_level_ids:?}"
+            );
+        }
+        let result = engine.check("és.");
         let ids: Vec<&str> = result.matches.iter().map(|m| m.rule().id()).collect();
         assert!(
             ids.contains(&"UPPERCASE_SENTENCE_START"),
             "expected UPPERCASE_SENTENCE_START on lowercase start, got {ids:?}"
         );
+        let result = engine.check("la casa és gran.");
+        let ids: Vec<&str> = result.matches.iter().map(|m| m.rule().id()).collect();
+        assert!(
+            ids.contains(&"CA_MULTITOKEN_SPELLING_FOUR"),
+            "with the manual added.txt dictionary every common word stays UNKNOWN, so the \
+             multitoken-spelling rules fire exactly like the module pipeline: {ids:?}"
+        );
+    }
+
+    #[test]
+    fn catalan_engine_tokenizer_mounts_the_catalan_splitter() {
+        let texts = |code: &str| {
+            WordTokenizerBridge::for_code(code)
+                .tokenize("Emporta-te'ls a l'observatori dels mars", 0)
+                .into_iter()
+                .map(|t| t.token().token().to_string())
+                .collect::<Vec<_>>()
+        };
+        let catalan = texts("ca");
+        assert_eq!(
+            catalan,
+            vec![
+                "Emporta",
+                "-",
+                "te",
+                "'ls",
+                " ",
+                "a",
+                " ",
+                "l",
+                "'",
+                "observatori",
+                " ",
+                "de",
+                "ls",
+                " ",
+                "mars"
+            ]
+        );
+        let generic = texts("xx");
+        assert_ne!(catalan, generic);
+        assert_eq!(generic[0], "Emporta-te");
+        assert_eq!(generic[10], "dels");
     }
 
     #[test]
