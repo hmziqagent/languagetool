@@ -1315,6 +1315,27 @@ mod tests {
         }
     }
 
+    #[ignore]
+    #[test]
+    fn probe_round20_wladce_initial_readings() {
+        for text in [
+            "Surowce zawieraj\u{105}ce te alkaloidy",
+            "Wo\u{17a}nice odebrali ma\u{142}ym konikom worki z obrokiem.",
+            "Uwielbiam tego gruzi\u{144}skiego tw\u{f3}rce ludowego.",
+        ] {
+            eprintln!("=== initial readings '{text}' ===");
+            let sentence = crate::pl::test_support::analyze_undisambiguated(text, 0, text.len());
+            for t in sentence.non_whitespace_tokens() {
+                let readings: Vec<String> = t
+                    .readings()
+                    .iter()
+                    .map(|r| format!("{}[{}]", r.lemma().unwrap_or("-"), r.pos_tags().join("+")))
+                    .collect();
+                eprintln!("   {:?} => {}", t.token().token(), readings.join(", "));
+            }
+        }
+    }
+
     fn adj_rule_variant_xml(rule_id: &str, strip: &[usize]) -> (String, usize) {
         let path = crate::pl::pl_rules_dir()
             .expect("pl rules dir")
