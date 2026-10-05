@@ -1113,6 +1113,54 @@ mod tests {
         });
     }
 
+    #[ignore]
+    #[test]
+    fn probe_round17_wladce_sequential_disambig_scan() {
+        let resource_dir = crate::pl::tagger::pl_resource_dir().expect("pl resource dir");
+        let xml = std::fs::read_to_string(resource_dir.join("disambiguation.xml")).unwrap();
+        let normalized = crate::pl::normalize_disambiguation_xml(&xml);
+        let parsed = og_tagger::XmlDisambiguator::from_xml_with_english(&normalized, None)
+            .expect("parse disambiguation.xml");
+        let text = "Surowce zawieraj\u{105}ce te alkaloidy";
+        let mut sentence = crate::pl::test_support::analyze_undisambiguated(text, 0, text.len());
+        for (i, t) in sentence.non_whitespace_tokens().iter().enumerate() {
+            eprintln!("   token {i}: {:?}", t.token().token());
+        }
+        let surowce_reading = |s: &og_core::AnalyzedSentence| -> String {
+            s.non_whitespace_tokens()
+                .iter()
+                .find(|t| t.token().token() == "Surowce")
+                .map(|t| {
+                    t.readings()
+                        .iter()
+                        .map(|r| r.pos_tags().join("+"))
+                        .collect::<Vec<_>>()
+                        .join(",")
+                })
+                .unwrap_or_default()
+        };
+        for (idx, id) in parsed.rule_ids().iter().enumerate() {
+            let hits = parsed.debug_match_rule(&mut sentence, idx);
+            let covers = hits.iter().any(|positions| positions.contains(&1));
+            let before = surowce_reading(&sentence);
+            parsed.apply_rule(&mut sentence, idx);
+            let after = surowce_reading(&sentence);
+            if covers || before != after {
+                eprintln!(
+                    "   rule {id} (idx {idx}) covers={covers} hits={hits:?} surowce_changed={}",
+                    before != after
+                );
+                if covers {
+                    eprintln!("     pattern: {}", parsed.rule_pattern_debug(idx));
+                }
+                if before != after {
+                    eprintln!("     surowce: {before} -> {after}");
+                }
+            }
+        }
+        eprintln!("   final Surowce: {}", surowce_reading(&sentence));
+    }
+
     fn adj_rule_variant_xml(rule_id: &str, strip: &[usize]) -> (String, usize) {
         let path = crate::pl::pl_rules_dir()
             .expect("pl rules dir")
@@ -1247,6 +1295,83 @@ mod tests {
             "the pipeline adds the SENT_END reading before disambiguation, so the PO_WOLI \\
              residue isolates the loss to a disambiguator path that Java guards with \\
              AnalyzedTokenReadings.java:377 / DisambiguationPatternRuleReplacer.java:176"
+        );
+    }
+
+    #[test]
+    fn wladce_residue_precondition_surowce_keeps_exact_case_depr_reading() {
+        let text = "Surowce zawieraj\u{105}ce te alkaloidy";
+        let resource_dir = crate::pl::tagger::pl_resource_dir().expect("pl resource dir");
+        let dict = og_tagger::generic_tagger::shared_dictionary(&resource_dir, "polish")
+            .expect("polish.dict");
+        let exact: Vec<String> = dict
+            .lookup("Surowce")
+            .iter()
+            .map(|(lemma, pos)| format!("{lemma}/{pos}"))
+            .collect();
+        assert!(
+            exact
+                .iter()
+                .any(|e| e.split('/').next().is_some_and(|l| l == "Surowiec")
+                    && e.rsplit('/')
+                        .next()
+                        .is_some_and(|pos| pos.split('+').any(|p| p == "depr:pl:nom:m2"))),
+            "the exact-case FSA hit that feeds the WLADCE false positive: {exact:?}"
+        );
+        let sentence = disambiguated_sentence(text);
+        let surowce = sentence
+            .non_whitespace_tokens()
+            .into_iter()
+            .find(|t| t.token().token() == "Surowce")
+            .expect("Surowce token");
+        assert!(
+            surowce
+                .readings()
+                .iter()
+                .any(|r| r.pos_tags().first().is_some_and(|p| p == "depr:pl:nom:m2")),
+            "the WLADCE fp precondition: the reading survives the whole module pipeline - \\
+             the two unify_adj_subst sub-rules that cover the token keep m2 (the pact tag \\
+                             'pact:pl:nom.acc.voc:m2.m3.f.n1.n2.p2.p3' satisfies the \".*\\bm2\\b.*\" gender \\
+             equivalence), so the Java-side drop happens in shared engine code, not in pl XML"
+        );
+    }
+
+    #[test]
+    fn rymy_residue_compiles_the_match_reference_element_with_no_matchable_source() {
+        let rymy: Vec<&CompiledRule> = compiled_rules()
+            .rules
+            .iter()
+            .filter(|r| r.id == "RYMY")
+            .collect();
+        assert!(!rymy.is_empty(), "RYMY must compile");
+        let sub1 = rymy
+            .iter()
+            .find(|r| r.sub_id.as_deref() == Some("1"))
+            .expect("RYMY sub-rule 1");
+        let and_members: Vec<&og_xml::compiler::CompiledPatternToken> = sub1
+            .pattern
+            .elements
+            .iter()
+            .filter_map(|e| match e {
+                og_xml::compiler::CompiledPatternElement::AndGroup(members) => Some(members.iter()),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        assert!(
+            and_members.len() >= 2,
+            "RYMY sub-rule 1 must carry the <and> group: {:?}",
+            sub1.pattern.tokens.len()
+        );
+        assert!(
+            and_members.iter().all(|m| {
+                m.text.is_none() && m.compiled_regexp.is_none() && m.compiled_regexp_fancy.is_none()
+            }),
+            "the shared compiler drops the token-level <match no=\"0\" regexp_match=...> \\
+             transform, so RYMY's <and> branch can never match - this pin flips when the \\
+             engine gains the Java runtime rewrite (PatternTokenMatcher.java:55-63 \\
+             resolveReference -> PatternToken.java:502-515 doCompile -> MatchState.java:221-227 \\
+             toFinalString replaceAll)"
         );
     }
 }
