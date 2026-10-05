@@ -23,6 +23,21 @@ const CAMEL_CASE_HYPHEN_WORDS: [&str; 6] = [
     "ph-metres",
 ];
 
+const CLITIC_HYPHEN_FORMS: [&str; 24] = [
+    "-el", "-els", "-em", "-en", "-ens", "-hi", "-ho", "-l", "-la", "-les", "-li", "-lo", "-los",
+    "-m", "-me", "-n", "-ne", "-nos", "-s", "-se", "-t", "-te", "-us", "-vos",
+];
+
+fn is_dict_atomic_clitic(piece: &str) -> bool {
+    let mut chars = piece.chars();
+    let letter_ok = matches!(chars.next(), Some(c) if "lnmtsdLNMTSD".contains(c));
+    let apos_ok = matches!(chars.next(), Some('\'') | Some('\u{2019}'));
+    letter_ok && apos_ok && chars.next().is_none()
+        || CLITIC_HYPHEN_FORMS
+            .iter()
+            .any(|form| piece.eq_ignore_ascii_case(form))
+}
+
 #[derive(Clone)]
 struct AuxChar {
     ch: char,
@@ -369,6 +384,10 @@ impl CatalanWordTokenizer {
         }
         let ela_fixed = piece.replace('\u{00AD}', "").replace("l-l", "l\u{b7}l");
         if self.tagger.is_word_tagged(&ela_fixed) {
+            push(piece.to_string(), disp_from, disp_to, out);
+            return;
+        }
+        if is_dict_atomic_clitic(piece) {
             push(piece.to_string(), disp_from, disp_to, out);
             return;
         }
@@ -726,14 +745,12 @@ mod tests {
             texts("Emporta-te'ls a l'observatori dels mars"),
             vec![
                 "Emporta".to_string(),
-                "-".to_string(),
-                "te".to_string(),
+                "-te".to_string(),
                 "'ls".to_string(),
                 " ".to_string(),
                 "a".to_string(),
                 " ".to_string(),
-                "l".to_string(),
-                "'".to_string(),
+                "l'".to_string(),
                 "observatori".to_string(),
                 " ".to_string(),
                 "de".to_string(),
@@ -741,12 +758,13 @@ mod tests {
                 " ".to_string(),
                 "mars".to_string(),
             ],
-            "Java keeps 'l'/'-te' whole via the dictionary; the added lists have no clitics, so \
-             wordsToAdd splits them exactly like an unknown hyphen word"
+            "Java CatalanWordTokenizerTest expects exactly [Emporta, -te, 'ls,  , a,  , l', \
+             observatori,  , de, ls,  , mars]: the closed pronom-feble class stays whole like the \
+             dictionary keeps it, while 'dels' still splits into de+ls"
         );
         assert_eq!(
             texts("Emporta-te\u{2019}ls a l\u{2019}observatori dels mars").len(),
-            15,
+            13,
             "the typographic apostrophe behaves identically"
         );
     }
@@ -758,10 +776,7 @@ mod tests {
             texts("Se'n d\u{f3}na vergonya"),
             vec!["Se", "'n", " ", "d\u{f3}na", " ", "vergonya"]
         );
-        assert_eq!(
-            texts("-M'agradaria."),
-            vec!["-", "M", "'", "agradaria", "."]
-        );
+        assert_eq!(texts("-M'agradaria."), vec!["-", "M'", "agradaria", "."]);
         assert_eq!(
             texts("No acabava d\u{2019}entendre\u{2019}l b\u{e9}"),
             vec![
@@ -769,8 +784,7 @@ mod tests {
                 " ",
                 "acabava",
                 " ",
-                "d",
-                "\u{2019}",
+                "d\u{2019}",
                 "entendre",
                 "\u{2019}l",
                 " ",
@@ -779,9 +793,7 @@ mod tests {
         );
         assert_eq!(
             texts("N'hi ha vint-i-quatre"),
-            vec![
-                "N", "'", "hi", " ", "ha", " ", "vint", "-", "i", "-", "quatre"
-            ]
+            vec!["N'", "hi", " ", "ha", " ", "vint", "-", "i", "-", "quatre"]
         );
     }
 
@@ -814,7 +826,7 @@ mod tests {
             texts("Castella-la Manxa"),
             vec!["Castella", "-", "la", " ", "Manxa"]
         );
-        assert_eq!(texts("S\u{e0}sser-l'Alguer").len(), 5);
+        assert_eq!(texts("S\u{e0}sser-l'Alguer").len(), 4);
         assert_eq!(
             texts("Em\u{ed}lia-Romanya"),
             vec!["Em\u{ed}lia", "-", "Romanya"]
@@ -837,7 +849,6 @@ mod tests {
         assert_eq!(texts("can"), vec!["ca", "n"]);
         assert_eq!(texts("casa"), vec!["casa"]);
     }
-
     #[test]
     fn java_pin_ela_geminada_forms() {
         assert_eq!(
@@ -865,8 +876,8 @@ mod tests {
 
     #[test]
     fn java_pin_digit_grouping_and_decimals() {
-        assert_eq!(texts("\u{c9}s d'1 km.").len(), 8);
-        assert_eq!(texts("\u{c9}s d'1,5 km.").len(), 8);
+        assert_eq!(texts("\u{c9}s d'1 km.").len(), 7);
+        assert_eq!(texts("\u{c9}s d'1,5 km.").len(), 7);
         assert_eq!(texts("10 000").len(), 1);
         assert_eq!(texts("1 000 000").len(), 1);
         assert_eq!(texts("2005 57 114"), vec!["2005", " ", "57 114"]);
@@ -927,7 +938,7 @@ mod tests {
         );
         assert_eq!(
             texts("-contar-se'n-"),
-            vec!["-", "contar", "-", "se", "'n", "-"]
+            vec!["-", "contar", "-se", "'n", "-"]
         );
     }
 

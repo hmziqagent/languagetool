@@ -148,7 +148,20 @@ pub(crate) fn pattern_of(rule_id: &str) {
 }
 
 fn token_needs_readings(t: &og_xml::compiler::CompiledPatternToken) -> bool {
-    t.postag.is_some() || t.compiled_postag_regexp.is_some() || t.inflected
+    t.postag.is_some()
+        || t.compiled_postag_regexp.is_some()
+        || t.compiled_postag_regexp_fancy.is_some()
+        || t.inflected
+        || t.chunk.is_some()
+        || t.chunk_re.is_some()
+        || t.exceptions.iter().any(exception_needs_readings)
+}
+
+fn exception_needs_readings(e: &og_xml::compiler::CompiledException) -> bool {
+    e.postag.is_some()
+        || e.compiled_postag_regexp.is_some()
+        || e.compiled_postag_regexp_fancy.is_some()
+        || e.inflected
 }
 
 fn element_needs_readings(e: &CompiledPatternElement) -> bool {
@@ -166,7 +179,7 @@ pub(crate) fn pattern_needs_readings(pattern: &CompiledPattern) -> bool {
 }
 
 pub(crate) fn rule_needs_readings(rule: &CompiledRule) -> bool {
-    pattern_needs_readings(&rule.pattern)
+    pattern_needs_readings(&rule.pattern) || rule.antipatterns.iter().any(pattern_needs_readings)
 }
 
 fn count_matches(rule_id: &str, text: &str) -> usize {
@@ -287,12 +300,15 @@ mod tests {
 
     #[test]
     fn classifier_counts_inflected_tokens_as_dict_dependent() {
-        let surface = compiled_rules()
+        let accent_solt = compiled_rules()
             .rules
             .iter()
-            .find(|r| r.id == "MES1")
-            .expect("MES1 compiled");
-        assert!(!rule_needs_readings(surface));
+            .find(|r| r.id == "ACCENT_SOLT")
+            .expect("ACCENT_SOLT compiled");
+        assert!(
+            !rule_needs_readings(accent_solt),
+            "ACCENT_SOLT (single [`\u{b4}] regexp token, grammar.xml ACCENT_SOLT) must stay surface-only"
+        );
         let enrecordar = compiled_rules()
             .rules
             .iter()
@@ -303,11 +319,72 @@ mod tests {
             "ENRECORDAR must carry inflected tokens"
         );
         assert!(rule_needs_readings(enrecordar));
+        let mes1 = compiled_rules()
+            .rules
+            .iter()
+            .find(|r| r.id == "MES1")
+            .expect("MES1 compiled");
+        assert!(
+            rule_needs_readings(mes1),
+            "round-21 correction: MES1's own antipattern carries the exception scope=next \
+         inflected=ser (grammar.xml:72590-72596), and antipatterns run through the same \
+         reading-based matcher as patterns (PatternRule.java:223-226 immunizes via \
+         DisambiguationPatternRuleReplacer.java:82-99, PatternRuleMatcher over readings), so \
+         MES1 is dict-dependent after all - its 76-fp family was already attributed to the \
+         SuppressIfAnyRuleMatchesFilter+MES2 chain, both dict-hungry"
+        );
+    }
+
+    #[test]
+    fn classifier_reads_antipattern_and_exception_postags() {
+        let palestina = compiled_rules()
+            .rules
+            .iter()
+            .find(|r| r.id == "PALESTINA")
+            .expect("PALESTINA compiled");
+        assert!(
+            !palestina.pattern.tokens.iter().any(token_needs_readings),
+            "PALESTINA's pattern is the plain case-sensitive token 'palestina'"
+        );
+        assert!(
+            rule_needs_readings(palestina),
+            "PALESTINA's fp family (9 fails) is suppressed in Java only by its three antipatterns \
+         (N.[FC]S000|A..[FC]S.|_GN_FS + A..[FC]S., CC, inflected ser, grammar.xml PALESTINA), \
+         all of which consult readings - dict-dependent, not engine-side"
+        );
+        let diacritics02 = compiled_rules()
+            .rules
+            .iter()
+            .find(|r| r.id == "DIACRITICS_02")
+            .expect("DIACRITICS_02 compiled");
+        assert!(
+            diacritics02
+                .pattern
+                .tokens
+                .iter()
+                .any(|t| t.exceptions.iter().any(exception_needs_readings)),
+            "DIACRITICS_02's marker token carries <exception postag='D.*|V.N.*|[NA].*|V.P.*' \
+         postag_regexp='yes'/> (grammar.xml:31567), tested per reading by \
+         AbstractPatternRulePerformer.java:232-234 isExceptionMatchedCompletely"
+        );
+        assert!(rule_needs_readings(diacritics02));
+        let hagut = compiled_rules()
+            .rules
+            .iter()
+            .find(|r| r.id == "HAGUT")
+            .expect("HAGUT compiled");
+        assert!(
+            rule_needs_readings(hagut),
+            "HAGUT's fp family (7 fails) is suppressed by <exception scope='previous' \
+         inflected='yes'>haver</exception> on the pattern token (grammar.xml HAGUT): Java \
+         vetoes 'Ha hagut' because 'Ha' carries lemma haver - inflected exceptions need the \
+         dictionary"
+        );
     }
 
     #[ignore]
     #[test]
-    fn probe_round20_engine_side_breakdown() {
+    fn probe_round21_engine_side_breakdown() {
         let Ok(lines) = std::fs::read_to_string("/tmp/test_failures_ca_module.txt") else {
             eprintln!("no /tmp/test_failures_ca_module.txt - run the module suite first");
             return;
@@ -320,28 +397,56 @@ mod tests {
                 }
             }
         }
+        let implemented_filters = [
+            "org.languagetool.rules.spelling.multitoken.MultitokenSpellerFilter",
+            "org.languagetool.rules.patterns.ApostropheTypeFilter",
+        ];
         let mut engine_side: Vec<(String, usize)> = Vec::new();
+        let mut filter_side: Vec<(String, usize)> = Vec::new();
         let mut dict_side = 0usize;
         for (id, n) in &fails {
             let mut sub_rules = 0usize;
-            let mut surface_subs = 0usize;
+            let mut reading_subs = 0usize;
+            let mut unimplemented_filter = false;
             for r in compiled_rules().rules.iter().filter(|r| &r.id == id) {
                 sub_rules += 1;
-                surface_subs += usize::from(!rule_needs_readings(r));
+                reading_subs += usize::from(rule_needs_readings(r));
+                if let Some(f) = &r.filter
+                    && !implemented_filters.contains(&f.class.as_str())
+                {
+                    unimplemented_filter = true;
+                }
             }
-            if sub_rules > 0 && surface_subs == sub_rules {
-                engine_side.push((id.clone(), *n));
-            } else {
+            if sub_rules == 0 {
                 dict_side += n;
+            } else if reading_subs > 0 {
+                dict_side += n;
+            } else if unimplemented_filter {
+                filter_side.push((id.clone(), *n));
+            } else {
+                engine_side.push((id.clone(), *n));
             }
         }
         engine_side.sort_unstable_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+        filter_side.sort_unstable_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
         let total: usize = fails.values().sum();
         let engine_total: usize = engine_side.iter().map(|(_, n)| n).sum();
+        let filter_total: usize = filter_side.iter().map(|(_, n)| n).sum();
         eprintln!(
-            "corrected attribution: {total} failures -> {dict_side} on dict-dependent rules \
-             (postag OR inflected in every sub-rule, per PatternToken.java:364-374 and \
-             AbstractPatternRulePerformer.java:204-218), {engine_total} on fully surface rules"
+            "round-21 attribution: {total} failures -> {dict_side} dict-dependent (postag OR \
+             inflected on any pattern/antipattern token or exception, per PatternToken.java:\
+             364-374, AbstractPatternRulePerformer.java:232-234 and PatternRule.java:223-226), \
+             {filter_total} on rules carrying a filter class with no engine arm, \
+             {engine_total} on fully surface rules"
+        );
+        eprintln!(
+            "filter-class residue by rule: {}",
+            filter_side
+                .iter()
+                .take(20)
+                .map(|(id, n)| format!("{id}({n})"))
+                .collect::<Vec<_>>()
+                .join(" ")
         );
         eprintln!(
             "surface residue by rule: {}",
@@ -352,6 +457,228 @@ mod tests {
                 .collect::<Vec<_>>()
                 .join(" ")
         );
+    }
+
+    #[test]
+    fn round21_clitics_stay_whole_so_date_patterns_match() {
+        assert_eq!(
+            count_matches("CA_DATE_WEEKDAY", "Dilluns, 7 d'octubre de 2014"),
+            1,
+            "guards the round-21 tokenizer fix: Java's wordsToAdd keeps the closed clitic set \
+             whole via the dictionary (CatalanWordTokenizer.java:225-235, pinned by \
+             CatalanWordTokenizerTest [N', hi]/[d', 1]) and grammar.xml references d'/l'/s'/n'/\
+             m'/t' as literal tokens 236/235/93/69/29/12 times, so those forms are dict-atomic; \
+             our added.txt-only tagger used to split d' into d+' and the pattern token \
+             <token regexp=\"yes\">de|d'</token> (grammar.xml CA_DATE_WEEKDAY) could never \
+             match - if this pin flips back to 0 the clitic whitelist in word_tokenizer.rs \
+             regressed"
+        );
+        assert_eq!(
+            count_matches("CA_DATE_WEEKDAY", "Divendres, 15 d'agost del 2013."),
+            1,
+            "incorrect example (Java matches: the year is wrong) - matches now that d'agost \
+             tokenizes like Java"
+        );
+        assert_eq!(
+            count_matches("CA_DATE_WEEKDAY", "Dimarts, 7 d'octubre de 2014"),
+            1,
+            "fp twin: 7 October 2014 was a dimarts, so Java drops this via <filter \
+             class='org.languagetool.rules.ca.DateCheckFilter' args='year:7 month:5 day:3 \
+             weekDay:1'/> (grammar.xml CA_DATE_WEEKDAY, DateCheckFilter.java extends \
+             AbstractDateCheckWithSuggestionsFilter) - the engine's filter dispatch \
+             (og-rules pattern_rule.rs:2665 apply_filter) has no .ca. arm and the catch-all \
+             keeps the match; flips to 0 when the engine gains the ca DateCheckFilter arm"
+        );
+    }
+
+    #[test]
+    fn round21_cometes_residue_is_the_shared_apostrophe_normalization() {
+        assert_eq!(
+            count_matches("COMETES_INCORRECTES", "El pou d'Avall."),
+            0,
+            "guards the round-21 tokenizer fix: with d' whole, the pattern exception \
+             <exception regexp=\"yes\">[lnmtsd]'|[\\[\\(\u{ab}\u{201c}]</exception> \
+             (grammar.xml COMETES_INCORRECTES) vetoes the match exactly like Java - the \
+             pre-fix fp was the split ' token that no exception could veto"
+        );
+        assert_eq!(
+            count_matches(
+                "COMETES_INCORRECTES",
+                "El pou d'\u{2018}aquella casa\u{2019}."
+            ),
+            2,
+            "residue: sub-rules 1 and 2 match 'casa' + '\u{2019}' because the shared engine \
+             normalizes apostrophes on BOTH sides of the plain-token compare \
+             (og-rules pattern_rule.rs:1123-1124 over og-xml unifier.rs:8-14, which folds \
+             U+2019/U+2018/U+201B to '), so the pattern token <token spacebefore=\"no\">\
+             \u{2018}</token> accepts the closing quote \u{2019} - Java has no such fold \
+             (PatternTokenMatcher compares with equals/equalsIgnoreCase) - flips to 0 when \
+             the shared owner stops equating the two quotes in token matching"
+        );
+        assert_eq!(
+            count_matches(
+                "COMETES_INCORRECTES",
+                "\u{2018}lletra de l'alfabet grec\u{2019}"
+            ),
+            1,
+            "same engine-side fold: sub-rule 2 matches 'grec' + '\u{2019}' against the \
+             pattern's \u{2018} token"
+        );
+    }
+
+    #[test]
+    fn round21_antipattern_and_exception_fps_stay_dict_starved() {
+        assert_eq!(
+            count_matches("HAGUT", "Ha hagut de fer-ho."),
+            1,
+            "HAGUT (7 fails): Java vetoes via <exception scope='previous' inflected='yes'>\
+             haver</exception> on the pattern token (grammar.xml HAGUT) because 'Ha' carries \
+             lemma haver - AbstractPatternRulePerformer.java:232-234 tests exceptions per \
+             reading; dict-starved 'Ha' has no readings so the exception cannot veto - flips \
+             to 0 with ca-ES.dict"
+        );
+        assert_eq!(
+            count_matches("PALESTINA", "Una dona palestina."),
+            1,
+            "PALESTINA (9 fails): Java suppresses via the antipattern N.[FC]S000|A..[FC]S.|\
+             _GN_FS + palestina ('dona' is NCFS000) or the inflected=ser antipattern \
+             (grammar.xml PALESTINA); antipatterns run through the same reading-based matcher \
+             (PatternRule.java:223-226, DisambiguationPatternRuleReplacer.java:82-99) - \
+             dict-starved they cannot fire, flips to 0 with ca-ES.dict"
+        );
+        assert_eq!(
+            count_matches("DISPAR", "eren situacions dispars."),
+            1,
+            "DISPAR (10 fails): the antipattern NC.*|RG.*|.*LOC_ADV.*|V.[MSI].*|_GV_|VS.* + \
+             dispars? needs 'situacions' to carry its NC* reading (grammar.xml DISPAR) - \
+             dict-starved, flips to 0 with ca-ES.dict"
+        );
+        assert_eq!(
+            count_matches(
+                "PEL_QUE",
+                "\u{c9}s aquesta la q\u{fc}esti\u{f3}, pel que sembla."
+            ),
+            1,
+            "PEL_QUE (16 fails): sub-rule 2's antipattern pe+l+que+no+V.[IS].*+_PUNCT.*|CC \
+             vetoes when 'sembla' carries VMIP3S0 (grammar.xml PEL_QUE) - dict-starved, \
+             flips to 0 with ca-ES.dict"
+        );
+        assert_eq!(
+            count_matches(
+                "DIFERENCIA",
+                "el que realment la diferencia de totes les altres"
+            ),
+            1,
+            "DIFERENCIA verb-side fp: the group's que + min0max2 RG|LOC_ADV + la + \
+             diferencia antipatterns (grammar.xml DIFERENCIA) need adverb readings - \
+             dict-starved, flips to 0 with ca-ES.dict"
+        );
+    }
+
+    #[test]
+    fn round21_srx_residue_stays_sentence_split_divergent() {
+        assert_eq!(
+            count_matches("D_SR", "D\u{ba}. Jaume Ivars."),
+            0,
+            "D_SR (1 fail): our SRX splitter breaks 'D\u{ba}. Jaume Ivars.' into 'D\u{ba}. ' + \
+             'Jaume Ivars.' (probe_round21_family_counts dumps the two sentences) so the \
+             pattern D\u{ba} + . + Lu-initial token cannot span; Java's ca SRX ruleset keeps \
+             it whole (the D_SR example passes in Java and CatalanSentenceTokenizerTest pins \
+             the no-break family, e.g. line 90 'amb tot...' stays one sentence) - flips when \
+             og-tokenizer's SRX handling stops breaking after '\u{ba}.' and after '... '"
+        );
+        assert_eq!(
+            count_matches("ETCETERA", "Tres, quatre, cinc, ... etc."),
+            0,
+            "ETCETERA (1 fail): the splitter breaks after '... ' before 'etc.', so sub-rule 2 \
+             (, . . . etc .) cannot span; Java keeps 'el vi no \u{e9}s gens propi de monjos, \
+             amb tot...' as one sentence (CatalanSentenceTokenizerTest:90) - same og-tokenizer \
+             SRX divergence"
+        );
+    }
+
+    #[test]
+    fn round21_cometes_rectes_residue_is_the_regexp_normalization_asymmetry() {
+        assert_eq!(
+            count_matches("COMETES_RECTES", "\u{c9}s de \u{2018}gran qualitat\"."),
+            0,
+            "COMETES_RECTES (2 fails): sub-rule 2's <token regexp=\"yes\">[\u{2018}\u{2019}]\
+             </token> can never match because the shared engine normalizes the token surface \
+             (\u{2018}\u{2192}') but matches the UNnormalized pattern regex against it \
+             (pattern_rule.rs:2201-2218 element_surface_text_matches over og-xml unifier.\
+             rs:8-14) - Java matches the raw surface - flips to 1 when the engine matches \
+             regexps against the unnormalized surface (or folds both sides consistently)"
+        );
+    }
+
+    #[test]
+    fn round21_chunk_rules_stay_dict_starved() {
+        assert_eq!(
+            count_matches("EN_FA_QUATRE_ANYS", "D'aix\u{f2} en fa quatre anys."),
+            0,
+            "EN_FA_QUATRE_ANYS (3 fails): the pattern needs <token chunk=\"PTime\"/>, and \
+             every PTime producer is an action=\"addchunk\" rule in disambiguation.xml whose \
+             pattern is postag-based (PERIODES_DE_TEMPS at disambiguation.xml:1512-1530 uses \
+             DA.*|AO.*|NC.*) - dict-starved twice over: no readings means no chunk, and the \
+             chunk classifier (token_needs_readings counts chunk/chunk_re) keeps this family \
+             in the dict bucket"
+        );
+    }
+
+    #[ignore]
+    #[test]
+    fn probe_round21_family_counts() {
+        for (id, text) in [
+            ("CA_DATE_WEEKDAY", "Dilluns, 7 d'octubre de 2014"),
+            ("CA_DATE_WEEKDAY", "Dimarts, 7 d'octubre de 2014"),
+            ("CA_DATE_WEEKDAY", "Dimarts, 7 oct 2014"),
+            ("CA_DATE_WEEKDAY", "Divendres, 15 d'agost del 2013."),
+            ("COMETES_INCORRECTES", "El pou d'Avall."),
+            (
+                "COMETES_INCORRECTES",
+                "El pou d'\u{2018}aquella casa\u{2019}.",
+            ),
+            (
+                "COMETES_INCORRECTES",
+                "\u{2018}lletra de l'alfabet grec\u{2019}",
+            ),
+            ("HAGUT", "Ha hagut de fer-ho."),
+            ("PALESTINA", "Una dona palestina."),
+            ("DISPAR", "eren situacions dispars."),
+            (
+                "PEL_QUE",
+                "\u{c9}s aquesta la q\u{fc}esti\u{f3}, pel que sembla.",
+            ),
+            (
+                "DIFERENCIA",
+                "Aquest fet indica que la diferencia en l'estructura ha tendit a reduir-se.",
+            ),
+            (
+                "DIFERENCIA",
+                "el que realment la diferencia de totes les altres",
+            ),
+            ("ENRECORDAR", "No t'enrecordes?"),
+            ("LHI_SEL", "L'hi denominava aix\u{ed}."),
+            ("EN_FA_QUATRE_ANYS", "D'aix\u{f2} en fa quatre anys."),
+            ("COMETES_RECTES", "\u{c9}s de \u{2018}gran qualitat\"."),
+            ("DEJA_VU", "Un d\u{e9}j\u{e0}-vu."),
+            ("ETCETERA", "Tres, quatre, cinc, ... etc."),
+            ("ET_AL", "F. Garcia et. al., J. Pont."),
+            ("D_SR", "D\u{ba}. Jaume Ivars."),
+        ] {
+            eprintln!("{id} on '{text}': {}", count_matches(id, text));
+        }
+        probe(
+            "COMETES_INCORRECTES",
+            "El pou d'\u{2018}aquella casa\u{2019}.",
+        );
+        probe(
+            "COMETES_INCORRECTES",
+            "\u{2018}lletra de l'alfabet grec\u{2019}",
+        );
+        probe("D_SR", "D\u{ba}. Jaume Ivars.");
+        probe("ETCETERA", "Tres, quatre, cinc, ... etc.");
+        probe("ET_AL", "F. Garcia et. al., J. Pont.");
     }
 
     #[ignore]

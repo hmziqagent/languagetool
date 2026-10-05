@@ -278,7 +278,8 @@ fn catalan_grammar_examples_with_ca_pipeline() {
         started.elapsed().as_secs_f64(),
     );
     eprintln!(
-        "residue attribution: {} failures on dict-dependent rules (postag or inflected tokens in the pattern - need the missing ca-ES.dict), {} on surface-only rules",
+        "residue attribution: {} failures on dict-dependent rules (postag or inflected tokens, \
+         token exceptions or antipattern tokens - need the missing ca-ES.dict), {} on surface-only rules",
         tag_starved, engine_side
     );
     let mut top_rules: Vec<(String, usize)> = fail_by_rule.into_iter().collect();
@@ -467,7 +468,7 @@ fn pipeline_gv_chunking_stays_dict_starved_on_our_data() {
         .filter(|t| !t.is_whitespace() && !t.is_sentence_start())
         .collect();
     let surfaces: Vec<&str> = tokens.iter().map(|t| t.token().token()).collect();
-    assert_eq!(surfaces, vec!["S", "'", "ha", "de", "fer", "."]);
+    assert_eq!(surfaces, vec!["S'", "ha", "de", "fer", "."]);
     assert!(
         tokens.iter().all(|t| !t.has_chunk("GV")),
         "added.txt carries no haver/de/fer verb readings, so the GV chunker cannot fire on our data"
