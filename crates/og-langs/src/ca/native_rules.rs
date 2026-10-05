@@ -6,7 +6,7 @@ use og_core::{
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
 
-fn uppercase_first_char(word: &str) -> String {
+pub(crate) fn uppercase_first_char(word: &str) -> String {
     let mut chars = word.chars();
     match chars.next() {
         Some(first) => format!("{}{}", first.to_uppercase(), chars.as_str()),
@@ -14,7 +14,7 @@ fn uppercase_first_char(word: &str) -> String {
     }
 }
 
-fn is_capitalized_word(word: &str) -> bool {
+pub(crate) fn is_capitalized_word(word: &str) -> bool {
     let mut chars = word.chars();
     match chars.next() {
         Some(first) if first.is_uppercase() => {
@@ -32,7 +32,7 @@ fn is_camel_case(word: &str) -> bool {
     chars.any(char::is_uppercase)
 }
 
-fn is_all_uppercase(word: &str) -> bool {
+pub(crate) fn is_all_uppercase(word: &str) -> bool {
     word.chars()
         .all(|c| !(c.is_alphabetic() && c.is_lowercase()))
 }
@@ -49,7 +49,7 @@ fn to_id_suffix(text: &str) -> String {
     out.trim_matches('_').to_string()
 }
 
-fn context_around(
+pub(crate) fn context_around(
     sentence: &AnalyzedSentence,
     start: usize,
     end: usize,

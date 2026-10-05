@@ -1,4 +1,4 @@
-use og_core::rule::Rule as _;
+use og_core::rule::{Rule as _, TextLevelRule as _};
 use og_core::{AnalyzedSentence, AnalyzedToken, AnalyzedTokenReadings};
 use og_rules::pattern_rule::PatternRuleEngine;
 use og_xml::compiler::{CompiledRule, CompiledRuleSet, XmlCompiler};
@@ -102,6 +102,7 @@ impl CatalanPipeline {
         if let Some(disambiguator) = &self.disambiguator {
             disambiguator.disambiguate(&mut sentence);
         }
+        super::gv_chunker::add_gv_chunks(&mut sentence);
         sentence
     }
 
@@ -457,4 +458,111 @@ fn sentence_with_readings_helper_is_exported() {
     let sentence =
         super::native_rules::sentence_with_readings(&[("AICLE", &[("AICLE", "NCMS000")])]);
     assert!(sentence.tokens()[1].has_pos_tag("NCMS000"));
+}
+
+#[test]
+fn pipeline_gv_chunking_stays_dict_starved_on_our_data() {
+    let pipeline = CatalanPipeline::shared();
+    let sentences = pipeline.analyze_offset_text("S'ha de fer.");
+    let tokens: Vec<&og_core::AnalyzedTokenReadings> = sentences[0]
+        .0
+        .tokens()
+        .iter()
+        .filter(|t| !t.is_whitespace() && !t.is_sentence_start())
+        .collect();
+    let surfaces: Vec<&str> = tokens.iter().map(|t| t.token().token()).collect();
+    assert_eq!(surfaces, vec!["S", "'", "ha", "de", "fer", "."]);
+    assert!(
+        tokens.iter().all(|t| !t.has_chunk("GV")),
+        "added.txt carries no haver/de/fer verb readings, so the GV chunker cannot fire on our data"
+    );
+}
+
+#[test]
+fn pronom_feble_duplicate_stays_dict_starved_through_the_pipeline() {
+    let rule = super::pronom_feble_duplicate::PronomFebleDuplicateRule::new();
+    let pipeline = CatalanPipeline::shared();
+    let text = "S'ha de fer-se";
+    let sentences = pipeline.analyze_offset_text(text);
+    let matches = rule.match_sentence(&sentences[0].0);
+    assert!(
+        matches.is_empty(),
+        "our-data outcome: without ca-ES.dict the tagger emits no pronom-feble or verb readings, so PRONOMS_FEBLES_DUPLICATS stays dormant (algorithm-level pins live in pronom_feble_duplicate::tests)"
+    );
+}
+
+#[test]
+fn compound_rule_pipeline_outcome_on_a_two_word_compound() {
+    let rule = super::compound_rule::CompoundRule::new();
+    let pipeline = CatalanPipeline::shared();
+    let sentences = pipeline.analyze_offset_text("El blau grana \u{e9}s bonic.");
+    let matches = rule.match_sentence(&sentences[0].0);
+    assert_eq!(
+        matches.len(),
+        1,
+        "our-data outcome: 'blau grana' must fire CA_COMPOUNDS with the tagged merge 'blaugrana'"
+    );
+    assert!(
+        matches[0]
+            .replacements()
+            .iter()
+            .any(|r| r.value() == "blaugrana")
+    );
+}
+
+#[test]
+fn unpaired_brackets_pipeline_spans_match_the_text() {
+    let rule = super::catalan_unpaired_brackets_rule();
+    let pipeline = CatalanPipeline::shared();
+    let text = "Aix\u{f2} \u{e9}s (impossible. ";
+    let sentences: Vec<AnalyzedSentence> = pipeline
+        .analyze_offset_text(text)
+        .into_iter()
+        .map(|(s, _)| s)
+        .collect();
+    let matches = rule.match_text(text, &sentences);
+    assert_eq!(matches.len(), 1);
+    assert_eq!(
+        &text[matches[0].offset()..matches[0].offset() + matches[0].length()],
+        "("
+    );
+}
+
+#[test]
+fn word_repeat_beginning_pipeline_fires_on_the_java_example() {
+    let rule = super::word_repeat_beginning::CatalanWordRepeatBeginningRule::new();
+    let pipeline = CatalanPipeline::shared();
+    let text = "Per\u{f2} el carrer \u{e9}s tot modernista. Per\u{f2} t\u{e9} nom de poeta.";
+    let sentences: Vec<AnalyzedSentence> = pipeline
+        .analyze_offset_text(text)
+        .into_iter()
+        .map(|(s, _)| s)
+        .collect();
+    let matches = rule.match_text(text, &sentences);
+    assert_eq!(matches.len(), 1);
+    assert_eq!(
+        &text[matches[0].offset()..matches[0].offset() + matches[0].length()],
+        "Per\u{f2}"
+    );
+}
+
+#[test]
+fn remote_rules_stay_silent_through_the_pipeline() {
+    let pipeline = CatalanPipeline::shared();
+    let text = "Aix\u{f2} \u{e9}s una frase. I aquesta \u{e9}s una altra.";
+    let sentences: Vec<AnalyzedSentence> = pipeline
+        .analyze_offset_text(text)
+        .into_iter()
+        .map(|(s, _)| s)
+        .collect();
+    assert!(
+        super::remote_rules::CatalanRemoteRule::new()
+            .match_text(text, &sentences)
+            .is_empty()
+    );
+    assert!(
+        super::remote_rules::CatalanSplitLongSentenceRule::new(60)
+            .match_text(text, &sentences)
+            .is_empty()
+    );
 }
