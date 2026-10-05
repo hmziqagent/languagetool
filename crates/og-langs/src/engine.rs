@@ -2530,16 +2530,24 @@ mod tests {
         }
         let result = engine.check("és.");
         let ids: Vec<&str> = result.matches.iter().map(|m| m.rule().id()).collect();
-        assert!(
-            ids.contains(&"UPPERCASE_SENTENCE_START"),
-            "expected UPPERCASE_SENTENCE_START on lowercase start, got {ids:?}"
+        assert_eq!(
+            ids,
+            vec!["TOTS_ELS_DIACRITICS"],
+            "Catalan.java:513 gives UPPERCASE_SENTENCE_START -300 while TOTS_ELS_DIACRITICS \
+             falls to the base 0, so the CatalanMatchFilter's overlap resolution keeps the \
+             diacritics rule exactly like CleanOverlappingFilter.java:90-99 - this locks the \
+             ca match-filter wiring end-to-end through the real engine"
         );
         let result = engine.check("la casa és gran.");
         let ids: Vec<&str> = result.matches.iter().map(|m| m.rule().id()).collect();
-        assert!(
-            ids.contains(&"CA_MULTITOKEN_SPELLING_FOUR"),
-            "with the manual added.txt dictionary every common word stays UNKNOWN, so the \
-             multitoken-spelling rules fire exactly like the module pipeline: {ids:?}"
+        assert_eq!(
+            ids,
+            vec!["CA_SPLIT_WORDS"],
+            "with the manual added.txt dictionary every common word stays UNKNOWN so \
+             CA_MULTITOKEN_SPELLING_FOUR fires pre-filter exactly like the module pipeline, \
+             but Catalan.java:303 gives CA_SPLIT_WORDS 30 over the -95 of \
+             Catalan.java:522-523, so the ca overlap resolution keeps only CA_SPLIT_WORDS: \
+             {ids:?}"
         );
         let result = engine.check("Aix\u{f2} \u{e9}s (impossible. ");
         let brackets: Vec<_> = result

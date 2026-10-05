@@ -1097,6 +1097,7 @@ pub fn for_code(code: &str) -> Arc<dyn LanguageMatchFilter> {
         "pl" => Arc::new(PolishMatchFilter),
         "be" => Arc::new(BelarusianMatchFilter),
         "ru" => Arc::new(RussianMatchFilter),
+        "ca" => Arc::new(crate::ca::match_filter::CatalanMatchFilter),
         _ => Arc::new(BaseLanguageMatchFilter),
     }
 }
@@ -1182,5 +1183,19 @@ mod tests {
         assert_eq!(filter.priority_for_id("REPETITIONS_STYLE"), -55);
         assert_eq!(filter.priority_for_id("SOME_STYLE_RULE"), -50);
         assert_eq!(filter.priority_for_id("UNKNOWN_PL_RULE"), 0);
+    }
+
+    #[test]
+    fn catalan_filter_is_registered_for_code() {
+        assert_eq!(for_code("ca").priority_for_id("DEU_NI_DO"), 80);
+        assert_eq!(
+            for_code("ca").priority_for_id("MORFOLOGIK_RULE_CA_ES"),
+            -100
+        );
+        assert_eq!(for_code("ca").priority_for_id("SOME_CA_RULE"), 0);
+        assert_eq!(
+            for_code("ca-ES-valencia").priority_for_id("CA_SIMPLE_REPLACE_MULTIWORDS_X"),
+            70
+        );
     }
 }
