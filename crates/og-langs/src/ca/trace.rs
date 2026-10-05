@@ -205,6 +205,39 @@ fn count_matches_sub(rule_id: &str, sub_id: Option<&str>, text: &str) -> usize {
 mod tests {
     use super::*;
 
+    #[ignore]
+    #[test]
+    fn probe_round22_divendres_agost_pipeline_state() {
+        let pipeline = CatalanPipeline::shared();
+        let engine = suite_engine();
+        for text in [
+            "Divendres, 15 d'agost del 2013.",
+            "Dilluns, 7 d'octubre de 2014",
+            "Dimarts, 7 d'octubre de 2014",
+        ] {
+            eprintln!("=== {text:?}");
+            for (sentence, _) in pipeline.analyze_offset_text(text) {
+                for tr in sentence.tokens() {
+                    eprintln!(
+                        "  tok {:?} {}..{}",
+                        tr.token().token(),
+                        tr.token().start(),
+                        tr.token().end()
+                    );
+                }
+            }
+            for rule in group_of("CA_DATE_WEEKDAY") {
+                let mut total = 0usize;
+                for (sentence, _) in pipeline.analyze_offset_text(text) {
+                    total += engine.match_rule(rule, &sentence).len();
+                }
+                if total > 0 {
+                    eprintln!("  sub {:?} kept {} matches", rule.sub_id, total);
+                }
+            }
+        }
+    }
+
     #[test]
     fn mes1_antipattern_immunizes_its_own_example() {
         assert_eq!(
@@ -498,18 +531,21 @@ mod tests {
         );
         assert_eq!(
             count_matches("CA_DATE_WEEKDAY", "Dimarts, 7 d'octubre de 2014"),
-            1,
-            "fp twin: 7 October 2014 was a dimarts, so Java drops this via <filter \
-             class='org.languagetool.rules.ca.DateCheckFilter' args='year:7 month:5 day:3 \
-             weekDay:1'/> (grammar.xml CA_DATE_WEEKDAY, DateCheckFilter.java extends \
-             AbstractDateCheckWithSuggestionsFilter) - the engine's filter dispatch \
-             (og-rules pattern_rule.rs:2727 apply_filter) has no .ca. arm and the catch-all \
-             keeps the match; round-22 ports the ca tables at ca::date_check_filter \
-             (parse_weekday_catalan exact equals per DateFilterHelper.java:31-42, \
-             parse_month_catalan startsWith chain :52-64, day_name_catalan, \
-             CATALAN_WRONG_YEAR_MESSAGE :33-35, all dict-independent) - flips to 0 when \
-             the shared owner adds DateLang::Ca plus the class arm over the existing \
-             apply_date_check_with_suggestions_filter"
+            0,
+            "correct date: 7 October 2014 was a dimarts, so Java's DateCheckFilter \
+             (AbstractDateCheckWithSuggestionsFilter.java:186-189 dayOfWeekFromString == \
+             dayOfWeekFromDate -> null) drops the raw pattern match; the round-22 wiring \
+             adds DateLang::Ca (weekday equals-table and month startsWith chain from \
+             DateFilterHelper.java:31-75, day names :47-57, wrong-year message \
+             DateCheckFilter.java:52-54) plus the org.languagetool.rules.ca.DateCheckFilter \
+             arm in apply_filter, and the filter's plain-number args now resolve against \
+             per-element last-token positions like Java's getSkipCorrectedReference \
+             (RuleFilter.java:121-133 over one span entry per pattern element, \
+             AbstractPatternRulePerformer.java:124/141) - the old per-token indexing made \
+             year:7 land on 'l' whenever the min=0 max=8 element consumed two tokens \
+             ('de'+'l' in 'del 2013'), dropping Java's wrong-year match on 'Divendres, 15 \
+             d'agost del 2013.'; if this pin flips back to >0 the .ca. arm or the element \
+             resolution regressed"
         );
     }
 

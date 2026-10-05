@@ -147,10 +147,9 @@ mod tests {
                 parse_weekday_catalan(claimed),
                 weekday_of(y, m, d),
                 "the five CA_DATE_WEEKDAY correct examples are true dates: \
-                 AbstractDateCheckWithSuggestionsFilter.java:124-127 returns null and Java \
-                 reports no match - our engine keeps them because \
-                 pattern_rule.rs:2727 apply_filter has no \
-                 org.languagetool.rules.ca.DateCheckFilter arm"
+                 AbstractDateCheckWithSuggestionsFilter.java:186-189 returns null and Java \
+                 reports no match - the round-22 DateLang::Ca wiring drops them the same \
+                 way (pinned in trace::round21_clitics_stay_whole_so_date_patterns_match)"
             );
         }
         let keeps = [

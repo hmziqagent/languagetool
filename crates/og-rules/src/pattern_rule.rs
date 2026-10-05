@@ -757,11 +757,15 @@ impl PatternRuleEngine {
         }
 
         if let Some(ref filter) = rule.filter {
+            let element_positions: Vec<usize> = (0..rule.pattern.elements.len())
+                .filter_map(|elem| match_result.last_position_for_pattern(elem))
+                .collect();
             return self.apply_filter(
                 rule,
                 filter,
                 &match_result.matched_texts,
                 &match_result.matched_positions,
+                &element_positions,
                 tokens,
                 sentence,
                 rm,
@@ -2668,6 +2672,7 @@ impl PatternRuleEngine {
         filter: &og_xml::types::XmlFilter,
         matched_texts: &[String],
         matched_positions: &[usize],
+        element_positions: &[usize],
         tokens: &[&AnalyzedTokenReadings],
         sentence: &AnalyzedSentence,
         rm: RuleMatch,
@@ -2746,19 +2751,21 @@ impl PatternRuleEngine {
             | "org.languagetool.rules.fr.DateCheckFilter"
             | "org.languagetool.rules.es.DateCheckFilter"
             | "org.languagetool.rules.pt.DateCheckFilter"
-            | "org.languagetool.rules.nl.DateCheckFilter" => {
+            | "org.languagetool.rules.nl.DateCheckFilter"
+            | "org.languagetool.rules.ca.DateCheckFilter" => {
                 let lang = match filter.class.as_str() {
                     c if c.contains(".de.") => DateLang::De,
                     c if c.contains(".fr.") => DateLang::Fr,
                     c if c.contains(".es.") => DateLang::Es,
                     c if c.contains(".pt.") => DateLang::Pt,
                     c if c.contains(".nl.") => DateLang::Nl,
+                    c if c.contains(".ca.") => DateLang::Ca,
                     _ => DateLang::En,
                 };
                 self.apply_date_check_with_suggestions_filter(
                     lang,
                     &filter.args,
-                    matched_positions,
+                    element_positions,
                     tokens,
                     sentence.start(),
                     rm,
@@ -3117,7 +3124,7 @@ impl PatternRuleEngine {
         &self,
         lang: DateLang,
         args: &str,
-        matched_positions: &[usize],
+        element_positions: &[usize],
         tokens: &[&AnalyzedTokenReadings],
         base: usize,
         rm: RuleMatch,
@@ -3128,10 +3135,10 @@ impl PatternRuleEngine {
             .collect();
         let arg_pos = |key: &str| -> Option<usize> {
             let value: usize = raw.get(key)?.parse().ok()?;
-            if value == 0 || value > matched_positions.len() {
+            if value == 0 || value > element_positions.len() {
                 return None;
             }
-            Some(matched_positions[value - 1])
+            Some(element_positions[value - 1])
         };
         let week_day_pos = arg_pos("weekDay")?;
         let mut is_full_date_token = false;
@@ -4717,6 +4724,7 @@ enum DateLang {
     Ar,
     Br,
     Eo,
+    Ca,
 }
 
 fn trim_special_chars(s: &str) -> String {
@@ -4739,6 +4747,7 @@ fn parse_month_for(lang: DateLang, s: &str) -> u32 {
         DateLang::Ar => parse_month_arabic(s),
         DateLang::Br => parse_month_breton(s),
         DateLang::Eo => parse_month_esperanto(s),
+        DateLang::Ca => parse_month_catalan(s),
     }
 }
 
@@ -4962,6 +4971,7 @@ fn parse_weekday_for(lang: DateLang, s: &str) -> u32 {
         DateLang::Ar => parse_weekday_arabic(s),
         DateLang::Br => parse_weekday_breton(s),
         DateLang::Eo => parse_weekday_esperanto(s),
+        DateLang::Ca => parse_weekday_catalan(s),
     }
 }
 
@@ -5222,6 +5232,16 @@ fn localized_day_name(lang: DateLang, weekday: u32) -> &'static str {
         DateLang::Eo => [
             "", "dimanĉo", "lundo", "mardo", "merkredo", "jaŭdo", "vendredo", "sabato",
         ],
+        DateLang::Ca => [
+            "",
+            "diumenge",
+            "dilluns",
+            "dimarts",
+            "dimecres",
+            "dijous",
+            "divendres",
+            "dissabte",
+        ],
     };
     names.get(weekday as usize).copied().unwrap_or("")
 }
@@ -5368,6 +5388,51 @@ fn parse_day_of_month_breton(s: &str) -> u32 {
     }
 }
 
+fn parse_weekday_catalan(s: &str) -> u32 {
+    match s.to_lowercase().as_str() {
+        "dg" | "diumenge" => 1,
+        "dl" | "dilluns" => 2,
+        "dt" | "dimarts" => 3,
+        "dc" | "dimecres" => 4,
+        "dj" | "dijous" => 5,
+        "dv" | "divendres" => 6,
+        "ds" | "dissabte" => 7,
+        _ => 0,
+    }
+}
+
+fn parse_month_catalan(s: &str) -> u32 {
+    let mon = s.to_lowercase();
+    let n = mon.as_str();
+    if n.starts_with("gen") {
+        1
+    } else if n.starts_with("febr") {
+        2
+    } else if n.starts_with("mar\u{e7}") {
+        3
+    } else if n.starts_with("abr") {
+        4
+    } else if n.starts_with("maig") {
+        5
+    } else if n.starts_with("juny") {
+        6
+    } else if n.starts_with("jul") {
+        7
+    } else if n.starts_with("ag") {
+        8
+    } else if n.starts_with("set") {
+        9
+    } else if n.starts_with("oct") {
+        10
+    } else if n.starts_with("nov") {
+        11
+    } else if n.starts_with("des") {
+        12
+    } else {
+        0
+    }
+}
+
 fn wrong_year_message(lang: DateLang) -> &'static str {
     match lang {
         DateLang::En => "This date is wrong. Did you mean \"{currentYear}\"?",
@@ -5382,6 +5447,7 @@ fn wrong_year_message(lang: DateLang) -> &'static str {
             "Esta data está incorreta. Você está se referindo ao ano \"{currentYear}\"?"
         }
         DateLang::Nl => "Deze datum is onjuist. Bedoelt u misschien \"{currentYear}\"?",
+        DateLang::Ca => "Aquesta data no és correcta. ¿Us referiu a l'any \"{currentYear}\"?",
         _ => "",
     }
 }
@@ -5540,6 +5606,48 @@ mod tests {
         assert_eq!(parse_month_italian("settembre"), 9);
         assert_eq!(parse_month_italian("dic"), 12);
         assert_eq!(parse_month_italian("07"), 7);
+    }
+
+    #[test]
+    fn catalan_date_filter_parsers_match_java() {
+        assert_eq!(parse_weekday_catalan("Diumenge"), 1);
+        assert_eq!(parse_weekday_catalan("dg"), 1);
+        assert_eq!(parse_weekday_catalan("Dilluns"), 2);
+        assert_eq!(parse_weekday_catalan("dl"), 2);
+        assert_eq!(parse_weekday_catalan("Dimarts"), 3);
+        assert_eq!(parse_weekday_catalan("dt"), 3);
+        assert_eq!(parse_weekday_catalan("Dimecres"), 4);
+        assert_eq!(parse_weekday_catalan("dc"), 4);
+        assert_eq!(parse_weekday_catalan("Dijous"), 5);
+        assert_eq!(parse_weekday_catalan("dj"), 5);
+        assert_eq!(parse_weekday_catalan("Divendres"), 6);
+        assert_eq!(parse_weekday_catalan("dv"), 6);
+        assert_eq!(parse_weekday_catalan("Dissabte"), 7);
+        assert_eq!(parse_weekday_catalan("ds"), 7);
+        assert_eq!(parse_weekday_catalan("dium"), 0);
+        assert_eq!(parse_weekday_catalan("divendres "), 0);
+        assert_eq!(parse_weekday_catalan("x"), 0);
+
+        assert_eq!(parse_month_catalan("Octubre"), 10);
+        assert_eq!(parse_month_catalan("oct"), 10);
+        assert_eq!(parse_month_catalan("d'agost"), 0);
+        assert_eq!(parse_month_catalan("agost"), 8);
+        assert_eq!(parse_month_catalan("ag"), 8);
+        assert_eq!(parse_month_catalan("juliol"), 7);
+        assert_eq!(parse_month_catalan("jul"), 7);
+        assert_eq!(parse_month_catalan("setembre"), 9);
+        assert_eq!(parse_month_catalan("desembre"), 12);
+        assert_eq!(parse_month_catalan("mar\u{e7}"), 3);
+        assert_eq!(parse_month_catalan("mar"), 0);
+        assert_eq!(parse_month_catalan("x"), 0);
+
+        assert_eq!(compute_weekday(2014, 10, 7), 3);
+        assert_eq!(localized_day_name(DateLang::Ca, 3), "dimarts");
+        assert_eq!(localized_day_name(DateLang::Ca, 6), "divendres");
+        assert_eq!(
+            wrong_year_message(DateLang::Ca),
+            "Aquesta data no \u{e9}s correcta. \u{bf}Us referiu a l'any \"{currentYear}\"?"
+        );
     }
 
     #[test]
