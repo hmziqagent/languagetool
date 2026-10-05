@@ -399,8 +399,10 @@ mod tests {
         }
         let implemented_filters = [
             "org.languagetool.rules.spelling.multitoken.MultitokenSpellerFilter",
-            "org.languagetool.rules.patterns.ApostropheTypeFilter",
+            "org.languagetool.rules.ApostropheTypeFilter",
         ];
+        let dict_blocked_filters = ["org.languagetool.rules.ca.ConvertToGenderAndNumberFilter"];
+        let tokenizer_dict_families = ["DEJA_VU", "PROVA_DEL_COTO"];
         let mut engine_side: Vec<(String, usize)> = Vec::new();
         let mut filter_side: Vec<(String, usize)> = Vec::new();
         let mut dict_side = 0usize;
@@ -419,7 +421,18 @@ mod tests {
             }
             if sub_rules == 0 {
                 dict_side += n;
+            } else if tokenizer_dict_families.contains(&id.as_str()) {
+                dict_side += n;
             } else if reading_subs > 0 {
+                dict_side += n;
+            } else if unimplemented_filter
+                && compiled_rules().rules.iter().any(|r| {
+                    &r.id == id
+                        && r.filter
+                            .as_ref()
+                            .is_some_and(|f| dict_blocked_filters.contains(&f.class.as_str()))
+                })
+            {
                 dict_side += n;
             } else if unimplemented_filter {
                 filter_side.push((id.clone(), *n));
@@ -435,7 +448,11 @@ mod tests {
         eprintln!(
             "round-21 attribution: {total} failures -> {dict_side} dict-dependent (postag OR \
              inflected on any pattern/antipattern token or exception, per PatternToken.java:\
-             364-374, AbstractPatternRulePerformer.java:232-234 and PatternRule.java:223-226), \
+             364-374, AbstractPatternRulePerformer.java:232-234 and PatternRule.java:223-226, \
+             plus the round-22 additions: ConvertToGenderAndNumberFilter rules need the \
+             ca-ES_synth.dict synthesis and tagger readings, and DEJA_VU/PROVA_DEL_COTO \
+             hyphen words are kept whole only by the wordsToAdd dictionary lookup at \
+             CatalanWordTokenizer.java:204-226), \
              {filter_total} on rules carrying a filter class with no engine arm, \
              {engine_total} on fully surface rules"
         );
@@ -486,8 +503,13 @@ mod tests {
              class='org.languagetool.rules.ca.DateCheckFilter' args='year:7 month:5 day:3 \
              weekDay:1'/> (grammar.xml CA_DATE_WEEKDAY, DateCheckFilter.java extends \
              AbstractDateCheckWithSuggestionsFilter) - the engine's filter dispatch \
-             (og-rules pattern_rule.rs:2665 apply_filter) has no .ca. arm and the catch-all \
-             keeps the match; flips to 0 when the engine gains the ca DateCheckFilter arm"
+             (og-rules pattern_rule.rs:2727 apply_filter) has no .ca. arm and the catch-all \
+             keeps the match; round-22 ports the ca tables at ca::date_check_filter \
+             (parse_weekday_catalan exact equals per DateFilterHelper.java:31-42, \
+             parse_month_catalan startsWith chain :52-64, day_name_catalan, \
+             CATALAN_WRONG_YEAR_MESSAGE :33-35, all dict-independent) - flips to 0 when \
+             the shared owner adds DateLang::Ca plus the class arm over the existing \
+             apply_date_check_with_suggestions_filter"
         );
     }
 
@@ -600,14 +622,104 @@ mod tests {
     #[test]
     fn round21_cometes_rectes_residue_is_the_regexp_normalization_asymmetry() {
         assert_eq!(
-            count_matches("COMETES_RECTES", "\u{c9}s de \u{2018}gran qualitat\"."),
+            count_matches("COMETES_RECTES", "És de ‘gran qualitat\"."),
             0,
-            "COMETES_RECTES (2 fails): sub-rule 2's <token regexp=\"yes\">[\u{2018}\u{2019}]\
-             </token> can never match because the shared engine normalizes the token surface \
-             (\u{2018}\u{2192}') but matches the UNnormalized pattern regex against it \
+            "COMETES_RECTES (2 fails): sub-rule 2's <token regexp=\"yes\">[‘’]</token> \
+             can never match because the shared engine normalizes the token surface \
+             (‘→') but matches the UNnormalized pattern regex against it \
              (pattern_rule.rs:2201-2218 element_surface_text_matches over og-xml unifier.\
              rs:8-14) - Java matches the raw surface - flips to 1 when the engine matches \
              regexps against the unnormalized surface (or folds both sides consistently)"
+        );
+    }
+
+    #[test]
+    fn round22_et_al_is_the_third_srx_residue() {
+        assert_eq!(
+            count_matches("ET_AL", "F. Garcia et. al., J. Pont."),
+            0,
+            "ET_AL (1 fail): sub-rule 2's et + . + a + l + . pattern spans our SRX break - \
+             probe_round21_family_counts dumps the split: 'F. Garcia et. ' + 'al., J. \
+             Pont.' as two sentences, with the second carrying the CORRECT a + l + . \
+             tokens (the contraction split at CatalanWordTokenizer.java:166-176 works). \
+             Java's own example test requires the match (grammar.xml:87533 <example \
+             correction='et al.|et alii'>F. Garcia <marker>et. al.</marker>, J. Pont.</\
+             example>), so Java's ca sentence tokenizer keeps it one sentence - same \
+             og-tokenizer SRX family as D_SR ('Dº.') and ETCETERA ('... ')"
+        );
+        assert_eq!(
+            count_matches("ET_AL", "F. Garcia et al, J. Pont."),
+            1,
+            "positive control: sub-rule 1 (et + [min=0 .] + a + l) fires once the sentence \
+             stays whole, proving the rule compile, the contraction split and the \
+             suggestions are all correct"
+        );
+    }
+
+    #[test]
+    fn round22_hyphenated_dict_words_stay_split_without_ca_dict() {
+        assert_eq!(
+            count_matches("DEJA_VU", "Un déjà-vu."),
+            1,
+            "DEJA_VU (1 fail, re-attributed this round): the fp is the tokenizer's hyphen \
+             split, NOT <match> interpolation - grammar.xml:64055-64067 has no <match> \
+             element. CatalanWordTokenizer.java:204-226 wordsToAdd keeps 'déjà-vu' whole \
+             only when CatalanTagger.INSTANCE_CAT.tag(...).isTagged() succeeds, a ca-ES.\
+             dict lookup; our added.txt-only tagger does not tag it, so the StringTokenizer \
+             fallback at :224-228 splits it into déjà + - + vu and the 3-token pattern \
+             d[eèé]j[aàá] + [- min=0] + v[uú] matches - flips to 0 only when the \
+             dictionary-driven keep-whole lookup exists"
+        );
+        assert_eq!(
+            count_matches("PROVA_DEL_COTO", "Serà la prova del cotó-en-pèl."),
+            1,
+            "PROVA_DEL_COTO (1 fail): same wordsToAdd dictionary lookup - Java keeps \
+             'cotó-en-pèl' whole so the <token regexp=\"yes\">cotó|cotó-en-pèl</token> \
+             alternative matches the single token and the match spans the full marker \
+             (the suite artifact shows our match 9..24 'prova del cotó' vs marker 9..32 \
+             'prova del cotó-en-pèl') - dict-dependent via the tokenizer, not an engine gap"
+        );
+        assert_eq!(
+            count_matches("PROVA_DEL_COTO", "Serà la prova del cotó fluix."),
+            2,
+            "positive control: sub-rule 1 (prova de l cotó fluix) fires with the span that \
+             covers the marker, and sub-rule 2 ALSO fires because its \
+             cot\u{f3}|cot\u{f3}-en-p\u{e8}l regexp matches the bare 'cot\u{f3}' token - \
+             Java matches both too, and its example passes because sub-rule 1's span \
+             contains the marker"
+        );
+    }
+
+    #[test]
+    fn round22_gender_number_filter_families_need_the_synth_dict() {
+        assert_eq!(count_matches("COSE", "Tinc una cose per a tu."), 1);
+        assert_eq!(
+            count_matches("RODALIES", "Per la ciutat i les seves rodalies."),
+            1
+        );
+        assert_eq!(
+            count_matches("RECOLZAMENT", "Sense recolzament popular."),
+            1
+        );
+        assert_eq!(
+            count_matches("TINGLADO", "Era un tinglado."),
+            1,
+            "the 13 span-shape failures (AVANTATJA_AVANTATGE 3, RECOLZAMENT 3, COLLE 2, \
+             TINGLADO 2, COSE/LIJA/RODALIES 1 each) all carry <filter class='org.\
+             languagetool.rules.ca.ConvertToGenderAndNumberFilter'>: Java rebuilds the \
+             match over the determiner it re-inflects (ConvertToGenderAndNumberFilter.\
+             java:197-201 sets startPos=i on the DA reading, :330-331 emits the RuleMatch \
+             over tokens[startPos]..tokens[endPos]) and synthesizes every suggested word \
+             via CatalanSynthesizer (synthesizeWithGenderAndNumber :372-397 over \
+             BaseSynthesizer '/ca/ca.sor' '/ca/ca-ES_synth.dict' '/ca/ca-ES_tags.txt', \
+             CatalanSynthesizer.java:59-60). ca-ES_synth.dict and ca-ES_tags.txt are \
+             absent from the Java tree too (find: only ca.sor exists), and the tagger \
+             readings the filter consults (:66 lemmaSelect, :79 suggestion tagging, \
+             :124-131 neighbor agreement) need ca-ES.dict - accepted-excluded on data \
+             missing from BOTH trees, like MorfologikCatalanSpellerRule. A dict-less \
+             engine arm cannot reproduce the span either: the :81-85 fallback keeps the \
+             original span and empty synthesis sets ignoreThisSuggestion (:172-175), \
+             dropping the match instead of expanding it"
         );
     }
 
@@ -661,9 +773,18 @@ mod tests {
             ("LHI_SEL", "L'hi denominava aix\u{ed}."),
             ("EN_FA_QUATRE_ANYS", "D'aix\u{f2} en fa quatre anys."),
             ("COMETES_RECTES", "\u{c9}s de \u{2018}gran qualitat\"."),
-            ("DEJA_VU", "Un d\u{e9}j\u{e0}-vu."),
             ("ETCETERA", "Tres, quatre, cinc, ... etc."),
             ("ET_AL", "F. Garcia et. al., J. Pont."),
+            ("ET_AL", "F. Garcia et al, J. Pont."),
+            ("DEJA_VU", "Un d\u{e9}j\u{e0}-vu."),
+            (
+                "PROVA_DEL_COTO",
+                "Ser\u{e0} la prova del cot\u{f3}-en-p\u{e8}l.",
+            ),
+            ("PROVA_DEL_COTO", "Ser\u{e0} la prova del cot\u{f3} fluix."),
+            ("COSE", "Tinc una cose per a tu."),
+            ("RODALIES", "Per la ciutat i les seves rodalies."),
+            ("RECOLZAMENT", "Sense recolzament popular."),
             ("D_SR", "D\u{ba}. Jaume Ivars."),
         ] {
             eprintln!("{id} on '{text}': {}", count_matches(id, text));

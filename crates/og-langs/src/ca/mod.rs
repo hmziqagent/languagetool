@@ -1,4 +1,5 @@
 pub mod compound_rule;
+pub mod date_check_filter;
 pub mod gv_chunker;
 pub mod match_filter;
 pub mod native_rules;
