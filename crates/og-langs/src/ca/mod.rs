@@ -1,5 +1,6 @@
 pub mod compound_rule;
 pub mod gv_chunker;
+pub mod match_filter;
 pub mod native_rules;
 pub mod pronom_feble_duplicate;
 pub mod pronoms_febles;
