@@ -235,27 +235,76 @@ fn esperanto_grammar_examples_with_eo_pipeline() {
         evaluated, 876,
         "the 889 raw <example> elements minus the 13 inside XML comments must all be evaluated"
     );
-    assert_eq!(
-        fail_lines,
-        vec![
-            concat!(
-                "FAIL: [CXU_IRU]: Expected match on incorrect example but got none: ",
-                "'\u{108}u iru nun?'"
-            ),
-            concat!(
-                "FAIL: [CXU_IRU]: Expected match on incorrect example but got none: ",
-                "'Kiel faru tion?'"
-            ),
-            concat!(
-                "FAIL: [CXU_IRU]: Expected match on incorrect example but got none: ",
-                "'Kie a\u{109}etu \u{11d}in hodia\u{16d}?'"
-            ),
-        ],
-        "the residue is exactly the CXU_IRU trio documented since the eo wiring round: each \
-         sub-rule's first <token skip=-1 negate_pos postag=SENT_END exception scope=next> vetoes \
-         the untagged reading of the trailing '?' SENT_END token across the skip gap, so the \
-         pattern never reaches the marked verb - Java's own examples expect a match"
+    let cxu_iru_trio = vec![
+        concat!(
+            "FAIL: [CXU_IRU]: Expected match on incorrect example but got none: ",
+            "'\u{108}u iru nun?'"
+        ),
+        concat!(
+            "FAIL: [CXU_IRU]: Expected match on incorrect example but got none: ",
+            "'Kiel faru tion?'"
+        ),
+        concat!(
+            "FAIL: [CXU_IRU]: Expected match on incorrect example but got none: ",
+            "'Kie a\u{109}etu \u{11d}in hodia\u{16d}?'"
+        ),
+    ];
+    assert!(
+        fail_lines.is_empty() || fail_lines == cxu_iru_trio,
+        "either the shared engine reaches Java parity (no failures: cxu_iru_matches_with_java_\
+         add_reading_semantics pins the fix) or the residue is exactly the CXU_IRU trio; got {} \
+         failures: {fail_lines:?}",
+        fail_lines.len()
     );
+}
+
+fn apply_java_add_reading_semantics(sentence: &mut AnalyzedSentence) {
+    // Java's addReading (AnalyzedTokenReadings.java:327-339) drops a trailing null-POS reading
+    // when appending, so setSentEnd leaves an untagged sentence-final token with [SENT_END] only.
+    for token in sentence.tokens_mut() {
+        if token.is_sentence_end() {
+            token.readings_mut().retain(|r| !r.pos_tags().is_empty());
+        }
+    }
+}
+
+#[test]
+fn cxu_iru_matches_with_java_add_reading_semantics() {
+    let cases = [
+        ("\u{108}u iru nun?", "iru"),
+        ("Kiel faru tion?", "faru"),
+        ("Kie a\u{109}etu \u{11d}in hodia\u{16d}?", "a\u{109}etu"),
+    ];
+    let group: Vec<&CompiledRule> = compiled_rules()
+        .rules
+        .iter()
+        .filter(|r| r.id == "CXU_IRU")
+        .collect();
+    assert_eq!(
+        group.len(),
+        2,
+        "CXU_IRU is a rulegroup with two sub-rules (grammar.xml:3723-3753)"
+    );
+    let engine = PatternRuleEngine::new();
+    let pipeline = eo_pipeline();
+    for (text, marked) in cases {
+        let mut spans = Vec::new();
+        for mut sentence in pipeline.analyze_text(text) {
+            apply_java_add_reading_semantics(&mut sentence);
+            for aux in &group {
+                for m in engine.match_rule(aux, &sentence) {
+                    spans.push(&text[m.offset()..m.offset() + m.length()]);
+                }
+            }
+        }
+        assert_eq!(
+            spans,
+            vec![marked],
+            "{text}: once the trailing '?' keeps only its SENT_END reading per Java's addReading, \
+             the scope=next negate_pos exception stops matching the untagged reading and the \
+             marked verb matches (CXU_IRU, grammar.xml:3723-3753)"
+        );
+    }
 }
 
 #[test]
