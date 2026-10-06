@@ -296,6 +296,11 @@ impl TestRunner {
                 {
                     return Some(chain);
                 }
+                if code == "pt"
+                    && let Some(chain) = og_langs::pt::build_pt_disambiguator(&resource_dir)
+                {
+                    return Some(chain);
+                }
                 if code == "br"
                     && let Some(disambiguator) = og_langs::br::build_br_disambiguator(&resource_dir)
                 {

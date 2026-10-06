@@ -46,6 +46,8 @@ pub enum Language {
     Portuguese,
     PortugueseBr,
     PortuguesePt,
+    PortugueseAo,
+    PortugueseMz,
     Dutch,
     DutchBe,
     Polish,
@@ -101,6 +103,8 @@ impl Language {
             "pt" => Some(Language::Portuguese),
             "pt-BR" => Some(Language::PortugueseBr),
             "pt-PT" => Some(Language::PortuguesePt),
+            "pt-AO" => Some(Language::PortugueseAo),
+            "pt-MZ" => Some(Language::PortugueseMz),
             "nl" => Some(Language::Dutch),
             "nl-BE" => Some(Language::DutchBe),
             "nl-NL" => Some(Language::DutchNl),
@@ -154,6 +158,8 @@ impl Language {
             Language::Portuguese => "pt",
             Language::PortugueseBr => "pt-BR",
             Language::PortuguesePt => "pt-PT",
+            Language::PortugueseAo => "pt-AO",
+            Language::PortugueseMz => "pt-MZ",
             Language::Dutch | Language::DutchNl => "nl",
             Language::DutchBe => "nl-BE",
             Language::Polish => "pl",
@@ -202,7 +208,11 @@ impl Language {
             Language::German | Language::GermanDe | Language::GermanAt | Language::GermanCh => "de",
             Language::French => "fr",
             Language::Spanish => "es",
-            Language::Portuguese | Language::PortugueseBr | Language::PortuguesePt => "pt",
+            Language::Portuguese
+            | Language::PortugueseBr
+            | Language::PortuguesePt
+            | Language::PortugueseAo
+            | Language::PortugueseMz => "pt",
             Language::Dutch | Language::DutchBe | Language::DutchNl => "nl",
             Language::Polish => "pl",
             Language::Ukrainian => "uk",
@@ -250,9 +260,11 @@ impl Language {
             Language::German | Language::GermanDe | Language::GermanAt | Language::GermanCh => {
                 Language::German
             }
-            Language::Portuguese | Language::PortugueseBr | Language::PortuguesePt => {
-                Language::Portuguese
-            }
+            Language::Portuguese
+            | Language::PortugueseBr
+            | Language::PortuguesePt
+            | Language::PortugueseAo
+            | Language::PortugueseMz => Language::Portuguese,
             Language::Dutch | Language::DutchBe | Language::DutchNl => Language::Dutch,
             other => other.clone(),
         }
@@ -274,6 +286,8 @@ impl Language {
             Language::Portuguese => "Portuguese",
             Language::PortugueseBr => "Portuguese (Brazil)",
             Language::PortuguesePt => "Portuguese (Portugal)",
+            Language::PortugueseAo => "Portuguese (Angola preAO)",
+            Language::PortugueseMz => "Portuguese (Moçambique preAO)",
             Language::Dutch | Language::DutchNl => "Dutch",
             Language::DutchBe => "Dutch (Belgian)",
             Language::Polish => "Polish",
@@ -328,6 +342,8 @@ impl Language {
             Language::Portuguese,
             Language::PortugueseBr,
             Language::PortuguesePt,
+            Language::PortugueseAo,
+            Language::PortugueseMz,
             Language::Dutch,
             Language::DutchBe,
             Language::DutchNl,

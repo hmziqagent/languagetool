@@ -842,6 +842,10 @@ impl LanguageEngine {
             && let Some(chain) = crate::fr::build_fr_disambiguator(&resource_dir)
         {
             engine.disambiguator = Some(chain);
+        } else if short == "pt"
+            && let Some(chain) = crate::pt::build_pt_disambiguator(&resource_dir)
+        {
+            engine.disambiguator = Some(chain);
         } else if short == "pl"
             && let Some(chain) = crate::pl::build_pl_disambiguator(&resource_dir)
         {
@@ -2250,6 +2254,56 @@ mod tests {
         );
         assert_eq!(pt_pt.language.code(), "pt-PT");
         assert_eq!(pt_br.language.code(), "pt-BR");
+    }
+
+    #[test]
+    fn portuguese_engine_disambiguates_through_the_global_xml() {
+        let engine =
+            LanguageEngine::for_code("pt").expect("pt engine must be registered via for_code");
+        assert!(
+            engine.disambiguator.is_some(),
+            "the pt arm must install the entity-expanded disambiguation.xml chain plus \
+             disambiguation-global.xml (PortugueseHybridDisambiguator.java:47)"
+        );
+        let mut request = og_core::CheckRequest::new(
+            "google.com.br é um excelente recurso.",
+            og_core::Language::PortuguesePt,
+        );
+        request.enabled_rules = vec!["URL_INICIAL".to_string()];
+        let result = engine.check_with_request(&request);
+        let url_matches: Vec<&og_core::RuleMatch> = result
+            .matches
+            .iter()
+            .filter(|m| m.rule().id() == "URL_INICIAL")
+            .collect();
+        assert_eq!(
+            url_matches.len(),
+            1,
+            "URL_INICIAL (grammar.xml:16565) only fires when the GLOBAL_URL add-rules of \
+             disambiguation-global.xml tag bare domains with _IS_URL readings"
+        );
+        assert_eq!((url_matches[0].offset(), url_matches[0].length()), (0, 13));
+    }
+
+    #[test]
+    fn portuguese_pre_reform_variants_register_native_rules() {
+        let base = LanguageEngine::for_code("pt").expect("pt base engine");
+        for (code, expected_language) in [
+            ("pt-AO", og_core::Language::PortugueseAo),
+            ("pt-MZ", og_core::Language::PortugueseMz),
+        ] {
+            let variant = base.portuguese_variant(code);
+            let ids: Vec<String> = variant.rules.iter().map(|r| r.id().to_string()).collect();
+            assert!(
+                ids.contains(&"PT_COMPOUNDS_PRE_REFORM".to_string()),
+                "{code} must carry PreReformPortugueseCompoundRule (AngolaPortuguese.java:55)"
+            );
+            assert!(
+                ids.contains(&"PT_PREAO_DASH_RULE".to_string()),
+                "{code} must carry PreReformPortugueseDashRule (AngolaPortuguese.java:56)"
+            );
+            assert_eq!(variant.language, expected_language);
+        }
     }
 
     #[test]

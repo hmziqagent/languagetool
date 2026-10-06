@@ -292,8 +292,9 @@ async fn test_v2_languages_lists_only_implementable_languages() {
         "/v2/languages must advertise the implemented Dutch engine"
     );
     assert!(
-        !json.iter().any(|l| l["code"] == "ca"),
-        "/v2/languages must not advertise languages without an engine"
+        json.iter()
+            .any(|l| l["code"] == "ca" && l["longCode"] == "ca"),
+        "/v2/languages must advertise the implemented Catalan engine"
     );
 }
 
@@ -546,8 +547,8 @@ async fn test_v2_languages_lists_all_registered_engines() {
         })
         .unwrap_or_default();
     for code in [
-        "en-US", "de-DE", "fr", "es", "pt-BR", "pt-PT", "nl", "pl", "ru", "it", "ar", "ast", "be",
-        "br", "ca", "el", "gl", "ro", "sv",
+        "en-US", "de-DE", "fr", "es", "pt-BR", "pt-PT", "pt-AO", "pt-MZ", "nl", "pl", "ru", "it",
+        "ar", "ast", "be", "br", "ca", "el", "gl", "ro", "sv",
     ] {
         assert!(codes.contains(&code), "missing {code} in {codes:?}");
     }
