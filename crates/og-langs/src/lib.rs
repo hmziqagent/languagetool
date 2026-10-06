@@ -12,6 +12,7 @@ pub mod br;
 pub mod ca;
 pub mod confusion_probability;
 pub mod crh;
+pub mod da;
 pub mod de;
 pub mod detection;
 pub mod es;

@@ -910,7 +910,7 @@ impl LanguageEngine {
             }
         } else if !dict.is_empty() {
             let dict = Arc::new(dict);
-            if short != "pl" && short != "ast" && short != "br" {
+            if short != "pl" && short != "ast" && short != "br" && short != "da" {
                 engine.add_rule(Arc::new(
                     og_spell::SpellingCheckRule::new_shared(dict.clone(), config.1, HashSet::new())
                         .with_ignore_words(ignore_words),
@@ -1142,10 +1142,10 @@ impl LanguageEngine {
                 ]);
             }
             "da" => {
-                engine.add_rule(
-                    Arc::new(og_rules::native_rules::UppercaseSentenceStartRule::new())
-                        as Arc<dyn Rule>,
-                );
+                engine.add_rules([
+                    Arc::new(crate::da::DanishSpellerRule::new()) as Arc<dyn Rule>,
+                    Arc::new(og_rules::native_rules::UppercaseSentenceStartRule::new()),
+                ]);
             }
             "be" => {
                 engine.add_rule(
@@ -2086,7 +2086,7 @@ mod tests {
             engine.tagger.is_some(),
             "expected the Danish morfologik tagger to load"
         );
-        let result = engine.check("Dette er en tes.");
+        let result = engine.check("Dette er en perfect sætning.");
         let ids: Vec<&str> = result.matches.iter().map(|m| m.rule().id()).collect();
         assert!(
             ids.contains(&"HUNSPELL_RULE"),
