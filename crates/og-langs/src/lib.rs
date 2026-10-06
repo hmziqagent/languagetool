@@ -15,6 +15,7 @@ pub mod crh;
 pub mod da;
 pub mod de;
 pub mod detection;
+pub mod el;
 pub mod es;
 pub mod fr;
 pub mod it;
