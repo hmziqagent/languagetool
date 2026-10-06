@@ -41,6 +41,71 @@ fn extract_marker(text: &str) -> (String, Option<(usize, usize)>) {
     }
 }
 
+fn element_texts(
+    rule: &CompiledRule,
+    tokens: &[&og_core::AnalyzedTokenReadings],
+    m: &og_core::RuleMatch,
+) -> Vec<Option<String>> {
+    let end = m.offset() + m.length();
+    let overlap: Vec<usize> = tokens
+        .iter()
+        .enumerate()
+        .filter(|(_, t)| t.token().start() < end && t.token().end() > m.offset())
+        .map(|(i, _)| i)
+        .collect();
+    let mut texts: Vec<Option<String>> = vec![None; rule.pattern.elements.len()];
+    let Some(ms) = rule.pattern.marker_elem_start else {
+        return overlap
+            .iter()
+            .map(|&i| Some(tokens[i].token().token().to_string()))
+            .collect();
+    };
+    let me = rule
+        .pattern
+        .marker_elem_end
+        .unwrap_or(rule.pattern.elements.len());
+    for (k, &token_idx) in overlap.iter().enumerate() {
+        if ms + k < me {
+            texts[ms + k] = Some(tokens[token_idx].token().token().to_string());
+        }
+    }
+    let Some(&first) = overlap.first() else {
+        return texts;
+    };
+    let mut left = first;
+    let mut k = ms;
+    while k > 0 {
+        k -= 1;
+        let Some(next) = tokens[..left].iter().rposition(|t| !t.is_whitespace()) else {
+            break;
+        };
+        left = next;
+        if !matches!(
+            &rule.pattern.elements[k],
+            og_xml::compiler::CompiledPatternElement::Token(t) if t.min == Some(0)
+        ) {
+            texts[k] = Some(tokens[left].token().token().to_string());
+        }
+    }
+    texts
+}
+
+fn apply_pl_filters(
+    rule: &CompiledRule,
+    tokens: &[&og_core::AnalyzedTokenReadings],
+    m: og_core::RuleMatch,
+) -> Option<og_core::RuleMatch> {
+    let Some(filter) = rule
+        .filter
+        .as_ref()
+        .filter(|f| crate::pl::filters::is_undispatched_pl_filter(&f.class))
+    else {
+        return Some(m);
+    };
+    let texts = element_texts(rule, tokens, &m);
+    crate::pl::filters::apply_undispatched_pl_filter(&filter.class, &filter.args, &texts, m)
+}
+
 #[derive(PartialEq, Eq, Hash, Clone, Copy)]
 enum Outcome {
     NoMatch,
@@ -108,7 +173,11 @@ fn evaluate_examples_file(rules_path: &Path, file_label: &str, artifact: &str) {
             let mut matches = Vec::new();
             for aux in group.iter() {
                 for (sentence, sentence_start) in pipeline.analyze_offset_text(&clean_text) {
-                    for mut m in engine.match_rule(aux, &sentence) {
+                    let tokens = sentence.non_whitespace_tokens();
+                    for m in engine.match_rule(aux, &sentence) {
+                        let Some(mut m) = apply_pl_filters(aux, &tokens, m) else {
+                            continue;
+                        };
                         m.set_offset_length(m.offset() + sentence_start, m.length());
                         matches.push(m);
                     }
@@ -244,9 +313,12 @@ mod tests {
         let pipeline = PolishPipeline::shared();
         let mut out = Vec::new();
         for (sentence, sentence_start) in pipeline.analyze_offset_text(text) {
+            let tokens = sentence.non_whitespace_tokens();
             for rule in rules.rules.iter().filter(|r| r.id == rule_id) {
                 for m in engine.match_rule(rule, &sentence) {
-                    out.push((m.offset() + sentence_start, m.length()));
+                    if let Some(m) = apply_pl_filters(rule, &tokens, m) {
+                        out.push((m.offset() + sentence_start, m.length()));
+                    }
                 }
             }
         }
@@ -261,6 +333,148 @@ mod tests {
 
     fn rule_matches_of(rules_path: PathBuf, rule_id: &str, text: &str) -> Vec<(usize, usize)> {
         rule_matches(rules_path, rule_id, text)
+    }
+
+    fn filtered_rule_matches(
+        rule_id: &str,
+        filter_class: &str,
+        text: &str,
+    ) -> Vec<(usize, usize, Vec<String>)> {
+        let rules = compiled_rules_from(grammar_path());
+        let engine = suite_engine();
+        let pipeline = PolishPipeline::shared();
+        let mut out = Vec::new();
+        for (sentence, sentence_start) in pipeline.analyze_offset_text(text) {
+            let tokens = sentence.non_whitespace_tokens();
+            for rule in rules.rules.iter().filter(|r| {
+                r.id == rule_id && r.filter.as_ref().is_some_and(|f| f.class == filter_class)
+            }) {
+                for m in engine.match_rule(rule, &sentence) {
+                    if let Some(m) = apply_pl_filters(rule, &tokens, m) {
+                        out.push((
+                            m.offset() + sentence_start,
+                            m.length(),
+                            m.replacements()
+                                .iter()
+                                .map(|r| r.value().to_string())
+                                .collect(),
+                        ));
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn grammar_carries_the_java_filter_class_inventory() {
+        let xml = std::fs::read_to_string(grammar_path()).expect("grammar.xml");
+        assert_eq!(
+            xml.matches("org.languagetool.rules.pl.DecadeSpellingFilter")
+                .count(),
+            3
+        );
+        assert_eq!(
+            xml.matches("org.languagetool.rules.pl.DateCheckFilter")
+                .count(),
+            3
+        );
+        assert_eq!(
+            xml.matches("org.languagetool.rules.DateRangeChecker")
+                .count(),
+            3
+        );
+        assert_eq!(
+            xml.matches("org.languagetool.rules.ShortenedYearRangeChecker")
+                .count(),
+            1
+        );
+        assert_eq!(xml.matches("<filter class=").count(), 10);
+    }
+
+    #[test]
+    fn data_dekady_suggestions_carry_the_java_decade_and_century() {
+        for (text, expected) in [
+            (
+                "Na pocz\u{105}tku lat 1840. ulica Zachodnia zosta\u{142}a po\u{142}\u{105}czona na p\u{f3}\u{142}nocy z ulic\u{105} Stodolnian\u{105} na Starym Mie\u{15b}cie.",
+                "40. XIX w.",
+            ),
+            ("Wspominam pi\u{119}kne lata 1990.", "90. XX w."),
+            (
+                "W latach 1770. Smith osiedli\u{142} si\u{119} w miejscowo\u{15b}ci wypoczynkowej Bath.",
+                "70. XVIII w.",
+            ),
+            (
+                "Szampan jest wi\u{119}c szybko butelkowany od lat 1660.",
+                "60. XVII w.",
+            ),
+            (
+                "Szampan jest wi\u{119}c szybko butelkowany od lat 1560.",
+                "60. XVI w.",
+            ),
+            (
+                "Szampan jest wi\u{119}c szybko butelkowany od lat 1460.",
+                "60. XV w.",
+            ),
+            (
+                "Szampan jest wi\u{119}c szybko butelkowany od lat 1360.",
+                "60. XIV w.",
+            ),
+            (
+                "Szampan jest wi\u{119}c szybko butelkowany od lat 1260.",
+                "60. XIII w.",
+            ),
+            (
+                "Szampan jest wi\u{119}c szybko butelkowany od lat 1160.",
+                "60. XII w.",
+            ),
+            (
+                "Lata 1900. charakteryzowa\u{142}y si\u{119} historycznymi zmianami.",
+                "pierwsza dekada XX w.",
+            ),
+            (
+                "Lata 1910. charakteryzowa\u{142}y si\u{119} historycznymi zmianami.",
+                "druga dekada XX w.",
+            ),
+        ] {
+            let matches = filtered_rule_matches(
+                "DATA_DEKADY",
+                "org.languagetool.rules.pl.DecadeSpellingFilter",
+                text,
+            );
+            assert_eq!(matches.len(), 1, "{text}");
+            assert_eq!(matches[0].2, vec![expected.to_string()], "{text}");
+        }
+    }
+
+    #[test]
+    fn shortened_year_range_drops_the_ranges_java_accepts() {
+        let class = "org.languagetool.rules.ShortenedYearRangeChecker";
+        assert_eq!(
+            filtered_rule_matches(
+                "DATA_NIEMOZLIWA",
+                class,
+                "By\u{142}o to w latach 1855\u{2013}40."
+            )
+            .len(),
+            1,
+            "1855 >= 1840 keeps the match (grammar.xml example)"
+        );
+        assert_eq!(
+            filtered_rule_matches("DATA_NIEMOZLIWA", class, "By\u{142}o to w latach 1915-15.")
+                .len(),
+            1,
+            "1915 >= 1915 keeps the match (grammar.xml example)"
+        );
+        assert!(
+            filtered_rule_matches(
+                "DATA_NIEMOZLIWA",
+                class,
+                "By\u{142}o to w latach 1855\u{2013}60."
+            )
+            .is_empty(),
+            "1855 < 1860 is a valid range, Java's ShortenedYearRangeChecker drops it"
+        );
     }
 
     #[test]

@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 pub mod dash_rule;
+pub mod filters;
 pub mod simple_replace;
 pub mod speller;
 pub mod tagger;
