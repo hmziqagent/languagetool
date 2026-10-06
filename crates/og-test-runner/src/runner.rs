@@ -44,6 +44,7 @@ enum TestWordTokenizer {
     Belarusian(og_langs::be::word_tokenizer::BelarusianWordTokenizer),
     Breton(og_langs::br::word_tokenizer::BretonWordTokenizer),
     Catalan(og_langs::ca::word_tokenizer::CatalanWordTokenizer),
+    Greek(og_langs::el::word_tokenizer::GreekWordTokenizer),
 }
 
 impl WordTokenizer for TestWordTokenizer {
@@ -93,6 +94,7 @@ impl WordTokenizer for TestWordTokenizer {
             TestWordTokenizer::Belarusian(tz) => tz.tokenize(text),
             TestWordTokenizer::Breton(tz) => tz.tokenize(text),
             TestWordTokenizer::Catalan(tz) => og_tokenizer::WordTokenizer::tokenize(tz, text),
+            TestWordTokenizer::Greek(tz) => og_tokenizer::WordTokenizer::tokenize(tz, text),
         };
         tokens
             .into_iter()
@@ -503,6 +505,9 @@ impl TestRunner {
             }
             None if self.language == "ca" => {
                 TestWordTokenizer::Catalan(og_langs::ca::word_tokenizer::CatalanWordTokenizer::new())
+            }
+            None if self.language == "el" => {
+                TestWordTokenizer::Greek(og_langs::el::word_tokenizer::GreekWordTokenizer::new())
             }
             None => TestWordTokenizer::Default(self.language == "en"),
         };

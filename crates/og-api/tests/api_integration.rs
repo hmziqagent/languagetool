@@ -573,6 +573,56 @@ async fn test_v2_check_danish_engine_registered() {
 }
 
 #[tokio::test]
+async fn test_v2_check_greek_engine_registered() {
+    let app = app();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(
+                    "/v2/check?language=el&text=%CE%91%CF%85%CF%84%CE%AE+%CE%B5%CE%AF%CE%BD%CE%B1%\
+                     CE%B9+%CE%BC%CE%B9%CE%B1+%CE%B4%CE%BF%CE%BA%CE%B9%CE%BC%CE%AE.",
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["language"]["code"].as_str(), Some("el"));
+    assert!(json["matches"].is_array());
+}
+
+#[tokio::test]
+async fn test_v2_check_esperanto_engine_registered() {
+    let app = app();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/check?language=eo&text=La+Mondaj+Ludoj+de+2013+estis+plur-sporta+evento.")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["language"]["code"].as_str(), Some("eo"));
+    assert!(json["matches"].is_array());
+    let flagged: Vec<&str> = json["matches"]
+        .as_array()
+        .map(|ms| ms.iter().filter_map(|m| m["rule"]["id"].as_str()).collect())
+        .unwrap_or_default();
+    assert!(
+        flagged.contains(&"HUNSPELL_RULE"),
+        "EsperantoTest.java:41-44 expects the hunspell speller to flag 'plur-sporta', got \
+         {flagged:?}"
+    );
+}
+
+#[tokio::test]
 async fn test_v2_languages_lists_all_registered_engines() {
     let json = check_response("/v2/languages").await;
     let codes: Vec<&str> = json
@@ -586,7 +636,7 @@ async fn test_v2_languages_lists_all_registered_engines() {
         .unwrap_or_default();
     for code in [
         "en-US", "de-DE", "fr", "es", "pt-BR", "pt-PT", "pt-AO", "pt-MZ", "nl", "pl", "ru", "it",
-        "ar", "ast", "be", "br", "ca", "crh", "da", "el", "gl", "ro", "sv",
+        "ar", "ast", "be", "br", "ca", "crh", "da", "el", "eo", "gl", "ro", "sv",
     ] {
         assert!(codes.contains(&code), "missing {code} in {codes:?}");
     }

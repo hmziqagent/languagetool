@@ -908,7 +908,7 @@ impl LanguageEngine {
                     ),
                 ));
             }
-        } else if !dict.is_empty() {
+        } else if !dict.is_empty() && short != "eo" {
             let dict = Arc::new(dict);
             if short != "pl" && short != "ast" && short != "br" && short != "da" {
                 engine.add_rule(Arc::new(
@@ -1185,6 +1185,16 @@ impl LanguageEngine {
                 engine.add_text_level_rules([Arc::new(
                     og_rules::text_level_rules::LongSentenceRule::new(50),
                 ) as Arc<dyn TextLevelRule>]);
+                let natives = crate::el::greek_native_rules();
+                engine.add_rules(natives.rules);
+                engine.add_text_level_rules(natives.text_level_rules);
+            }
+            "eo" => {
+                engine.add_rules([
+                    Arc::new(crate::eo::EsperantoSpellerRule::new()) as Arc<dyn Rule>,
+                    Arc::new(og_rules::native_rules::UppercaseSentenceStartRule::new()),
+                    Arc::new(og_rules::native_rules::WordRepeatRule::new()),
+                ]);
             }
             "ca" => {
                 if let Some(tagger) = crate::ca::CatalanTagger::shared_arc() {
@@ -1200,9 +1210,6 @@ impl LanguageEngine {
                     og_rules::text_level_rules::LongSentenceRule::new(60),
                 ));
                 engine.add_text_level_rules(native.text_level_rules);
-                engine.add_text_level_rule(Arc::new(
-                    og_rules::text_level_rules::PunctuationMarkAtParagraphEnd2Rule::new(),
-                ));
             }
             "ru" => {
                 engine.add_rules([
@@ -1824,6 +1831,7 @@ enum WordTokenizerBridge {
     Belarusian(crate::be::word_tokenizer::BelarusianWordTokenizer),
     Breton(crate::br::word_tokenizer::BretonWordTokenizer),
     Catalan(crate::ca::word_tokenizer::CatalanWordTokenizer),
+    Greek(crate::el::word_tokenizer::GreekWordTokenizer),
 }
 
 impl WordTokenizerBridge {
@@ -1872,6 +1880,9 @@ impl WordTokenizerBridge {
         }
         if code == "ca" {
             return Self::Catalan(crate::ca::word_tokenizer::CatalanWordTokenizer::new());
+        }
+        if code == "el" {
+            return Self::Greek(crate::el::word_tokenizer::GreekWordTokenizer::new());
         }
         if code != "fr" {
             return Self::Default(false);
@@ -1937,6 +1948,7 @@ impl WordTokenizer for WordTokenizerBridge {
             Self::Belarusian(tz) => tz.tokenize(text),
             Self::Breton(tz) => tz.tokenize(text),
             Self::Catalan(tz) => og_tokenizer::WordTokenizer::tokenize(tz, text),
+            Self::Greek(tz) => og_tokenizer::WordTokenizer::tokenize(tz, text),
         };
         tokens
             .into_iter()
@@ -2091,6 +2103,118 @@ mod tests {
         assert!(
             ids.contains(&"HUNSPELL_RULE"),
             "expected Danish speller to fire on a typo, got {ids:?}"
+        );
+    }
+
+    #[test]
+    fn greek_engine_registers_java_relevant_natives() {
+        let engine =
+            LanguageEngine::for_code("el").expect("Greek engine must be registered via for_code");
+        let ids = engine.rule_ids();
+        for expected in [
+            "UPPERCASE_SENTENCE_START",
+            "DOUBLE_PUNCTUATION",
+            "COMMA_PARENTHESIS_WHITESPACE",
+            "WORD_REPEAT_RULE",
+            "GREEK_HOMONYMS_REPLACE",
+            "EL_SPECIFIC_CASE",
+            "GREEK_ORTHOGRAPHY_NUMERAL_STRESS",
+            "EL_REDUNDANCY_REPLACE",
+            "MORFOLOGIK_RULE_EL_GR",
+        ] {
+            assert!(
+                ids.contains(&expected),
+                "expected {expected} in Greek natives, got {ids:?}"
+            );
+        }
+        let text_level_ids = engine.text_level_rule_ids();
+        for expected in [
+            "EL_UNPAIRED_BRACKETS",
+            "WHITESPACE_RULE",
+            "SENTENCE_WHITESPACE",
+            "GREEK_WORD_REPEAT_BEGINNING_RULE",
+            "TOO_LONG_SENTENCE",
+        ] {
+            assert!(
+                text_level_ids.contains(&expected),
+                "expected {expected} in Greek text-level natives, got {text_level_ids:?}"
+            );
+        }
+        assert!(
+            engine.tagger.is_some(),
+            "expected the Greek morfologik tagger to load"
+        );
+
+        let result = engine.check("\u{3b1}\u{3c5}\u{3c4}\u{3ae} \u{3b5}\u{3af}\u{3bd}\u{3b1}\u{3b9} \u{3bc}\u{3b9}\u{3b1} \u{3b4}\u{3bf}\u{3ba}\u{3b9}\u{3bc}\u{3ae}.");
+        let ids: Vec<&str> = result.matches.iter().map(|m| m.rule().id()).collect();
+        assert!(
+            ids.contains(&"UPPERCASE_SENTENCE_START"),
+            "expected UPPERCASE_SENTENCE_START on lowercase start, got {ids:?}"
+        );
+    }
+
+    #[test]
+    fn esperanto_engine_registers_java_relevant_natives() {
+        let engine = LanguageEngine::for_code("eo")
+            .expect("Esperanto engine must be registered via for_code");
+        let ids = engine.rule_ids();
+        for expected in [
+            "HUNSPELL_RULE",
+            "UPPERCASE_SENTENCE_START",
+            "WORD_REPEAT_RULE",
+            "DOUBLE_PUNCTUATION",
+            "COMMA_PARENTHESIS_WHITESPACE",
+        ] {
+            assert!(
+                ids.contains(&expected),
+                "expected {expected} in Esperanto natives, got {ids:?}"
+            );
+        }
+        assert_eq!(
+            ids.iter().filter(|id| **id == "HUNSPELL_RULE").count(),
+            1,
+            "the eo arm's EsperantoSpellerRule must be the only hunspell speller, like \
+             Esperanto.java:85: {ids:?}"
+        );
+        assert!(
+            !ids.contains(&"HUNSPELL_RULE_EO"),
+            "the generic wordlist speller must stay off for eo (Esperanto.java has no morfologik \
+             dict): {ids:?}"
+        );
+        let text_level_ids = engine.text_level_rule_ids();
+        for expected in [
+            "UNPAIRED_BRACKETS",
+            "WHITESPACE_RULE",
+            "SENTENCE_WHITESPACE",
+        ] {
+            assert!(
+                text_level_ids.contains(&expected),
+                "expected {expected} in Esperanto text-level natives, got {text_level_ids:?}"
+            );
+        }
+        assert!(
+            engine.tagger.is_some(),
+            "expected the EsperantoTagger to load"
+        );
+
+        let text = "La Mondaj Ludoj de 2013 estis plur-sporta evento.";
+        let result = engine.check(text);
+        let hunspell_spans: Vec<&str> = result
+            .matches
+            .iter()
+            .filter(|m| m.rule().id() == "HUNSPELL_RULE")
+            .map(|m| &text[m.offset()..m.offset() + m.length()])
+            .collect();
+        assert_eq!(
+            hunspell_spans,
+            vec!["plur-sporta"],
+            "EsperantoTest.java:41-44 expects exactly the compound 'plur-sporta' flagged, got \
+             all ids {:?}",
+            result
+                .matches
+                .iter()
+                .map(|m| m.rule().id())
+                .collect::<Vec<_>>()
         );
     }
 
@@ -2574,7 +2698,7 @@ mod tests {
             "CA_WORD_COHERENCY",
             "CA_REMOTE_RULE",
             "CA_SPLIT_LONG_SENTENCE",
-            "PUNCTUATION_PARAGRAPH_END2",
+            "PUNCTUATION_PARAGRAPH_END",
             "IGNORE_PROPER_NOUNS",
         ] {
             assert!(
