@@ -158,7 +158,7 @@ fn rule_groups(rule_set: &CompiledRuleSet) -> Vec<Vec<&CompiledRule>> {
     groups
 }
 
-fn all_grammar_matches(text: &str) -> Vec<(String, usize, usize)> {
+pub(crate) fn all_grammar_matches(text: &str) -> Vec<(String, usize, usize)> {
     let engine = PatternRuleEngine::new();
     let pipeline = BretonPipeline::shared();
     let rule_set = compiled_rules();
@@ -176,6 +176,55 @@ fn all_grammar_matches(text: &str) -> Vec<(String, usize, usize)> {
         }
     }
     matched
+}
+
+#[derive(Debug)]
+pub(crate) struct TraceDump {
+    pub pattern_idx: usize,
+    pub token_idx: usize,
+    pub token: String,
+    pub cause: String,
+}
+
+pub(crate) fn trace_rule_matches(
+    id: &str,
+    text: &str,
+) -> (
+    Vec<&'static CompiledRule>,
+    Vec<AnalyzedSentence>,
+    Vec<TraceDump>,
+) {
+    let engine = PatternRuleEngine::new();
+    let pipeline = BretonPipeline::shared();
+    og_rules::pattern_rule::set_test_date_hack(true);
+    let rules: Vec<&CompiledRule> = compiled_rules()
+        .rules
+        .iter()
+        .filter(|r| r.id == id)
+        .collect();
+    let sentences: Vec<AnalyzedSentence> = pipeline
+        .analyze_offset_text(text)
+        .into_iter()
+        .map(|(s, _)| s)
+        .collect();
+    og_rules::pattern_trace::set_enabled(true);
+    og_rules::pattern_trace::clear();
+    for rule in &rules {
+        for sentence in &sentences {
+            engine.match_rule(rule, sentence);
+        }
+    }
+    let events = og_rules::pattern_trace::take()
+        .into_iter()
+        .map(|e| TraceDump {
+            pattern_idx: e.pattern_idx,
+            token_idx: e.token_idx,
+            token: e.token,
+            cause: e.cause,
+        })
+        .collect();
+    og_rules::pattern_trace::set_enabled(false);
+    (rules, sentences, events)
 }
 
 #[test]

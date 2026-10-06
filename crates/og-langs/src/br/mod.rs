@@ -6,6 +6,8 @@ pub mod word_tokenizer;
 
 #[cfg(test)]
 mod example_suite;
+#[cfg(test)]
+pub(crate) mod trace;
 
 pub use normalize::{normalize_br_disambiguation_xml, normalize_br_rules_xml};
 pub use speller::BretonSpellerRule;
