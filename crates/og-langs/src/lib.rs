@@ -18,6 +18,7 @@ pub mod detection;
 pub mod el;
 pub mod eo;
 pub mod es;
+pub mod fa;
 pub mod fr;
 pub mod it;
 pub mod match_priority;
