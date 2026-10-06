@@ -13,6 +13,21 @@ commands in *Reproduction*.
 | + portuguese.dict swapped to fetch md5 `8d7f0590…` | 5218/5492 (95.0%) | 219 | 49 | 6 |
 | + `PortugueseTagger` on the engine path (in-module pipeline; the state after the integrator wiring below) | **5222/5492 (95.1%)** | 214 | 50 | 6 |
 
+### Refresh (round 26, 2026-10-06, by the wave integrator)
+
+The rows above are the round-25 state and are stale: the round-26 module work (disambiguation
+chain completion of commit `13fd76b`, wired by `34f9ec9`) moved the suite further. Current
+state, re-measured this round on the committed tree
+(`cargo test -p og-langs --release --lib pt::example_suite::portuguese_grammar_examples_with_pt_pipeline
+-- --ignored --test-threads=1 --nocapture`):
+
+| configuration | suite result | no_match | fp | marker |
+|---|---|---|---|---|
+| round 26, grammar.xml module pipeline | **5282/5492 (96.2%)** | 181 | 23 | 6 |
+
+Failure artifact: `/tmp/test_failures_pt_module.txt` (210 lines, down from 270). The style.xml
+residue of the same round is documented in `docs/attributions/pt-style-suite-r26.md`.
+
 Suite command: `cargo test -p og-test-runner --release test_real_portuguese_grammar_examples
 -- --ignored --nocapture`. The in-module measurement: `cargo test -p og-langs --release --lib
 pt::example_suite -- --ignored --nocapture`.

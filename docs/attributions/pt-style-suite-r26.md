@@ -1,7 +1,7 @@
 # pt style.xml example suite — per-family disposition (round 26, lang-pt round 2)
 
-Generated 2026-10-06 on the tree of this round's pt module changes (uncommitted at writing
-time; the integrator promotes this file to `docs/attributions/pt-style-suite-r26.md`).
+Generated 2026-10-06 on the tree of this round's pt module changes (committed as the round-26
+pt module commit; promoted from `crates/og-langs/src/pt/style-suite-dispositions-r26.md`).
 Companion of `docs/attributions/pt-grammar-suite-r25.md` (grammar.xml residue), which it does
 not supersede. Every number below was produced this round by the commands in *Reproduction*.
 
