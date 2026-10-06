@@ -733,6 +733,477 @@ pub fn spanish_number_in_word_filter(
     Some(rm)
 }
 
+fn pac_re(pat: &'static str) -> &'static Regex {
+    static CACHE: OnceLock<Mutex<HashMap<&'static str, &'static Regex>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut guard = cache.lock().unwrap();
+    if let Some(re) = guard.get(pat) {
+        return re;
+    }
+    let re: &'static Regex = Box::leak(Regex::new(pat).expect("pac regex").into());
+    guard.insert(pat, re);
+    re
+}
+
+fn pac_pos(token: &AnalyzedTokenReadings, pat: &'static str) -> bool {
+    let re = pac_re(pat);
+    token.readings().iter().any(|r| {
+        r.pos_tags().iter().any(|t| re.is_match(t))
+            || r.pos_tags().is_empty() && re.is_match("UNKNOWN")
+    })
+}
+
+fn pac_text(token: &AnalyzedTokenReadings, pat: &'static str) -> bool {
+    pac_re(pat).is_match(token.token().token())
+}
+
+fn pac_reading<'a>(
+    token: &'a AnalyzedTokenReadings,
+    pat: &'static str,
+) -> Option<&'a og_core::AnalyzedToken> {
+    let re = pac_re(pat);
+    token.readings().iter().find(|r| {
+        r.pos_tags().iter().any(|t| re.is_match(t))
+            || r.pos_tags().is_empty() && re.is_match("UNKNOWN")
+    })
+}
+
+const PAC_NOM: &str = r"^N.*$";
+const PAC_NOM_MS: &str = r"^(?:N.MS.*|PI0MS000)$";
+const PAC_NOM_FS: &str = r"^(?:N.FS.*|PI0FS000)$";
+const PAC_NOM_MP: &str = r"^N.MP.*$";
+const PAC_NOM_MN: &str = r"^N.MN.*$";
+const PAC_NOM_FP: &str = r"^N.FP.*$";
+const PAC_NOM_CS: &str = r"^N.CS.*$";
+const PAC_NOM_CP: &str = r"^N.CP.*$";
+const PAC_NOM_DET: &str = r"^(?:N.*|D[NDA0I].*|PI0[MF]S000)$";
+const PAC_GN_ANY: &str = r"^_GN_.*$";
+const PAC_GN_MS: &str = r"^_GN_MS$";
+const PAC_GN_FS: &str = r"^_GN_FS$";
+const PAC_GN_MP: &str = r"^_GN_MP$";
+const PAC_GN_FP: &str = r"^_GN_FP$";
+const PAC_GN_CS: &str = r"^_GN_[MF]S$";
+const PAC_GN_CP: &str = r"^_GN_[MF]P$";
+const PAC_DET_ANY: &str = r"^D[NDA0IP].*$";
+const PAC_DET_CS: &str = r"^D[NDA0IP]0CS0$";
+const PAC_DET_MS: &str = r"^D[NDA0IP]0MS0$";
+const PAC_DET_FS: &str = r"^D[NDA0IP]0FS0$";
+const PAC_DET_MP: &str = r"^D[NDA0IP]0MP0$";
+const PAC_DET_FP: &str = r"^D[NDA0IP]0FP0$";
+const PAC_SUBST_MS: &str =
+    r"^(?:N.[MC][SN].*|A..[MC][SN].*|V.P..SM.?|PX.MS.*|D[NDA0I]0MS0|PI0MS000)$";
+const PAC_SUBST_FS: &str =
+    r"^(?:N.[FC][SN].*|A..[FC][SN].*|V.P..SF.?|PX.FS.*|D[NDA0I]0FS0|PI0FS000)$";
+const PAC_SUBST_MP: &str = r"^(?:N.[MC][PN].*|A..[MC][PN].*|V.P..PM.?|PX.MP.*|D[NDA0I]0MP0)$";
+const PAC_SUBST_FP: &str = r"^(?:N.[FC][PN].*|A..[FC][PN].*|V.P..PF.?|PX.FP.*|D[NDA0I]0FP0)$";
+const PAC_SUBST_CP: &str = r"^(?:N.[FMC][PN].*|A..[FMC][PN].*|D[NDA0I]0[FM]P0)$";
+const PAC_SUBST_CS: &str = r"^(?:N.[FMC][SN].*|A..[FC][SN].*|D[NDA0I]0[FM]S0||PI0[MFC]S000)$";
+const PAC_ADJ_ANY: &str = r"^(?:AQ.*|V.P.*|PX.*|.*LOC_ADJ.*)$";
+const PAC_ADJ_MS: &str = r"^(?:A..[MC][SN].*|V.P..SM.?|PX.MS.*)$";
+const PAC_ADJ_FS: &str = r"^(?:A..[FC][SN].*|V.P..SF.?|PX.FS.*)$";
+const PAC_ADJ_MP: &str = r"^(?:A..[MC][PN].*|V.P..PM.?|PX.MP.*)$";
+const PAC_ADJ_FP: &str = r"^(?:A..[FC][PN].*|V.P..PF.?|PX.FP.*)$";
+const PAC_ADJ_CP: &str = r"^A..C[PN].*$";
+const PAC_ADJ_CS: &str = r"^A..C[SN].*$";
+const PAC_ADJ_S: &str = r"^(?:A...[SN].*|V.P..S..?|PX..S.*)$";
+const PAC_ADJ_P: &str = r"^(?:A...[PN].*|V.P..P..?|PX..P.*)$";
+const PAC_ADVERBI: &str = r"^(?:R.|.*LOC_ADV.*)$";
+const PAC_CONJUNCIO: &str = r"^(?:C.|.*LOC_CONJ.*)$";
+const PAC_PUNCT: &str = r"^_PUNCT$";
+const PAC_LOC_ADV: &str = r"^.*LOC_ADV.*$";
+const PAC_ADVERBIS_ACCEPTATS: &str = r"^RG_before$";
+const PAC_KEEP_COUNT: &str = r"^(?:A.*|N.*|D[NAIDP].*|SPS.*|SP:DA|.*LOC_ADV.*|V.P.*|_PUNCT.*|.*LOC_ADJ.*|PX.*|PI0.S000|UNKNOWN|V.N.{4})$";
+const PAC_KEEP_COUNT2: &str = r"^(?:,|y|e|o|ni|u)$";
+const PAC_STOP_COUNT: &str = r"^(?:;|lo)$";
+const PAC_PREPOSICIONS: &str = r"^SP.*$";
+const PAC_PREP_CANVI_NIVELL: &str = r"^(?:de|del|en|sobre|a|entre|por|con|sin|contra|para)$";
+const PAC_COORDINACIO_IONI: &str = r"^(?:y|e|o|u|ni)$";
+const PAC_VERB: &str = r"^(?:V.[^P].*|_GV_)$";
+const PAC_GV: &str = r"^_GV_$";
+
+struct PacState {
+    adverb: bool,
+    conjunction: bool,
+    punctuation: bool,
+}
+
+impl PacState {
+    fn new() -> Self {
+        Self {
+            adverb: false,
+            conjunction: false,
+            punctuation: false,
+        }
+    }
+
+    fn reset(&mut self) {
+        *self = Self::new();
+    }
+
+    fn update(&mut self, token: &AnalyzedTokenReadings) {
+        if pac_pos(token, PAC_NOM) || pac_pos(token, PAC_ADJ_ANY) {
+            self.reset();
+            return;
+        }
+        self.adverb |= pac_pos(token, PAC_ADVERBI);
+        self.conjunction |= pac_pos(token, PAC_CONJUNCIO);
+        self.punctuation |= pac_pos(token, PAC_PUNCT) || token.token().token() == ",";
+    }
+}
+
+fn pac_keep_counting(state: &PacState, token: &AnalyzedTokenReadings) -> bool {
+    if (state.adverb && state.conjunction)
+        || (state.adverb && state.punctuation)
+        || (state.conjunction && state.punctuation)
+        || (state.punctuation && pac_pos(token, PAC_PUNCT))
+    {
+        return false;
+    }
+    (pac_pos(token, PAC_KEEP_COUNT)
+        || pac_text(token, PAC_KEEP_COUNT2)
+        || pac_pos(token, PAC_ADVERBIS_ACCEPTATS))
+        && !pac_text(token, PAC_STOP_COUNT)
+        && (!pac_pos(token, PAC_GV) || pac_pos(token, PAC_GN_ANY))
+}
+
+pub fn postponed_adjective_concordance_filter(
+    args: &str,
+    matched_positions: &[usize],
+    tokens: &[&AnalyzedTokenReadings],
+    synthesizer: Option<&og_rules::postponed_adjective::LangSynthesizer>,
+    mut rm: RuleMatch,
+) -> Option<RuleMatch> {
+    let add_comma = args
+        .split_whitespace()
+        .any(|part| part.eq_ignore_ascii_case("addComma:true"));
+    let i = *matched_positions.first()?;
+    if i == 0 || i >= tokens.len() {
+        return None;
+    }
+    let max_levels = 4usize;
+    let mut is_plural = true;
+    let mut is_prev_noun = false;
+    let mut can_be_ms = false;
+    let mut can_be_fs = false;
+    let mut can_be_mp = false;
+    let mut can_be_fp = false;
+    let mut can_be_p = false;
+    let mut c_nt = [0usize; 4];
+    let mut c_nms = [0usize; 4];
+    let mut c_nfs = [0usize; 4];
+    let mut c_nmp = [0usize; 4];
+    let mut c_nmn = [0usize; 4];
+    let mut c_nfp = [0usize; 4];
+    let mut c_ncs = [0usize; 4];
+    let mut c_ncp = [0usize; 4];
+    let mut c_dms = [0usize; 4];
+    let mut c_dfs = [0usize; 4];
+    let mut c_dmp = [0usize; 4];
+    let mut c_dfp = [0usize; 4];
+    let mut c_n = [0usize; 4];
+    let mut c_d = [0usize; 4];
+    let mut level = 0usize;
+    let mut state = PacState::new();
+    let mut j = 1usize;
+    while i > j && level < max_levels && pac_keep_counting(&state, tokens[i - j]) {
+        let cur = i - j;
+        if !is_prev_noun
+            && (pac_pos(tokens[cur], PAC_NOM)
+                || (cur > 0
+                    && !pac_pos(tokens[cur], PAC_NOM)
+                    && pac_pos(tokens[cur], PAC_ADJ_ANY)
+                    && pac_pos(tokens[cur - 1], PAC_DET_ANY)))
+        {
+            if pac_pos(tokens[cur], PAC_GN_MS) {
+                c_nms[level] += 1;
+                can_be_ms = true;
+            }
+            if pac_pos(tokens[cur], PAC_GN_FS) {
+                c_nfs[level] += 1;
+                can_be_fs = true;
+            }
+            if pac_pos(tokens[cur], PAC_GN_MP) {
+                c_nmp[level] += 1;
+                can_be_mp = true;
+            }
+            if pac_pos(tokens[cur], PAC_GN_FP) {
+                c_nfp[level] += 1;
+                can_be_fp = true;
+            }
+        }
+        if !pac_pos(tokens[cur], PAC_GN_ANY) {
+            if pac_pos(tokens[cur], PAC_NOM_MS) {
+                c_nms[level] += 1;
+                can_be_ms = true;
+            } else if pac_pos(tokens[cur], PAC_NOM_FS) {
+                c_nfs[level] += 1;
+                can_be_fs = true;
+            } else if pac_pos(tokens[cur], PAC_NOM_MP) {
+                c_nmp[level] += 1;
+                can_be_mp = true;
+            } else if pac_pos(tokens[cur], PAC_NOM_MN) {
+                c_nmn[level] += 1;
+                can_be_ms = true;
+                can_be_mp = true;
+            } else if pac_pos(tokens[cur], PAC_NOM_FP) {
+                c_nfp[level] += 1;
+                can_be_fp = true;
+            } else if pac_pos(tokens[cur], PAC_NOM_CS) {
+                c_ncs[level] += 1;
+                can_be_ms = true;
+                can_be_fs = true;
+            } else if pac_pos(tokens[cur], PAC_NOM_CP) {
+                c_ncp[level] += 1;
+                can_be_fp = true;
+                can_be_mp = true;
+            }
+        }
+        if pac_pos(tokens[cur], PAC_NOM) {
+            c_nt[level] += 1;
+            is_prev_noun = true;
+        } else {
+            is_prev_noun = false;
+        }
+        if pac_pos(tokens[cur], PAC_DET_CS) {
+            if cur + 1 < tokens.len() && pac_pos(tokens[cur + 1], PAC_NOM_MS) {
+                c_dms[level] += 1;
+                can_be_ms = true;
+            }
+            if cur + 1 < tokens.len() && pac_pos(tokens[cur + 1], PAC_NOM_FS) {
+                c_dfs[level] += 1;
+                can_be_fs = true;
+            }
+        }
+        if !pac_pos(tokens[cur], PAC_ADVERBI) {
+            if pac_pos(tokens[cur], PAC_DET_MS) {
+                c_dms[level] += 1;
+                can_be_ms = true;
+            }
+            if pac_pos(tokens[cur], PAC_DET_FS) {
+                c_dfs[level] += 1;
+                can_be_fs = true;
+            }
+            if pac_pos(tokens[cur], PAC_DET_MP) {
+                c_dmp[level] += 1;
+                can_be_mp = true;
+            }
+            if pac_pos(tokens[cur], PAC_DET_FP) {
+                c_dfp[level] += 1;
+                can_be_fp = true;
+            }
+        }
+        if cur > 0
+            && pac_text(tokens[cur], PAC_PREP_CANVI_NIVELL)
+            && !pac_text(tokens[cur - 1], PAC_COORDINACIO_IONI)
+            && cur + 1 < tokens.len()
+            && !pac_pos(tokens[cur + 1], PAC_ADVERBI)
+        {
+            level += 1;
+        }
+        if level > 0 && pac_text(tokens[cur], PAC_COORDINACIO_IONI) {
+            let mut k = 1usize;
+            while k < 4 && cur > k && cur - k > 0 {
+                let back = cur - k;
+                if !((pac_pos(tokens[back], PAC_KEEP_COUNT)
+                    || pac_text(tokens[back], PAC_KEEP_COUNT2)
+                    || pac_pos(tokens[back], PAC_ADVERBIS_ACCEPTATS))
+                    && !pac_text(tokens[back], PAC_STOP_COUNT))
+                {
+                    break;
+                }
+                if pac_pos(tokens[back], PAC_PREPOSICIONS) {
+                    j += k;
+                    break;
+                }
+                k += 1;
+            }
+        }
+        state.update(tokens[i - j]);
+        j += 1;
+    }
+    level += 1;
+    if level > max_levels {
+        level = max_levels;
+    }
+    let mut c_ntotal = 0usize;
+    let mut c_dtotal = 0usize;
+    let mut j2 = 0usize;
+    while j2 < level {
+        c_n[j2] = c_nms[j2] + c_nfs[j2] + c_nmp[j2] + c_nfp[j2] + c_ncs[j2] + c_ncp[j2] + c_nmn[j2];
+        c_d[j2] = c_dms[j2] + c_dfs[j2] + c_dmp[j2] + c_dfp[j2];
+        c_ntotal += c_n[j2];
+        c_dtotal += c_d[j2];
+        if pac_pos(tokens[i], PAC_ADJ_MP)
+            && (c_n[j2] > 1 || c_d[j2] > 1)
+            && (c_nms[j2] + c_nmn[j2] + c_nmp[j2] + c_ncs[j2] + c_ncp[j2] + c_dms[j2] + c_dmp[j2])
+                > 0
+            && (c_nfs[j2] + c_nfp[j2] <= c_nt[j2])
+        {
+            return None;
+        }
+        if pac_pos(tokens[i], PAC_ADJ_FP)
+            && (c_n[j2] > 1 || c_d[j2] > 1)
+            && ((c_nms[j2] + c_nmp[j2] + c_nmn[j2] + c_dms[j2] + c_dmp[j2]) == 0
+                || (c_nt[j2] > 0 && c_nfs[j2] + c_nfp[j2] >= c_nt[j2]))
+        {
+            return None;
+        }
+        if c_n[j2] + c_d[j2] > 0 {
+            is_plural = is_plural && c_d[j2] > 1;
+            can_be_p = can_be_p || c_n[j2] > 1;
+        }
+        j2 += 1;
+    }
+    if i > 2 && c_nmp[0] + c_nfp[0] + c_ncp[0] > 0 && tokens[i - 2].token().token() == "," {
+        is_plural = true;
+    }
+    if c_ntotal == 0 && c_dtotal == 0 {
+        return None;
+    }
+    let (subst, adj_pat, gn_pat) = if pac_pos(tokens[i], PAC_ADJ_CS) {
+        (PAC_SUBST_CS, PAC_ADJ_S, PAC_GN_CS)
+    } else if pac_pos(tokens[i], PAC_ADJ_CP) {
+        (PAC_SUBST_CP, PAC_ADJ_P, PAC_GN_CP)
+    } else if pac_pos(tokens[i], PAC_ADJ_MS) {
+        (PAC_SUBST_MS, PAC_ADJ_MS, PAC_GN_MS)
+    } else if pac_pos(tokens[i], PAC_ADJ_FS) {
+        (PAC_SUBST_FS, PAC_ADJ_FS, PAC_GN_FS)
+    } else if pac_pos(tokens[i], PAC_ADJ_MP) {
+        (PAC_SUBST_MP, PAC_ADJ_MP, PAC_GN_MP)
+    } else if pac_pos(tokens[i], PAC_ADJ_FP) {
+        (PAC_SUBST_FP, PAC_ADJ_FP, PAC_GN_FP)
+    } else {
+        return None;
+    };
+    let mut j3 = 1usize;
+    let mut keep = true;
+    while i > j3 && keep {
+        let cur = i - j3;
+        if pac_pos(tokens[cur], PAC_NOM_DET) && pac_pos(tokens[cur], gn_pat) {
+            return None;
+        }
+        if !pac_pos(tokens[cur], PAC_GN_ANY) && pac_pos(tokens[cur], subst) {
+            return None;
+        }
+        keep = !pac_pos(tokens[cur], PAC_NOM_DET);
+        j3 += 1;
+    }
+    let prev_ok = (pac_pos(tokens[i - 1], PAC_NOM) && !pac_pos(tokens[i - 1], subst))
+        || (pac_pos(tokens[i - 1], PAC_ADJ_ANY) && !pac_pos(tokens[i - 1], gn_pat))
+        || (pac_pos(tokens[i - 1], PAC_ADJ_ANY) && !pac_pos(tokens[i - 1], adj_pat))
+        || (i > 2
+            && pac_pos(tokens[i - 1], PAC_ADVERBIS_ACCEPTATS)
+            && !pac_pos(tokens[i - 2], PAC_VERB)
+            && !pac_pos(tokens[i - 2], PAC_PREPOSICIONS))
+        || (i > 3
+            && pac_pos(tokens[i - 1], PAC_LOC_ADV)
+            && pac_pos(tokens[i - 2], PAC_LOC_ADV)
+            && !pac_pos(tokens[i - 3], PAC_VERB)
+            && !pac_pos(tokens[i - 3], PAC_PREPOSICIONS));
+    if !prev_ok {
+        return None;
+    }
+    if !(is_plural && pac_pos(tokens[i], PAC_ADJ_S)) {
+        let mut j4 = 1usize;
+        state.reset();
+        while i > j4 && pac_keep_counting(&state, tokens[i - j4]) && (level > 1 || j4 < 4) {
+            let cur = i - j4;
+            if !pac_pos(tokens[cur], PAC_GN_ANY)
+                && pac_pos(tokens[cur], PAC_NOM_DET)
+                && pac_pos(tokens[cur], subst)
+            {
+                return None;
+            } else if pac_pos(tokens[cur], gn_pat) {
+                return None;
+            }
+            state.update(tokens[cur]);
+            j4 += 1;
+        }
+    }
+    let synth = synthesizer?;
+    let target = tokens[i].token().token();
+    let mut suggestions: Vec<String> = Vec::new();
+    if let Some(at) = pac_reading(tokens[i], PAC_ADJ_CS) {
+        if let Some(lemma) = at.lemma() {
+            suggestions.extend(synth.synthesize(lemma, pac_re(r"^A..CP.$")));
+        }
+    }
+    if suggestions.is_empty() {
+        if let Some(at) = pac_reading(tokens[i], PAC_ADJ_CP) {
+            if let Some(lemma) = at.lemma() {
+                suggestions.extend(synth.synthesize(lemma, pac_re(r"^A..CS.$")));
+            }
+        }
+    }
+    if suggestions.is_empty() && is_plural {
+        if let Some(at) = pac_reading(tokens[i], PAC_ADJ_P) {
+            if let Some(lemma) = at.lemma() {
+                suggestions
+                    .extend(synth.synthesize(lemma, pac_re(r"^(?:A...P.|V.P..P.|PX..P.*)$")));
+            }
+        }
+    }
+    if let Some(at) = pac_reading(tokens[i], PAC_ADJ_ANY) {
+        if let Some(lemma) = at.lemma() {
+            if suggestions.is_empty() {
+                if can_be_ms && !is_plural {
+                    suggestions
+                        .extend(synth.synthesize(lemma, pac_re(r"^(?:A..MS.|V.P..SM|PX.MS.*)$")));
+                }
+                if can_be_fs && !is_plural {
+                    suggestions
+                        .extend(synth.synthesize(lemma, pac_re(r"^(?:A..FS.|V.P..SF|PX.FS.*)$")));
+                }
+                if can_be_mp {
+                    suggestions
+                        .extend(synth.synthesize(lemma, pac_re(r"^(?:A..MP.|V.P..PM|PX.MP.*)$")));
+                }
+                if can_be_fp {
+                    suggestions
+                        .extend(synth.synthesize(lemma, pac_re(r"^(?:A..FP.|V.P..PF|PX.FP.*)$")));
+                }
+                if can_be_ms && (is_plural || can_be_p) {
+                    suggestions
+                        .extend(synth.synthesize(lemma, pac_re(r"^(?:A..MP.|V.P..PM|PX.MP.*)$")));
+                }
+                if can_be_fs && !can_be_ms && (is_plural || can_be_p) {
+                    suggestions
+                        .extend(synth.synthesize(lemma, pac_re(r"^(?:A..FP.|V.P..PF|PX.FP.*)$")));
+                }
+            }
+        }
+    }
+    let lower_target = target.to_lowercase();
+    suggestions.retain(|s| *s != lower_target);
+    if suggestions.is_empty() {
+        return None;
+    }
+    let mut definitive: Vec<String> = Vec::new();
+    if add_comma {
+        definitive.push(format!(", {target}"));
+        for s in &suggestions {
+            definitive.push(format!(" {s}"));
+        }
+        // Java shifts the match to tokenStart-1 keeping the end; our span may start on the space
+        let new_start = tokens[i].token().start().saturating_sub(1);
+        let new_len = (rm.offset() + rm.length()).saturating_sub(new_start);
+        rm.set_offset_length(new_start, new_len);
+    } else {
+        for s in suggestions {
+            if !definitive.contains(&s) {
+                definitive.push(s);
+            }
+        }
+    }
+    rm.set_replacements(
+        definitive
+            .into_iter()
+            .map(SuggestedReplacement::new)
+            .collect(),
+    );
+    Some(rm)
+}
+
 pub fn is_es_filter(class: &str) -> bool {
     matches!(
         class,
@@ -743,6 +1214,7 @@ pub fn is_es_filter(class: &str) -> bool {
             | "org.languagetool.rules.es.FindSuggestionsFilter"
             | "org.languagetool.rules.es.SpanishSuppressMisspelledSuggestionsFilter"
             | "org.languagetool.rules.es.SpanishNumberInWordFilter"
+            | "org.languagetool.rules.es.PostponedAdjectiveConcordanceFilter"
     )
 }
 
@@ -789,6 +1261,15 @@ pub fn apply_es_filter(class: &str, call: EsFilterCall<'_>, rm: RuleMatch) -> Op
         }
         "org.languagetool.rules.es.SpanishNumberInWordFilter" => {
             spanish_number_in_word_filter(call.args, call.matched_texts, rm)
+        }
+        "org.languagetool.rules.es.PostponedAdjectiveConcordanceFilter" => {
+            postponed_adjective_concordance_filter(
+                call.args,
+                call.matched_positions,
+                call.tokens,
+                call.synthesizer,
+                rm,
+            )
         }
         _ => None,
     }
@@ -1270,7 +1751,7 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_recognizes_exactly_the_seven_es_filter_classes() {
+    fn dispatch_recognizes_exactly_the_eight_es_filter_classes() {
         for class in [
             "org.languagetool.rules.es.ConfusionCheckFilter",
             "org.languagetool.rules.AddCommasFilter",
@@ -1279,6 +1760,7 @@ mod tests {
             "org.languagetool.rules.es.FindSuggestionsFilter",
             "org.languagetool.rules.es.SpanishSuppressMisspelledSuggestionsFilter",
             "org.languagetool.rules.es.SpanishNumberInWordFilter",
+            "org.languagetool.rules.es.PostponedAdjectiveConcordanceFilter",
         ] {
             assert!(is_es_filter(class), "{class} must route");
         }
@@ -1288,9 +1770,7 @@ mod tests {
         assert!(!is_es_filter(
             "org.languagetool.rules.fr.FindSuggestionsFilter"
         ));
-        assert!(!is_es_filter(
-            "org.languagetool.rules.es.PostponedAdjectiveConcordanceFilter"
-        ));
+        assert!(!is_es_filter("org.languagetool.rules.ca.DateCheckFilter"));
         assert!(!is_es_filter(""));
     }
 
@@ -1354,6 +1834,149 @@ mod tests {
         assert!(
             values.starts_with(&["Están".to_string(), "Estén".to_string()]),
             "correction pair must lead the suggestions: {values:?}"
+        );
+    }
+
+    fn position_of(
+        tokens: &[&AnalyzedTokenReadings],
+        offset: usize,
+        length: usize,
+    ) -> Option<usize> {
+        tokens
+            .iter()
+            .position(|t| offset < t.token().end() && t.token().start() < offset + length)
+    }
+
+    fn postponed_rule(sub_id: &str) -> &'static og_xml::compiler::CompiledRule {
+        let rule_set = compiled_rules();
+        rule_set
+            .rules
+            .iter()
+            .find(|r| {
+                r.id == "AGREEMENT_POSTPONED_ADJ"
+                    && r.sub_id.as_deref() == Some(sub_id)
+                    && r.filter
+                        .as_ref()
+                        .is_some_and(|f| f.class.ends_with("PostponedAdjectiveConcordanceFilter"))
+            })
+            .unwrap_or_else(|| panic!("postponed sub-rule {sub_id} carrying the filter"))
+    }
+
+    fn run_postponed(text: &str, sub_id: &str) -> Vec<(usize, usize, Vec<String>)> {
+        let pipeline = SpanishPipeline::shared();
+        let rule = postponed_rule(sub_id);
+        let synth = crate::es::es_resource_dir().and_then(|dir| {
+            og_rules::postponed_adjective::LangSynthesizer::for_language(&dir, "es")
+                .map(std::sync::Arc::new)
+        });
+        let mut engine = PatternRuleEngine::new();
+        if let Some(ref synth) = synth {
+            engine = engine
+                .with_synthesizer(synth.clone())
+                .with_suggestion_synthesizer(synth.clone());
+        }
+        let mut out = Vec::new();
+        for sentence in pipeline.analyze_text(text) {
+            let tokens: Vec<&og_core::AnalyzedTokenReadings> = sentence.non_whitespace_tokens();
+            for raw in engine.match_rule(rule, &sentence) {
+                eprintln!(
+                    "raw match @{}..{} on {text:?}",
+                    raw.offset(),
+                    raw.offset() + raw.length()
+                );
+                let Some(pos) = position_of(&tokens, raw.offset(), raw.length()) else {
+                    continue;
+                };
+                eprintln!(
+                    "token {:?} pos {pos} readings {:?}",
+                    tokens[pos].token().token(),
+                    tokens[pos]
+                        .readings()
+                        .iter()
+                        .map(|r| (r.lemma(), r.pos_tags()))
+                        .collect::<Vec<_>>()
+                );
+                let texts = vec![tokens[pos].token().token().to_string()];
+                let call = EsFilterCall {
+                    args: rule.filter.as_ref().map(|f| f.args.as_str()).unwrap_or(""),
+                    matched_texts: &texts,
+                    matched_positions: &[pos],
+                    tokens: &tokens,
+                    sentence_text: sentence.text(),
+                    synthesizer: synth.as_deref(),
+                };
+                if let Some(m) = apply_es_filter(
+                    "org.languagetool.rules.es.PostponedAdjectiveConcordanceFilter",
+                    call,
+                    raw,
+                ) {
+                    let values = m
+                        .replacements()
+                        .iter()
+                        .map(|r| r.value().to_string())
+                        .collect();
+                    out.push((m.offset(), m.length(), values));
+                }
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn postponed_adj_keeps_entrega_productos_only_via_dict_invented_forms() {
+        let out = run_postponed("Entrega productos.", "3");
+        assert_eq!(out.len(), 1, "one kept match: {out:?}");
+        assert_eq!(out[0].2, vec!["producta".to_string()]);
+    }
+
+    #[test]
+    fn postponed_adj_keeps_musgo_only_via_dict_invented_forms() {
+        let out = run_postponed("Una piedra rodante junta musgo.", "3");
+        assert_eq!(out.len(), 1, "one kept match on musgo: {out:?}");
+        assert_eq!(out[0].0, 25);
+        assert_eq!(out[0].2, vec!["musga".to_string(), "musgosa".to_string()]);
+    }
+
+    #[test]
+    fn postponed_adj_filter_suggests_blanco_blanca() {
+        let out = run_postponed("La casa del pueblo blancas.", "3");
+        assert_eq!(out.len(), 1, "exactly one kept match: {out:?}");
+        assert_eq!(out[0].0, 19);
+        assert_eq!(out[0].1, 7);
+        assert_eq!(out[0].2, vec!["blanco".to_string(), "blanca".to_string()]);
+    }
+
+    #[test]
+    #[ignore]
+    fn postponed_adj_probe_remaining_fps() {
+        for text in [
+            "Se dan los ciervos, gamos, corzos, muflones y la cabra montés.",
+            "Los alumnos de 4º de la ESO de Carmelitas premiados en el concurso europeo.",
+            "Abandonaron el país transcurridas diez semanas.",
+            "Abandonaron el país transcurridos más de diez meses.",
+            "Una piedra rodante no junta musgo.",
+            "Muestra resultados.",
+            "El impulso motriz.",
+            "El domingo pasada hubo corrida de toros de lujo.",
+            "Análisis clínica.",
+            "Son casas rojos.",
+            "Estas son las sillas blancos de las que te hablé.",
+            "Un loro puede imitar el habla humano.",
+            "El domingo pasada hubo corrida.",
+        ] {
+            eprintln!("{text:?} -> {:?}", run_postponed(text, "3"));
+        }
+    }
+
+    #[test]
+    fn postponed_adj_add_comma_shifts_offset_and_prefixes_token() {
+        let out = run_postponed("Disculpe el retraso maestra.", "2");
+        assert_eq!(out.len(), 1, "exactly one kept match: {out:?}");
+        assert_eq!((out[0].0, out[0].1), (19, 8));
+        assert_eq!(out[0].2.first().map(String::as_str), Some(", maestra"));
+        assert!(
+            out[0].2.iter().any(|s| s == " maestro"),
+            "synthesized masculine form must follow: {out:?}"
         );
     }
 }

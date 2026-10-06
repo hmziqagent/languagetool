@@ -439,6 +439,215 @@ fn perifrasis_verbal_addchunk_rules_do_not_strip_interim_readings() {
 }
 #[test]
 #[ignore]
+fn probe_comillas_apostrofo_quote_equality_divergence() {
+    run_rule(
+        "COMILLAS_APOSTROFO",
+        "Ha ilustrado ‘El Hobbit’, ‘El Señor de los Anillos‘ y ‘Los hijos de Húrin’.",
+    );
+    run_rule(
+        "COMILLAS_APOSTROFO",
+        "Los historiales clínicos (‘medical records’)",
+    );
+}
+
+#[test]
+#[ignore]
+fn probe_postponed_antipattern_suppression() {
+    let xml = std::fs::read_to_string(grammar_path()).expect("grammar.xml");
+    let rule_set = XmlCompiler::new()
+        .compile_file_with_base(&xml, grammar_path().parent())
+        .expect("compile");
+    for r in rule_set
+        .rules
+        .iter()
+        .filter(|r| r.id == "AGREEMENT_POSTPONED_ADJ")
+    {
+        eprintln!(
+            "sub-rule {:?}: antipatterns={} examples={} first_example={:?}",
+            r.sub_id,
+            r.antipatterns.len(),
+            r.examples.len(),
+            r.examples.first().map(|e| e.text.clone())
+        );
+    }
+    let big = rule_set
+        .rules
+        .iter()
+        .find(|r| r.id == "AGREEMENT_POSTPONED_ADJ" && r.sub_id.as_deref() == Some("3"))
+        .expect("big postponed sub-rule 3");
+    eprintln!(
+        "sub-rule 3: antipatterns={} pattern_tokens={}",
+        big.antipatterns.len(),
+        big.pattern.tokens.len()
+    );
+    let engine = PatternRuleEngine::new();
+    let pipeline = SpanishPipeline::shared();
+    let text = "El domingo pasada hubo corrida de toros de lujo.";
+    let count_with = |antis: &[og_xml::compiler::CompiledPattern]| -> usize {
+        let mut probe = big.clone();
+        probe.antipatterns = antis.to_vec();
+        let mut total = 0;
+        for (sentence, _) in pipeline.analyze_offset_text(text) {
+            total += engine.match_rule(&probe, &sentence).len();
+        }
+        total
+    };
+    eprintln!("all: {}", count_with(&big.antipatterns));
+    let mut lo = 0usize;
+    let mut hi = big.antipatterns.len();
+    while hi - lo > 1 {
+        let mid = (lo + hi) / 2;
+        let subset = big.antipatterns[lo..mid].to_vec();
+        if count_with(&subset) == 0 {
+            hi = mid;
+        } else {
+            lo = mid;
+        }
+    }
+    eprintln!("suppressing antipattern index in sub-rule: {lo}");
+    let anti = &big.antipatterns[lo];
+    for (i, tok) in anti.tokens.iter().enumerate() {
+        eprintln!("  anti[{i}] = {:?}", tok);
+    }
+    eprintln!("  structured={}", anti.has_structured_elements);
+    for (i, el) in anti.elements.iter().enumerate() {
+        eprintln!("  anti-element[{i}] = {:?}", el);
+    }
+}
+
+#[test]
+#[ignore]
+fn probe_minimal_postponed_element() {
+    let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<rules lang="es">
+    <rule id="T1">
+        <pattern>
+            <token postag="AQ.*|V.P.*|PX.*" postag_regexp="yes"><exception postag="_GN_.*|ignore_concordance|AQ.CN.|_GV_" postag_regexp="yes"/><exception regexp="yes">primero|juntos|juntas|dado|dada|dados|dadas|incluso|valgo|valga</exception><exception regexp="yes">\p{Lu}.*</exception></token>
+        </pattern>
+    </rule>
+    <rule id="T2">
+        <pattern>
+            <token postag="AQ.*|V.P.*|PX.*" postag_regexp="yes"/>
+        </pattern>
+    </rule>
+    <rule id="T3">
+        <pattern>
+            <token postag="V.P.*" postag_regexp="yes"/>
+        </pattern>
+    </rule>
+</rules>
+"#;
+    let path = std::path::PathBuf::from("/tmp/es_t1_probe.xml");
+    std::fs::write(&path, xml).unwrap();
+    let rule_set = XmlCompiler::new()
+        .compile_file_with_base(xml, path.parent())
+        .expect("compile");
+    let engine = PatternRuleEngine::new();
+    let pipeline = SpanishPipeline::shared();
+    for text in [
+        "El domingo pasada hubo corrida.",
+        "El domingo pasada hubo corrida de toros de lujo.",
+        "La casa del pueblo blancas.",
+        "Abandonaron el país transcurridas diez semanas.",
+    ] {
+        for rule in &rule_set.rules {
+            let mut hits = 0;
+            for (sentence, _) in pipeline.analyze_offset_text(text) {
+                for m in engine.match_rule(rule, &sentence) {
+                    eprintln!(
+                        "{} on {:?} @{}..{}",
+                        rule.id,
+                        text,
+                        m.offset(),
+                        m.offset() + m.length()
+                    );
+                    hits += 1;
+                }
+            }
+            if hits == 0 {
+                eprintln!("{} on {:?}: NO MATCH", rule.id, text);
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore]
+fn probe_raw_dict_lookups() {
+    use crate::es::es_resource_dir;
+    let dir = es_resource_dir().expect("es dir");
+    let dict = og_tagger::morfologik::MorfologikDictionary::load(
+        &dir.join("spanish.dict"),
+        &dir.join("spanish.info"),
+    )
+    .expect("dict");
+    for w in [
+        "maquina",
+        "maquinar",
+        "practicas",
+        "Entrega",
+        "productos",
+        "penca",
+        "centrales",
+        "tsunami",
+        "anime",
+        "pasada",
+        "pasado",
+        "motriz",
+    ] {
+        eprintln!("lookup({w:?}) = {:?}", dict.lookup(w));
+    }
+    if let Some(shared) = og_tagger::generic_tagger::shared_dictionary(
+        &crate::es::es_resource_dir().expect("es dir"),
+        "spanish",
+    ) {
+        for w in ["maquina", "máquina", "maquinas"] {
+            eprintln!("shared lookup({w:?}) = {:?}", shared.lookup(w));
+        }
+    }
+    let tagger = crate::es::tagger::SpanishTagger::shared().expect("tagger");
+    for w in ["maquina", "máquina"] {
+        eprintln!("tagger lookup({w:?}) = {:?}", tagger.lookup(w));
+    }
+}
+
+#[test]
+#[ignore]
+fn probe_all_tagged_no_match_families() {
+    run_rule("MI_TILDE", "Y a mi solo mil.");
+    dump("Y a mi solo mil.");
+    run_rule("MI_TILDE", "Y a mi mil.");
+    dump("Y a mi mil.");
+    run_rule("EL_MENOS", "Lo hizo el menos tres veces.");
+    dump("Lo hizo el menos tres veces.");
+    run_rule("EL_MENOS", "Yo tengo el menos cuatro.");
+    run_rule("HACIA_TILDE", "Hacia dos años que no se veían.");
+    dump("Hacia dos años que no se veían.");
+    run_rule(
+        "DIACRITICS_VERB_N_ADJ",
+        "La extraña maquina produjo lo necesario.",
+    );
+    dump("La extraña maquina produjo lo necesario.");
+    run_rule("AGREEMENT_POSTPONED_ADJ", "Entrega productos.");
+    dump("Entrega productos.");
+    run_rule("AGREEMENT_POSTPONED_ADJ", "El impulso motriz.");
+    dump("El impulso motriz.");
+    run_rule(
+        "AGREEMENT_POSTPONED_ADJ",
+        "El domingo pasada hubo corrida de toros de lujo.",
+    );
+    dump("El domingo pasada hubo corrida de toros de lujo.");
+    run_rule("AGREEMENT_POSTPONED_ADJ", "La casa del pueblo blancas.");
+    dump("La casa del pueblo blancas.");
+    run_rule(
+        "COMILLAS_APOSTROFO",
+        "Ha ilustrado ‘El Hobbit’, ‘El Señor de los Anillos‘ y ‘Los hijos de Húrin’.",
+    );
+    dump("Ha ilustrado ‘El Hobbit’, ‘El Señor de los Anillos‘ y ‘Los hijos de Húrin’.");
+}
+
+#[test]
+#[ignore]
 fn probe_mydia01_fp() {
     run_rule(
         "MYDIA01",

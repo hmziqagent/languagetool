@@ -33,6 +33,50 @@ fn pinned_dict_gaps_block_the_eight_direct_ok_residue_rules() {
 }
 
 #[test]
+fn pinned_dict_era_numeral_readings_block_mi_tilde_and_el_menos() {
+    let tagger = crate::es::test_support::SpanishPipeline::shared().tagger_ref();
+    let mil = tagger.lookup("mil");
+    assert!(
+        mil.contains(&("mil", "AQ0CP0")) && mil.iter().all(|(_, tag)| !tag.starts_with("DN")),
+        "MI_TILDE antipattern 2 (grammar.xml:9140-9144) suppresses 'a mi mil' unless 'mil' carries a DN.* reading exempted by its <exception postag=\"DN.*\">; the pinned dict has only {mil:?}"
+    );
+    for word in ["tres", "cuatro"] {
+        let readings = tagger.lookup(word);
+        assert!(
+            readings.iter().all(|(_, tag)| !tag.starts_with("DN")),
+            "EL_MENOS sub-rules need a D[IN].* reading on '{word}' so the optional determiner element can consume it before vez|veces; the pinned dict has only {readings:?}"
+        );
+    }
+    let pasada = tagger.lookup("pasada");
+    assert!(
+        pasada.iter().all(|(lemma, _)| *lemma != "pasado"),
+        "AGREEMENT_POSTPONED_ADJ's day-of-week antipattern exempts inflected forms of lemma 'pasado' (grammar.xml entities.ent:18); without a pasado-lemma reading on 'pasada' the exception cannot fire and the match is suppressed: {pasada:?}"
+    );
+}
+
+#[test]
+#[ignore]
+fn probe_dict_era_reading_evidence() {
+    let tagger = crate::es::test_support::SpanishPipeline::shared().tagger_ref();
+    for w in [
+        "mil",
+        "tres",
+        "dos",
+        "cuatro",
+        "pasada",
+        "anime",
+        "motriz",
+        "maquina",
+        "productos",
+        "musgo",
+        "penca",
+        "tsunami",
+    ] {
+        eprintln!("{w}: {:?}", tagger.lookup(w));
+    }
+}
+
+#[test]
 #[ignore]
 fn compare_failing_words_across_spanish_dicts() {
     let resource_dir = crate::es::es_resource_dir().expect("es resource dir");
