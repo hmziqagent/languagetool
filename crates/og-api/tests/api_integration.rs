@@ -623,6 +623,63 @@ async fn test_v2_check_esperanto_engine_registered() {
 }
 
 #[tokio::test]
+async fn test_v2_check_persian_engine_registered() {
+    let app = app();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(
+                    "/v2/check?language=fa&text=%D9%88%DB%8C+%D8%AD%D8%A7%D8%B8%D8%B1+%D8%A8%D9%87\
+                     +%D9%87%D9%85%DA%A9%D8%A7%D8%B1%DB%8C+%D8%B4%D8%AF.",
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["language"]["code"].as_str(), Some("fa"));
+    assert!(json["matches"].is_array());
+    let flagged: Vec<&str> = json["matches"]
+        .as_array()
+        .map(|ms| ms.iter().filter_map(|m| m["rule"]["id"].as_str()).collect())
+        .unwrap_or_default();
+    assert!(
+        flagged.contains(&"FA_SIMPLE_REPLACE"),
+        "SimpleReplaceRule must flag 'حاظر', got {flagged:?}"
+    );
+}
+
+#[tokio::test]
+async fn test_v2_check_irish_engine_registered() {
+    let app = app();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/check?language=ga&text=Seo%20dh%C3%A1%20ab%20d%C3%A9ag.")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["language"]["code"].as_str(), Some("ga"));
+    assert!(json["matches"].is_array());
+    let flagged: Vec<&str> = json["matches"]
+        .as_array()
+        .map(|ms| ms.iter().filter_map(|m| m["rule"]["id"].as_str()).collect())
+        .unwrap_or_default();
+    assert!(
+        flagged.contains(&"GA_DHA_NO_BEIRT"),
+        "DhaNoBeirtRuleTest.java:35 expects GA_DHA_NO_BEIRT on 'dhá ab déag', got {flagged:?}"
+    );
+}
+
+#[tokio::test]
 async fn test_v2_languages_lists_all_registered_engines() {
     let json = check_response("/v2/languages").await;
     let codes: Vec<&str> = json
@@ -636,7 +693,7 @@ async fn test_v2_languages_lists_all_registered_engines() {
         .unwrap_or_default();
     for code in [
         "en-US", "de-DE", "fr", "es", "pt-BR", "pt-PT", "pt-AO", "pt-MZ", "nl", "pl", "ru", "it",
-        "ar", "ast", "be", "br", "ca", "crh", "da", "el", "eo", "gl", "ro", "sv",
+        "ar", "ast", "be", "br", "ca", "crh", "da", "el", "eo", "fa", "ga", "gl", "ro", "sv",
     ] {
         assert!(codes.contains(&code), "missing {code} in {codes:?}");
     }

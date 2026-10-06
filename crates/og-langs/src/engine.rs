@@ -784,6 +784,8 @@ impl LanguageEngine {
             "sk" => ("slovak", "MORFOLOGIK_RULE_SK_SK"),
             "sv" => ("swedish", "HUNSPELL_RULE"),
             "eo" => ("", "HUNSPELL_RULE_EO"),
+            "fa" => ("", ""),
+            "ga" => ("irish", "MORFOLOGIK_RULE_GA_IE"),
             _ => return None,
         };
 
@@ -854,6 +856,10 @@ impl LanguageEngine {
             && let Some(disambiguator) = crate::br::build_br_disambiguator(&resource_dir)
         {
             engine.disambiguator = Some(Arc::new(disambiguator));
+        } else if short == "ga"
+            && let Some(chain) = crate::ga::build_ga_disambiguator(&resource_dir)
+        {
+            engine.disambiguator = Some(Arc::new(chain));
         } else if disambig_path.exists()
             && let Ok(xml) = std::fs::read_to_string(&disambig_path)
             && let Ok(disambiguator) = XmlDisambiguator::from_xml(&xml)
@@ -908,7 +914,7 @@ impl LanguageEngine {
                     ),
                 ));
             }
-        } else if !dict.is_empty() && short != "eo" {
+        } else if !dict.is_empty() && short != "eo" && short != "ga" {
             let dict = Arc::new(dict);
             if short != "pl" && short != "ast" && short != "br" && short != "da" {
                 engine.add_rule(Arc::new(
@@ -979,17 +985,10 @@ impl LanguageEngine {
             || short == "ru"
         {
             None
-        } else if short == "pt" {
+        } else if short == "pt" || short == "da" || short == "ga" {
             Some(Arc::new(
                 og_rules::text_level_rules::GenericUnpairedBracketsRule::new().with_symbols(
                     vec!["[", "(", "{", "\"", "“"],
-                    vec!["]", ")", "}", "\"", "”"],
-                ),
-            ))
-        } else if short == "da" {
-            Some(Arc::new(
-                og_rules::text_level_rules::GenericUnpairedBracketsRule::new().with_symbols(
-                    vec!["[", "(", "{", "\"", "”"],
                     vec!["]", ")", "}", "\"", "”"],
                 ),
             ))
@@ -1195,6 +1194,28 @@ impl LanguageEngine {
                     Arc::new(og_rules::native_rules::UppercaseSentenceStartRule::new()),
                     Arc::new(og_rules::native_rules::WordRepeatRule::new()),
                 ]);
+            }
+            "fa" => {
+                engine.add_text_level_rule(Arc::new(
+                    og_rules::text_level_rules::LongSentenceRule::new(50),
+                ) as Arc<dyn TextLevelRule>);
+                let native = crate::fa::persian_native_rules();
+                engine.add_rules(native.rules);
+                engine.add_text_level_rules(native.text_level_rules);
+            }
+            "ga" => {
+                engine.add_rule(
+                    Arc::new(og_rules::native_rules::UppercaseSentenceStartRule::new())
+                        as Arc<dyn Rule>,
+                );
+                engine.add_text_level_rules([
+                    Arc::new(og_rules::text_level_rules::LongSentenceRule::new(50))
+                        as Arc<dyn TextLevelRule>,
+                    Arc::new(og_rules::text_level_rules::LongParagraphRule::new(220)),
+                ]);
+                let native = crate::ga::irish_native_rules();
+                engine.add_rules(native.rules);
+                engine.add_text_level_rules(native.text_level_rules);
             }
             "ca" => {
                 if let Some(tagger) = crate::ca::CatalanTagger::shared_arc() {
@@ -1832,6 +1853,7 @@ enum WordTokenizerBridge {
     Breton(crate::br::word_tokenizer::BretonWordTokenizer),
     Catalan(crate::ca::word_tokenizer::CatalanWordTokenizer),
     Greek(crate::el::word_tokenizer::GreekWordTokenizer),
+    Persian(crate::fa::word_tokenizer::PersianWordTokenizer),
 }
 
 impl WordTokenizerBridge {
@@ -1883,6 +1905,9 @@ impl WordTokenizerBridge {
         }
         if code == "el" {
             return Self::Greek(crate::el::word_tokenizer::GreekWordTokenizer::new());
+        }
+        if code == "fa" {
+            return Self::Persian(crate::fa::word_tokenizer::PersianWordTokenizer::new());
         }
         if code != "fr" {
             return Self::Default(false);
@@ -1949,6 +1974,7 @@ impl WordTokenizer for WordTokenizerBridge {
             Self::Breton(tz) => tz.tokenize(text),
             Self::Catalan(tz) => og_tokenizer::WordTokenizer::tokenize(tz, text),
             Self::Greek(tz) => og_tokenizer::WordTokenizer::tokenize(tz, text),
+            Self::Persian(tz) => og_tokenizer::WordTokenizer::tokenize(tz, text),
         };
         tokens
             .into_iter()
@@ -2215,6 +2241,132 @@ mod tests {
                 .iter()
                 .map(|m| m.rule().id())
                 .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn persian_engine_registers_java_relevant_natives() {
+        let engine =
+            LanguageEngine::for_code("fa").expect("Persian engine must be registered via for_code");
+        let ids = engine.rule_ids();
+        for expected in [
+            "COMMA_PARENTHESIS_WHITESPACE",
+            "DOUBLE_PUNCTUATION",
+            "PERSIAN_COMMA_PARENTHESIS_WHITESPACE",
+            "PERSIAN_DOUBLE_PUNCTUATION",
+            "PERSIAN_WORD_REPEAT_RULE",
+            "FA_SIMPLE_REPLACE",
+            "FA_SPACE_BEFORE_CONJUNCTION",
+        ] {
+            assert!(
+                ids.contains(&expected),
+                "expected {expected} in Persian natives, got {ids:?}"
+            );
+        }
+        let text_level_ids = engine.text_level_rule_ids();
+        for expected in [
+            "UNPAIRED_BRACKETS",
+            "WHITESPACE_RULE",
+            "SENTENCE_WHITESPACE",
+            "TOO_LONG_SENTENCE",
+            "PERSIAN_WORD_REPEAT_BEGINNING_RULE",
+            "FA_WORD_COHERENCY",
+        ] {
+            assert!(
+                text_level_ids.contains(&expected),
+                "expected {expected} in Persian text-level natives, got {text_level_ids:?}"
+            );
+        }
+        assert!(
+            engine.tagger.is_none(),
+            "Persian.java defines no tagger and fa carries no dict: {ids:?}"
+        );
+        assert!(
+            !ids.iter()
+                .any(|id| id.starts_with("MORFOLOGIK_RULE") || id.contains("HUNSPELL")),
+            "Persian.java:81-94 installs no speller, fa has no hunspell dir: {ids:?}"
+        );
+
+        let text = "این کار برای برای تو بود.";
+        let result = engine.check(text);
+        let spans: Vec<&str> = result
+            .matches
+            .iter()
+            .filter(|m| m.rule().id() == "PERSIAN_WORD_REPEAT_RULE")
+            .map(|m| &text[m.offset()..m.offset() + m.length()])
+            .collect();
+        assert_eq!(
+            spans,
+            vec!["برای برای"],
+            "PersianWordRepeatRule.java:50-51 flags the doubled word with both tokens, got \
+             all ids {:?}",
+            result
+                .matches
+                .iter()
+                .map(|m| m.rule().id())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn irish_engine_registers_java_relevant_natives() {
+        let engine =
+            LanguageEngine::for_code("ga").expect("Irish engine must be registered via for_code");
+        let ids = engine.rule_ids();
+        for expected in [
+            "COMMA_PARENTHESIS_WHITESPACE",
+            "DOUBLE_PUNCTUATION",
+            "UPPERCASE_SENTENCE_START",
+            "WORD_REPEAT_RULE",
+            "WHITESPACE_PARAGRAPH_BEGIN",
+            "GA_LOGAINM",
+            "GA_PEOPLE",
+            "GA_SPASANNA",
+            "GA_COMPOUNDS",
+            "GA_PRESTANDARD_REPLACE",
+            "GA_REPLACE",
+            "GA_FGB_EQ_REPLACE",
+            "GA_ENGLISH_HOMOPHONE",
+            "GA_DHA_NO_BEIRT",
+            "GA_DATIVE_PLURALS_STD",
+            "GA_SPECIFIC_CASE",
+        ] {
+            assert!(
+                ids.contains(&expected),
+                "expected {expected} in Irish natives, got {ids:?}"
+            );
+        }
+        let text_level_ids = engine.text_level_rule_ids();
+        for expected in [
+            "UNPAIRED_BRACKETS",
+            "WHITESPACE_RULE",
+            "SENTENCE_WHITESPACE",
+            "TOO_LONG_SENTENCE",
+            "TOO_LONG_PARAGRAPH",
+            "WHITESPACE_PARAGRAPH",
+            "PARAGRAPH_REPEAT_BEGINNING_RULE",
+        ] {
+            assert!(
+                text_level_ids.contains(&expected),
+                "expected {expected} in Irish text-level natives, got {text_level_ids:?}"
+            );
+        }
+        assert!(
+            engine.tagger.is_some(),
+            "the GenericTagger manual added.txt path must install while irish.dict is absent"
+        );
+        assert!(
+            !ids.contains(&"MORFOLOGIK_RULE_GA_IE"),
+            "Irish.java:106 MorfologikIrishSpellerRule needs irish.dict which is absent, and \
+             the ga spelling.txt wordlist (single letters) must not become a speller: {ids:?}"
+        );
+
+        let result = engine.check("Seo abairt cheart.");
+        let ids: Vec<&str> = result.matches.iter().map(|m| m.rule().id()).collect();
+        assert!(
+            !ids.iter()
+                .any(|id| id.starts_with("MORFOLOGIK_RULE") || id.contains("HUNSPELL")),
+            "a correct Irish sentence must stay unflagged by spellers, got {ids:?}"
         );
     }
 

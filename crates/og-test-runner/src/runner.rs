@@ -45,6 +45,7 @@ enum TestWordTokenizer {
     Breton(og_langs::br::word_tokenizer::BretonWordTokenizer),
     Catalan(og_langs::ca::word_tokenizer::CatalanWordTokenizer),
     Greek(og_langs::el::word_tokenizer::GreekWordTokenizer),
+    Persian(og_langs::fa::word_tokenizer::PersianWordTokenizer),
 }
 
 impl WordTokenizer for TestWordTokenizer {
@@ -95,6 +96,7 @@ impl WordTokenizer for TestWordTokenizer {
             TestWordTokenizer::Breton(tz) => tz.tokenize(text),
             TestWordTokenizer::Catalan(tz) => og_tokenizer::WordTokenizer::tokenize(tz, text),
             TestWordTokenizer::Greek(tz) => og_tokenizer::WordTokenizer::tokenize(tz, text),
+            TestWordTokenizer::Persian(tz) => og_tokenizer::WordTokenizer::tokenize(tz, text),
         };
         tokens
             .into_iter()
@@ -141,6 +143,8 @@ pub fn generic_dict_stem(code: &str) -> Option<&'static str> {
         ("br", "breton"),
         ("ca", "catalan"),
         ("el", "greek"),
+        ("fa", ""),
+        ("ga", "irish"),
         ("gl", "galician"),
         ("ro", "romanian"),
         ("sk", "slovak"),
@@ -307,6 +311,11 @@ impl TestRunner {
                     && let Some(disambiguator) = og_langs::br::build_br_disambiguator(&resource_dir)
                 {
                     return Some(Arc::new(disambiguator));
+                }
+                if code == "ga"
+                    && let Some(chain) = og_langs::ga::build_ga_disambiguator(&resource_dir)
+                {
+                    return Some(Arc::new(chain));
                 }
                 let disambig_path = resource_dir.join("disambiguation.xml");
                 match std::fs::read_to_string(&disambig_path) {
@@ -508,6 +517,9 @@ impl TestRunner {
             }
             None if self.language == "el" => {
                 TestWordTokenizer::Greek(og_langs::el::word_tokenizer::GreekWordTokenizer::new())
+            }
+            None if self.language == "fa" => {
+                TestWordTokenizer::Persian(og_langs::fa::word_tokenizer::PersianWordTokenizer::new())
             }
             None => TestWordTokenizer::Default(self.language == "en"),
         };
@@ -2324,6 +2336,18 @@ fn test_real_breton_grammar_examples() {
 #[ignore]
 fn test_real_greek_grammar_examples() {
     run_generic_example_suite("el");
+}
+
+#[test]
+#[ignore]
+fn test_real_persian_grammar_examples() {
+    run_generic_example_suite("fa");
+}
+
+#[test]
+#[ignore]
+fn test_real_irish_grammar_examples() {
+    run_generic_example_suite("ga");
 }
 
 #[test]
