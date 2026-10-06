@@ -269,6 +269,54 @@ fn specific_case_pins_the_java_air_france_offsets() {
         matches[0].message(),
         "Уласныя імёны і назвы пішуцца з вялікай літары."
     );
+    assert_eq!(matches[0].short_message(), Some("Proper noun"));
+}
+
+#[test]
+fn speller_rule_stays_data_blocked_until_a_belarusian_dict_lands() {
+    let resource_dir = be_resource_dir();
+    let dict_files: Vec<String> = std::fs::read_dir(&resource_dir)
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|name| name.ends_with(".dict"))
+        .collect();
+    assert!(
+        dict_files.is_empty(),
+        "the LT checkout shipped no Belarusian .dict when this pin was written; \
+         landing one must unblock MorfologikBelarusianSpellerRule, found {dict_files:?}"
+    );
+    let spelling = std::fs::read_to_string(resource_dir.join("hunspell/spelling.txt"))
+        .expect("be hunspell/spelling.txt");
+    assert!(
+        spelling
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .all(|l| l.trim_start().starts_with('#')),
+        "spelling.txt was comment-only when this pin was written"
+    );
+
+    let engine = crate::engine::LanguageEngine::shared_for_code("be").expect("be engine");
+    assert!(
+        !engine.rule_ids().contains(&"MORFOLOGIK_RULE_BE_BY"),
+        "with no dictionary data the be engine must install no speller rule"
+    );
+    for text in [
+        "знакамты",
+        " сумна знакаміты вялікімі стратамі",
+        "З’яўляцца",
+        "З'яўляцца",
+        "п'яны",
+        "п’яны",
+    ] {
+        let result = engine.check(text);
+        let ids: Vec<&str> = result.matches.iter().map(|m| m.rule().id()).collect();
+        assert!(
+            !ids.contains(&"MORFOLOGIK_RULE_BE_BY"),
+            "'{text}' must stay unflagged by the blocked speller, got {ids:?}"
+        );
+    }
 }
 
 fn simple_replace_matches(text: &str) -> Vec<og_core::RuleMatch> {

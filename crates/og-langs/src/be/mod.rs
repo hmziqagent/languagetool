@@ -1,3 +1,5 @@
+use og_core::AnalyzedSentence;
+
 pub mod word_tokenizer;
 
 #[cfg(test)]
@@ -19,17 +21,53 @@ pub fn belarusian_simple_replace_rule() -> crate::pt::simple_replace2::SimpleRep
     rule
 }
 
-pub fn belarusian_specific_case_rule() -> crate::specific_case::SpecificCaseRule {
-    crate::specific_case::SpecificCaseRule::from_data(
-        "BE_SPECIFIC_CASE",
-        "Напісанне спецыяльных найменняў у верхнім або ніжнім рэгістры",
-        "Вялікія літары",
-        "Уласныя імёны і назвы пішуцца з вялікай літары.",
-        "Калі гэта уласнае імя або назва, выкарыстоўвайце прапанаванае напісанне.",
-        include_str!(
-            "../../../../languagetool/languagetool-language-modules/be/src/main/resources/org/languagetool/resource/be/specific_case.txt"
+pub struct BelarusianSpecificCaseRule {
+    inner: crate::specific_case::SpecificCaseRule,
+}
+
+pub fn belarusian_specific_case_rule() -> BelarusianSpecificCaseRule {
+    BelarusianSpecificCaseRule {
+        inner: crate::specific_case::SpecificCaseRule::from_data(
+            "BE_SPECIFIC_CASE",
+            "Напісанне спецыяльных найменняў у верхнім або ніжнім рэгістры",
+            "Вялікія літары",
+            "Уласныя імёны і назвы пішуцца з вялікай літары.",
+            "Калі гэта уласнае імя або назва, выкарыстоўвайце прапанаванае напісанне.",
+            include_str!(
+                "../../../../languagetool/languagetool-language-modules/be/src/main/resources/org/languagetool/resource/be/specific_case.txt"
+            ),
         ),
-    )
+    }
+}
+
+impl og_core::rule::Rule for BelarusianSpecificCaseRule {
+    fn id(&self) -> &str {
+        self.inner.id()
+    }
+
+    fn description(&self) -> &str {
+        self.inner.description()
+    }
+
+    fn is_default_on(&self) -> bool {
+        self.inner.is_default_on()
+    }
+
+    fn category(&self) -> og_core::Category {
+        self.inner.category()
+    }
+
+    fn issue_type(&self) -> og_core::IssueType {
+        self.inner.issue_type()
+    }
+
+    fn match_sentence(&self, sentence: &AnalyzedSentence) -> Vec<og_core::RuleMatch> {
+        self.inner
+            .match_sentence(sentence)
+            .into_iter()
+            .map(|m| m.with_short_message("Proper noun"))
+            .collect()
+    }
 }
 
 pub fn belarusian_paragraph_repeat_beginning_rule()
@@ -90,6 +128,7 @@ mod tests {
             matches[0].message(),
             "Калі гэта уласнае імя або назва, выкарыстоўвайце прапанаванае напісанне."
         );
+        assert_eq!(matches[0].short_message(), Some("Proper noun"));
     }
 
     #[test]
