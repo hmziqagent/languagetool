@@ -3,6 +3,9 @@ pub mod speller;
 #[cfg(test)]
 mod example_suite;
 
+#[cfg(test)]
+mod trace;
+
 use og_core::rule::Rule;
 use og_core::{
     AnalyzedSentence, AnalyzedTokenReadings, Category, IssueType, RuleMatch, RuleMatchContext,

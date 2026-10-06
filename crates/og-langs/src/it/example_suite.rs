@@ -211,6 +211,43 @@ mod tests {
     }
 
     #[test]
+    fn date_weekday_grammar_examples_all_pass_through_date_check_filter() {
+        og_rules::pattern_rule::set_test_date_hack(true);
+        for (text, expected) in [
+            ("Luned\u{ec} 7 ottobre 2014", 1),
+            ("Marted\u{ec}, 7 ottobre 2014", 0),
+            ("Luned\u{ec}, 7.ott.2014", 1),
+            ("Luned\u{ec} 7/ottobre/2014", 1),
+            ("Lun 7 ottobre 2014", 1),
+        ] {
+            assert_eq!(
+                matches_for_sub("DATE_WEEKDAY", "1", text).len(),
+                expected,
+                "DATE_WEEKDAY[1] on {text}"
+            );
+        }
+        for (text, expected) in [
+            ("Luned\u{ec} 7 ottobre", 1),
+            ("Luned\u{ec}, 7 ottobre", 1),
+            ("Marted\u{ec}, 7 ottobre", 0),
+            ("Marted\u{ec} 27 novembre 1922", 0),
+            ("Marted\u{ec} 27 novembre del 1922", 0),
+        ] {
+            assert_eq!(
+                matches_for_sub("DATE_WEEKDAY", "2", text).len(),
+                expected,
+                "DATE_WEEKDAY[2] on {text}"
+            );
+        }
+        let matches = matches_for_sub("DATE_WEEKDAY", "2", "Luned\u{ec}, 7 ottobre");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(
+            matches[0].message(),
+            "Se si riferisce all'anno in corso (2014), questa data non \u{e8} un luned\u{ec} ma un marted\u{ec}."
+        );
+    }
+
+    #[test]
     fn date_weekday_year_examples_blocked_by_antipattern() {
         og_rules::pattern_rule::set_test_date_hack(true);
         for text in [
@@ -357,5 +394,42 @@ mod tests {
         assert_eq!(sentences.len(), 2);
         assert!(sentences[0].text().trim_end().ends_with("Torino."));
         assert!(sentences[1].text().starts_with("Nel corso"));
+    }
+
+    #[test]
+    fn italian_test_demo_text_matches_java_expectation() {
+        let engine = crate::engine::LanguageEngine::for_code("it").expect("it engine");
+        let text = "Inserite qui il vostro testo... Oppure controlate direttamente questo ed avrete un assaggio di quali errori possono essere identificati con LanguageTool.";
+        let result = engine.check(text);
+        let covered: Vec<(&str, &str)> = result
+            .matches
+            .iter()
+            .map(|m| {
+                let start = m.offset();
+                (m.rule().id(), &text[start..start + m.length()])
+            })
+            .collect();
+        let java_expected: Vec<(&str, &str)> = vec![
+            ("MORFOLOGIK_RULE_IT_IT", "controlate"),
+            ("ST_03_001", "ed avrete"),
+        ];
+        let non_residue: Vec<(&str, &str)> = covered
+            .iter()
+            .filter(|(id, word)| !(*id == "MORFOLOGIK_RULE_IT_IT" && *word == "LanguageTool"))
+            .copied()
+            .collect();
+        assert_eq!(
+            non_residue, java_expected,
+            "ItalianTest.java:35-40 expects exactly [MORFOLOGIK_RULE_IT_IT, ST_03_001]; \
+             the LanguageTool speller hit is pinned residue, see it::trace \
+             probe_demo_text_languagetool_speller_fp"
+        );
+        let st = result
+            .matches
+            .iter()
+            .find(|m| m.rule().id() == "ST_03_001")
+            .expect("ST_03_001 match");
+        assert_eq!(st.replacements().len(), 1);
+        assert_eq!(st.replacements()[0].value(), "e avrete");
     }
 }
