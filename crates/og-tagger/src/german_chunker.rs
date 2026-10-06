@@ -844,4 +844,231 @@ mod tests {
         assert_eq!(rules().len(), 9);
         assert_eq!(rules2().len(), 73);
     }
+
+    fn de_resource_dir() -> std::path::PathBuf {
+        [
+            "/home/agent/opengrammar-rs/languagetool/languagetool-language-modules/de/src/main/resources/org/languagetool/resource/de",
+            "languagetool/languagetool-language-modules/de/src/main/resources/org/languagetool/resource/de",
+        ]
+        .iter()
+        .map(std::path::PathBuf::from)
+        .find(|p| p.join("german.dict").exists())
+        .expect("german resources")
+    }
+
+    fn de_tokenize(text: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        for part in text.split(' ').filter(|p| !p.is_empty()) {
+            if part.len() > 1 && (part.ends_with('.') || part.ends_with(',')) {
+                out.push(part[..part.len() - 1].to_string());
+                out.push(part[part.len() - 1..].to_string());
+            } else {
+                out.push(part.to_string());
+            }
+        }
+        out
+    }
+
+    fn de_tagger() -> &'static crate::german_tagger::GermanTagger {
+        static TAGGER: OnceLock<crate::german_tagger::GermanTagger> = OnceLock::new();
+        TAGGER.get_or_init(|| {
+            crate::german_tagger::GermanTagger::from_resource_dir(&de_resource_dir())
+                .expect("tagger loads")
+        })
+    }
+
+    fn de_disambiguator() -> &'static crate::xml_disambiguator::XmlDisambiguator {
+        static DISAMBIG: OnceLock<crate::xml_disambiguator::XmlDisambiguator> = OnceLock::new();
+        DISAMBIG.get_or_init(|| {
+            let xml = std::fs::read_to_string(de_resource_dir().join("disambiguation.xml"))
+                .expect("disambiguation.xml");
+            crate::xml_disambiguator::XmlDisambiguator::from_xml(&xml)
+                .expect("disambiguation compiles")
+        })
+    }
+
+    fn de_analyzed(text: &str) -> AnalyzedSentence {
+        let words = de_tokenize(text);
+        let refs: Vec<&str> = words.iter().map(|w| w.as_str()).collect();
+        let tagged = crate::Tagger::tag(de_tagger(), &refs);
+        let mut tokens = vec![AnalyzedTokenReadings::new(
+            AnalyzedToken::new("<S>", 0, 0).with_pos_tags(vec!["SENT_START".to_string()]),
+        )];
+        let mut offset = 0;
+        for (word, atr) in words.iter().zip(tagged) {
+            let mut next = if atr.readings().is_empty() {
+                AnalyzedTokenReadings::new(AnalyzedToken::new(
+                    word.as_str(),
+                    offset,
+                    offset + word.len(),
+                ))
+            } else {
+                let readings = atr.into_readings();
+                let all_tags: Vec<String> = readings
+                    .iter()
+                    .flat_map(|r| r.pos_tags().to_vec())
+                    .collect();
+                let primary = AnalyzedToken::new(word.as_str(), offset, offset + word.len())
+                    .with_pos_tags(all_tags);
+                AnalyzedTokenReadings::new(primary).with_readings(readings)
+            };
+            tokens.push(next);
+            offset += word.len() + 1;
+        }
+        let mut sentence = AnalyzedSentence::new(text, 0, offset);
+        sentence.set_tokens(tokens);
+        use og_core::checker::Disambiguator as _;
+        de_disambiguator().disambiguate(&mut sentence);
+        sentence
+    }
+
+    fn java_expected(input: &str) -> Vec<String> {
+        input
+            .split(' ')
+            .filter(|p| !p.is_empty())
+            .map(
+                |part| match part.split('/').collect::<Vec<_>>().as_slice() {
+                    [_, chunk] => match *chunk {
+                        "B" => "B-NP".to_string(),
+                        "I" => "I-NP".to_string(),
+                        other => other.to_string(),
+                    },
+                    _ => "O".to_string(),
+                },
+            )
+            .collect()
+    }
+
+    fn assert_java_chunks(input: &str, basic: bool) {
+        static STRIP: std::sync::LazyLock<regex::Regex> =
+            std::sync::LazyLock::new(|| regex::Regex::new("/[A-Z-]*").unwrap());
+        let plain = STRIP.replace_all(input, "").replace(" ,", ",");
+        let mut s = de_analyzed(&plain);
+        let chunks: Vec<String> = if basic {
+            let forms = sentence_forms(&s);
+            let mut tokens: Vec<Token> = s
+                .tokens()
+                .iter()
+                .filter(|t| !t.is_whitespace())
+                .map(|t| Token::new(t, vec!["O".to_string()]))
+                .collect();
+            for rule in rules() {
+                apply(rule, &mut tokens, &forms);
+            }
+            tokens.into_iter().map(|t| t.chunks.join("|")).collect()
+        } else {
+            GermanChunker::new().add_chunk_tags(&mut s);
+            chunk_strings(&s)
+        };
+        let chunks = &chunks[1..];
+        let expected = java_expected(input);
+        for (i, want) in expected.iter().enumerate() {
+            let got = chunks.get(i).map(|c| c.as_str()).unwrap_or("<none>");
+            assert!(
+                got.split('|').any(|c| c == want),
+                "{input}\n  token #{i} expected {want}, got {got:?}\n  all: {chunks:?}"
+            );
+        }
+    }
+
+    const FULL_CHUNK_LINES: &[&str] = &[
+        "Ein/B Haus/I",
+        "Ein/NPP Hund/NPP und/NPP eine/NPP Katze/NPP stehen dort",
+        "Es war die/NPS größte/NPS und/NPS erfolgreichste/NPS Erfindung/NPS",
+        "Geräte/B , deren/NPS Bestimmung/NPS und/NPS Funktion/NPS unklar sind.",
+        "Julia/NPP und/NPP Karsten/NPP sind alt",
+        "Es ist die/NPS älteste/NPS und/NPS bekannteste/NPS Maßnahme/NPS",
+        "Das ist eine/NPS Masseeinheit/NPS und/NPS keine/NPS Gewichtseinheit/NPS",
+        "Sie fährt nur eins/NPS ihrer/NPS drei/NPS Autos/NPS",
+        "Da sind er/NPP und/NPP seine/NPP Schwester/NPP",
+        "Rekonstruktionen/NPP oder/NPP der/NPP Wiederaufbau/NPP sind das/NPS Ziel/NPS",
+        "Isolation/NPP und/NPP ihre/NPP Überwindung/NPP ist das/NPS Thema/NPS",
+        "Es gibt weder/NPP Gerechtigkeit/NPP noch/NPP Freiheit/NPP",
+        "Da sitzen drei/NPP Katzen/NPP",
+        "Der/NPS von/NPS der/NPS Regierung/NPS geprüfte/NPS Hund/NPS ist grün",
+        "Herr/NPP und/NPP Frau/NPP Schröder/NPP sind betrunken",
+        "Das sind 37/NPS Prozent/NPS",
+        "Das sind 37/NPP Prozent/NPP",
+        "Er will die/NPP Arbeitsplätze/NPP so umgestalten , dass/NPP sie/NPP wie/NPP ein/NPP Spiel/NPP sind.",
+        "So dass Knochenbrüche/NPP und/NPP Platzwunden/NPP die/NPP Regel/NPP sind",
+        "Eine/NPS Veranstaltung/NPS ,/NPS die/NPS immer/NPS wieder/NPS ein/NPS kultureller/NPS Höhepunkt/NPS war",
+        "Und die/NPS ältere/NPS der/NPS beiden/NPS Töchter/NPS ist 20.",
+        "Der/NPS Synthese/NPS organischer/NPS Verbindungen/NPS steht nichts im/PP Weg/NPS",
+        "Aber/B die/NPP Kenntnisse/NPP der/NPP Sprache/NPP sind nötig.",
+        "Dort steht die/NPS Pyramide/NPS des/NPS Friedens/NPS und/NPS der/NPS Eintracht/NPS",
+        "Und Teil/B der/NPS dort/NPS ausgestellten/NPS Bestände/NPS wurde privat finanziert.",
+        "Autor/NPS der/NPS ersten/NPS beiden/NPS Bücher/NPS ist Stephen King/NPS",
+        "Autor/NPS der/NPS beiden/NPS Bücher/NPS ist Stephen King/NPS",
+        "Teil/NPS der/NPS umfangreichen/NPS dort/NPS ausgestellten/NPS Bestände/NPS stammt von privat",
+        "Ein/NPS Teil/NPS der/NPS umfangreichen/NPS dort/NPS ausgestellten/NPS Bestände/NPS stammt von privat",
+        "Die/NPS Krankheit/NPS unserer/NPS heutigen/NPS Städte/NPS und/NPS Siedlungen/NPS ist der/NPS Verkehr/NPS",
+        "Der/B Nil/I ist der/NPS letzte/NPS der/NPS vier/NPS großen/NPS Flüsse/NPS",
+        "Der/NPS letzte/NPS der/NPS vier/NPS großen/NPS Flüsse/NPS ist der/B Nil/I",
+        "Sie kennt eine/NPP Menge/NPP englischer/NPP Wörter/NPP",
+        "Eine/NPP Menge/NPP englischer/NPP Wörter/NPP sind aus/PP dem/NPS Lateinischen/NPS abgeleitet.",
+        "Laut/PP den/PP meisten/PP Quellen/PP ist er 35 Jahre/B alt.",
+        "Bei/PP den/PP sehr/PP niedrigen/PP Oberflächentemperaturen/PP verbrennt nichts",
+        "In/PP den/PP alten/PP Religionen/PP ,/PP Mythen/PP und/PP Sagen/PP tauchen Geister/B auf.",
+        "Die/B Straße/I ist wichtig für/PP die/PP Stadtteile/PP und/PP selbständigen/PP Ortsteile/PP",
+        "Es herrscht gute/NPS Laune/NPS in/PP chemischen/PP Komplexverbindungen/PP",
+        "Funktionen/NPP des/NPP Körpers/NPP einschließlich/PP der/PP biologischen/PP und/PP sozialen/PP Grundlagen/PP",
+        "Das/NPS Dokument/NPS umfasst das für/PP Ärzte/PP und/PP Ärztinnen/PP festgestellte/PP Risikoprofil/PP",
+        "In/PP den/PP darauf/PP folgenden/PP Wochen/PP ging es los.",
+        "In/PP nur/PP zwei/PP Wochen/PP geht es los.",
+        "Programme/B , in/PP deren/PP deutschen/PP Installationen/PP nichts funktioniert.",
+        "Nach/PP sachlichen/PP und/PP militärischen/PP Kriterien/PP war das unnötig.",
+        "Mit/PP über/PP 1000/PP Handschriften/PP ist es die/NPS größte/NPS Sammlung/NPS",
+        "Es gab Beschwerden/NPP über/PP laufende/PP Sanierungsmaßnahmen/PP",
+        "Gesteigerte/B Effizienz/I durch/PP Einsatz/PP größerer/PP Maschinen/PP und/PP bessere/PP Kapazitätsplanung/PP",
+        "Bei/PP sehr/PP guten/PP Beobachtungsbedingungen/PP bin ich dabei",
+        "Die/NPP Beziehungen/NPP zwischen/NPP Kanada/NPP und/NPP dem/NPP Iran/NPP sind unterkühlt",
+        "Die/PP darauffolgenden/PP Jahre/PP war es kalt",
+        "Die/NPP darauffolgenden/PP Jahre/PP waren kalt",
+        "Die/PP letzten/PP zwei/PP Monate/PP war es kalt",
+        "Letztes/PP Jahr/PP war kalt",
+        "Letztes/PP Jahr/PP war es kalt",
+        "Es sind Atome/NPP ,/NPP welche/NPP der/NPP Urstoff/NPP aller/NPP Körper/NPP sind",
+        "Kommentare/NPP ,/NPP Korrekturen/NPP ,/NPP Kritik/NPP bitte nach /dev/null",
+        "Einer/NPS der/NPS beiden/NPS Höfe/NPS war schön",
+    ];
+
+    const BASIC_CHUNK_LINES: &[&str] = &[
+        "Ein/B Haus/I",
+        "Da steht ein/B Haus/I",
+        "Da steht ein/B schönes/I Haus/I",
+        "Da steht ein/B schönes/I großes/I Haus/I",
+        "Da steht ein/B sehr/I großes/I Haus/I",
+        "Da steht ein/B sehr/I schönes/I großes/I Haus/I",
+        "Da steht ein/B sehr/I großes/I Haus/I mit Dach/B",
+        "Da steht ein/B sehr/I großes/I Haus/I mit einem/B blauen/I Dach/I",
+        "Eine/B leckere/I Lasagne/I",
+        "Herr/B Meier/I isst eine/B leckere/I Lasagne/I",
+        "Herr/B Schrödinger/I isst einen/B Kuchen/I",
+        "Herr/B Schrödinger/I isst einen/B leckeren/I Kuchen/I",
+        "Herr/B Karl/I Meier/I isst eine/B leckere/I Lasagne/I",
+        "Herr/B Finn/I Westerwalbesloh/I isst eine/B leckere/I Lasagne/I",
+        "Unsere/B schöne/I Heimat/I geht den/B Bach/I runter",
+        "Er meint das/B Haus/I am grünen/B Hang/I",
+        "Ich/B muss dem/B Hund/I Futter/I geben",
+        "Das/B Wasser/I , das die/B Wärme/I überträgt",
+        "Er mag das/B Wasser/I , das/B Meer/I und die/B Luft/I",
+        "Schon mehr als zwanzig/B Prozent/I der/B Arbeiter/I sind im Streik/B",
+        "Das/B neue/I Gesetz/I betrifft 1000 Bürger/B",
+        "In zwei/B Wochen/I ist Weihnachten/B",
+        "Eines ihrer/B drei/I Autos/I ist blau",
+    ];
+
+    #[test]
+    fn java_test_full_chunk_lines() {
+        for input in FULL_CHUNK_LINES {
+            assert_java_chunks(input, false);
+        }
+    }
+
+    #[test]
+    fn java_test_basic_chunk_lines() {
+        for input in BASIC_CHUNK_LINES {
+            assert_java_chunks(input, true);
+        }
+    }
 }
