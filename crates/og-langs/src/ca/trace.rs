@@ -201,6 +201,20 @@ fn count_matches_sub(rule_id: &str, sub_id: Option<&str>, text: &str) -> usize {
     matches
 }
 
+fn count_matches_unsplit(rule_id: &str, sub_id: Option<&str>, text: &str) -> usize {
+    let pipeline = CatalanPipeline::shared();
+    let engine = suite_engine();
+    let sentence = pipeline.analyze_range(text, 0, text.len());
+    let mut matches = 0usize;
+    for rule in group_of(rule_id)
+        .iter()
+        .filter(|r| sub_id.is_none_or(|s| r.sub_id.as_deref() == Some(s)))
+    {
+        matches += engine.match_rule(rule, &sentence).len();
+    }
+    matches
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -634,54 +648,98 @@ mod tests {
     }
 
     #[test]
-    fn round21_srx_residue_stays_sentence_split_divergent() {
+    fn round24_d_sr_srx_split_is_java_parity_and_the_example_passes_unsplit() {
         assert_eq!(
             count_matches("D_SR", "D\u{ba}. Jaume Ivars."),
             0,
-            "D_SR (1 fail): our SRX splitter breaks 'D\u{ba}. Jaume Ivars.' into 'D\u{ba}. ' + \
-             'Jaume Ivars.' (probe_round21_family_counts dumps the two sentences) so the \
-             pattern D\u{ba} + . + Lu-initial token cannot span; Java's ca SRX ruleset keeps \
-             it whole (the D_SR example passes in Java and CatalanSentenceTokenizerTest pins \
-             the no-break family, e.g. line 90 'amb tot...' stays one sentence) - flips when \
-             og-tokenizer's SRX handling stops breaking after '\u{ba}.' and after '... '"
+            "strict (sentence-split) path, and the split after 'D\u{ba}. ' is what Java's \
+             loomchild cascade produces too: SrxTextIterator.java:358-391 takes the earliest \
+             break rule by position (ties by document order) and consults only the no-break \
+             rules preceding it in the ruleset (RuleManager.java:48-83 builds each break \
+             rule's exception alternation from the no-break rules seen so far), and no \
+             Catalan no-break rule covers 'D\u{ba}. ' before an uppercase word - the acronym \
+             rule at segment.srx:4918 gates its afterbreak on lowercase-only (Ll), the initials rule at \
+             :4871 needs an uppercase letter immediately before the dot, and \u{ba} is Lo \
+             not Lu for the rule at :4927. Round 21 pinned this as an og-tokenizer bug on \
+             the false premise that Java keeps the text whole; that premise is refuted"
         );
+        assert_eq!(
+            count_matches_unsplit("D_SR", None, "D\u{ba}. Jaume Ivars."),
+            1,
+            "Java parity of the upstream harness: PatternRuleTest.java:617-620 routes ca \
+             incorrect examples through getMatchesForSingleSentence (:866-868, \
+             lt.getAnalyzedSentence over the whole text with no SRX splitting), so upstream's \
+             CatalanPatternRuleTest passes the grammar.xml:139737 example without the \
+             splitter ever running on it; the suite now mirrors that branch (example_suite \
+             unsplit_incorrect) and the D\u{ba} + . + Lu-initial pattern matches the \
+             unsplit token stream"
+        );
+    }
+
+    #[test]
+    fn round24_etcetera_srx_split_is_java_parity_and_the_example_passes_unsplit() {
         assert_eq!(
             count_matches("ETCETERA", "Tres, quatre, cinc, ... etc."),
             0,
-            "ETCETERA (1 fail): the splitter breaks after '... ' before 'etc.', so sub-rule 2 \
-             (, . . . etc .) cannot span; Java keeps 'el vi no \u{e9}s gens propi de monjos, \
-             amb tot...' as one sentence (CatalanSentenceTokenizerTest:90) - same og-tokenizer \
-             SRX divergence"
+            "strict path: the only candidate ellipsis no-break rule \
+             [non-space](ellipsis)[space] at segment.srx:4958 requires a NON-whitespace \
+             character immediately before '...' (verified by cat -A on the vendored file), \
+             but 'cinc, ...' carries a space between the comma and the dots, so the \
+             exception cannot fire in the Java cascade either - both engines split before \
+             'etc.'. The round-21 citation of CatalanSentenceTokenizerTest:90 was a \
+             different family (ellipsis directly after 'tot' with a closing quote, matched \
+             by the rule at :4963)"
+        );
+        assert_eq!(
+            count_matches_unsplit("ETCETERA", Some("3"), "Tres, quatre, cinc, ... etc."),
+            1,
+            "unsplit, sub-rule 3 (, . . . ,? etc .) alone matches exactly like Java's \
+             per-sub-rule getMatchesForSingleSentence evaluation of grammar.xml:85936 \
+             (getPatternRulesByIdAndSubId runs one sub-rule per example): the tokenizer \
+             splits '...' into three '.' tokens (word_tokenizer.rs test_ellipsis_standalone)"
         );
     }
 
     #[test]
     fn round21_cometes_rectes_residue_is_the_regexp_normalization_asymmetry() {
         assert_eq!(
-            count_matches("COMETES_RECTES", "És de ‘gran qualitat\"."),
+            count_matches_unsplit("COMETES_RECTES", None, "És de ‘gran qualitat\"."),
             0,
-            "COMETES_RECTES (2 fails): sub-rule 2's <token regexp=\"yes\">[‘’]</token> \
-             can never match because the shared engine normalizes the token surface \
-             (‘→') but matches the UNnormalized pattern regex against it \
-             (pattern_rule.rs:2201-2218 element_surface_text_matches over og-xml unifier.\
-             rs:8-14) - Java matches the raw surface - flips to 1 when the engine matches \
-             regexps against the unnormalized surface (or folds both sides consistently)"
+            "COMETES_RECTES (2 fails, both modes): sub-rule 2's <token regexp=\"yes\">[‘’]\
+             </token> can never match because the shared engine normalizes the token surface \
+             (‘→') at pattern_rule.rs:2203 and matches the UNnormalized pattern regex \
+             against it (:2211-2219) - Java compares the raw string with no apostrophe fold \
+             anywhere in the matcher path (StringMatcher.java:44-46), so [‘’] matches the \
+             raw ‘ token and the grammar.xml:83049 example passes upstream. Fix site for \
+             the shared owner: match regexps against the unnormalized surface (or fold the \
+             pattern source at compile time); note the plain-text arm at :2204-2210 folds \
+             both sides, which Java also does not - the two arms should be made raw/raw. \
+             This is the ONLY remaining engine-side surface family once the harness runs \
+             the Java-lenient unsplit branch"
         );
     }
 
     #[test]
-    fn round22_et_al_is_the_third_srx_residue() {
+    fn round24_et_al_srx_split_is_java_parity_and_the_example_passes_unsplit() {
         assert_eq!(
             count_matches("ET_AL", "F. Garcia et. al., J. Pont."),
             0,
-            "ET_AL (1 fail): sub-rule 2's et + . + a + l + . pattern spans our SRX break - \
-             probe_round21_family_counts dumps the split: 'F. Garcia et. ' + 'al., J. \
-             Pont.' as two sentences, with the second carrying the CORRECT a + l + . \
-             tokens (the contraction split at CatalanWordTokenizer.java:166-176 works). \
-             Java's own example test requires the match (grammar.xml:87533 <example \
-             correction='et al.|et alii'>F. Garcia <marker>et. al.</marker>, J. Pont.</\
-             example>), so Java's ca sentence tokenizer keeps it one sentence - same \
-             og-tokenizer SRX family as D_SR ('Dº.') and ETCETERA ('... ')"
+            "strict path, Java-parity split after 'et. ': the acronym rule at \
+             segment.srx:4918 (letter-dot repetitions behind a word boundary) cannot match \
+             'et.' because the boundary fails before the 't' and the group needs \
+             letter+dot pairs, and the composed-abbreviation rule at :4950 is the literal \
+             space form 'et al.'. Round 22's claim that Java's tokenizer keeps it whole is \
+             refuted - upstream passes the grammar.xml:87543 example because \
+             PatternRuleTest.java:617-620 never splits ca incorrect examples"
+        );
+        assert_eq!(
+            count_matches_unsplit("ET_AL", Some("2"), "F. Garcia et. al., J. Pont."),
+            1,
+            "unsplit, sub-rule 2 (et + . + a + l + .) alone matches with the contraction \
+             split (CatalanWordTokenizer.java:166-176) intact, mirroring upstream's green \
+             per-sub-rule example test; sub-rule 1 (et + [min=0 .] + a + l) also matches \
+             this text, so the whole-group count is 2 - each sub-rule's own example is \
+             evaluated against itself exactly like Java's getPatternRulesByIdAndSubId"
         );
         assert_eq!(
             count_matches("ET_AL", "F. Garcia et al, J. Pont."),
@@ -823,7 +881,11 @@ mod tests {
             ("RECOLZAMENT", "Sense recolzament popular."),
             ("D_SR", "D\u{ba}. Jaume Ivars."),
         ] {
-            eprintln!("{id} on '{text}': {}", count_matches(id, text));
+            eprintln!(
+                "{id} on '{text}': strict={} unsplit={}",
+                count_matches(id, text),
+                count_matches_unsplit(id, None, text)
+            );
         }
         probe(
             "COMETES_INCORRECTES",

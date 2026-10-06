@@ -192,11 +192,19 @@ fn catalan_grammar_examples_with_ca_pipeline() {
         for example in &rule.examples {
             let (clean_text, marker_range) = extract_marker(&example.text);
             let mut matches = Vec::new();
+            // Java tests ca incorrect examples unsplit (PatternRuleTest.java:617-620)
+            let unsplit_incorrect =
+                example.example_type == og_xml::types::XmlExampleType::Incorrect;
             for aux in group.iter() {
-                for (sentence, sentence_start) in pipeline.analyze_offset_text(&clean_text) {
-                    for mut m in engine.match_rule(aux, &sentence) {
-                        m.set_offset_length(m.offset() + sentence_start, m.length());
-                        matches.push(m);
+                if unsplit_incorrect {
+                    let sentence = pipeline.analyze_range(&clean_text, 0, clean_text.len());
+                    matches.extend(engine.match_rule(aux, &sentence));
+                } else {
+                    for (sentence, sentence_start) in pipeline.analyze_offset_text(&clean_text) {
+                        for mut m in engine.match_rule(aux, &sentence) {
+                            m.set_offset_length(m.offset() + sentence_start, m.length());
+                            matches.push(m);
+                        }
                     }
                 }
             }
