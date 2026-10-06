@@ -436,6 +436,82 @@ mod tests {
     }
 
     #[test]
+    fn java_embedded_examples_pin_exact_texts() {
+        let wordiness = super::super::arabic_wordiness_rule();
+        let matches = sentence_matches(&wordiness, "هناك خطأ في العبارة");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].replacements()[0].value(), "في العبارة خطأ");
+
+        let simple_replace = super::super::arabic_simple_replace_rule();
+        let matches = sentence_matches(&simple_replace, "الى");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].replacements()[0].value(), "إلى");
+
+        let trans_verb =
+            super::super::trans_verb::ArabicTransVerbRule::from_resource_dir(&resource_dir());
+        assert!(
+            sentence_matches(&trans_verb, "The train arrived a hour ago.").is_empty(),
+            "Java's embedded example is an English leftover no Arabic verb-data word matches"
+        );
+    }
+
+    #[test]
+    fn replace_rules_match_phrases_beyond_three_tokens() {
+        let wordiness = super::super::arabic_wordiness_rule();
+        let matches = sentence_matches(&wordiness, "هناك مشكلة في الكمبيوتر");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].replacements()[0].value(), "في الحاسوب مشكلة");
+
+        let simple_replace = super::super::arabic_simple_replace_rule();
+        let matches = sentence_matches(&simple_replace, "أشهد ألا إله إلا الله");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(
+            matches[0].replacements()[0].value(),
+            "أشهد أن لا إله إلا الله"
+        );
+        let matches = sentence_matches(&simple_replace, "الرضى من أجل النعم على الإنسان");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].replacements()[0].value(), "الر\u{651}\u{650}ضا");
+    }
+
+    #[test]
+    fn replace_rules_keep_only_the_longest_match() {
+        let simple_replace = super::super::arabic_simple_replace_rule();
+        let text = "فترة طويلة";
+        let matches = sentence_matches(&simple_replace, text);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(
+            &text[matches[0].offset()..matches[0].offset() + matches[0].length()],
+            text
+        );
+        assert_eq!(matches[0].replacements()[0].value(), "مدة");
+
+        let diacritics = super::super::arabic_diacritics_rule();
+        let matches = sentence_matches(&diacritics, "هضبة الجولان");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].replacements()[0].value(), "هضبة الجَوْلان");
+    }
+
+    #[test]
+    fn replace_rules_render_java_messages() {
+        let simple_replace = super::super::arabic_simple_replace_rule();
+        let matches = sentence_matches(&simple_replace, "أسطحة");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(
+            matches[0].message(),
+            "قل <suggestion>سطوح</suggestion> أو  <suggestion>أسْطح</suggestion>"
+        );
+        assert_eq!(matches[0].short_message(), Some("خطأ، يفضل أن  يقال:"));
+
+        let with_tab = sentence_matches(&simple_replace, "فترة");
+        assert_eq!(with_tab.len(), 1);
+        assert_eq!(
+            with_tab[0].message(),
+            "الفترة في اللغة العربية الضعف والسكون وانكسار الحدة والنشاط، وتطلق على ما بين نبيين"
+        );
+    }
+
+    #[test]
     fn word_coherency_rule_matches_java_example() {
         let rule = super::super::arabic_word_coherency_rule();
         let text = "وزارة الشؤون الخارجية تهتم  بكل شئون العالم.";

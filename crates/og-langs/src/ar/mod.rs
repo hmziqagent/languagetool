@@ -1,5 +1,6 @@
 pub mod comma_whitespace;
 pub mod inflected_one_word;
+pub mod replace_rules;
 pub mod trans_verb;
 pub mod word_coherency;
 pub mod word_repeat;
@@ -12,11 +13,12 @@ pub use comma_whitespace::{
     arabic_question_mark_whitespace_rule, arabic_semicolon_whitespace_rule,
 };
 pub use inflected_one_word::ArabicInflectedOneWordReplaceRule;
+pub use replace_rules::ArabicSimpleReplaceRule2;
 pub use trans_verb::ArabicTransVerbRule;
 pub use word_coherency::ArabicWordCoherencyRule;
 pub use word_repeat::ArabicWordRepeatRule;
 
-use crate::en::SimpleReplaceRule;
+use og_core::{Category, IssueType};
 use og_rules::native_rules::DoublePunctuationRule;
 
 pub fn arabic_double_punctuation_rule() -> DoublePunctuationRule {
@@ -28,20 +30,30 @@ pub fn arabic_double_punctuation_rule() -> DoublePunctuationRule {
 fn replace_rule(
     id: &str,
     name: &str,
+    short: &str,
     message: &str,
     separator: &str,
     data: &str,
     category: (&str, &str),
-) -> SimpleReplaceRule {
-    let mut rule = SimpleReplaceRule::new(id, name, category.0, category.1);
-    rule = rule.with_message_template(message, separator);
+    issue_type: IssueType,
+) -> ArabicSimpleReplaceRule2 {
+    let mut rule = ArabicSimpleReplaceRule2::new(
+        id,
+        name,
+        short,
+        message,
+        separator,
+        Category::new(category.0, category.1),
+        issue_type,
+    );
     rule.load_data(data);
     rule
 }
 
-pub fn arabic_darja_rule() -> SimpleReplaceRule {
+pub fn arabic_darja_rule() -> ArabicSimpleReplaceRule2 {
     replace_rule(
         "AR_DARJA_REPLACE",
+        "كلمات بديلة للكلمات العامية أو الأجنبية",
         "كلمات بديلة للكلمات العامية أو الأجنبية",
         "الكلمة عامية  أو أجنبية يفضل أن يقال $suggestions",
         " أو  ",
@@ -49,71 +61,82 @@ pub fn arabic_darja_rule() -> SimpleReplaceRule {
             "../../../../languagetool/languagetool-language-modules/ar/src/main/resources/org/languagetool/rules/ar/darja.txt"
         ),
         ("STYLE", "Style"),
+        IssueType::LocaleViolation,
     )
 }
 
-pub fn arabic_diacritics_rule() -> SimpleReplaceRule {
+pub fn arabic_diacritics_rule() -> ArabicSimpleReplaceRule2 {
     replace_rule(
         "AR_DIACRITICS_REPLACE",
         "كلمات مشكولة للتوضيح",
+        "كلمات يستحسن أن تشكّل لتصحيح نطقها",
         "'$match' كلمة يشيع نطقها نطقا خاطئا لذا نقترح تشكيلها كالآتي: $suggestions",
         " أو ",
         include_str!(
             "../../../../languagetool/languagetool-language-modules/ar/src/main/resources/org/languagetool/rules/ar/diacritics.txt"
         ),
         ("STYLE", "Style"),
+        IssueType::Style,
     )
 }
 
-pub fn arabic_simple_replace_rule() -> SimpleReplaceRule {
+pub fn arabic_simple_replace_rule() -> ArabicSimpleReplaceRule2 {
     replace_rule(
         "AR_SIMPLE_REPLACE",
         "قاعدة تطابق الكلمات التي يجب تجنبها وتقترح تصويبا لها",
+        "خطأ، يفضل أن  يقال:",
         "قل $suggestions",
         " أو  ",
         include_str!(
             "../../../../languagetool/languagetool-language-modules/ar/src/main/resources/org/languagetool/rules/ar/replaces.txt"
         ),
         ("CONFUSED_WORDS", "Confused Words"),
+        IssueType::Uncategorized,
     )
 }
 
-pub fn arabic_homophones_rule() -> SimpleReplaceRule {
+pub fn arabic_homophones_rule() -> ArabicSimpleReplaceRule2 {
     replace_rule(
         "AR_HOMOPHONES_REPLACE",
         "كلمات متشابهة لفظا للتوضيح، يرجى التحقق منها مثل تشابه الظاء والضاد.",
+        "كلمات متشابهة لفظا يرجى التحقق منها",
         "قل $suggestions",
         " أو  ",
         include_str!(
             "../../../../languagetool/languagetool-language-modules/ar/src/main/resources/org/languagetool/rules/ar/homophones.txt"
         ),
         ("CONFUSED_WORDS", "Confused Words"),
+        IssueType::Uncategorized,
     )
 }
 
-pub fn arabic_redundancy_rule() -> SimpleReplaceRule {
+pub fn arabic_redundancy_rule() -> ArabicSimpleReplaceRule2 {
     replace_rule(
         "AR_REDUNDANCY_REPLACE",
         "1. تكرار (عام)",
+        "تكرار",
         "'$match' تعبير فيه تكرار.في بعض الحالات، يستحسن استعمال $suggestions",
         " أو ",
         include_str!(
             "../../../../languagetool/languagetool-language-modules/ar/src/main/resources/org/languagetool/rules/ar/redundancies.txt"
         ),
         ("REDUNDANCY", "Redundancy"),
+        IssueType::Style,
     )
 }
 
-pub fn arabic_wordiness_rule() -> SimpleReplaceRule {
+pub fn arabic_wordiness_rule() -> ArabicSimpleReplaceRule2 {
     replace_rule(
         "AR_WORDINESS_REPLACE",
         "2. حشو(تعبير فيه تكرار)",
+        "حشو (تعبير فيه تكرار)",
         "'$match' تعبير فيه حشو يفضل أن يقال $suggestions",
         " أو ",
         include_str!(
             "../../../../languagetool/languagetool-language-modules/ar/src/main/resources/org/languagetool/rules/ar/wordiness.txt"
         ),
         ("REDUNDANCY", "Redundancy"),
+        IssueType::Style,
     )
 }
 
