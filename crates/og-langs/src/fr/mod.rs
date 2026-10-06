@@ -253,6 +253,206 @@ mod tests {
         assert_eq!(french_repeated_words_rule(None).id(), "FR_REPEATEDWORDS");
     }
 
+    fn parse_leading_int(text: &str) -> Option<i32> {
+        let bytes = text.as_bytes();
+        let start = bytes
+            .iter()
+            .position(|b| *b == b'-' || b.is_ascii_digit())?;
+        let mut end = start + usize::from(bytes[start] == b'-');
+        while end < bytes.len() && bytes[end].is_ascii_digit() {
+            end += 1;
+        }
+        text[start..end].parse().ok()
+    }
+
+    fn java_priority_table(java: &str) -> Vec<(String, i32)> {
+        let mut out = Vec::new();
+        for line in java.lines() {
+            let Some(idx) = line.find("id2prio.put(\"") else {
+                continue;
+            };
+            if line[..idx].contains("//") {
+                continue;
+            }
+            let rest = &line[idx + "id2prio.put(\"".len()..];
+            let Some(id_end) = rest.find('"') else {
+                continue;
+            };
+            if let Some(prio) = parse_leading_int(&rest[id_end + 1..]) {
+                out.push((rest[..id_end].to_string(), prio));
+            }
+        }
+        out
+    }
+
+    fn branch_entries(
+        body: &str,
+        starts_marker: &str,
+        equals_marker: &str,
+    ) -> Vec<(bool, String, i32)> {
+        let mut out = Vec::new();
+        let mut scan = 0usize;
+        loop {
+            let starts_hit = body[scan..].find(starts_marker);
+            let equals_hit = body[scan..].find(equals_marker);
+            let (at, marker, starts) = match (starts_hit, equals_hit) {
+                (None, None) => break,
+                (Some(a), Some(b)) if a <= b => (scan + a, starts_marker, true),
+                (Some(a), None) => (scan + a, starts_marker, true),
+                (_, Some(b)) => (scan + b, equals_marker, false),
+            };
+            let rest = &body[at + marker.len()..];
+            let Some(id_end) = rest.find('"') else {
+                break;
+            };
+            let after = &rest[id_end + 1..];
+            let ret = after.find("return ").expect("return after branch");
+            let prio = parse_leading_int(&after[ret + "return ".len()..]).expect("priority int");
+            out.push((starts, rest[..id_end].to_string(), prio));
+            scan = at + marker.len() + id_end + 1;
+        }
+        out
+    }
+
+    fn rust_priority_table(rust_src: &str) -> Vec<(String, i32)> {
+        let start = rust_src.find("fn fr_priority_table").expect("table fn");
+        let end = rust_src[start..].find("\n}").expect("table fn end");
+        let body = &rust_src[start..start + end];
+        let mut out = Vec::new();
+        let mut scan = 0usize;
+        while let Some(hit) = body[scan..].find("\" => ") {
+            let at = scan + hit;
+            let id_start = body[..at].rfind('"').expect("opening quote") + 1;
+            let prio = parse_leading_int(&body[at + "\" => ".len()..]).expect("priority int");
+            out.push((body[id_start..at].to_string(), prio));
+            scan = at + "\" => ".len();
+        }
+        out
+    }
+
+    #[test]
+    fn french_id2prio_parity_with_java_source() {
+        use std::collections::BTreeMap;
+        let lt_root = crate::engine::find_lt_resource_dir().expect("languagetool tree");
+        let java = std::fs::read_to_string(
+            lt_root.join("fr/src/main/java/org/languagetool/language/French.java"),
+        )
+        .expect("French.java");
+        let rust_src = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/match_priority.rs"
+        ))
+        .expect("match_priority.rs source");
+
+        let java_table = java_priority_table(&java);
+        assert!(
+            java_table.len() >= 90,
+            "parsed only {} id2prio entries",
+            java_table.len()
+        );
+        let method_start = java.find("getPriorityForId(String id)").expect("method");
+        let method_end = method_start
+            + java[method_start..]
+                .find("hasMinMatchesRules")
+                .expect("method end");
+        let java_branches = branch_entries(
+            &java[method_start..method_end],
+            "id.startsWith(\"",
+            "id.equals(\"",
+        );
+        assert_eq!(java_branches.len(), 12, "{java_branches:?}");
+        let rust_table = rust_priority_table(&rust_src);
+        let impl_start = rust_src
+            .find("impl LanguageMatchFilter for FrenchMatchFilter")
+            .expect("impl");
+        let impl_end = impl_start + rust_src[impl_start..].find("\n}").expect("impl end");
+        let rust_branches = branch_entries(
+            &rust_src[impl_start..impl_end],
+            "id.starts_with(\"",
+            "id == \"",
+        );
+
+        let jt: BTreeMap<&str, i32> = java_table.iter().map(|(k, v)| (k.as_str(), *v)).collect();
+        let rt: BTreeMap<&str, i32> = rust_table.iter().map(|(k, v)| (k.as_str(), *v)).collect();
+        let missing: Vec<&str> = jt
+            .keys()
+            .filter(|k| !rt.contains_key(*k))
+            .copied()
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "absent from fr_priority_table: {missing:?}"
+        );
+        let extra: Vec<&str> = rt
+            .keys()
+            .filter(|k| !jt.contains_key(*k))
+            .copied()
+            .collect();
+        assert!(extra.is_empty(), "only in fr_priority_table: {extra:?}");
+        for (id, prio) in &jt {
+            assert_eq!(rt.get(id), Some(prio), "priority mismatch for {id}");
+        }
+
+        for branch in &rust_branches {
+            assert!(
+                java_branches.iter().any(|(s, l, p)| {
+                    *s == branch.0 && l.as_str() == branch.1 && *p == branch.2
+                }),
+                "rust-only branch {branch:?}"
+            );
+        }
+        let java_only: Vec<(bool, String, i32)> = java_branches
+            .iter()
+            .filter(|b| {
+                !rust_branches
+                    .iter()
+                    .any(|(s, l, p)| *s == b.0 && l.as_str() == b.1 && *p == b.2)
+            })
+            .cloned()
+            .collect();
+        assert_eq!(
+            java_only,
+            vec![
+                (true, "AI_FR_HYDRA_LEO".to_string(), -101),
+                (true, "AI_FR_GGEC_REPLACEMENT_ORTHOGRAPHY".to_string(), -101),
+            ],
+            "only the data-inert AI_FR prefixes may be absent from match_priority.rs"
+        );
+
+        use og_core::match_filters::{LanguageMatchFilter as _, base_priority_for_id};
+        let filter = crate::match_priority::for_code("fr");
+        for (id, prio) in &java_table {
+            assert_eq!(filter.priority_for_id(id), *prio, "behavior drift for {id}");
+        }
+        for (starts, lit, prio) in &java_branches {
+            let probe = if *starts {
+                format!("{lit}_PIN_PROBE")
+            } else {
+                lit.clone()
+            };
+            if jt.contains_key(probe.as_str()) || lit.starts_with("AI_FR") {
+                continue;
+            }
+            assert_eq!(
+                filter.priority_for_id(&probe),
+                *prio,
+                "branch behavior drift for {probe}"
+            );
+        }
+        let rules_dir = crate::fr::test_support::fr_rules_dir().expect("fr rules dir");
+        for file in ["grammar.xml", "style.xml"] {
+            let xml = std::fs::read_to_string(rules_dir.join(file)).expect(file);
+            assert!(
+                !xml.contains("id=\"AI_FR"),
+                "{file} must not define AI_FR rules"
+            );
+        }
+        assert_eq!(
+            filter.priority_for_id("AI_FR_HYDRA_LEO_PIN_PROBE"),
+            base_priority_for_id("AI_FR_HYDRA_LEO_PIN_PROBE")
+        );
+    }
+
     #[test]
     fn strict_whitespace_rule_is_picky_and_temp_off() {
         let strict = french_question_whitespace_strict_rule();

@@ -1,6 +1,6 @@
 use og_core::{
-    AnalyzedSentence, AnalyzedTokenReadings, Category, IssueType, RuleMatch, RuleMatchContext,
-    RuleMatchRule, SuggestedReplacement, rule::Rule,
+    AnalyzedSentence, AnalyzedToken, AnalyzedTokenReadings, Category, IssueType, RuleMatch,
+    RuleMatchContext, RuleMatchRule, SuggestedReplacement, rule::Rule,
 };
 use og_tagger::GenericTagger;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -208,6 +208,7 @@ impl Rule for CompoundRule {
         let text = sentence.text();
         let mut prev_tokens: VecDeque<(&AnalyzedTokenReadings, bool)> =
             VecDeque::with_capacity(MAX_TERMS);
+        let synthetic = AnalyzedTokenReadings::new(AnalyzedToken::new("", 0, 0));
         let mut rule_matches: Vec<RuleMatch> = Vec::new();
         let mut prev_from: Option<usize> = None;
         for i in 0..n + MAX_TERMS {
@@ -335,6 +336,8 @@ impl Rule for CompoundRule {
             }
             if let Some(pair) = current {
                 prev_tokens.push_back(pair);
+            } else {
+                prev_tokens.push_back((&synthetic, false));
             }
         }
         rule_matches
@@ -455,6 +458,20 @@ mod tests {
         assert!(!rule.data.dash.contains("le quel"));
         assert!(rule.data.dash.contains("anglo saxon"));
         assert!(!rule.data.joined.contains("anglo saxon"));
+    }
+
+    #[test]
+    fn java_class_example_pair_haut_rhin() {
+        assert_eq!(suggestion_lists("Le Haut Rhin."), vec![vec!["Haut-Rhin"]]);
+        assert_eq!(
+            suggestion_lists("un anglo saxon ici."),
+            vec![vec!["anglo-saxon"]]
+        );
+        let rule = CompoundRule::french(None);
+        assert!(
+            rule.match_sentence(&sentence_from("Le Haut-Rhin."))
+                .is_empty()
+        );
     }
 
     #[test]
