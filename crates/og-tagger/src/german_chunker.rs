@@ -476,7 +476,7 @@ impl GermanChunker {
             .tokens()
             .iter()
             .filter(|t| !t.is_whitespace())
-            .map(|t| Token::new(t, t.chunks().to_vec()))
+            .map(|t| Token::new(t, vec!["O".to_string()]))
             .collect();
         for rule in rules() {
             apply(rule, &mut tokens, &forms);
@@ -506,16 +506,13 @@ impl og_core::checker::Chunker for GermanChunker {
             }
             key.push_str(atr.token().token());
             key.push('\u{1}');
-            let reading = atr.token();
-            for tag in reading.pos_tags() {
-                key.push_str(tag);
-                key.push('\u{2}');
+            for reading in atr.readings() {
+                for tag in reading.pos_tags() {
+                    key.push_str(tag);
+                    key.push('\u{2}');
+                }
+                key.push('\u{4}');
             }
-            for chunk in atr.chunks() {
-                key.push_str(chunk);
-                key.push('\u{3}');
-            }
-            key.push('\u{4}');
         }
         if key.is_empty() {
             return;
@@ -671,7 +668,19 @@ mod tests {
         let mut s = sentence(&[(".", &["."])]);
         GermanChunker::new().add_chunk_tags(&mut s);
         let chunks = chunk_strings(&s);
-        assert!(chunks[0].is_empty() || chunks[0] == "O", "{chunks:?}");
+        assert_eq!(chunks[0], "O", "{chunks:?}");
+    }
+
+    #[test]
+    fn incoming_chunk_tags_are_reset_to_o() {
+        let mut s = sentence_with_chunks(&[
+            ("und", &["KON"], &["B-NP", "I-NP"]),
+            (",", &[","], &["NPP"]),
+        ]);
+        GermanChunker::new().add_chunk_tags(&mut s);
+        let chunks = chunk_strings(&s);
+        assert_eq!(chunks[1], "O", "{chunks:?}");
+        assert_eq!(chunks[2], "O", "{chunks:?}");
     }
 
     #[test]
