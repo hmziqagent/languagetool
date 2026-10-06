@@ -106,6 +106,20 @@ impl PortugueseCompoundRule {
         .with_double_r_s()
     }
 
+    pub fn pre_reform() -> Self {
+        Self::new(
+            "PT_COMPOUNDS_PRE_REFORM",
+            "Palavras compostas",
+            "Esta palavra é hifenizada.",
+            "Esta palavra é composta por justaposição.",
+            "Esta palavra pode ser composta por justaposição ou hifenizada.",
+            Some("Este conjunto forma uma palavra composta."),
+            include_str!(
+                "../../../../languagetool/languagetool-language-modules/pt/src/main/resources/org/languagetool/resource/pt/pre-reform-compounds.txt"
+            ),
+        )
+    }
+
     pub fn colour_hyphenation() -> Self {
         Self::new(
             "PT_COLOUR_HYPHENATION",
@@ -476,5 +490,29 @@ mod tests {
         let rule = PortugueseCompoundRule::colour_hyphenation();
         assert_eq!(rule.id(), "PT_COLOUR_HYPHENATION");
         assert!(!rule.data.incorrect_compounds.is_empty());
+    }
+
+    #[test]
+    fn pre_reform_rule_matches_the_pre_reform_dataset() {
+        let rule = PortugueseCompoundRule::pre_reform();
+        assert_eq!(rule.id(), "PT_COMPOUNDS_PRE_REFORM");
+        assert_eq!(rule.description(), "Palavras compostas");
+        assert_eq!(
+            replacements(&rule, "Foi um fato a propósito."),
+            vec!["a-propósito".to_string()]
+        );
+        let post = PortugueseCompoundRule::post_reform();
+        assert!(
+            post.match_sentence(&make_sentence("Foi um fato a propósito."))
+                .is_empty(),
+            "'a-propósito' is pre-reform-only data and must not fire the post-reform rule"
+        );
+    }
+
+    #[test]
+    fn pre_reform_omits_the_post_reform_url_and_rr_doubling() {
+        let rule = PortugueseCompoundRule::pre_reform();
+        assert!(rule.url.is_none());
+        assert!(!rule.double_r_s);
     }
 }

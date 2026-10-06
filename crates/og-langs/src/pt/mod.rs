@@ -20,17 +20,53 @@ pub(crate) mod trace;
 
 use crate::en::{WordCoherencyRule, WrongWordInContextRule};
 use og_core::rule::{Rule, TextLevelRule};
+use std::path::Path;
 use std::sync::Arc;
+
+struct PtDisambiguatorChain {
+    hybrid: Arc<dyn og_core::checker::Disambiguator>,
+    global_xml: Arc<og_tagger::XmlDisambiguator>,
+}
+
+impl og_core::checker::Disambiguator for PtDisambiguatorChain {
+    fn disambiguate(&self, sentence: &mut og_core::AnalyzedSentence) {
+        self.hybrid.disambiguate(sentence);
+        self.global_xml.disambiguate(sentence);
+    }
+}
+
+pub fn build_pt_disambiguator(
+    resource_dir: &Path,
+) -> Option<Arc<dyn og_core::checker::Disambiguator>> {
+    let xml = std::fs::read_to_string(resource_dir.join("disambiguation.xml")).ok()?;
+    let expanded =
+        og_xml::parser::XmlRuleParser::expand_entities_with_base(&xml, Some(resource_dir));
+    let xml_disambiguator = og_tagger::XmlDisambiguator::from_xml(&expanded).ok()?;
+    let core = crate::engine::find_lt_core_resource_dir()?;
+    let hybrid = og_tagger::hybrid_disambiguator("pt", resource_dir, &core, xml_disambiguator);
+    let global_xml = std::fs::read_to_string(core.join("disambiguation-global.xml")).ok()?;
+    let global_expanded =
+        og_xml::parser::XmlRuleParser::expand_entities_with_base(&global_xml, Some(&core));
+    let global = Arc::new(og_tagger::XmlDisambiguator::from_xml(&global_expanded).ok()?);
+    Some(Arc::new(PtDisambiguatorChain {
+        hybrid,
+        global_xml: global,
+    }))
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PtVariant {
+    Angola,
     Brazil,
+    Mozambique,
     Portugal,
 }
 
 pub fn variant_for_code(code: &str) -> Option<PtVariant> {
     match code {
+        "pt-AO" => Some(PtVariant::Angola),
         "pt-BR" => Some(PtVariant::Brazil),
+        "pt-MZ" => Some(PtVariant::Mozambique),
         "pt-PT" => Some(PtVariant::Portugal),
         _ => None,
     }
@@ -38,7 +74,9 @@ pub fn variant_for_code(code: &str) -> Option<PtVariant> {
 
 pub fn variant_rules_dir(variant: PtVariant) -> &'static str {
     match variant {
+        PtVariant::Angola => "pt-AO",
         PtVariant::Brazil => "pt-BR",
+        PtVariant::Mozambique => "pt-MZ",
         PtVariant::Portugal => "pt-PT",
     }
 }
@@ -111,8 +149,17 @@ pub fn shared_native_rules() -> PortugueseNativeRules {
 }
 
 pub fn variant_native_rules(variant: PtVariant) -> PortugueseNativeRules {
+    if matches!(variant, PtVariant::Angola | PtVariant::Mozambique) {
+        return PortugueseNativeRules {
+            rules: vec![
+                Arc::new(compound::PortugueseCompoundRule::pre_reform()),
+                Arc::new(dash::PreReformPortugueseDashRule::new()),
+            ],
+            text_level_rules: Vec::new(),
+        };
+    }
     let (replace, barbarisms, archaisms, cliche, redundancy, wordiness, wikipedia) = match variant {
-        PtVariant::Portugal => (
+        PtVariant::Portugal | PtVariant::Angola | PtVariant::Mozambique => (
             simple_replace2::portugal_replace_rule(),
             simple_replace2::barbarisms_portugal(),
             simple_replace2::archaisms_portugal(),
@@ -205,8 +252,11 @@ mod tests {
     fn variant_for_code_maps_codes() {
         assert_eq!(variant_for_code("pt-BR"), Some(PtVariant::Brazil));
         assert_eq!(variant_for_code("pt-PT"), Some(PtVariant::Portugal));
+        assert_eq!(variant_for_code("pt-AO"), Some(PtVariant::Angola));
+        assert_eq!(variant_for_code("pt-MZ"), Some(PtVariant::Mozambique));
         assert_eq!(variant_for_code("pt"), None);
         assert_eq!(variant_rules_dir(PtVariant::Portugal), "pt-PT");
+        assert_eq!(variant_rules_dir(PtVariant::Mozambique), "pt-MZ");
     }
 
     #[test]
@@ -273,9 +323,29 @@ mod tests {
         let rules = variant_native_rules(PtVariant::Brazil);
         let ids: Vec<&str> = rules.rules.iter().map(|r| r.id()).collect();
         for expected in ["PT_BR_SIMPLE_REPLACE", "PT_ARCHAISMS_REPLACE"] {
-            assert!(ids.contains(&expected), "missing {expected} in {ids:?}");
+            assert!(ids.contains(&expected));
         }
         assert!(!ids.contains(&"PT_AGREEMENT_REPLACE"));
+    }
+
+    #[test]
+    fn pre_reform_variant_rules_carry_java_ids() {
+        for variant in [PtVariant::Angola, PtVariant::Mozambique] {
+            let rules = variant_native_rules(variant);
+            let ids: Vec<&str> = rules.rules.iter().map(|r| r.id()).collect();
+            assert_eq!(
+                ids,
+                vec!["PT_COMPOUNDS_PRE_REFORM", "PT_PREAO_DASH_RULE"],
+                "AngolaPortuguese/MozambiquePortuguese add exactly the two pre-reform rules over the shared base: {ids:?}"
+            );
+            assert!(rules.text_level_rules.is_empty());
+        }
+        assert!(
+            variant_native_rules(PtVariant::Portugal)
+                .rules
+                .iter()
+                .all(|r| r.id() != "PT_COMPOUNDS_PRE_REFORM")
+        );
     }
 
     #[test]

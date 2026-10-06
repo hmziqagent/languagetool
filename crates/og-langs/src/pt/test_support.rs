@@ -29,13 +29,7 @@ impl PortuguesePipeline {
                 Some(tz) => PtTokenizer::Portuguese(tz),
                 None => PtTokenizer::Generic(og_tokenizer::DefaultWordTokenizer::new_generic()),
             };
-            let disambiguator = std::fs::read_to_string(resource_dir.join("disambiguation.xml"))
-                .ok()
-                .and_then(|xml| og_tagger::XmlDisambiguator::from_xml(&xml).ok())
-                .and_then(|d| {
-                    crate::engine::find_lt_core_resource_dir()
-                        .map(|core| og_tagger::hybrid_disambiguator("pt", &resource_dir, &core, d))
-                });
+            let disambiguator = super::build_pt_disambiguator(&resource_dir);
             PortuguesePipeline {
                 tokenizer,
                 tagger,
@@ -158,6 +152,50 @@ pub(crate) fn analyze_portuguese(text: &str) -> Vec<AnalyzedSentence> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn global_disambiguation_adds_is_url_readings() {
+        let sentences = analyze_portuguese("google.com.br é um excelente recurso.");
+        let url_tokens: Vec<(&str, bool)> = sentences[0]
+            .tokens()
+            .iter()
+            .filter(|t| matches!(t.token().token(), "google" | "com" | "br"))
+            .map(|t| {
+                (
+                    t.token().token(),
+                    t.readings()
+                        .iter()
+                        .any(|r| r.pos_tags().contains(&"_IS_URL".to_string())),
+                )
+            })
+            .collect();
+        assert_eq!(url_tokens.len(), 3, "{url_tokens:?}");
+        assert!(
+            url_tokens.iter().all(|(_, marked)| *marked),
+            "disambiguation-global.xml GLOBAL_URL rules must add _IS_URL to every URL token: {url_tokens:?}"
+        );
+    }
+
+    #[test]
+    fn pt_disambiguation_entities_resolve_det_verbonome() {
+        let sentences =
+            analyze_portuguese("Ele confundiu o rapaz com um borrego, seu tira moncos.");
+        let tira = sentences[0]
+            .tokens()
+            .iter()
+            .find(|t| t.token().token() == "tira")
+            .expect("tira token");
+        let readings: Vec<String> = tira
+            .readings()
+            .iter()
+            .map(|r| r.pos_tags().join("|"))
+            .collect();
+        assert_eq!(
+            readings,
+            vec!["NCFS000".to_string()],
+            "DET_VERBONOME (disambiguation.xml with external entities resolved) must drop the V.[ISM].+ readings of 'tira' after 'seu': {readings:?}"
+        );
+    }
 
     #[test]
     fn srx_rules_resolve_for_portuguese() {

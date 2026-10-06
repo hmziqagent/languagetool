@@ -189,3 +189,52 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod round1_tests {
+    use super::PortuguesePipeline;
+    use super::XmlCompiler;
+
+    #[test]
+    #[ignore]
+    fn trace_round1_global_disambiguation_and_style_residue() {
+        super::probe("google.com.br");
+        let engine = crate::pt::example_suite::suite_engine();
+        let style = crate::pt::filters::pt_rules_dir()
+            .expect("pt rules dir")
+            .join("style.xml");
+        let xml = std::fs::read_to_string(&style).expect("style.xml");
+        let rule_set = XmlCompiler::new()
+            .compile_file_with_base(&xml, style.parent())
+            .expect("compile style.xml");
+        let pipeline = PortuguesePipeline::shared();
+        for (id, text) in [
+            (
+                "CIENTÍFICO_TERMOS_TÉCNICOS_TERMINOLOGIA",
+                "Os termos técnicos são importantes.",
+            ),
+            (
+                "SIMPLIFICAR_QUE_PRON_V_ANDAR_A_INFINITIVO",
+                "Há décadas que me andava a arrastar sem objetivos.",
+            ),
+        ] {
+            eprintln!("== {id} '{text}'");
+            for rule in rule_set.rules.iter().filter(|r| r.id == id) {
+                for (sentence, sentence_start) in pipeline.analyze_offset_text(text) {
+                    for m in engine.match_rule(rule, &sentence) {
+                        eprintln!(
+                            "  sub {:?}: match {}..{} reps={:?}",
+                            rule.sub_id,
+                            m.offset() + sentence_start,
+                            m.offset() + sentence_start + m.length(),
+                            m.replacements()
+                                .iter()
+                                .map(|r| r.value().to_string())
+                                .collect::<Vec<_>>()
+                        );
+                    }
+                }
+            }
+        }
+    }
+}

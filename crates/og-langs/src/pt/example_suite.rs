@@ -682,4 +682,19 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn url_inicial_matches_through_the_global_disambiguation_stage() {
+        let matches = filtered_rule_matches(
+            grammar_path(),
+            "URL_INICIAL",
+            "google.com.br é um excelente recurso.",
+        );
+        assert!(
+            matches
+                .iter()
+                .any(|(start, len, _)| *start == 0 && *len == 13),
+            "disambiguation-global.xml must add _IS_URL so URL_INICIAL fires on the sentence-initial URL: {matches:?}"
+        );
+    }
 }
