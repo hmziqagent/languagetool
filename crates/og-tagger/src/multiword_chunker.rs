@@ -593,6 +593,22 @@ impl MultiWordChunkerDisambiguator {
     }
 }
 
+const EN_MULTIWORDS: ChunkerParams = ChunkerParams {
+    allow_first_capitalized: true,
+    allow_all_uppercase: true,
+    allow_titlecase: false,
+    default_tag: None,
+    remove_previous_tags: true,
+    add_ignore_spelling: true,
+};
+const EN_SPELLING_GLOBAL: ChunkerParams = ChunkerParams {
+    allow_first_capitalized: true,
+    allow_all_uppercase: true,
+    allow_titlecase: false,
+    default_tag: Some(TAG_FOR_NOT_ADDING_TAGS),
+    remove_previous_tags: false,
+    add_ignore_spelling: true,
+};
 const FR_MULTIWORDS: ChunkerParams = ChunkerParams {
     allow_first_capitalized: true,
     allow_all_uppercase: true,
@@ -689,6 +705,7 @@ pub fn hybrid_disambiguator(
     xml: XmlDisambiguator,
 ) -> Arc<dyn Disambiguator> {
     let (multiwords, global, xml_first) = match code {
+        "en" => (Some(EN_MULTIWORDS), Some(EN_SPELLING_GLOBAL), false),
         "fr" => (Some(FR_MULTIWORDS), Some(FR_SPELLING_GLOBAL), false),
         "es" => (Some(ES_MULTIWORDS), Some(ES_SPELLING_GLOBAL), false),
         "ca" => (Some(CA_MULTIWORDS), Some(CA_SPELLING_GLOBAL), false),
@@ -1005,6 +1022,92 @@ mod hybrid_tests {
         let chain = hybrid_disambiguator("fr", &fr_resource_dir(), &core_resource_dir(), xml);
         let mut sentence = AnalyzedSentence::new("x", 0, 1);
         chain.disambiguate(&mut sentence);
+    }
+
+    fn en_resource_dir() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(
+            "../../../languagetool/languagetool-language-modules/en/src/main/resources/org/languagetool/resource/en",
+        )
+    }
+
+    fn reading_tuples(atr: &AnalyzedTokenReadings) -> Vec<(String, String)> {
+        atr.readings()
+            .iter()
+            .map(|r| {
+                (
+                    r.pos_tags().concat(),
+                    r.lemma().unwrap_or_default().to_string(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn hybrid_disambiguator_builds_english_chain() {
+        let xml = XmlDisambiguator::from_xml("<rules></rules>").unwrap();
+        let chain = hybrid_disambiguator("en", &en_resource_dir(), &core_resource_dir(), xml);
+        let mut sentence = AnalyzedSentence::new("20th Century Fox released it", 0, 28);
+        sentence.set_tokens(vec![
+            AnalyzedTokenReadings::new(
+                AnalyzedToken::new("<S>", 0, 3).with_pos_tags(vec!["SENT_START".to_string()]),
+            ),
+            AnalyzedTokenReadings::new(
+                AnalyzedToken::new("20th", 0, 4)
+                    .with_pos_tags(vec!["CD".to_string()])
+                    .with_lemma("20th".to_string()),
+            ),
+            AnalyzedTokenReadings::new(
+                AnalyzedToken::new(" ", 4, 5).with_pos_tags(vec![" ".to_string()]),
+            ),
+            AnalyzedTokenReadings::new(
+                AnalyzedToken::new("Century", 5, 12)
+                    .with_pos_tags(vec!["NNP".to_string()])
+                    .with_lemma("Century".to_string()),
+            ),
+            AnalyzedTokenReadings::new(
+                AnalyzedToken::new(" ", 12, 13).with_pos_tags(vec![" ".to_string()]),
+            ),
+            AnalyzedTokenReadings::new(
+                AnalyzedToken::new("Fox", 13, 16)
+                    .with_pos_tags(vec!["NNP".to_string()])
+                    .with_lemma("Fox".to_string()),
+            ),
+            AnalyzedTokenReadings::new(
+                AnalyzedToken::new(" ", 16, 17).with_pos_tags(vec![" ".to_string()]),
+            ),
+            AnalyzedTokenReadings::new(
+                AnalyzedToken::new("released", 17, 25)
+                    .with_pos_tags(vec!["VBD".to_string()])
+                    .with_lemma("release".to_string()),
+            ),
+            AnalyzedTokenReadings::new(
+                AnalyzedToken::new(" ", 25, 26).with_pos_tags(vec![" ".to_string()]),
+            ),
+            AnalyzedTokenReadings::new(
+                AnalyzedToken::new("it", 26, 28)
+                    .with_pos_tags(vec!["PRP".to_string()])
+                    .with_lemma("it".to_string()),
+            ),
+        ]);
+        chain.disambiguate(&mut sentence);
+        let tokens = sentence.tokens();
+        for idx in [1usize, 3, 5] {
+            assert_eq!(
+                reading_tuples(&tokens[idx]),
+                vec![("NNP".to_string(), "20th Century Fox".to_string())],
+                "token {idx} must be chunked to a single NNP reading with the multiword lemma"
+            );
+            assert!(
+                tokens[idx].is_ignored_by_speller(),
+                "token {idx} must carry the spelling_global ignore flag across the reading replacement"
+            );
+        }
+        assert!(!tokens[7].is_ignored_by_speller());
+        assert_eq!(
+            reading_tuples(&tokens[7]),
+            vec![("VBD".to_string(), "release".to_string())]
+        );
+        assert!(!tokens[9].is_ignored_by_speller());
     }
 }
 
