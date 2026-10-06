@@ -995,4 +995,186 @@ mod tests {
         }
         probe_with_engine_trace_sub("MESOS_MINUSCULA", Some("1"), "El 3 de Juliol de 1985.");
     }
+
+    #[ignore]
+    #[test]
+    fn probe_round25_example_coverage_gap() {
+        let rule_set = compiled_rules();
+        let compiled_examples: usize = rule_set.rules.iter().map(|r| r.examples.len()).sum();
+        eprintln!(
+            "compiled rules: {} compiled examples: {} (grammar.xml carries 27098)",
+            rule_set.rules.len(),
+            compiled_examples
+        );
+        let mut group_index: std::collections::HashMap<(String, Option<String>), usize> =
+            std::collections::HashMap::new();
+        let mut groups: Vec<(String, Option<String>, usize, usize)> = Vec::new();
+        for rule in &rule_set.rules {
+            let key = (rule.id.clone(), rule.sub_id.clone());
+            let next = groups.len();
+            let idx = *group_index.entry(key).or_insert(next);
+            if idx == next {
+                groups.push((rule.id.clone(), rule.sub_id.clone(), rule.examples.len(), 1));
+            } else {
+                groups[idx].2 += rule.examples.len();
+                groups[idx].3 += 1;
+            }
+        }
+        let evaluated: usize = groups.iter().map(|g| g.2).sum();
+        eprintln!(
+            "suite groups: {} evaluated examples (group-first only): {}",
+            groups.len(),
+            evaluated
+        );
+        let mut dupes: Vec<&(String, Option<String>, usize, usize)> =
+            groups.iter().filter(|g| g.3 > 1).collect();
+        dupes.sort_unstable_by_key(|g| std::cmp::Reverse(g.2));
+        eprintln!(
+            "duplicate (id, sub_id) keys losing group.tail examples: {}",
+            dupes
+                .iter()
+                .take(25)
+                .map(|g| format!("{}[{:?}]x{}", g.0, g.1, g.3))
+                .collect::<Vec<_>>()
+                .join(" ")
+        );
+        let mut no_sub: Vec<&CompiledRule> = rule_set
+            .rules
+            .iter()
+            .filter(|r| r.sub_id.is_none() && r.examples.is_empty())
+            .collect();
+        no_sub.sort_unstable_by(|a, b| a.id.cmp(&b.id));
+        eprintln!(
+            "compiled rules with zero examples: {} of {} rules; ids: {}",
+            rule_set
+                .rules
+                .iter()
+                .filter(|r| r.examples.is_empty())
+                .count(),
+            rule_set.rules.len(),
+            rule_set
+                .rules
+                .iter()
+                .filter(|r| r.examples.is_empty())
+                .take(25)
+                .map(|r| r.id.clone())
+                .collect::<Vec<_>>()
+                .join(" ")
+        );
+        let _ = &mut no_sub;
+    }
+
+    #[ignore]
+    #[test]
+    fn probe_round25_sub_rule_inventory() {
+        for id in [
+            "DARRERA",
+            "QUANT_QUAN",
+            "SON",
+            "ESCOLTAR_SENTIR",
+            "QUE_INICIAL_AMBACCENT_VERB",
+            "ACCENTUATION_CHECK",
+        ] {
+            for rule in group_of(id).iter().take(3) {
+                let first: Vec<String> = rule
+                    .pattern
+                    .tokens
+                    .iter()
+                    .take(3)
+                    .map(|t| {
+                        format!(
+                            "{:?}/postag={:?}/inf={}",
+                            t.text.as_deref(),
+                            t.postag.as_deref(),
+                            t.inflected
+                        )
+                    })
+                    .collect();
+                let exs: Vec<&str> = rule
+                    .examples
+                    .iter()
+                    .map(|e| e.text.as_str())
+                    .take(2)
+                    .collect();
+                eprintln!(
+                    "{id} sub {:?} tokens [{}] examples {:?}",
+                    rule.sub_id,
+                    first.join(", "),
+                    exs
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn round25_top_residue_families_pin_their_java_matching_sub_rules() {
+        assert_eq!(
+            count_matches_sub("ESCOLTAR_SENTIR", Some("1"), "Escoltava dir coses."),
+            0,
+            "ESCOLTAR_SENTIR (124 fails, the largest residue family) pins the exact Java \
+             (id, subId) scope of PatternRuleTest.java:579 getPatternRulesByIdAndSubId: the \
+             example belongs to sub-rule 1 (grammar.xml:121717-121726), <token inflected=\"yes\"\
+             >escoltar</token> + <token regexp=\"yes\">dir|parlar|comentar|expressar|manifestar\
+             </token> with filter AdjustVerbSuggestionsFilter - 'Escoltava' must carry lemma \
+             escoltar, which only ca-ES.dict provides (CatalanTagger.java:64 loads it; absent \
+             from this tree); the group's surface sub-rules cover different phrases so they \
+             cannot satisfy this example even in the same-id scope - dict-starved, flips to 1 \
+             when a ca lexicon lands"
+        );
+        assert_eq!(
+            count_matches_sub("QUE_INICIAL_AMBACCENT_VERB", Some("1"), "Que ha passat?"),
+            0,
+            "QUE_INICIAL_AMBACCENT_VERB (96 fails): sub-rule 1 is grammar.xml:70158-70167 - \
+             SENT_START + \\p{{P}}* + marker 'que' + <token min=\"0\" inflected=\"yes\">haver\
+             </token> + <token skip=\"-1\" postag=\"V.[ISMNGP].*|_GV_\" inflected=\"yes\" \
+             regexp=\"yes\">passar|voler|necessitar|de</token> + '?' - 'ha' and 'passat' need \
+             their VAIP*/VMP* readings from ca-ES.dict; the surface tokens ('que', '?') alone \
+             cannot complete the pattern - dict-starved"
+        );
+        assert_eq!(
+            count_matches_sub("ACCENTUATION_CHECK", Some("1"), "Amb industria."),
+            0,
+            "ACCENTUATION_CHECK (86 fails): sub-rule 1 is grammar.xml:31674-31690 - <token \
+             postag=\"SPS00|LOC_PREP\" postag_regexp=\"yes\"> (exception postag RG|_possible_\
+             nompropi) + marker <token> with exception postag D.*|V.N.*|[NA].*|V.P.*|_possible_\
+             nompropi + DiacriticsCheckFilter(form:\\2 postag:[AN].*) - 'Amb' must carry SPS00 \
+             and the filter checks 'industria' against the [AN].* postag set, both from \
+             ca-ES.dict - dict-starved"
+        );
+        assert_eq!(
+            count_matches_sub(
+                "DARRERA",
+                Some("1"),
+                "Crisi darrera crisi, no se'n surten mai."
+            ),
+            0,
+            "DARRERA no_match half (20 fails): sub-rule 1 is grammar.xml:54734-54743, <token \
+             postag=\"[NA].*|V.P.*\" postag_regexp=\"yes\"/> + marker 'darrera' + <token><match \
+             no=\"0\"/></token> - 'Crisi' must carry an NC* reading (grammar.xml:54743 is this \
+             exact example) - dict-starved; the same-id scope does not save it because no \
+             sibling sub-rule's surface pattern covers 'Crisi darrera crisi'"
+        );
+        assert_eq!(
+            count_matches_sub("QUANT_QUAN", Some("1"), "Quant tens?"),
+            1,
+            "QUANT_QUAN fp (13 fails): sub-rule 1's pattern (grammar.xml:20067-20072) is the \
+             single marker token 'quant' (fully surface), so our engine fires on 'Quant' - Java \
+             suppresses via the sub-rule antipattern at grammar.xml:20041-20045, <token>quant\
+             </token> + <token skip=\"-1\" inflected=\"yes\" regexp=\"yes\">tenir|fer</token> \
+             + '?', because 'tens' carries the tenir lemma from ca-ES.dict - our added.txt-only \
+             tagger gives 'tens' no readings so the inflected antipattern cannot veto; flips \
+             to 0 with a ca lexicon"
+        );
+        assert_eq!(
+            count_matches_sub("SON", Some("1"), "son pare no té nas"),
+            1,
+            "SON fp (15 fails): sub-rule 1's pattern (grammar.xml:71091-71095) is the bare \
+             marker token 'son' with <exception postag=\"_GN_.S|_possible_nompropi|NP.*\"> - \
+             Java vetoes the match because possessive 'son' carries a _GN_.S reading from \
+             ca-ES.dict, and the sub-rule antipattern <token postag=\"SPS00|.*LOC_PREP.*\"> + \
+             son (grammar.xml:71087-71090) also needs readings; dict-starved 'son' is \
+             reading-empty so the exception cannot veto and we fire - flips to 0 with a ca \
+             lexicon"
+        );
+    }
 }

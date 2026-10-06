@@ -309,6 +309,42 @@ fn catalan_grammar_examples_with_ca_pipeline() {
 }
 
 #[test]
+fn suite_covers_every_live_grammar_example() {
+    let rule_set = compiled_rules();
+    assert_eq!(
+        rule_set.rules.len(),
+        9610,
+        "ca grammar.xml carries exactly 9610 <rule> elements (1742 rulegroups + standalone) and \
+         the compiler must keep them all"
+    );
+    let total_examples: usize = rule_set.rules.iter().map(|r| r.examples.len()).sum();
+    assert_eq!(
+        total_examples, 25598,
+        "the suite denominator must stay the full live example set: of the 27098 '<example' \
+         occurrences in grammar.xml, 410 sit inside XML comments and 1090 inside <antipattern> \
+         elements (Java routes those to antiPatternExample, PatternRuleHandler.java:342-348, \
+         and never tests them as rule examples), leaving 25598 live rule examples - any drop \
+         here is a silent og-xml parser/compiler regression"
+    );
+    let mut keys = std::collections::HashSet::with_capacity(rule_set.rules.len());
+    for rule in &rule_set.rules {
+        assert!(
+            keys.insert((rule.id.clone(), rule.sub_id.clone())),
+            "duplicate (id, sub_id) key {:?}/{:?}: rule_groups keeps only the first rule's \
+             examples and the rest would never be evaluated",
+            rule.id,
+            rule.sub_id
+        );
+        assert!(
+            !rule.examples.is_empty(),
+            "rule {}/{} lost all its examples",
+            rule.id,
+            rule.sub_id.clone().unwrap_or_default()
+        );
+    }
+}
+
+#[test]
 fn srx_languagemap_resolves_the_catalan_ruleset() {
     let splitter = og_tokenizer::srx::srx_splitter("ca").expect("ca SRX rules must resolve");
     use og_tokenizer::SentenceTokenizer as _;
