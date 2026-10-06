@@ -246,12 +246,51 @@ mod tests {
     #[test]
     fn java_pin_france_3_channel_name() {
         let rule = TopoReplaceRule::new();
-        let matches = rule.match_sentence(&sentence("France 3 a zo ur chadenn skinwel."));
-        assert_eq!(
-            matches.len(),
-            1,
-            "the Java rule code matches 'France' here; the Java test claims 0 - documented divergence"
+        let sentence =
+            crate::br::example_suite::disambiguated_sentence("France 3 a zo ur chadenn skinwel.");
+        let france = sentence
+            .tokens()
+            .iter()
+            .find(|t| t.token().token() == "France")
+            .expect("France token");
+        assert!(
+            france.is_immunized(),
+            "disambiguation.xml's FRANCE rulegroup must immunize 'France' before the \
+             channel words, which is how Java's TopoReplaceRuleTest gets 0 matches"
         );
+        assert_eq!(
+            rule.match_sentence(&sentence).len(),
+            0,
+            "the immunized first token must be skipped like TopoReplaceRule.java's \
+             prevTokensList.get(len - crtWordCount).isImmunized() check"
+        );
+        let plain = crate::br::example_suite::disambiguated_sentence("France a zo ur vro.");
+        let france = plain
+            .tokens()
+            .iter()
+            .find(|t| t.token().token() == "France")
+            .expect("France token");
+        assert!(!france.is_immunized());
+        assert_eq!(rule.match_sentence(&plain).len(), 1);
+    }
+
+    #[test]
+    fn java_pin_preceded_france_stays_immunized() {
+        let rule = TopoReplaceRule::new();
+        let sentence =
+            crate::br::example_suite::disambiguated_sentence("Radio France a zo ur skingomz.");
+        let france = sentence
+            .tokens()
+            .iter()
+            .find(|t| t.token().token() == "France")
+            .expect("France token");
+        assert!(
+            france.is_immunized(),
+            "the FRANCE rulegroup's second rule immunizes 'France' after \
+             Air|Anatole|Radio|de; got {:?}",
+            france.readings()
+        );
+        assert!(rule.match_sentence(&sentence).is_empty());
     }
 
     #[test]

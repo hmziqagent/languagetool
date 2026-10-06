@@ -178,6 +178,15 @@ pub(crate) fn all_grammar_matches(text: &str) -> Vec<(String, usize, usize)> {
     matched
 }
 
+pub(crate) fn disambiguated_sentence(text: &str) -> AnalyzedSentence {
+    BretonPipeline::shared()
+        .analyze_offset_text(text)
+        .into_iter()
+        .map(|(sentence, _)| sentence)
+        .next()
+        .expect("text must yield at least one sentence")
+}
+
 #[derive(Debug)]
 pub(crate) struct TraceDump {
     pub pattern_idx: usize,
