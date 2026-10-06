@@ -267,14 +267,385 @@ fn portuguese_grammar_examples_with_pt_pipeline() {
     );
 }
 
+#[derive(Default)]
+pub(crate) struct StyleAntipatternExamples {
+    pub(crate) by_key: HashMap<(String, Option<String>), Vec<String>>,
+    skipped_targets: usize,
+    rule_level_count: usize,
+    group_level_count: usize,
+}
+
+fn decode_xml_entities(text: &str) -> String {
+    if !text.contains('&') {
+        return text.to_string();
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(amp) = rest.find('&') {
+        out.push_str(&rest[..amp]);
+        let after = &rest[amp + 1..];
+        match after.find(';') {
+            Some(end) if end <= 10 => {
+                let entity = &after[..end];
+                match entity {
+                    "amp" => out.push('&'),
+                    "lt" => out.push('<'),
+                    "gt" => out.push('>'),
+                    "quot" => out.push('"'),
+                    "apos" => out.push('\''),
+                    _ => {
+                        if let Some(hex) = entity
+                            .strip_prefix("#x")
+                            .or_else(|| entity.strip_prefix("#X"))
+                            && let Ok(code) = u32::from_str_radix(hex, 16)
+                            && let Some(ch) = char::from_u32(code)
+                        {
+                            out.push(ch);
+                        } else if let Some(dec) = entity.strip_prefix('#')
+                            && let Ok(code) = dec.parse::<u32>()
+                            && let Some(ch) = char::from_u32(code)
+                        {
+                            out.push(ch);
+                        } else {
+                            out.push('&');
+                            out.push_str(entity);
+                            out.push(';');
+                        }
+                    }
+                }
+                rest = &after[end + 1..];
+            }
+            _ => {
+                out.push('&');
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+fn tag_name(tag: &str) -> &str {
+    let body = tag.strip_prefix('<').unwrap_or(tag);
+    let body = body.strip_prefix('/').unwrap_or(body);
+    let end = body
+        .find(|c: char| c.is_whitespace() || c == '>' || c == '/')
+        .unwrap_or(body.len());
+    &body[..end]
+}
+
+fn attr_value(tag: &str, attr: &str) -> Option<String> {
+    for quote in ['"', '\''] {
+        let needle = format!("{attr}={quote}");
+        if let Some(start) = tag.find(&needle) {
+            let rest = &tag[start + needle.len()..];
+            let end = rest.find(quote)?;
+            return Some(decode_xml_entities(&rest[..end]));
+        }
+    }
+    None
+}
+
+pub(crate) fn collect_style_antipattern_examples(nc: &str) -> StyleAntipatternExamples {
+    let mut out = StyleAntipatternExamples::default();
+    let mut group_id: Option<String> = None;
+    let mut group_sub_keys: Vec<(String, Option<String>)> = Vec::new();
+    let mut group_examples: Vec<String> = Vec::new();
+    let mut in_rule = false;
+    let mut rule_key: Option<(String, Option<String>)> = None;
+    let mut in_antipattern = false;
+    let mut example_capture: Option<String> = None;
+    let mut rest = nc;
+    while let Some(lt) = rest.find('<') {
+        if let Some(cap) = example_capture.as_mut() {
+            cap.push_str(&rest[..lt]);
+        }
+        let tag_end = rest[lt..]
+            .find('>')
+            .map(|e| lt + e + 1)
+            .unwrap_or(rest.len());
+        let tag = &rest[lt..tag_end];
+        match tag_name(tag) {
+            "rulegroup" if !tag.starts_with("</") => {
+                group_id = attr_value(tag, "id");
+                group_sub_keys.clear();
+                group_examples.clear();
+            }
+            "rulegroup" => {
+                if group_id.is_some() && !group_examples.is_empty() {
+                    for key in &group_sub_keys {
+                        out.by_key
+                            .entry(key.clone())
+                            .or_default()
+                            .extend(group_examples.iter().cloned());
+                    }
+                    if group_sub_keys.is_empty() {
+                        out.skipped_targets += group_examples.len();
+                    }
+                }
+                group_id = None;
+                group_sub_keys.clear();
+                group_examples.clear();
+                in_rule = false;
+                rule_key = None;
+                in_antipattern = false;
+                example_capture = None;
+            }
+            "rule" if !tag.starts_with("</") => {
+                in_rule = true;
+                if let Some(gid) = &group_id {
+                    group_sub_keys.push((
+                        attr_value(tag, "id").unwrap_or_else(|| gid.clone()),
+                        Some((group_sub_keys.len() + 1).to_string()),
+                    ));
+                    let key = group_sub_keys.last().cloned();
+                    rule_key = key;
+                } else {
+                    rule_key = attr_value(tag, "id").map(|id| (id, None));
+                }
+            }
+            "rule" => {
+                in_rule = false;
+                rule_key = None;
+                in_antipattern = false;
+                example_capture = None;
+            }
+            "antipattern" if !tag.starts_with("</") && !tag.ends_with("/>") => {
+                in_antipattern = true;
+            }
+            "antipattern" => {
+                in_antipattern = false;
+            }
+            "example" if in_antipattern && example_capture.is_none() && !tag.starts_with("</") => {
+                example_capture = Some(String::new());
+            }
+            "example" if example_capture.is_some() => {
+                if let Some(text) = example_capture.take() {
+                    let clean = decode_xml_entities(&text)
+                        .replace("<marker>", "")
+                        .replace("</marker>", "")
+                        .trim()
+                        .to_string();
+                    if in_rule {
+                        if let Some(key) = &rule_key {
+                            out.rule_level_count += 1;
+                            out.by_key.entry(key.clone()).or_default().push(clean);
+                        } else {
+                            out.skipped_targets += 1;
+                        }
+                    } else if group_id.is_some() {
+                        out.group_level_count += 1;
+                        group_examples.push(clean);
+                    } else {
+                        out.skipped_targets += 1;
+                    }
+                }
+            }
+            _ => {}
+        }
+        rest = &rest[tag_end..];
+    }
+    out
+}
+
 #[test]
 #[ignore]
 fn portuguese_style_examples_with_pt_pipeline() {
-    evaluate_examples_file(
-        &style_path(),
-        "style.xml",
-        Some("/tmp/test_failures_pt_style.txt"),
+    evaluate_style_examples_with_antipatterns();
+}
+
+fn evaluate_style_examples_with_antipatterns() {
+    let rules_path = style_path();
+    let xml = std::fs::read_to_string(&rules_path).expect("rules xml");
+    let without_comments = strip_xml_comments(&xml);
+    let antipattern = collect_style_antipattern_examples(&without_comments);
+    let antipattern_example_count: usize = antipattern.by_key.values().map(Vec::len).sum();
+
+    let rule_set = XmlCompiler::new()
+        .compile_file_with_base(&xml, rules_path.parent())
+        .expect("compile rules xml");
+    let mut group_index: HashMap<(String, Option<String>), usize> = HashMap::new();
+    let mut groups: Vec<Vec<&CompiledRule>> = Vec::new();
+    for rule in &rule_set.rules {
+        let key = (rule.id.clone(), rule.sub_id.clone());
+        let next = groups.len();
+        let idx = *group_index.entry(key).or_insert(next);
+        if idx == next {
+            groups.push(vec![rule]);
+        } else {
+            groups[idx].push(rule);
+        }
+    }
+
+    let engine = suite_engine();
+    let synthesizer = suite_synthesizer();
+    let pipeline = PortuguesePipeline::shared();
+    og_rules::pattern_rule::set_test_date_hack(true);
+
+    let mut passed = 0usize;
+    let mut failed = 0usize;
+    let mut fail_lines: Vec<String> = Vec::new();
+    let started = std::time::Instant::now();
+
+    for group in &groups {
+        let Some(rule) = group.first() else { continue };
+        for example in &rule.examples {
+            let (clean_text, marker_range) = extract_marker(&example.text);
+            let mut matches = Vec::new();
+            for aux in group.iter() {
+                let pt_filter = aux.filter.as_ref().filter(|f| is_pt_filter(&f.class));
+                for (sentence, sentence_start) in pipeline.analyze_offset_text(&clean_text) {
+                    let tokens: Vec<&AnalyzedTokenReadings> = sentence.non_whitespace_tokens();
+                    for m in engine.match_rule(aux, &sentence) {
+                        let Some(mut m) = (match pt_filter {
+                            Some(filter) => apply_suite_filter(
+                                aux,
+                                filter,
+                                &sentence,
+                                &tokens,
+                                synthesizer.as_ref(),
+                                m,
+                            ),
+                            None => Some(m),
+                        }) else {
+                            continue;
+                        };
+                        m.set_offset_length(m.offset() + sentence_start, m.length());
+                        matches.push(m);
+                    }
+                }
+            }
+            let failure: Option<String> = match example.example_type {
+                og_xml::types::XmlExampleType::Incorrect => {
+                    if matches.is_empty() {
+                        Some(format!(
+                            "Expected match on incorrect example but got none: '{clean_text}'"
+                        ))
+                    } else if let Some((m_start, m_end)) = marker_range {
+                        let first = &matches[0];
+                        let match_start = first.offset();
+                        let match_end = match_start + first.length();
+                        if match_start <= m_start && match_end >= m_end {
+                            None
+                        } else {
+                            Some(format!(
+                                "Match {match_start}..{match_end} does not contain marker {m_start}..{m_end}: '{clean_text}'"
+                            ))
+                        }
+                    } else {
+                        None
+                    }
+                }
+                og_xml::types::XmlExampleType::Correct => {
+                    if matches.is_empty() {
+                        None
+                    } else {
+                        Some(format!(
+                            "Expected no match on correct example but got {}: '{clean_text}'",
+                            matches.len()
+                        ))
+                    }
+                }
+                og_xml::types::XmlExampleType::TriggersError => None,
+            };
+            match failure {
+                None => passed += 1,
+                Some(message) => {
+                    failed += 1;
+                    fail_lines.push(format!("FAIL: [{}] {}", rule.id, message));
+                }
+            }
+        }
+    }
+
+    let mut antipattern_failures = 0usize;
+    let mut antipattern_target_misses = 0usize;
+    for ((id, sub_id), texts) in &antipattern.by_key {
+        let targets: Vec<&CompiledRule> = groups
+            .iter()
+            .flatten()
+            .copied()
+            .filter(|r| &r.id == id && &r.sub_id == sub_id)
+            .collect();
+        if targets.is_empty() {
+            antipattern_target_misses += texts.len();
+            continue;
+        }
+        for text in texts {
+            let mut matches = 0usize;
+            for aux in &targets {
+                for (sentence, _) in pipeline.analyze_offset_text(text) {
+                    matches += engine.match_rule(aux, &sentence).len();
+                }
+            }
+            if matches == 0 {
+                passed += 1;
+            } else {
+                failed += 1;
+                antipattern_failures += 1;
+                fail_lines.push(format!(
+                    "FAIL: [{id}/{} ANTIPATTERN]: Expected no match (antipattern example) but got {matches}: '{text}'",
+                    sub_id.as_deref().unwrap_or("-")
+                ));
+            }
+        }
+    }
+
+    eprintln!(
+        "pt module pipeline [style.xml + antipatterns]: {}/{} passed ({:.1}%) - antipattern examples: {} evaluated, {} failed, {} target-missed, {} skipped [{:.1}s]",
+        passed,
+        passed + failed,
+        100.0 * passed as f64 / (passed + failed).max(1) as f64,
+        antipattern_example_count,
+        antipattern_failures,
+        antipattern_target_misses,
+        antipattern.skipped_targets,
+        started.elapsed().as_secs_f64(),
     );
+    let _ = std::fs::write(
+        "/tmp/test_failures_pt_style.txt",
+        fail_lines.join("\n") + "\n",
+    );
+    assert!(passed + failed > 0, "suite must evaluate examples");
+}
+
+#[cfg(test)]
+mod antipattern_tests {
+    use super::*;
+
+    #[test]
+    fn style_antipattern_extraction_counts_match_an_independent_parse() {
+        let xml = std::fs::read_to_string(style_path()).expect("style.xml");
+        let without_comments = strip_xml_comments(&xml);
+        let antipattern = collect_style_antipattern_examples(&without_comments);
+        let total: usize = antipattern.by_key.values().map(Vec::len).sum();
+        assert_eq!(
+            total, 1477,
+            "910 rule-level + 273 group-level antipattern examples; the 273 group-level ones expand to every sub-rule key like Java's prepareRule (PatternRuleHandler.java:858-866), so the evaluated total is 1477 (independent count via python re over comment-stripped XML, round 2)"
+        );
+        assert_eq!(antipattern.rule_level_count, 910);
+        assert_eq!(antipattern.group_level_count, 273);
+        assert_eq!(
+            antipattern.skipped_targets, 0,
+            "every antipattern example must attach to a rule or group key"
+        );
+        assert_eq!(
+            antipattern
+                .by_key
+                .get(&("USAR_UTILIZAR".to_string(), None))
+                .map(Vec::len),
+            Some(29),
+            "USAR_UTILIZAR is a top-level rule carrying 29 antipattern examples under key (id, None)"
+        );
+        assert!(
+            antipattern
+                .by_key
+                .contains_key(&("INTERNET_ABBREVIATIONS".to_string(), Some("1".to_string()))),
+            "anonymous sub-rules of rulegroups must key as (group_id, Some(pos)) so the compiled (id, sub_id) lookup resolves"
+        );
+        assert_eq!(antipattern.rule_level_count, 910);
+        assert_eq!(antipattern.group_level_count, 273);
+    }
 }
 
 fn evaluate_examples_file(rules_path: &Path, file_label: &str, artifact: Option<&str>) {
@@ -434,6 +805,10 @@ fn evaluate_examples_file(rules_path: &Path, file_label: &str, artifact: Option<
         let _ = std::fs::write(artifact, fail_lines.join("\n") + "\n");
     }
     assert!(passed + failed > 0, "suite must evaluate examples");
+}
+
+pub(crate) fn strip_xml_comments_pub(xml: &str) -> String {
+    strip_xml_comments(xml)
 }
 
 fn strip_xml_comments(xml: &str) -> String {
