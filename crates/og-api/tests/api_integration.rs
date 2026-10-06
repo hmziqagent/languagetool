@@ -535,6 +535,44 @@ async fn test_v2_check_catalan_engine_registered() {
 }
 
 #[tokio::test]
+async fn test_v2_check_crimean_tatar_engine_registered() {
+    let app = app();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/check?language=crh&text=%C3%96z%C3%BC+bir+%C3%A7aqr%C4%B1m+uzaqta%2C+demiryol+ke%C3%A7idi+yan%C4%B1nda+ya%C5%9Fay.")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["language"]["code"].as_str(), Some("crh"));
+    assert!(json["matches"].is_array());
+}
+
+#[tokio::test]
+async fn test_v2_check_danish_engine_registered() {
+    let app = app();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/check?language=da&text=Inds%C3%A6t+din+egen+tekst+her.")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["language"]["code"].as_str(), Some("da"));
+    assert!(json["matches"].is_array());
+}
+
+#[tokio::test]
 async fn test_v2_languages_lists_all_registered_engines() {
     let json = check_response("/v2/languages").await;
     let codes: Vec<&str> = json
@@ -548,7 +586,7 @@ async fn test_v2_languages_lists_all_registered_engines() {
         .unwrap_or_default();
     for code in [
         "en-US", "de-DE", "fr", "es", "pt-BR", "pt-PT", "pt-AO", "pt-MZ", "nl", "pl", "ru", "it",
-        "ar", "ast", "be", "br", "ca", "el", "gl", "ro", "sv",
+        "ar", "ast", "be", "br", "ca", "crh", "da", "el", "gl", "ro", "sv",
     ] {
         assert!(codes.contains(&code), "missing {code} in {codes:?}");
     }

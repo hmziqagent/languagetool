@@ -37,7 +37,7 @@ impl AppState {
 pub const ENGINE_CODES: &[&str] = &[
     "en", "en-US", "en-GB", "en-CA", "en-AU", "en-NZ", "en-ZA", "de", "de-DE", "de-AT", "de-CH",
     "fr", "es", "pt", "pt-BR", "pt-PT", "pt-AO", "pt-MZ", "nl", "pl", "ru", "it", "ar", "ast",
-    "be", "br", "ca", "da", "el", "gl", "ro", "sv",
+    "be", "br", "ca", "crh", "da", "el", "gl", "ro", "sv",
 ];
 
 enum EngineSource {
@@ -76,6 +76,7 @@ fn engine_source(code: &str) -> Option<EngineSource> {
         "be" => Some(EngineSource::Generic("be")),
         "br" => Some(EngineSource::Generic("br")),
         "ca" => Some(EngineSource::Generic("ca")),
+        "crh" => Some(EngineSource::Generic("crh")),
         "el" => Some(EngineSource::Generic("el")),
         "gl" => Some(EngineSource::Generic("gl")),
         "ro" => Some(EngineSource::Generic("ro")),
