@@ -5,6 +5,7 @@ pub mod match_filter;
 pub mod native_rules;
 pub mod pronom_feble_duplicate;
 pub mod pronoms_febles;
+pub mod punctuation_paragraph_end;
 pub mod remote_rules;
 pub mod simple_replace;
 pub mod tagger;
@@ -73,6 +74,7 @@ pub fn catalan_native_rules() -> CatalanNativeRules {
             Arc::new(native_rules::CatalanUnpairedMarksRule::exclamation()),
             Arc::new(word_repeat_beginning::CatalanWordRepeatBeginningRule::new()),
             Arc::new(native_rules::catalan_word_coherency_rule()),
+            Arc::new(punctuation_paragraph_end::CatalanPunctuationMarkAtParagraphEnd::new()),
             Arc::new(remote_rules::CatalanRemoteRule::new()),
             Arc::new(remote_rules::CatalanSplitLongSentenceRule::new(60)),
             Arc::new(native_rules::IgnoreProperNouns),
@@ -125,6 +127,7 @@ mod tests {
             "CATALAN_WORD_REPEAT_BEGINNING_RULE",
             "CA_UNPAIRED_EXCLAMATION",
             "CA_WORD_COHERENCY",
+            "PUNCTUATION_PARAGRAPH_END",
             "CA_REMOTE_RULE",
             "CA_SPLIT_LONG_SENTENCE",
             "IGNORE_PROPER_NOUNS",
@@ -170,8 +173,12 @@ mod tests {
             "Catalan.java:141 before :147"
         );
         assert!(
-            tpos("CA_WORD_COHERENCY") < tpos("CA_REMOTE_RULE"),
-            "Catalan.java:147 before :149"
+            tpos("CA_WORD_COHERENCY") < tpos("PUNCTUATION_PARAGRAPH_END"),
+            "Catalan.java:147 before :148"
+        );
+        assert!(
+            tpos("PUNCTUATION_PARAGRAPH_END") < tpos("CA_REMOTE_RULE"),
+            "Catalan.java:148 before :149"
         );
         assert!(
             tpos("CA_REMOTE_RULE") < tpos("CA_SPLIT_LONG_SENTENCE"),
