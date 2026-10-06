@@ -4,6 +4,7 @@ pub mod fr_suppress;
 pub mod native_rules;
 pub mod pattern_rule;
 pub mod pattern_trace;
+pub mod pl_filters;
 pub mod postponed_adjective;
 pub mod pt_filters;
 pub mod ru_filters;

@@ -2858,6 +2858,12 @@ impl PatternRuleEngine {
                     None
                 }
             }
+            "org.languagetool.rules.pl.DecadeSpellingFilter" => {
+                crate::pl_filters::decade_spelling_filter(&filter.args, matched_texts, rm)
+            }
+            "org.languagetool.rules.ShortenedYearRangeChecker" => {
+                crate::pl_filters::shortened_year_range_filter(&filter.args, matched_texts, rm)
+            }
             "org.languagetool.rules.patterns.RegexAntiPatternFilter" => {
                 if self.apply_regex_antipattern_filter(&filter.args, matched_texts) {
                     Some(rm)
