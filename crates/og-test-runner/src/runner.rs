@@ -1454,6 +1454,125 @@ mod tests {
     #[test]
     #[ignore]
     fn test_real_english_grammar_examples() {
+        const PINNED_EN_RESIDUE: &[(&str, &str)] = &[
+            (
+                "LOOK_SLIKE",
+                "Expected match on incorrect example but got none: 'This sound slike an error.'",
+            ),
+            (
+                "SIGN_IN",
+                "Expected match on incorrect example but got none: 'It seems to me that tribute chance procs more with how many times a day you sign-in versus just signing in the one time a day.'",
+            ),
+            (
+                "ONE_PLURAL",
+                "Expected match on incorrect example but got none: 'I have 1 days left.'",
+            ),
+            (
+                "TYPEWRITER_APOSTROPHE",
+                "Expected match on incorrect example but got none: 'An actress’s role'",
+            ),
+            (
+                "TYPO_OR_OF",
+                "Expected no match on correct example but got 1: '...t dancers as the 1's (the active couple or actives); the other couple are 2's (or ...'",
+            ),
+            (
+                "IT_IS",
+                "Expected no match on correct example but got 1: 'And while I'm reading it's kind of hard to listen to you.'",
+            ),
+            (
+                "IT_IS_2",
+                "Expected match on incorrect example but got none: 'It’s only function is listed under Temperature.'",
+            ),
+            (
+                "IT_IS_2",
+                "Expected match on incorrect example but got none: 'Part of what makes the ADT Smarthings panel so appealing is it’s reliability for the security alarm and local processing for sensors and such.'",
+            ),
+            (
+                "VERB_APOSTROPHE_S",
+                "Expected match on incorrect example but got none: 'This vehicle get’s used too much.'",
+            ),
+            (
+                "COMPOUND_NNP_AGREEMENT",
+                "Expected match on incorrect example but got none: 'If Tom and Mary finds out I told you this, they'll be very angry.'",
+            ),
+            (
+                "COMPOUND_NNP_AGREEMENT",
+                "Expected match on incorrect example but got none: 'If Xavier and Aidan is friends, we can invite them both.'",
+            ),
+            (
+                "LIKE_THIS_AGREEMENT",
+                "Expected match on incorrect example but got none: 'Cars like these only takes synthetic motor oil.'",
+            ),
+            (
+                "SV_AGREEMENT_CLAUSES_PLURAL",
+                "Expected match on incorrect example but got none: 'The major cities that I-55 connects to includes (from south to north) Jackson, Mississippi; Memphis, Tennessee; and St. Louis.'",
+            ),
+            (
+                "TYPO_FORM_FROM",
+                "Expected match on incorrect example but got none: 'For this study he would like to get forward oil prices form us.'",
+            ),
+            (
+                "PLURAL_THAT_WHICH_WHO_AGREEMENT",
+                "Expected match on incorrect example but got none: 'The reports that describes everything in detail are missing.'",
+            ),
+            (
+                "ITS_TO_IT_S",
+                "Expected no match on correct example but got 1: 'Im so with you there; its that ‘collection’ element that got me hooked - and there's enough of a curve to keep me coming back… Im still hunting for Mythics!'",
+            ),
+            (
+                "REPEATED_VERBS",
+                "Expected no match on correct example but got 1: 'This map maps one or more keys to the specified value.'",
+            ),
+            (
+                "PLEASE_VB",
+                "Expected match on incorrect example but got none: 'Please improved the code.'",
+            ),
+            (
+                "PRP_MD_NN",
+                "Expected no match on correct example but got 1: 'Is must necessary for this recipe, or can I use grape juice?'",
+            ),
+            (
+                "A_NNS",
+                "Expected no match on correct example but got 1: 'I have a feeling private minions won’t be able to be configured to use authenticated proxy connections.'",
+            ),
+            (
+                "BEEN_PART_AGREEMENT",
+                "Expected no match on correct example but got 1: 'Wi-Fi is usually access point-centered.'",
+            ),
+            (
+                "TO_NON_BASE",
+                "Expected no match on correct example but got 1: 'It was offered to grades 9-10.'",
+            ),
+            (
+                "MD_BASEFORM",
+                "Expected match on incorrect example but got none: 'Sounds like the christening schedule will fits perfectly into that.'",
+            ),
+            (
+                "PRP_VBG",
+                "Expected match on incorrect example but got none: 'What else she doing?'",
+            ),
+            (
+                "THERE_S_MANY",
+                "Expected match on incorrect example but got none: 'There's some things (Kenneth Lay) wasn't told,\" Linda Lay said.'",
+            ),
+            (
+                "MISSING_TO_BEFORE_A_VERB",
+                "Expected match on incorrect example but got none: 'I'm trying mount my folder with code in my container.'",
+            ),
+            (
+                "COMMA_COMPOUND_SENTENCE_2",
+                "Expected match on incorrect example but got none: 'I wasn't sure but Tom from finance helped me.'",
+            ),
+            (
+                "COMMA_COMPOUND_SENTENCE_4",
+                "Expected match on incorrect example but got none: 'It's great but can you further improve it?'",
+            ),
+            (
+                "GIT_GET",
+                "Expected match on incorrect example but got none: 'Do you git more than you deserve?'",
+            ),
+        ];
+
         if !test_support::grammar_available() {
             eprintln!("Skipping: English grammar.xml not found");
             return;
@@ -1584,6 +1703,27 @@ mod tests {
             pass_rate > 0.10,
             "Expected at least 10% pass rate, got {:.1}%",
             pass_rate * 100.0
+        );
+
+        let residue: Vec<(String, String)> = summary
+            .results
+            .iter()
+            .filter(|r| !r.passed)
+            .map(|r| (r.rule_id.clone(), r.message.clone()))
+            .collect();
+        let expected: Vec<(String, String)> = PINNED_EN_RESIDUE
+            .iter()
+            .map(|(id, msg)| (id.to_string(), msg.to_string()))
+            .collect();
+        assert_eq!(
+            residue, expected,
+            "the English residue must stay pinned byte-exact: 21 open long-tail entries in the \
+             OpenNLP tag/chunk family (IT_IS_2 traced to the en-pos-maxent tag of 'only' -> \
+             B-ADVP where Java's rule needs a B-NP-singular chunk), typographic-apostrophe rules \
+             whose U+2019 our tokenizer normalizes away (TYPEWRITER_APOSTROPHE, \
+             VERB_APOSTROPHE_S), speller/confusion cases (GIT_GET, TYPO_FORM_FROM, TYPO_OR_OF) \
+             and antipattern/POS false positives; shrink the list deliberately and update this \
+             pin, but any new or changed failure is an engine regression"
         );
     }
 
