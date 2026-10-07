@@ -325,6 +325,7 @@ enum SynthLang {
     Romanian,
     Slovak,
     Italian,
+    Swedish,
 }
 
 pub struct LangSynthesizer {
@@ -442,6 +443,11 @@ impl LangSynthesizer {
                 og_tagger::morfologik::shared_synth_dictionary(resource_dir, "italian_synth"),
                 SynthLang::Italian,
             ),
+            "sv" => (
+                None,
+                og_tagger::morfologik::shared_synth_dictionary(resource_dir, "swedish_synth"),
+                SynthLang::Swedish,
+            ),
             _ => return None,
         };
         let manual = std::fs::read_to_string(resource_dir.join("added.txt"))
@@ -469,6 +475,7 @@ impl LangSynthesizer {
             SynthLang::Romanian => Some("romanian_tags.txt"),
             SynthLang::Slovak => Some("slovak_tags.txt"),
             SynthLang::Italian => Some("italian_tags.txt"),
+            SynthLang::Swedish => Some("swedish_synth.dict_tags.txt"),
             _ => None,
         };
         let possible_tags = possible_tags

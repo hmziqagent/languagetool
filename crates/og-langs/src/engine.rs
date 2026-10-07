@@ -791,6 +791,9 @@ impl LanguageEngine {
             "km" => ("khmer", "HUNSPELL_RULE"),
             "lt" => ("", "MORFOLOGIK_RULE_LT_LT"),
             "ml" => ("malayalam", "MORFOLOGIK_RULE_ML_IN"),
+            "sl" => ("", "MORFOLOGIK_RULE_SL_SI"),
+            "sr" => ("", "MORFOLOGIK_RULE_SR_EKAVIAN"),
+            "ta" => ("tamil", ""),
             _ => return None,
         };
 
@@ -925,7 +928,13 @@ impl LanguageEngine {
             }
         } else if !dict.is_empty() && short != "eo" && short != "ga" {
             let dict = Arc::new(dict);
-            if short != "pl" && short != "ast" && short != "br" && short != "da" && short != "ml" {
+            if short != "pl"
+                && short != "ast"
+                && short != "br"
+                && short != "da"
+                && short != "ml"
+                && short != "ta"
+            {
                 engine.add_rule(Arc::new(
                     og_spell::SpellingCheckRule::new_shared(dict.clone(), config.1, HashSet::new())
                         .with_ignore_words(ignore_words),
@@ -963,6 +972,8 @@ impl LanguageEngine {
                 engine.load_xml_file_normalized(&path, crate::br::normalize_br_rules_xml)
             } else if short == "lt" {
                 engine.load_xml_file_normalized(&path, crate::lt::normalize_lt_rules_xml)
+            } else if short == "sv" {
+                engine.load_xml_file_normalized(&path, crate::sv::normalize_sv_rules_xml)
             } else {
                 engine.load_xml_file(&path)
             };
@@ -987,6 +998,20 @@ impl LanguageEngine {
                 }
             }
         }
+        if short == "sr" {
+            for path in crate::sr::sr_extra_rule_paths(&lt_root) {
+                match engine.load_xml_file(&path) {
+                    Ok(count) => eprintln!(
+                        "Loaded {count} rules from sr/{}",
+                        path.file_name().unwrap_or_default().to_string_lossy()
+                    ),
+                    Err(e) => eprintln!(
+                        "Warning: failed to load sr/{}: {e}",
+                        path.file_name().unwrap_or_default().to_string_lossy()
+                    ),
+                }
+            }
+        }
 
         if short != "nl" && short != "pl" && short != "ru" && short != "ar" {
             engine.add_rules([
@@ -1002,6 +1027,7 @@ impl LanguageEngine {
             || short == "nl"
             || short == "pl"
             || short == "ru"
+            || short == "ta"
         {
             None
         } else if short == "pt" || short == "da" || short == "ga" {
@@ -1055,6 +1081,12 @@ impl LanguageEngine {
             Some(Arc::new(crate::ml::malayalam_unpaired_brackets_rule()) as Arc<dyn TextLevelRule>)
         } else if short == "ro" {
             Some(Arc::new(crate::ro::romanian_unpaired_brackets_rule()) as Arc<dyn TextLevelRule>)
+        } else if short == "sl" {
+            Some(Arc::new(crate::sl::slovenian_unpaired_brackets_rule()) as Arc<dyn TextLevelRule>)
+        } else if short == "sr" {
+            Some(Arc::new(crate::sr::serbian_unpaired_brackets_rule()) as Arc<dyn TextLevelRule>)
+        } else if short == "sv" {
+            Some(Arc::new(crate::sv::swedish_unpaired_brackets_rule()) as Arc<dyn TextLevelRule>)
         } else {
             Some(Arc::new(
                 og_rules::text_level_rules::GenericUnpairedBracketsRule::new(),
@@ -1287,6 +1319,33 @@ impl LanguageEngine {
                 let native = crate::sk::slovak_native_rules();
                 engine.add_rules(native.rules);
             }
+            "sl" => {
+                engine.add_rules([
+                    Arc::new(crate::sl::slovenian_speller_rule()) as Arc<dyn Rule>,
+                    Arc::new(og_rules::native_rules::UppercaseSentenceStartRule::new()),
+                    Arc::new(og_rules::native_rules::WordRepeatRule::new()),
+                ]);
+            }
+            "sr" => {
+                if let Some(tagger) = crate::sr::serbian_tagger(crate::sr::SerbianVariant::Ekavian)
+                {
+                    engine.tagger = Some(tagger);
+                }
+                engine.add_rules([
+                    Arc::new(og_rules::native_rules::UppercaseSentenceStartRule::new())
+                        as Arc<dyn Rule>,
+                    Arc::new(og_rules::native_rules::WordRepeatRule::new()),
+                    Arc::new(crate::sr::sr_speller_rule(
+                        crate::sr::SerbianVariant::Ekavian,
+                    )),
+                    Arc::new(crate::sr::sr_grammar_replace_rule(
+                        crate::sr::SerbianVariant::Ekavian,
+                    )),
+                    Arc::new(crate::sr::sr_style_replace_rule(
+                        crate::sr::SerbianVariant::Ekavian,
+                    )),
+                ]);
+            }
             "ca" => {
                 if let Some(tagger) = crate::ca::CatalanTagger::shared_arc() {
                     engine.tagger = Some(tagger);
@@ -1370,8 +1429,22 @@ impl LanguageEngine {
                 ) as Arc<dyn Rule>);
             }
             "sv" => {
-                engine.add_rule(Arc::new(crate::sv::swedish_compound_rule()) as Arc<dyn Rule>);
+                engine.add_rules([
+                    Arc::new(crate::sv::swedish_compound_rule()) as Arc<dyn Rule>,
+                    Arc::new(og_rules::native_rules::UppercaseSentenceStartRule::new()),
+                    Arc::new(og_rules::native_rules::WordRepeatRule::new()),
+                ]);
                 engine.add_text_level_rule(Arc::new(crate::sv::swedish_word_coherency_rule()));
+                engine.add_text_level_rules([
+                    Arc::new(og_rules::text_level_rules::LongSentenceRule::new(40))
+                        as Arc<dyn TextLevelRule>,
+                    Arc::new(og_rules::text_level_rules::LongParagraphRule::new(150)),
+                ]);
+            }
+            "ta" => {
+                engine.add_text_level_rule(Arc::new(
+                    og_rules::text_level_rules::LongSentenceRule::new(50),
+                ) as Arc<dyn TextLevelRule>);
             }
             "ar" => {
                 engine.add_rules([
@@ -1934,6 +2007,7 @@ enum WordTokenizerBridge {
     Khmer(crate::km::KhmerWordTokenizer),
     Malayalam(crate::ml::MalayalamWordTokenizer),
     Romanian(crate::ro::RomanianWordTokenizer),
+    Tamil(crate::ta::TamilWordTokenizer),
 }
 
 impl WordTokenizerBridge {
@@ -2003,6 +2077,9 @@ impl WordTokenizerBridge {
         }
         if code == "ro" {
             return Self::Romanian(crate::ro::RomanianWordTokenizer::new());
+        }
+        if code == "ta" {
+            return Self::Tamil(crate::ta::TamilWordTokenizer::new());
         }
         if code != "fr" {
             return Self::Default(false);
@@ -2077,6 +2154,7 @@ impl WordTokenizer for WordTokenizerBridge {
             Self::Khmer(tz) => og_tokenizer::WordTokenizer::tokenize(tz, text),
             Self::Malayalam(tz) => og_tokenizer::WordTokenizer::tokenize(tz, text),
             Self::Romanian(tz) => og_tokenizer::WordTokenizer::tokenize(tz, text),
+            Self::Tamil(tz) => og_tokenizer::WordTokenizer::tokenize(tz, text),
         };
         tokens
             .into_iter()
@@ -2953,6 +3031,203 @@ mod tests {
                 .iter()
                 .map(|m| m.rule().id())
                 .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn slovenian_engine_registers_java_relevant_natives() {
+        let engine = LanguageEngine::for_code("sl")
+            .expect("Slovenian engine must be registered via for_code");
+        let ids = engine.rule_ids();
+        for expected in [
+            "COMMA_PARENTHESIS_WHITESPACE",
+            "DOUBLE_PUNCTUATION",
+            "MORFOLOGIK_RULE_SL_SI",
+            "UPPERCASE_SENTENCE_START",
+            "WORD_REPEAT_RULE",
+        ] {
+            assert!(
+                ids.contains(&expected),
+                "expected {expected} in Slovenian natives, got {ids:?}"
+            );
+        }
+        for id in [
+            "COMMA_PARENTHESIS_WHITESPACE",
+            "DOUBLE_PUNCTUATION",
+            "MORFOLOGIK_RULE_SL_SI",
+            "UPPERCASE_SENTENCE_START",
+            "WORD_REPEAT_RULE",
+            "UNPAIRED_BRACKETS",
+            "WHITESPACE_RULE",
+            "SENTENCE_WHITESPACE",
+        ] {
+            assert_eq!(
+                ids.iter()
+                    .chain(engine.text_level_rule_ids().iter())
+                    .filter(|i| **i == id)
+                    .count(),
+                1,
+                "Slovenian.java:65-76 installs each native exactly once: the generic path \
+                 provides the shared ones, the sl arm only the missing speller + case + repeat, \
+                 got {ids:?} + {:?}",
+                engine.text_level_rule_ids()
+            );
+        }
+        assert!(
+            engine.tagger.is_none(),
+            "sl ships no POS .dict, so the tagger stays None = Java's DemoTagger parity"
+        );
+
+        let text = "Kupil je npr. jajca, moko in mleko.";
+        let result = engine.check(text);
+        let flagged: Vec<(&str, &str)> = result
+            .matches
+            .iter()
+            .map(|m| (m.rule().id(), &text[m.offset()..m.offset() + m.length()]))
+            .collect();
+        assert_eq!(
+            flagged,
+            vec![("MORFOLOGIK_RULE_SL_SI", "npr")],
+            "JLanguageToolTest.testSlovenian expects exactly 1 match: the hunspell/sl_SI.dict \
+             speller flags 'npr' (the dict stores 'npr.') while the Slovenian SRX ruleset keeps \
+             the sentence unsplit"
+        );
+    }
+
+    #[test]
+    fn serbian_engine_registers_java_relevant_natives() {
+        let engine =
+            LanguageEngine::for_code("sr").expect("Serbian engine must be registered via for_code");
+        let ids = engine.rule_ids();
+        for expected in [
+            "COMMA_PARENTHESIS_WHITESPACE",
+            "DOUBLE_PUNCTUATION",
+            "UPPERCASE_SENTENCE_START",
+            "WORD_REPEAT_RULE",
+            "MORFOLOGIK_RULE_SR_EKAVIAN",
+            "SR_EKAVIAN_SIMPLE_GRAMMAR_REPLACE_RULE",
+            "SR_EKAVIAN_SIMPLE_STYLE_REPLACE_RULE",
+            "INVALID_DATE",
+        ] {
+            assert!(
+                ids.contains(&expected),
+                "expected {expected} in Serbian rules (INVALID_DATE proves grammar-logical.xml \
+                 loads through sr_extra_rule_paths), got {ids:?}"
+            );
+        }
+        for id in [
+            "COMMA_PARENTHESIS_WHITESPACE",
+            "DOUBLE_PUNCTUATION",
+            "MORFOLOGIK_RULE_SR_EKAVIAN",
+            "WHITESPACE_RULE",
+            "SENTENCE_WHITESPACE",
+            "UNPAIRED_BRACKETS",
+        ] {
+            assert_eq!(
+                ids.iter()
+                    .chain(engine.text_level_rule_ids().iter())
+                    .filter(|i| **i == id)
+                    .count(),
+                1,
+                "Serbian.java:142-167 installs each native exactly once: the generic path \
+                 provides the shared ones, the sr arm only the missing five, got {ids:?}"
+            );
+        }
+        assert!(
+            !ids.contains(&"MORFOLOGIK_RULE_SR_JEKAVIAN"),
+            "the base Serbian language is ekavian (getDefaultLanguageVariant), so no jekavian \
+             rule ids may leak in, got {ids:?}"
+        );
+        assert!(
+            engine.tagger.is_some(),
+            "EkavianTagger = BaseTagger over dictionary/ekavian/serbian.dict must be installed by \
+             the sr arm (the dict lives in a variant subdirectory the generic stem cannot reach)"
+        );
+        assert!(
+            engine.disambiguator.is_some(),
+            "resource/sr/disambiguation.xml must load through the generic disambiguation branch"
+        );
+
+        let text = "То је било 31.11. Син је вишљи од оца. „Наводник";
+        let result = engine.check(text);
+        let flagged: Vec<(&str, &str)> = result
+            .matches
+            .iter()
+            .map(|m| (m.rule().id(), &text[m.offset()..m.offset() + m.length()]))
+            .collect();
+        assert_eq!(
+            flagged,
+            vec![
+                ("INVALID_DATE", "31.11."),
+                ("SR_EKAVIAN_SIMPLE_GRAMMAR_REPLACE_RULE", "вишљи"),
+                ("MORFOLOGIK_RULE_SR_EKAVIAN", "оца"),
+                ("UNPAIRED_BRACKETS", "„"),
+            ],
+            "the INVALID_DATE rule from grammar-logical.xml, the ekavian grammar-replace native, \
+             the ekavian speller and the Serbian unpaired-bracket symbols must all fire through \
+             the engine pipeline"
+        );
+        let replace = result
+            .matches
+            .iter()
+            .find(|m| m.rule().id() == "SR_EKAVIAN_SIMPLE_GRAMMAR_REPLACE_RULE")
+            .expect("grammar replace match");
+        assert!(
+            replace.replacements().iter().any(|r| r.value() == "виши"),
+            "SimpleGrammarEkavianReplaceRuleTest pins вишљи -> виши, got {:?}",
+            replace.replacements()
+        );
+    }
+
+    #[test]
+    fn tamil_engine_registers_java_relevant_natives() {
+        let engine =
+            LanguageEngine::for_code("ta").expect("Tamil engine must be registered via for_code");
+        let ids = engine.rule_ids();
+        for expected in ["COMMA_PARENTHESIS_WHITESPACE", "DOUBLE_PUNCTUATION"] {
+            assert!(
+                ids.contains(&expected),
+                "expected {expected} in Tamil natives, got {ids:?}"
+            );
+        }
+        assert!(
+            ids.iter()
+                .all(|i| !i.contains("SPELL") && !i.contains("MORFOLOGIK")),
+            "Tamil.java:66-74 installs no speller, so no spelling rule id may appear, got {ids:?}"
+        );
+        let text_level_ids = engine.text_level_rule_ids();
+        for expected in [
+            "WHITESPACE_RULE",
+            "TOO_LONG_SENTENCE",
+            "SENTENCE_WHITESPACE",
+        ] {
+            assert!(
+                text_level_ids.contains(&expected),
+                "expected {expected} in Tamil text-level natives, got {text_level_ids:?}"
+            );
+        }
+        assert!(
+            !text_level_ids.contains(&"UNPAIRED_BRACKETS"),
+            "Tamil.java carries no unpaired-brackets rule, got {text_level_ids:?}"
+        );
+        assert!(
+            engine.tagger.is_some(),
+            "TamilTagger = BaseTagger over tamil.dict must load through the generic path"
+        );
+
+        let text = "இந்த பெட்டியில் உங்கள் உரையை ஒட்டி சரிவர சோதிக்கிறதா என பாருங்கள். 'லேங்குவேஜ் டூல்' சில இலக்கணப் பிழைகளைச் சரியாக கண்டுபிடிக்கும். பல பிழைகளைப் பிடிக்க தடுமாறலாம்.";
+        let result = engine.check(text);
+        let ids: Vec<&str> = result.matches.iter().map(|m| m.rule().id()).collect();
+        assert_eq!(
+            ids,
+            vec![
+                "Ends_in_A_1",
+                "Ends_in_A_3",
+                "Ends_in_A_3",
+                "Ends_in_A_4",
+                "Ends_in_A_2",
+            ],
+            "TamilTest.java:35-37 testDemoText pins exactly these five matches in this order"
         );
     }
 

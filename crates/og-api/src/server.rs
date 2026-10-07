@@ -38,7 +38,7 @@ pub const ENGINE_CODES: &[&str] = &[
     "en", "en-US", "en-GB", "en-CA", "en-AU", "en-NZ", "en-ZA", "de", "de-DE", "de-AT", "de-CH",
     "fr", "es", "pt", "pt-BR", "pt-PT", "pt-AO", "pt-MZ", "nl", "pl", "ru", "it", "ar", "ast",
     "be", "br", "ca", "crh", "da", "el", "eo", "fa", "ga", "gl", "is", "ja", "km", "lt", "ml",
-    "ro", "sk", "sv",
+    "ro", "sk", "sl", "sr", "sv", "ta",
 ];
 
 enum EngineSource {
@@ -90,7 +90,10 @@ fn engine_source(code: &str) -> Option<EngineSource> {
         "ml" => Some(EngineSource::Generic("ml")),
         "ro" => Some(EngineSource::Generic("ro")),
         "sk" => Some(EngineSource::Generic("sk")),
+        "sl" => Some(EngineSource::Generic("sl")),
+        "sr" => Some(EngineSource::Generic("sr")),
         "sv" => Some(EngineSource::Generic("sv")),
+        "ta" => Some(EngineSource::Generic("ta")),
         _ => None,
     }
 }

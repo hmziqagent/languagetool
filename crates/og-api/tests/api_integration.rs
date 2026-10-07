@@ -916,6 +916,113 @@ async fn test_v2_check_slovak_engine_registered() {
 }
 
 #[tokio::test]
+async fn test_v2_check_slovenian_engine_registered() {
+    let app = app();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/check?language=sl&text=Kupil%20je%20npr.%20jajca%2C%20moko%20in%20mleko.")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["language"]["code"].as_str(), Some("sl"));
+    assert!(json["matches"].is_array());
+    let flagged: Vec<&str> = json["matches"]
+        .as_array()
+        .map(|ms| ms.iter().filter_map(|m| m["rule"]["id"].as_str()).collect())
+        .unwrap_or_default();
+    assert_eq!(
+        flagged,
+        vec!["MORFOLOGIK_RULE_SL_SI"],
+        "JLanguageToolTest.testSlovenian expects exactly 1 match: the sl_SI speller flags 'npr' \
+         (the dict stores 'npr.') while the Slovenian SRX ruleset keeps the sentence unsplit, got \
+         {json:?}"
+    );
+}
+
+#[tokio::test]
+async fn test_v2_check_serbian_engine_registered() {
+    let app = app();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(
+                    "/v2/check?language=sr&text=%D0%A2%D0%BE%20%D1%98%D0%B5%20%D0%B1%D0%B8%D0%BB%D0%BE%2031.11.%20%D0%A1%D0%B8%D0%BD%20%D1%98%D0%B5%20%D0%B2%D0%B8%D1%88%D1%99%D0%B8%20%D0%BE%D0%B4%20%D0%BE%D1%86%D0%B0.",
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["language"]["code"].as_str(), Some("sr"));
+    assert!(json["matches"].is_array());
+    let flagged: Vec<&str> = json["matches"]
+        .as_array()
+        .map(|ms| ms.iter().filter_map(|m| m["rule"]["id"].as_str()).collect())
+        .unwrap_or_default();
+    assert!(
+        flagged.contains(&"INVALID_DATE"),
+        "INVALID_DATE from grammar-logical.xml must fire on '31.11.' through the engine pipeline, \
+         got {flagged:?}"
+    );
+    let replace: Vec<&serde_json::Value> = json["matches"]
+        .as_array()
+        .map(|ms| {
+            ms.iter()
+                .filter(|m| m["rule"]["id"] == "SR_EKAVIAN_SIMPLE_GRAMMAR_REPLACE_RULE")
+                .collect()
+        })
+        .unwrap_or_default();
+    assert_eq!(
+        replace.len(),
+        1,
+        "the ekavian grammar-replace native must flag 'вишљи', got {json:?}"
+    );
+    assert!(
+        replace[0]["replacements"]
+            .as_array()
+            .is_some_and(|rs| rs.iter().any(|r| r["value"] == "виши")),
+        "SimpleGrammarEkavianReplaceRuleTest pins вишљи -> виши, got {json:?}"
+    );
+}
+
+#[tokio::test]
+async fn test_v2_check_tamil_engine_registered() {
+    let app = app();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/check?language=ta&text=%E0%AE%87%E0%AE%A8%E0%AF%8D%E0%AE%A4%20%E0%AE%AA%E0%AF%86%E0%AE%9F%E0%AF%8D%E0%AE%9F%E0%AE%BF%E0%AE%AF%E0%AE%BF%E0%AE%B2%E0%AF%8D%20%E0%AE%89%E0%AE%99%E0%AF%8D%E0%AE%95%E0%AE%B3%E0%AF%8D%20%E0%AE%89%E0%AE%B0%E0%AF%88%E0%AE%AF%E0%AF%88%20%E0%AE%92%E0%AE%9F%E0%AF%8D%E0%AE%9F%E0%AE%BF%20%E0%AE%9A%E0%AE%B0%E0%AE%BF%E0%AE%B5%E0%AE%B0%20%E0%AE%9A%E0%AF%8B%E0%AE%A4%E0%AE%BF%E0%AE%95%E0%AF%8D%E0%AE%95%E0%AE%BF%E0%AE%B1%E0%AE%A4%E0%AE%BE%20%E0%AE%8E%E0%AE%A9%20%E0%AE%AA%E0%AE%BE%E0%AE%B0%E0%AF%81%E0%AE%99%E0%AF%8D%E0%AE%95%E0%AE%B3%E0%AF%8D.")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["language"]["code"].as_str(), Some("ta"));
+    assert!(json["matches"].is_array());
+    let flagged: Vec<&str> = json["matches"]
+        .as_array()
+        .map(|ms| ms.iter().filter_map(|m| m["rule"]["id"].as_str()).collect())
+        .unwrap_or_default();
+    assert!(
+        flagged.contains(&"Ends_in_A_1"),
+        "Ends_in_A_1 must fire on the TamilTest demo text through the engine pipeline, got \
+         {flagged:?}"
+    );
+}
+
+#[tokio::test]
 async fn test_v2_languages_lists_all_registered_engines() {
     let json = check_response("/v2/languages").await;
     let codes: Vec<&str> = json
@@ -930,7 +1037,7 @@ async fn test_v2_languages_lists_all_registered_engines() {
     for code in [
         "en-US", "de-DE", "fr", "es", "pt-BR", "pt-PT", "pt-AO", "pt-MZ", "nl", "pl", "ru", "it",
         "ar", "ast", "be", "br", "ca", "crh", "da", "el", "eo", "fa", "ga", "gl", "is", "ja", "km",
-        "lt", "ml", "ro", "sk", "sv",
+        "lt", "ml", "ro", "sk", "sl", "sr", "sv", "ta",
     ] {
         assert!(codes.contains(&code), "missing {code} in {codes:?}");
     }
