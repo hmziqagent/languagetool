@@ -255,6 +255,13 @@ impl AnalyzedTokenReadings {
             AnalyzedToken::new(self.token.token.as_str(), self.token.start, self.token.end)
                 .with_pos_tags(vec!["SENT_END".to_string()])
                 .with_lemma(lemma);
+        if self
+            .readings
+            .last()
+            .is_some_and(|last| last.pos_tags.is_empty())
+        {
+            self.readings.pop();
+        }
         self.readings.push(sent_end_token);
         if !self.token.pos_tags.contains(&"SENT_END".to_string()) {
             self.token.pos_tags.push("SENT_END".to_string());

@@ -403,3 +403,69 @@ fn x_sistema_and_hunspell_spans_do_not_double_report() {
          (JLanguageTool.java:1912-1916)"
     );
 }
+
+#[test]
+fn sentence_end_readings_and_cxu_iru_flip_together() {
+    let cases = [
+        ("\u{108}u iru nun?", "iru"),
+        ("Kiel faru tion?", "faru"),
+        ("Kie a\u{109}etu \u{11d}in hodia\u{16d}?", "a\u{109}etu"),
+    ];
+    let group: Vec<&CompiledRule> = compiled_rules()
+        .rules
+        .iter()
+        .filter(|r| r.id == "CXU_IRU")
+        .collect();
+    let engine = PatternRuleEngine::new();
+    let pipeline = eo_pipeline();
+    for (text, marked) in cases {
+        let sentence = &pipeline.analyze_text(text)[0];
+        let readings: Vec<Vec<&str>> = sentence
+            .tokens()
+            .iter()
+            .rev()
+            .find(|t| t.is_sentence_end())
+            .expect("the pipeline tags the sentence-final token with SENT_END")
+            .readings()
+            .iter()
+            .map(|r| r.pos_tags().iter().map(String::as_str).collect())
+            .collect();
+        let readings_fixed = !readings.iter().any(|r| r.is_empty());
+        if readings_fixed {
+            assert_eq!(
+                readings,
+                vec![vec!["SENT_END"]],
+                "{text}: once og-core add_sent_end adopts Java's addReading drop of the trailing \
+                 null-POS reading (AnalyzedTokenReadings.java:329-332), the sentence-final token \
+                 keeps exactly its SENT_END reading"
+            );
+        } else {
+            assert_eq!(
+                readings,
+                vec![vec![], vec!["SENT_END"]],
+                "{text}: today add_sent_end plain-pushes, so the sentence-final token still \
+                 carries its untagged reading next to SENT_END"
+            );
+        }
+        let mut spans = Vec::new();
+        for aux in &group {
+            for m in engine.match_rule(aux, sentence) {
+                spans.push(&text[m.offset()..m.offset() + m.length()]);
+            }
+        }
+        if readings_fixed {
+            assert_eq!(
+                spans,
+                vec![marked],
+                "{text}: with the null-POS reading dropped, the scope=next negate_pos exception \
+                 no longer vetoes the skip window and CXU_IRU matches (grammar.xml:3723-3753)"
+            );
+        } else {
+            assert!(
+                spans.is_empty(),
+                "{text}: readings still carry the untagged reading but CXU_IRU matched anyway; \
+                 the shared engine state and the residue classification diverged"
+            );
+        }
+    }
+}
