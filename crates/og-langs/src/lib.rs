@@ -22,6 +22,7 @@ pub mod fa;
 pub mod fr;
 pub mod ga;
 pub mod gl;
+pub mod is;
 pub mod it;
 pub mod match_priority;
 pub mod nl;
