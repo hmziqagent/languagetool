@@ -787,6 +787,8 @@ impl LanguageEngine {
             "fa" => ("", ""),
             "ga" => ("irish", "MORFOLOGIK_RULE_GA_IE"),
             "is" => ("", ""),
+            "ja" => ("", ""),
+            "km" => ("khmer", "HUNSPELL_RULE"),
             _ => return None,
         };
 
@@ -1033,6 +1035,8 @@ impl LanguageEngine {
             Some(Arc::new(crate::gl::galician_unpaired_brackets_rule()) as Arc<dyn TextLevelRule>)
         } else if short == "is" {
             Some(Arc::new(crate::is::icelandic_unpaired_brackets_rule()) as Arc<dyn TextLevelRule>)
+        } else if short == "km" {
+            Some(Arc::new(crate::km::khmer_unpaired_brackets_rule()) as Arc<dyn TextLevelRule>)
         } else {
             Some(Arc::new(
                 og_rules::text_level_rules::GenericUnpairedBracketsRule::new(),
@@ -1239,6 +1243,13 @@ impl LanguageEngine {
                     Arc::new(crate::is::IcelandicSpellerRule::new()) as Arc<dyn Rule>,
                     Arc::new(og_rules::native_rules::UppercaseSentenceStartRule::new()),
                     Arc::new(og_rules::native_rules::WordRepeatRule::new()),
+                ]);
+            }
+            "km" => {
+                engine.add_rules([
+                    Arc::new(crate::km::khmer_simple_replace_rule()) as Arc<dyn Rule>,
+                    Arc::new(crate::km::KhmerWordRepeatRule::new()),
+                    Arc::new(crate::km::KhmerSpaceBeforeRule::new()),
                 ]);
             }
             "ca" => {
@@ -1879,6 +1890,8 @@ enum WordTokenizerBridge {
     Greek(crate::el::word_tokenizer::GreekWordTokenizer),
     Persian(crate::fa::word_tokenizer::PersianWordTokenizer),
     Galician(crate::gl::word_tokenizer::GalicianWordTokenizer),
+    Japanese(crate::ja::JapaneseWordTokenizer),
+    Khmer(crate::km::KhmerWordTokenizer),
 }
 
 impl WordTokenizerBridge {
@@ -1936,6 +1949,12 @@ impl WordTokenizerBridge {
         }
         if code == "gl" {
             return Self::Galician(crate::gl::word_tokenizer::GalicianWordTokenizer::new());
+        }
+        if code == "ja" {
+            return Self::Japanese(crate::ja::JapaneseWordTokenizer::new());
+        }
+        if code == "km" {
+            return Self::Khmer(crate::km::KhmerWordTokenizer::new());
         }
         if code != "fr" {
             return Self::Default(false);
@@ -2004,6 +2023,10 @@ impl WordTokenizer for WordTokenizerBridge {
             Self::Greek(tz) => og_tokenizer::WordTokenizer::tokenize(tz, text),
             Self::Persian(tz) => og_tokenizer::WordTokenizer::tokenize(tz, text),
             Self::Galician(tz) => og_tokenizer::WordTokenizer::tokenize(tz, text),
+            Self::Japanese(tz) => {
+                return og_core::checker::WordTokenizer::tokenize(tz, text, offset);
+            }
+            Self::Khmer(tz) => og_tokenizer::WordTokenizer::tokenize(tz, text),
         };
         tokens
             .into_iter()
@@ -2538,6 +2561,127 @@ mod tests {
                 .iter()
                 .map(|m| m.rule().id())
                 .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn japanese_engine_registers_java_relevant_natives() {
+        let engine = LanguageEngine::for_code("ja")
+            .expect("Japanese engine must be registered via for_code");
+        let ids = engine.rule_ids();
+        for expected in ["COMMA_PARENTHESIS_WHITESPACE", "DOUBLE_PUNCTUATION"] {
+            assert!(
+                ids.contains(&expected),
+                "expected {expected} in Japanese natives, got {ids:?}"
+            );
+        }
+        assert!(
+            engine.rule_count() > 700,
+            "the ja grammar.xml must load its 735 rules, got {}",
+            engine.rule_count()
+        );
+        let text_level_ids = engine.text_level_rule_ids();
+        for expected in [
+            "UNPAIRED_BRACKETS",
+            "WHITESPACE_RULE",
+            "SENTENCE_WHITESPACE",
+        ] {
+            assert!(
+                text_level_ids.contains(&expected),
+                "expected {expected} in Japanese text-level natives, got {text_level_ids:?}"
+            );
+        }
+        for id in ["DOUBLE_PUNCTUATION", "WHITESPACE_RULE"] {
+            assert_eq!(
+                ids.iter()
+                    .chain(text_level_ids.iter())
+                    .filter(|i| **i == id)
+                    .count(),
+                1,
+                "Japanese.java:61-66 installs DoublePunctuation + MultipleWhitespace once: the \
+                 generic path provides them, so japanese_native_rules() must not be installed \
+                 twice, got {ids:?} + {text_level_ids:?}"
+            );
+        }
+        assert!(
+            engine.tagger.is_none(),
+            "ja carries no resource dir: no dict/added.txt exists and the fused \
+             WordTokenizerBridge::Japanese arm supplies the gosen readings"
+        );
+
+        let result = engine.check("したがって。");
+        assert!(
+            result
+                .matches
+                .iter()
+                .any(|m| m.rule().id() == "SITAGATTE_END"),
+            "SITAGATTE_END = [したがって][SENT_END] must fire through the engine pipeline, got {:?}",
+            result
+                .matches
+                .iter()
+                .map(|m| m.rule().id())
+                .collect::<Vec<_>>()
+        );
+        let text = "これわ文章を入力して'Check Text'をクリックすると、誤記を探すことができる。";
+        let result = engine.check(text);
+        let ids: Vec<&str> = result.matches.iter().map(|m| m.rule().id()).collect();
+        assert!(
+            ids.contains(&"KOREWA"),
+            "the JapaneseTest demo text must fire KOREWA on これわ, got {ids:?}"
+        );
+    }
+
+    #[test]
+    fn khmer_engine_registers_java_relevant_natives() {
+        let engine =
+            LanguageEngine::for_code("km").expect("Khmer engine must be registered via for_code");
+        let ids = engine.rule_ids();
+        for expected in [
+            "COMMA_PARENTHESIS_WHITESPACE",
+            "DOUBLE_PUNCTUATION",
+            "HUNSPELL_RULE",
+            "KM_SIMPLE_REPLACE",
+            "KM_WORD_REPEAT_RULE",
+            "KM_SPACE_BEFORE_CONJUNCTION",
+        ] {
+            assert!(
+                ids.contains(&expected),
+                "expected {expected} in Khmer natives, got {ids:?}"
+            );
+        }
+        assert!(
+            !ids.contains(&"MORFOLOGIK_RULE"),
+            "Java KhmerHunspellRule carries the plain HUNSPELL_RULE id, got {ids:?}"
+        );
+        let text_level_ids = engine.text_level_rule_ids();
+        for expected in ["UNPAIRED_BRACKETS", "KM_UNPAIRED_BRACKETS"] {
+            assert_eq!(
+                text_level_ids.iter().filter(|i| **i == expected).count(),
+                if expected == "KM_UNPAIRED_BRACKETS" {
+                    1
+                } else {
+                    0
+                },
+                "the km brackets arm must install KhmerUnpairedBracketsRule instead of the \
+                 generic [ ( {{ tracker, got {text_level_ids:?}"
+            );
+        }
+        assert!(
+            engine.tagger.is_some(),
+            "KhmerTagger = BaseTagger over khmer.dict must load through the generic path"
+        );
+
+        let text = "ឃ្លា\u{200B}នេះ\u{200B}បង្ហាញ\u{200B}ពី\u{200B}ពី\u{200B}កំហុស\u{200B}វេយ្យាករណ៍ ដើម្បី\u{200B}បញ្ជាក់\u{200B}ពី\u{200B}ប្រសិទ្ធភាព\u{200B}របស់\u{200B}កម្មវិធី សំរាប់។";
+        let result = engine.check(text);
+        let replace = result
+            .matches
+            .iter()
+            .find(|m| m.rule().id() == "KM_SIMPLE_REPLACE")
+            .expect("KM_SIMPLE_REPLACE must flag the coherency.txt key 'សំរាប់'");
+        assert!(
+            replace.replacements().iter().any(|r| r.value() == "សម្រាប់"),
+            "coherency.txt:1260 maps សំរាប់ to សម្រាប់, got {:?}",
+            replace.replacements()
         );
     }
 

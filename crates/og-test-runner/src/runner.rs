@@ -47,6 +47,8 @@ enum TestWordTokenizer {
     Greek(og_langs::el::word_tokenizer::GreekWordTokenizer),
     Persian(og_langs::fa::word_tokenizer::PersianWordTokenizer),
     Galician(og_langs::gl::word_tokenizer::GalicianWordTokenizer),
+    Japanese(og_langs::ja::JapaneseWordTokenizer),
+    Khmer(og_langs::km::KhmerWordTokenizer),
 }
 
 impl WordTokenizer for TestWordTokenizer {
@@ -99,6 +101,10 @@ impl WordTokenizer for TestWordTokenizer {
             TestWordTokenizer::Greek(tz) => og_tokenizer::WordTokenizer::tokenize(tz, text),
             TestWordTokenizer::Persian(tz) => og_tokenizer::WordTokenizer::tokenize(tz, text),
             TestWordTokenizer::Galician(tz) => og_tokenizer::WordTokenizer::tokenize(tz, text),
+            TestWordTokenizer::Japanese(tz) => {
+                return WordTokenizer::tokenize(tz, text, offset);
+            }
+            TestWordTokenizer::Khmer(tz) => og_tokenizer::WordTokenizer::tokenize(tz, text),
         };
         tokens
             .into_iter()
@@ -149,6 +155,8 @@ pub fn generic_dict_stem(code: &str) -> Option<&'static str> {
         ("ga", "irish"),
         ("gl", "galician"),
         ("is", ""),
+        ("ja", ""),
+        ("km", "khmer"),
         ("ro", "romanian"),
         ("sk", "slovak"),
         ("sv", "swedish"),
@@ -539,6 +547,12 @@ impl TestRunner {
             None if self.language == "gl" => TestWordTokenizer::Galician(
                 og_langs::gl::word_tokenizer::GalicianWordTokenizer::new(),
             ),
+            None if self.language == "ja" => {
+                TestWordTokenizer::Japanese(og_langs::ja::JapaneseWordTokenizer::new())
+            }
+            None if self.language == "km" => {
+                TestWordTokenizer::Khmer(og_langs::km::KhmerWordTokenizer::new())
+            }
             None => TestWordTokenizer::Default(self.language == "en"),
         };
         let mut sentence = AnalyzedSentence::new(text, 0, text.len());
@@ -548,13 +562,17 @@ impl TestRunner {
         );
         tokens.insert(0, start_token);
 
-        let token_texts: Vec<String> = tokens
-            .iter()
-            .skip(1)
-            .map(|t| t.token().token().to_string())
-            .collect();
-        let text_refs: Vec<&str> = token_texts.iter().map(|s| s.as_str()).collect();
-        let tagged = self.tagger.tag(&text_refs);
+        let tagged = if self.language == "ja" {
+            Vec::new()
+        } else {
+            let token_texts: Vec<String> = tokens
+                .iter()
+                .skip(1)
+                .map(|t| t.token().token().to_string())
+                .collect();
+            let text_refs: Vec<&str> = token_texts.iter().map(|s| s.as_str()).collect();
+            self.tagger.tag(&text_refs)
+        };
 
         for (i, tagged_atr) in tagged.into_iter().enumerate() {
             let token_idx = i + 1;
@@ -2378,6 +2396,18 @@ fn test_real_galician_grammar_examples() {
 #[ignore]
 fn test_real_icelandic_grammar_examples() {
     run_generic_example_suite("is");
+}
+
+#[test]
+#[ignore]
+fn test_real_japanese_grammar_examples() {
+    run_generic_example_suite("ja");
+}
+
+#[test]
+#[ignore]
+fn test_real_khmer_grammar_examples() {
+    run_generic_example_suite("km");
 }
 
 #[test]

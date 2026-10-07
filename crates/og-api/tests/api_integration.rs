@@ -745,6 +745,72 @@ async fn test_v2_check_icelandic_engine_registered() {
 }
 
 #[tokio::test]
+async fn test_v2_check_japanese_engine_registered() {
+    let app = app();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/check?language=ja&text=%E3%81%97%E3%81%9F%E3%81%8C%E3%81%A3%E3%81%A6%E3%80%82")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["language"]["code"].as_str(), Some("ja"));
+    assert!(json["matches"].is_array());
+    let flagged: Vec<&str> = json["matches"]
+        .as_array()
+        .map(|ms| ms.iter().filter_map(|m| m["rule"]["id"].as_str()).collect())
+        .unwrap_or_default();
+    assert!(
+        flagged.contains(&"SITAGATTE_END"),
+        "SITAGATTE_END = [したがって][SENT_END] must fire through the engine pipeline, got \
+         {flagged:?}"
+    );
+}
+
+#[tokio::test]
+async fn test_v2_check_khmer_engine_registered() {
+    let app = app();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/check?language=km&text=%E1%9E%9F%E1%9F%86%E1%9E%9A%E1%9E%B6%E1%9E%94%E1%9F%8B%E1%9F%94")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["language"]["code"].as_str(), Some("km"));
+    assert!(json["matches"].is_array());
+    let replace: Vec<&serde_json::Value> = json["matches"]
+        .as_array()
+        .map(|ms| {
+            ms.iter()
+                .filter(|m| m["rule"]["id"] == "KM_SIMPLE_REPLACE")
+                .collect()
+        })
+        .unwrap_or_default();
+    assert_eq!(
+        replace.len(),
+        1,
+        "KhmerSimpleReplaceRule must flag the coherency.txt key 'សំរាប់', got {json:?}"
+    );
+    assert!(
+        replace[0]["replacements"]
+            .as_array()
+            .is_some_and(|rs| rs.iter().any(|r| r["value"] == "សម្រាប់")),
+        "coherency.txt:1260 maps សំរាប់ to សម្រាប់, got {json:?}"
+    );
+}
+
+#[tokio::test]
 async fn test_v2_languages_lists_all_registered_engines() {
     let json = check_response("/v2/languages").await;
     let codes: Vec<&str> = json
@@ -758,7 +824,8 @@ async fn test_v2_languages_lists_all_registered_engines() {
         .unwrap_or_default();
     for code in [
         "en-US", "de-DE", "fr", "es", "pt-BR", "pt-PT", "pt-AO", "pt-MZ", "nl", "pl", "ru", "it",
-        "ar", "ast", "be", "br", "ca", "crh", "da", "el", "eo", "fa", "ga", "gl", "is", "ro", "sv",
+        "ar", "ast", "be", "br", "ca", "crh", "da", "el", "eo", "fa", "ga", "gl", "is", "ja", "km",
+        "ro", "sv",
     ] {
         assert!(codes.contains(&code), "missing {code} in {codes:?}");
     }
