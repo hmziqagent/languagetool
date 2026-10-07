@@ -44,3 +44,4 @@ pub mod ta;
 pub mod tl;
 pub mod uk;
 pub mod upper_case_ngram;
+pub mod zh;
