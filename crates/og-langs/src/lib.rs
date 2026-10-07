@@ -35,6 +35,7 @@ pub mod pl;
 pub mod pt;
 pub mod ro;
 pub mod ru;
+pub mod sk;
 pub mod specific_case;
 pub mod sv;
 pub mod upper_case_ngram;
