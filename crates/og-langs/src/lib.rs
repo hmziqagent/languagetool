@@ -42,4 +42,5 @@ pub mod sr;
 pub mod sv;
 pub mod ta;
 pub mod tl;
+pub mod uk;
 pub mod upper_case_ngram;
