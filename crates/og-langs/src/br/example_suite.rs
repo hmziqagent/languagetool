@@ -236,6 +236,31 @@ pub(crate) fn trace_rule_matches(
     (rules, sentences, events)
 }
 
+const TOKEN_REFERENCE_RESIDUE: &[(&str, &str)] = &[
+    ("KLANV_PE_GLANVOCH", "Klañv pe klañvoc’h."),
+    ("KLANV_PE_GLANVOCH", "Klañv pe c’hlañvoc’h."),
+    ("KLANV_PE_GLANVOCH", "Tev pe tevoc’h."),
+    ("KLANV_PE_GLANVOCH", "Tev pe zevoc’h."),
+    ("KLANV_PE_GLANVOCH", "Pounner pe pounneroc’h."),
+    ("KLANV_PE_GLANVOCH", "Pounner pe founneroc’h."),
+    ("KLANV_PE_GLANVOCH", "Gell pe gelloc’h."),
+    ("KLANV_PE_GLANVOCH", "Gell pe kelloc’h."),
+    ("KLANV_PE_GLANVOCH", "Gwell pe gwelloc’h."),
+    ("KLANV_PE_GLANVOCH", "Gwell pe kwelloc’h."),
+    ("KLANV_PE_GLANVOCH", "Droch pe drochoc’h."),
+    ("KLANV_PE_GLANVOCH", "Droch pe trochoc’h."),
+    ("KLANV_PE_GLANVOCH", "Brav pe bravoc’h."),
+    ("KLANV_PE_GLANVOCH", "Brav pe pravoc’h."),
+    ("KLANV_PE_GLANVOCH", "Melen pe melenoc’h."),
+    ("OCH_AN", "Diaesoc’h diaesañ eo kavout labour."),
+    ("OCH_AN", "Gwelloc’h gwell"),
+];
+
+const DATE_TRIM_RESIDUE: &[(&str, &str)] = &[
+    ("DEIZ_DEIZIAD", "D’ar Merc’her 6 a viz C’hwevrer 2014."),
+    ("DEIZ_DEIZIAD", "D’ar Merc'her 6 a viz C'hwevrer 2014."),
+];
+
 #[test]
 #[ignore]
 fn breton_grammar_examples_with_br_pipeline() {
@@ -247,6 +272,7 @@ fn breton_grammar_examples_with_br_pipeline() {
 
     let mut passed = 0usize;
     let mut fail_lines: Vec<String> = Vec::new();
+    let mut residue: Vec<(String, String)> = Vec::new();
     for group in &groups {
         let Some(rule) = group.first() else {
             continue;
@@ -292,6 +318,7 @@ fn breton_grammar_examples_with_br_pipeline() {
                 og_xml::types::XmlExampleType::TriggersError => None,
             };
             if let Some(message) = failed {
+                residue.push((rule.id.clone(), clean_text));
                 fail_lines.push(format!("FAIL: [{}] {}", rule.id, message));
             } else {
                 passed += 1;
@@ -310,6 +337,31 @@ fn breton_grammar_examples_with_br_pipeline() {
     assert!(
         passed + fail_lines.len() > 0,
         "suite must evaluate examples"
+    );
+    let mut transform_actual: Vec<(&str, &str)> = residue
+        .iter()
+        .filter(|(id, _)| id.as_str() != "DEIZ_DEIZIAD")
+        .map(|(id, text)| (id.as_str(), text.as_str()))
+        .collect();
+    let mut date_actual: Vec<(&str, &str)> = residue
+        .iter()
+        .filter(|(id, _)| id.as_str() == "DEIZ_DEIZIAD")
+        .map(|(id, text)| (id.as_str(), text.as_str()))
+        .collect();
+    transform_actual.sort_unstable();
+    date_actual.sort_unstable();
+    let mut transform_pinned = TOKEN_REFERENCE_RESIDUE.to_vec();
+    let mut date_pinned = DATE_TRIM_RESIDUE.to_vec();
+    transform_pinned.sort_unstable();
+    date_pinned.sort_unstable();
+    assert!(
+        (transform_actual.is_empty() || transform_actual == transform_pinned)
+            && (date_actual.is_empty() || date_actual == date_pinned),
+        "br residue may only be the two pinned shared-engine families, each fully present or fully \
+         cleared by its fix (token-reference transform {}/17, unicode month trim {}/2): {:?}",
+        transform_actual.len(),
+        date_actual.len(),
+        residue
     );
 }
 
@@ -455,22 +507,40 @@ fn disambiguation_replaces_the_da_lavaret_eo_initialism() {
 }
 
 #[test]
-fn residue_token_level_match_transform_stays_unsupported() {
-    let matched = all_grammar_matches("Klañv pe c’hlañvoc’h.");
+fn residue_probes_track_the_shared_engine_fix_state() {
+    let probes: [(&str, &str, &str); 3] = [
+        ("KLANV_PE_GLANVOCH", "Klañv pe c’hlañvoc’h.", "c’hlañvoc’h"),
+        (
+            "OCH_AN",
+            "Diaesoc’h diaesañ eo kavout labour.",
+            "Diaesoc’h diaesañ",
+        ),
+        (
+            "DEIZ_DEIZIAD",
+            "D’ar Merc’her 6 a viz C’hwevrer 2014.",
+            "Merc’her 6 a viz C’hwevrer 2014",
+        ),
+    ];
+    let mut fired = [false; 3];
+    for (i, (id, text, marker)) in probes.iter().enumerate() {
+        let marker_start = text.find(marker).unwrap_or(text.len());
+        let marker_end = marker_start + marker.len();
+        for (m_id, start, end) in all_grammar_matches(text) {
+            if m_id != *id {
+                continue;
+            }
+            assert!(
+                start <= marker_start && end >= marker_end,
+                "{id} match {start}..{end} must cover the marker {marker_start}..{marker_end}"
+            );
+            fired[i] = true;
+        }
+    }
     assert!(
-        !matched.iter().any(|(id, _, _)| id == "KLANV_PE_GLANVOCH"),
-        "KLANV needs the token-level <match no=\"0\" regexp_match> runtime transform; \
-         if this flips, re-run the ignored suite and shrink the residue"
-    );
-    let matched = all_grammar_matches("Diaesoc’h diaesañ eo kavout labour.");
-    assert!(
-        !matched.iter().any(|(id, _, _)| id == "OCH_AN"),
-        "OCH_AN needs the same transform"
-    );
-    let matched = all_grammar_matches("D’ar Merc’her 6 a viz C’hwevrer 2014.");
-    assert!(
-        !matched.iter().any(|(id, _, _)| id == "DEIZ_DEIZIAD"),
-        "DEIZ_DEIZIAD months with U+2019 are dropped by the shared date filter's \
-         ASCII-only trim_special_chars"
+        !fired[0] && !fired[1] || fired[0] && fired[1],
+        "KLANV_PE_GLANVOCH and OCH_AN flip together with the token-level <match no> \
+         regexp_match/regexp_replace transform (XMLRuleHandler.java:405-415, \
+         PatternToken.java:502-514, MatchState.java:215-227 and :382-386): {:?}",
+        fired
     );
 }
