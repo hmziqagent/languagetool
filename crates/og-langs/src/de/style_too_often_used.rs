@@ -205,3 +205,69 @@ impl TextLevelRule for StyleTooOftenUsedWordRule {
         rule_matches
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use og_core::{AnalyzedSentence, AnalyzedToken, AnalyzedTokenReadings};
+
+    fn verb_sentence(words: &[(&str, &str, &str)]) -> AnalyzedSentence {
+        let text = words
+            .iter()
+            .map(|(w, _, _)| *w)
+            .collect::<Vec<_>>()
+            .join(" ");
+        let mut sentence = AnalyzedSentence::new(text.clone(), 0, text.len());
+        let mut tokens = Vec::new();
+        tokens.push(AnalyzedTokenReadings::new(
+            AnalyzedToken::new("<S>", 0, 0).with_pos_tags(vec!["SENT_START".to_string()]),
+        ));
+        let mut pos = 0usize;
+        for (w, lemma, tag) in words {
+            let start = text[pos..].find(*w).expect("word in text") + pos;
+            let end = start + w.len();
+            pos = end;
+            tokens.push(AnalyzedTokenReadings::new(
+                AnalyzedToken::new(*w, start, end)
+                    .with_lemma(*lemma)
+                    .with_pos_tags(vec![tag.to_string()]),
+            ));
+        }
+        sentence.set_tokens(tokens);
+        sentence
+    }
+
+    #[test]
+    fn stays_silent_below_min_word_count() {
+        let mut words = Vec::new();
+        for _ in 0..49 {
+            words.push(("gehen", "gehen", "VER:3:SIN"));
+        }
+        words.push(("machen", "machen", "VER:3:SIN"));
+        let sentences = vec![verb_sentence(&words)];
+        let rule = StyleTooOftenUsedWordRule::verb();
+        assert!(rule.match_text("", &sentences).is_empty());
+    }
+
+    #[test]
+    fn flags_verb_above_percent_limit() {
+        let owned: Vec<String> = (0..94).map(|i| format!("vga{i}")).collect();
+        let mut words: Vec<(&str, &str, &str)> = owned
+            .iter()
+            .map(|verb| (verb.as_str(), verb.as_str(), "VER:3:SIN"))
+            .collect();
+        words.extend([("machen", "machen", "VER:3:SIN"); 6]);
+        words.push(("ist", "sein", "VER:AUX:3:SIN"));
+        let sentences = vec![verb_sentence(&words)];
+        let rule = StyleTooOftenUsedWordRule::verb();
+        let matches = rule.match_text("", &sentences);
+        assert_eq!(matches.len(), 6, "one per machen token");
+        for m in &matches {
+            assert!(
+                m.message().contains("als 5% aller Verben"),
+                "{}",
+                m.message()
+            );
+        }
+    }
+}

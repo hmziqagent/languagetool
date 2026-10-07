@@ -218,3 +218,51 @@ impl TextLevelRule for GermanRepeatedWordsRule {
         matches
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::engine::LanguageEngine;
+
+    fn repeated_words_matches(text: &str) -> Vec<(String, Vec<String>)> {
+        let engine = LanguageEngine::shared_for_code("de").expect("german engine");
+        engine
+            .check(text)
+            .matches
+            .iter()
+            .filter(|m| m.rule().id() == "DE_REPEATEDWORDS")
+            .map(|m| {
+                (
+                    m.short_message().unwrap_or_default().to_string(),
+                    m.replacements()
+                        .iter()
+                        .map(|r| r.value().to_string())
+                        .collect(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn accepts_capitalized_repetition() {
+        let matches = repeated_words_matches("Lauf so schnell wie möglich. Das ist MÖGLICH!");
+        assert!(matches.is_empty(), "got {matches:?}");
+    }
+
+    #[test]
+    fn suggests_hervorragend_synonyms() {
+        let matches = repeated_words_matches(
+            "Das ist hervorragende Arbeit. Die Ergebnisse sind hervorragend.",
+        );
+        assert_eq!(matches.len(), 1, "got {matches:?}");
+        assert_eq!(
+            matches[0].1,
+            vec![
+                "brillant".to_string(),
+                "exzellent".to_string(),
+                "perfekt".to_string(),
+                "fantastisch".to_string(),
+                "traumhaft".to_string()
+            ]
+        );
+    }
+}

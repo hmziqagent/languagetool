@@ -317,3 +317,66 @@ impl Rule for RedundantModalOrAuxiliaryVerb {
         rule_matches
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::engine::LanguageEngine;
+    use og_core::checker::CheckRequest;
+
+    fn redundant_matches(text: &str) -> usize {
+        let engine = LanguageEngine::shared_for_code("de").expect("german engine");
+        let mut request = CheckRequest::new(text, engine.language().clone());
+        request.enabled_rules = vec!["REDUNDANT_MODAL_VERB".to_string()];
+        engine.check_with_request(&request).matches.len()
+    }
+
+    #[test]
+    fn fires_on_java_test_sentences() {
+        for text in [
+            "Erst werde ich die Preise vergleichen und erst dann werde ich entscheiden, ob ich die Kamera kaufe.",
+            "Sie hat das Foto von mir als kleinem Jungen angeschaut und hat gelacht.",
+            "Ich bin gern in eurer Mitte und ich bin gern zu Gast bei euch.",
+            "Da ich nun einmal bin, wer ich bin und was ich bin, kann ich es nicht übers Herz bringen.",
+            "Wann ist jemand kühn und wann ist jemand tollkühn?",
+            "Tom ist um halb drei angekommen und Mary ist kurze Zeit später angekommen.",
+            "Das Essen ist gut und der Service hier ist gut.",
+            "Wir müssen wissen, was wir tun sollen und wie wir es tun sollen.",
+            "Ich muss unbedingt wissen, was zu tun ist, wie es zu tun ist und wann es zu tun ist.",
+            "Er erzählte ihr, eine böse Hexe habe ihn in einen Frosch verwandelt und nur sie allein habe ihn retten können und morgen würden sie gemeinsam in sein Reich fahren.",
+        ] {
+            assert_eq!(redundant_matches(text), 1, "expected 1 match for {text:?}");
+        }
+    }
+
+    #[test]
+    fn accepts_java_test_correct_sentences() {
+        for text in [
+            "„nicht dürfen“ und „nicht müssen“ dürfen nicht miteinander verwechselt werden.",
+            "Ich mag Physik und Mathematik mag ich noch mehr.",
+            "Aus Angst vor den Zeitungen sind Politiker langweilig und am Ende sind sie selbst für die Zeitungen zu langweilig.",
+            "Ändert der Akkusativ wirklich die Bedeutung eines Satzes: Sie hat Aids oder Aids hat sie?",
+            "Tom hat eine Tüte Äpfel gekauft und er hat an einem Tag ein Drittel davon gegessen.",
+            "Mein Vaterland ist mein Stadtviertel und nun ist es beinahe nicht wiedererkennbar.",
+            "Johnny hat Alice vorgeschlagen und sie hat akzeptiert.",
+            "Unsere Zeit hier ist begrenzt und sie ist wertvoll.",
+            "Manchmal ist die Wahrheit nützlich und manchmal ist sie unnütz.",
+            "Treue ist irgendwo absolut oder sie ist gar nichts.",
+            "Sie mag niemanden und niemand mag sie.",
+            "Eines Tages wird die USA eine Frau als Präsidenten wählen und das wird kein schönes Schauspiel sein.",
+            "Mein Name ist Mary und das ist Tom.",
+            "Er hat seine Augen langsam geöffnet und dann hat sie ihn geküsst.",
+            "Die Flaneure haben es prinzipiell nicht eilig und sind immer für ein Schwätzchen zu haben.",
+            "Es sind Tendenzen erkennbar und diese Tendenzen sind leider nicht ermutigend.",
+            "Ja ist ja und nein ist nein, das nennt man Offenheit.",
+            "Wie werden einmal unsere Namen hinter den Erfindern des Fliegens und dergleichen vergessen werden?",
+            "In den Chroniken ist über die Flut von 1342 zu lesen, dass im Mainzer Dom einem Mann das Wasser bis zur Brust gestanden habe und dass man in Köln mit Booten über die Stadtmauern habe fahren können.",
+            "Sie stellt sicher, dass die gerissenen Bänder nicht belastet werden können und dass das Gelenk dennoch bewegt werden kann.",
+        ] {
+            assert_eq!(
+                redundant_matches(text),
+                0,
+                "expected 0 matches for {text:?}"
+            );
+        }
+    }
+}
