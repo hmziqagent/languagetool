@@ -24,6 +24,7 @@ pub mod ga;
 pub mod gl;
 pub mod is;
 pub mod it;
+pub mod ja;
 pub mod match_priority;
 pub mod nl;
 pub mod paragraph_repeat_beginning;
