@@ -653,26 +653,40 @@ impl LanguageEngine {
         rules.retain(|r| r.id() != "OLD_SPELLING_RULE");
         rules.push(Arc::new(crate::de::OldSpellingRule::new(&country)));
         let mut dict = og_spell::Dictionary::new();
+        let mut variant_ignore_words: Vec<String> = Vec::new();
+        let mut variant_hunspell: Option<Arc<og_spell::hunspell::HunspellChecker>> = None;
         if let Some(lt_root) = find_lt_resource_dir() {
             let hunspell_dir =
                 lt_root.join("de/src/main/resources/org/languagetool/resource/de/hunspell");
-            if let Ok(words) = std::fs::read_to_string(hunspell_dir.join("spelling.txt")) {
-                for line in words.lines() {
-                    let word = line.trim();
-                    if !word.is_empty() && !word.starts_with('#') {
-                        dict.add_word(word);
+            for file in ["spelling.txt", &format!("spelling-de-{country}.txt")] {
+                if let Ok(words) = std::fs::read_to_string(hunspell_dir.join(file)) {
+                    for line in words.lines() {
+                        for word in og_rules::spelling_support::prepare_line_for_speller(
+                            og_rules::spelling_support::SpellerVariant::German,
+                            line,
+                        ) {
+                            dict.add_word(&word);
+                            if file.starts_with("spelling-de-") && !word.is_empty() {
+                                variant_ignore_words.push(word);
+                            }
+                        }
                     }
                 }
             }
-            if let Ok(words) =
-                std::fs::read_to_string(hunspell_dir.join(format!("spelling-de-{country}.txt")))
-            {
-                for line in words.lines() {
-                    let word = line.trim();
-                    if !word.is_empty() && !word.starts_with('#') {
-                        dict.add_word(word);
+            let variant_dic = hunspell_dir.join(format!("de_{country}.dic"));
+            let variant_aff = hunspell_dir.join(format!("de_{country}.aff"));
+            if variant_dic.exists() && variant_aff.exists() {
+                if let Ok(content) = std::fs::read_to_string(&variant_dic) {
+                    for line in content.lines() {
+                        let word = line.split('/').next().unwrap_or("").trim();
+                        if !word.is_empty() && !word.starts_with('#') {
+                            dict.add_word(word);
+                        }
                     }
                 }
+                variant_hunspell =
+                    og_spell::hunspell::HunspellChecker::load(&variant_aff, &variant_dic)
+                        .map(std::sync::Arc::new);
             }
         }
         if let Some(lt_root) = find_lt_resource_dir()
@@ -685,14 +699,21 @@ impl LanguageEngine {
             }
         }
         if !dict.is_empty() {
-            let id = format!("MORFOLOGIK_RULE_DE_{country}");
+            let id = match country.as_str() {
+                "AT" => "AUSTRIAN_GERMAN_SPELLER_RULE",
+                "CH" => "SWISS_GERMAN_SPELLER_RULE",
+                _ => "MORFOLOGIK_RULE_DE_DE",
+            };
             rules.retain(|r| r.id() != "MORFOLOGIK_RULE_DE_DE");
             let variant_code = format!("de-{country}");
             if let Some(speller) = &self.german_speller {
-                let variant_speller =
-                    Arc::new(speller.with_shared_data(Arc::new(dict), &variant_code));
+                let mut variant_speller = speller.with_shared_data(Arc::new(dict), &variant_code);
+                variant_speller = variant_speller.with_extra_ignore_words(variant_ignore_words);
+                if let Some(checker) = variant_hunspell {
+                    variant_speller = variant_speller.with_hunspell_core(checker);
+                }
                 rules.push(Arc::new(og_spell::GermanSpellerRule::new(
-                    variant_speller,
+                    Arc::new(variant_speller),
                     id,
                 )));
             } else {
@@ -4269,8 +4290,8 @@ mod tests {
         let ch = base.german_variant("de-CH");
         let ch_ids: Vec<String> = ch.rules.iter().map(|r| r.id().to_string()).collect();
         assert!(
-            ch_ids.iter().any(|i| i == "MORFOLOGIK_RULE_DE_CH"),
-            "de-CH must swap in its own morfologik rule"
+            ch_ids.iter().any(|i| i == "SWISS_GERMAN_SPELLER_RULE"),
+            "de-CH must swap in its own speller rule"
         );
         assert!(!ch_ids.iter().any(|i| i == "MORFOLOGIK_RULE_DE_DE"));
         assert!(
@@ -4286,8 +4307,8 @@ mod tests {
         let at = base.german_variant("de-AT");
         let at_ids: Vec<String> = at.rules.iter().map(|r| r.id().to_string()).collect();
         assert!(
-            at_ids.iter().any(|i| i == "MORFOLOGIK_RULE_DE_AT"),
-            "de-AT must swap in its own morfologik rule"
+            at_ids.iter().any(|i| i == "AUSTRIAN_GERMAN_SPELLER_RULE"),
+            "de-AT must swap in its own speller rule"
         );
         assert!(
             at_ids.iter().any(|i| i == "GRUESSE_SPELLING_RULE"),
@@ -4298,6 +4319,79 @@ mod tests {
             "de-CH rules must not leak into de-AT"
         );
         assert_eq!(at.language().code(), "de-AT");
+    }
+
+    #[test]
+    fn german_variant_spellers_cover_the_java_wordlist_oracles() {
+        let base = shared_german();
+
+        let at = base.german_variant("de-AT");
+        let at_speller_matches = |text: &str| -> Vec<(String, Vec<String>)> {
+            at.check(text)
+                .matches
+                .iter()
+                .filter(|m| m.rule().id() == "AUSTRIAN_GERMAN_SPELLER_RULE")
+                .map(|m| {
+                    (
+                        text[m.offset()..m.offset() + m.length()].to_string(),
+                        m.replacements()
+                            .iter()
+                            .map(|r| r.value().to_string())
+                            .collect(),
+                    )
+                })
+                .collect()
+        };
+        assert!(
+            at_speller_matches("Shopbewertung").is_empty(),
+            "Shopbewertung comes from the de_AT hunspell dict"
+        );
+        assert!(
+            at_speller_matches("Wahlzuckerl").is_empty()
+                && at_speller_matches("Wahlzuckerls").is_empty(),
+            "Wahlzuckerl/NS comes from spelling-de-AT.txt"
+        );
+        assert_eq!(
+            at_speller_matches("aifhdlidflifs").len(),
+            1,
+            "gibberish must be flagged"
+        );
+
+        let ch = base.german_variant("de-CH");
+        let ch_speller_matches = |text: &str| -> Vec<(String, Vec<String>)> {
+            ch.check(text)
+                .matches
+                .iter()
+                .filter(|m| m.rule().id() == "SWISS_GERMAN_SPELLER_RULE")
+                .map(|m| {
+                    (
+                        text[m.offset()..m.offset() + m.length()].to_string(),
+                        m.replacements()
+                            .iter()
+                            .map(|r| r.value().to_string())
+                            .collect(),
+                    )
+                })
+                .collect()
+        };
+        for accepted in ["Shopbewertung", "Abwart", "Abwarts"] {
+            assert!(
+                ch_speller_matches(accepted).is_empty(),
+                "{accepted} must be accepted (spelling.txt / spelling-de-CH.txt)"
+            );
+        }
+        assert_eq!(
+            ch_speller_matches("aifhdlidflifs").len(),
+            1,
+            "gibberish must be flagged"
+        );
+        let trottinettens = ch_speller_matches("Trottinettens");
+        assert_eq!(trottinettens.len(), 1, "Trottinettens is not in any list");
+        assert_eq!(
+            trottinettens[0].1.first().map(String::as_str),
+            Some("Trottinetten"),
+            "first suggestion must be Trottinetten (Trottinette/N in spelling-de-CH.txt)"
+        );
     }
 
     #[test]

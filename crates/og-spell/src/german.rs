@@ -233,6 +233,7 @@ fn replace_first_binnen_i(s: &str) -> String {
     s.to_string()
 }
 
+#[derive(Clone)]
 struct GermanSharedData {
     tagger: Option<Arc<dyn Tagger>>,
     ignore_words: HashSet<String>,
@@ -506,6 +507,27 @@ impl GermanSpeller {
             suggestion_engine,
             shared: self.shared.clone(),
             swiss: variant == SWISS,
+            hunspell: self.hunspell.clone(),
+            cache: Mutex::new(HashMap::new()),
+        }
+    }
+
+    pub fn with_extra_ignore_words(&self, extra: Vec<String>) -> Self {
+        let mut data = (*self.shared).clone();
+        for word in extra {
+            let ch_form = if word.contains('ß') {
+                word.replace('ß', "ss")
+            } else {
+                word.clone()
+            };
+            data.ignore_words.insert(word);
+            data.ignore_words_ch.insert(ch_form);
+        }
+        Self {
+            dictionary: self.dictionary.clone(),
+            suggestion_engine: SuggestionEngine::new(&self.dictionary),
+            shared: Arc::new(data),
+            swiss: self.swiss,
             hunspell: self.hunspell.clone(),
             cache: Mutex::new(HashMap::new()),
         }
