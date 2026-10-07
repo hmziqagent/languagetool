@@ -1380,6 +1380,11 @@ mod tests {
     #[test]
     #[ignore]
     fn test_real_german_grammar_examples() {
+        const PINNED_RESIDUE: &[(&str, &str)] = &[(
+            "ZUSAMMENSCHREIBUNG_HINTER",
+            "Expected match on incorrect example but got none: 'Er hat ihr hinterher spioniert.'",
+        )];
+
         if !test_support::german_grammar_available() {
             eprintln!("Skipping: German grammar.xml not found");
             return;
@@ -1422,13 +1427,27 @@ mod tests {
         );
 
         let mut fail_file = String::new();
+        let mut residue: Vec<(String, String)> = Vec::new();
         for r in &summary.results {
             if !r.passed {
                 fail_file.push_str(&format!("FAIL: [{}] {}\n", r.rule_id, r.message));
+                residue.push((r.rule_id.clone(), r.message.clone()));
             }
         }
         let _ = std::fs::write("/tmp/test_failures_de.txt", fail_file);
 
+        let expected: Vec<(String, String)> = PINNED_RESIDUE
+            .iter()
+            .map(|(id, msg)| (id.to_string(), msg.to_string()))
+            .collect();
+        assert_eq!(
+            residue, expected,
+            "the German residue must stay pinned: the one ZUSAMMENSCHREIBUNG_HINTER example \
+             dies in RemoveUnknownCompoundsFilter because no spelled form of the compound \
+             'hinterherspioniert' is accepted (hunspell 1.6.2 and 1.7.2 built from the vendored \
+             sources reject it on LT's exact aff+dic, and no de accept list carries it); new or \
+             changed failures mean an engine regression"
+        );
         eprintln!("Summary: {}/{} passed", summary.passed, summary.total);
     }
 
