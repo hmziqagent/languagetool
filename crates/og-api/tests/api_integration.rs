@@ -811,6 +811,111 @@ async fn test_v2_check_khmer_engine_registered() {
 }
 
 #[tokio::test]
+async fn test_v2_check_lithuanian_engine_registered() {
+    let app = app();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/check?language=lt&text=Jaroslavas%20pajuto%20kad%20jo%20geriausias%20draugas%20yra%20Mantas.")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["language"]["code"].as_str(), Some("lt"));
+    assert!(json["matches"].is_array());
+    let flagged: Vec<&str> = json["matches"]
+        .as_array()
+        .map(|ms| ms.iter().filter_map(|m| m["rule"]["id"].as_str()).collect())
+        .unwrap_or_default();
+    assert!(
+        flagged.contains(&"BRAK_PRZECINKA_ZE"),
+        "the lt grammar rule must fire on the missing comma before 'kad' through the engine \
+         pipeline, got {flagged:?}"
+    );
+    assert!(
+        !flagged.contains(&"MORFOLOGIK_RULE_LT_LT"),
+        "no lt dictionary ships in the checkout, so no speller may fire, got {flagged:?}"
+    );
+}
+
+#[tokio::test]
+async fn test_v2_check_malayalam_engine_registered() {
+    let app = app();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/check?language=ml&text=Aagohw.")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["language"]["code"].as_str(), Some("ml"));
+    assert!(json["matches"].is_array());
+    let speller: Vec<&serde_json::Value> = json["matches"]
+        .as_array()
+        .map(|ms| {
+            ms.iter()
+                .filter(|m| m["rule"]["id"] == "MORFOLOGIK_RULE_ML_IN")
+                .collect()
+        })
+        .unwrap_or_default();
+    assert_eq!(
+        speller.len(),
+        1,
+        "MorfologikMalayalamSpellerRule over hunspell/ml_IN.dict must flag the non-word 'Aagohw', \
+         got {json:?}"
+    );
+}
+
+#[tokio::test]
+async fn test_v2_check_slovak_engine_registered() {
+    let app = app();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(
+                    "/v2/check?language=sk&text=Toto%20je%20%C4%8Desko%20slovensk%C3%BD%20projekt.",
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["language"]["code"].as_str(), Some("sk"));
+    assert!(json["matches"].is_array());
+    let compound: Vec<&serde_json::Value> = json["matches"]
+        .as_array()
+        .map(|ms| {
+            ms.iter()
+                .filter(|m| m["rule"]["id"] == "SK_COMPOUNDS")
+                .collect()
+        })
+        .unwrap_or_default();
+    assert_eq!(
+        compound.len(),
+        1,
+        "SK_COMPOUNDS must flag the spaced 'česko slovenský', got {json:?}"
+    );
+    assert!(
+        compound[0]["replacements"]
+            .as_array()
+            .is_some_and(|rs| rs.iter().any(|r| r["value"] == "česko-slovenský")),
+        "the spaced form must suggest the hyphenated form, got {json:?}"
+    );
+}
+
+#[tokio::test]
 async fn test_v2_languages_lists_all_registered_engines() {
     let json = check_response("/v2/languages").await;
     let codes: Vec<&str> = json
@@ -825,7 +930,7 @@ async fn test_v2_languages_lists_all_registered_engines() {
     for code in [
         "en-US", "de-DE", "fr", "es", "pt-BR", "pt-PT", "pt-AO", "pt-MZ", "nl", "pl", "ru", "it",
         "ar", "ast", "be", "br", "ca", "crh", "da", "el", "eo", "fa", "ga", "gl", "is", "ja", "km",
-        "ro", "sv",
+        "lt", "ml", "ro", "sk", "sv",
     ] {
         assert!(codes.contains(&code), "missing {code} in {codes:?}");
     }

@@ -33,6 +33,14 @@ pub fn malayalam_tagger() -> Option<Arc<og_tagger::GenericTagger>> {
         .clone()
 }
 
+pub fn malayalam_unpaired_brackets_rule() -> og_rules::text_level_rules::GenericUnpairedBracketsRule
+{
+    og_rules::text_level_rules::GenericUnpairedBracketsRule::new().with_symbols(
+        vec!["[", "(", "{", "\"", "'"],
+        vec!["]", ")", "}", "\"", "'"],
+    )
+}
+
 pub struct MalayalamNativeRules {
     pub rules: Vec<Arc<dyn Rule>>,
     pub text_level_rules: Vec<Arc<dyn TextLevelRule>>,
@@ -48,12 +56,7 @@ pub fn malayalam_native_rules() -> MalayalamNativeRules {
             Arc::new(og_rules::native_rules::WordRepeatRule::new()),
         ],
         text_level_rules: vec![
-            Arc::new(
-                og_rules::text_level_rules::GenericUnpairedBracketsRule::new().with_symbols(
-                    vec!["[", "(", "{", "\"", "'"],
-                    vec!["]", ")", "}", "\"", "'"],
-                ),
-            ),
+            Arc::new(malayalam_unpaired_brackets_rule()),
             Arc::new(og_rules::text_level_rules::MultipleWhitespaceRule::new()),
         ],
     }
