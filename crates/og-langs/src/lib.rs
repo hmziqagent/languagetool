@@ -28,6 +28,7 @@ pub mod ja;
 pub mod km;
 pub mod lt;
 pub mod match_priority;
+pub mod ml;
 pub mod nl;
 pub mod paragraph_repeat_beginning;
 pub mod pl;
