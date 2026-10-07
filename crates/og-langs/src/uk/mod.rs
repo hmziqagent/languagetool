@@ -44,7 +44,10 @@ pub fn uk_extra_rule_paths(lt_root: &Path) -> Vec<PathBuf> {
     paths
 }
 
-pub fn normalize_uk_rules_xml(xml: &str) -> String {
+pub fn normalize_uk_rules_xml(xml: &str) -> std::borrow::Cow<'_, str> {
+    if !xml.contains("<!--") {
+        return std::borrow::Cow::Borrowed(xml);
+    }
     let mut out = String::with_capacity(xml.len());
     let mut rest = xml;
     while let Some(start) = rest.find("<!--") {
@@ -57,7 +60,7 @@ pub fn normalize_uk_rules_xml(xml: &str) -> String {
         }
     }
     out.push_str(rest);
-    out
+    std::borrow::Cow::Owned(out)
 }
 
 pub struct UkrainianNativeRules {

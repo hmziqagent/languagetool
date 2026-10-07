@@ -794,6 +794,9 @@ impl LanguageEngine {
             "sl" => ("", "MORFOLOGIK_RULE_SL_SI"),
             "sr" => ("", "MORFOLOGIK_RULE_SR_EKAVIAN"),
             "ta" => ("tamil", ""),
+            "tl" => ("tagalog", crate::tl::MORFOLOGIK_RULE_TL),
+            "uk" => ("ukrainian", crate::uk::MORFOLOGIK_RULE_UK_UA),
+            "zh" => ("", ""),
             _ => return None,
         };
 
@@ -934,6 +937,7 @@ impl LanguageEngine {
                 && short != "da"
                 && short != "ml"
                 && short != "ta"
+                && short != "tl"
             {
                 engine.add_rule(Arc::new(
                     og_spell::SpellingCheckRule::new_shared(dict.clone(), config.1, HashSet::new())
@@ -974,6 +978,10 @@ impl LanguageEngine {
                 engine.load_xml_file_normalized(&path, crate::lt::normalize_lt_rules_xml)
             } else if short == "sv" {
                 engine.load_xml_file_normalized(&path, crate::sv::normalize_sv_rules_xml)
+            } else if short == "uk" {
+                engine.load_xml_file_normalized(&path, crate::uk::normalize_uk_rules_xml)
+            } else if short == "zh" {
+                engine.load_xml_file_normalized(&path, crate::zh::normalize_zh_rules_xml)
             } else {
                 engine.load_xml_file(&path)
             };
@@ -1012,8 +1020,17 @@ impl LanguageEngine {
                 }
             }
         }
+        if short == "uk" {
+            for path in crate::uk::uk_extra_rule_paths(&lt_root) {
+                let file = path.file_name().unwrap_or_default().to_string_lossy();
+                match engine.load_xml_file_normalized(&path, crate::uk::normalize_uk_rules_xml) {
+                    Ok(count) => eprintln!("Loaded {count} rules from uk/{file}"),
+                    Err(e) => eprintln!("Warning: failed to load uk/{file}: {e}"),
+                }
+            }
+        }
 
-        if short != "nl" && short != "pl" && short != "ru" && short != "ar" {
+        if short != "nl" && short != "pl" && short != "ru" && short != "ar" && short != "uk" {
             engine.add_rules([
                 Arc::new(og_rules::native_rules::DoublePunctuationRule::new()) as Arc<dyn Rule>,
                 Arc::new(og_rules::native_rules::CommaWhitespaceRule::new()),
@@ -1028,6 +1045,8 @@ impl LanguageEngine {
             || short == "pl"
             || short == "ru"
             || short == "ta"
+            || short == "uk"
+            || short == "zh"
         {
             None
         } else if short == "pt" || short == "da" || short == "ga" {
@@ -1087,13 +1106,15 @@ impl LanguageEngine {
             Some(Arc::new(crate::sr::serbian_unpaired_brackets_rule()) as Arc<dyn TextLevelRule>)
         } else if short == "sv" {
             Some(Arc::new(crate::sv::swedish_unpaired_brackets_rule()) as Arc<dyn TextLevelRule>)
+        } else if short == "tl" {
+            Some(Arc::new(crate::tl::tagalog_unpaired_brackets_rule()) as Arc<dyn TextLevelRule>)
         } else {
             Some(Arc::new(
                 og_rules::text_level_rules::GenericUnpairedBracketsRule::new(),
             ))
         };
         let mut generic_text_level_rules: Vec<Arc<dyn TextLevelRule>> =
-            if short == "nl" || short == "pl" {
+            if short == "nl" || short == "pl" || short == "uk" {
                 Vec::new()
             } else {
                 vec![
@@ -1445,6 +1466,18 @@ impl LanguageEngine {
                 engine.add_text_level_rule(Arc::new(
                     og_rules::text_level_rules::LongSentenceRule::new(50),
                 ) as Arc<dyn TextLevelRule>);
+            }
+            "tl" => {
+                engine.add_rules([
+                    Arc::new(og_rules::native_rules::UppercaseSentenceStartRule::new())
+                        as Arc<dyn Rule>,
+                    Arc::new(crate::tl::tagalog_speller_rule()),
+                ]);
+            }
+            "uk" => {
+                let native = crate::uk::ukrainian_native_rules();
+                engine.add_rules(native.rules);
+                engine.add_text_level_rules(native.text_level_rules);
             }
             "ar" => {
                 engine.add_rules([
@@ -2008,6 +2041,9 @@ enum WordTokenizerBridge {
     Malayalam(crate::ml::MalayalamWordTokenizer),
     Romanian(crate::ro::RomanianWordTokenizer),
     Tamil(crate::ta::TamilWordTokenizer),
+    Tagalog(crate::tl::TagalogWordTokenizer),
+    Ukrainian(crate::uk::UkrainianWordTokenizer),
+    Chinese(crate::zh::ChineseWordTokenizer),
 }
 
 impl WordTokenizerBridge {
@@ -2080,6 +2116,15 @@ impl WordTokenizerBridge {
         }
         if code == "ta" {
             return Self::Tamil(crate::ta::TamilWordTokenizer::new());
+        }
+        if code == "tl" {
+            return Self::Tagalog(crate::tl::TagalogWordTokenizer::new());
+        }
+        if code == "uk" {
+            return Self::Ukrainian(crate::uk::UkrainianWordTokenizer::new());
+        }
+        if code == "zh" {
+            return Self::Chinese(crate::zh::ChineseWordTokenizer::new());
         }
         if code != "fr" {
             return Self::Default(false);
@@ -2155,6 +2200,11 @@ impl WordTokenizer for WordTokenizerBridge {
             Self::Malayalam(tz) => og_tokenizer::WordTokenizer::tokenize(tz, text),
             Self::Romanian(tz) => og_tokenizer::WordTokenizer::tokenize(tz, text),
             Self::Tamil(tz) => og_tokenizer::WordTokenizer::tokenize(tz, text),
+            Self::Tagalog(tz) => og_tokenizer::WordTokenizer::tokenize(tz, text),
+            Self::Ukrainian(tz) => og_tokenizer::WordTokenizer::tokenize(tz, text),
+            Self::Chinese(tz) => {
+                return og_core::checker::WordTokenizer::tokenize(tz, text, offset);
+            }
         };
         tokens
             .into_iter()
@@ -3228,6 +3278,208 @@ mod tests {
                 "Ends_in_A_2",
             ],
             "TamilTest.java:35-37 testDemoText pins exactly these five matches in this order"
+        );
+    }
+
+    #[test]
+    fn tagalog_engine_registers_java_relevant_natives() {
+        let engine =
+            LanguageEngine::for_code("tl").expect("Tagalog engine must be registered via for_code");
+        let ids = engine.rule_ids();
+        for expected in [
+            "COMMA_PARENTHESIS_WHITESPACE",
+            "DOUBLE_PUNCTUATION",
+            "UPPERCASE_SENTENCE_START",
+            "MORFOLOGIK_RULE_TL",
+        ] {
+            assert!(
+                ids.contains(&expected),
+                "expected {expected} in Tagalog natives (Tagalog.java:84-94), got {ids:?}"
+            );
+        }
+        assert_eq!(
+            ids.iter().filter(|id| **id == "MORFOLOGIK_RULE_TL").count(),
+            1,
+            "the tl natives arm installs the module speller over hunspell/tl_PH.dict, so the \
+             generic wordlist speller over tagalog.dict must stay off (the pl/ast/br/da/ml/ta \
+             exclusion), got {ids:?}"
+        );
+        let text_level_ids = engine.text_level_rule_ids();
+        for expected in [
+            "UNPAIRED_BRACKETS",
+            "WHITESPACE_RULE",
+            "SENTENCE_WHITESPACE",
+        ] {
+            assert!(
+                text_level_ids.contains(&expected),
+                "expected {expected} in Tagalog text-level natives, got {text_level_ids:?}"
+            );
+        }
+        assert!(
+            engine.tagger.is_some(),
+            "TagalogTagger = BaseTagger over tagalog.dict must load through the generic path \
+             (the postag rules need it)"
+        );
+
+        let text = "Ang LanguageTool ay maganda gamit sa araw-araw. Ang talatang ito ay nagpapakita ng ng kakayahan ng LanguageTool at hinahalimbawa kung paano ito gamitin. Litaw rin sa talatang ito na may mga bagaybagay na hindii pa kayang itama nng LanguageTool.";
+        let result = engine.check(text);
+        let ids: Vec<&str> = result.matches.iter().map(|m| m.rule().id()).collect();
+        assert_eq!(
+            ids,
+            vec![
+                "ADJECTIVE-V_COMMON_NOUN",
+                "NG_NG",
+                "MORFOLOGIK_RULE_TL",
+                "R_WORDS",
+                "MORFOLOGIK_RULE_TL",
+                "MORFOLOGIK_RULE_TL",
+                "MORFOLOGIK_RULE_TL",
+            ],
+            "TagalogTest.java:33-37 testDemoText pins exactly these seven matches in this order"
+        );
+    }
+
+    #[test]
+    fn ukrainian_engine_registers_java_relevant_natives() {
+        let engine = LanguageEngine::for_code("uk")
+            .expect("Ukrainian engine must be registered via for_code");
+        let ids = engine.rule_ids();
+        for expected in [
+            "COMMA_PARENTHESIS_WHITESPACE",
+            "UKRAINIAN_WORD_REPEAT_RULE",
+            "DASH",
+            "UK_HIDDEN_CHARS",
+            "UK_MIXED_ALPHABETS",
+            "UK_SIMPLE_REPLACE_SOFT",
+            "UK_SIMPLE_REPLACE_RENAMED",
+            "UK_SIMPLE_REPLACE",
+        ] {
+            assert!(
+                ids.contains(&expected),
+                "expected {expected} in Ukrainian natives (Ukrainian.java:138-179 minus the \
+                 dictionary-gated entries), got {ids:?}"
+            );
+        }
+        assert!(
+            !ids.contains(&"DOUBLE_PUNCTUATION"),
+            "Ukrainian.java:162 comments DoublePunctuationRule out, so uk must leave the generic \
+             DoublePunctuation/CommaWhitespace block, got {ids:?}"
+        );
+        assert_eq!(
+            ids.iter()
+                .filter(|id| **id == "COMMA_PARENTHESIS_WHITESPACE")
+                .count(),
+            1,
+            "the uk natives arm supplies UkrainianCommaWhitespaceRule, so the generic block would \
+             duplicate the id, got {ids:?}"
+        );
+        assert!(
+            !ids.contains(&"MORFOLOGIK_RULE_UK_UA"),
+            "no ukrainian.dict and no hunspell/uk_UA.dict exist in this tree (the external \
+             ua.net.nlp:morfologik-ukrainian-lt artifact), so no speller may install, got {ids:?}"
+        );
+        let text_level_ids = engine.text_level_rule_ids();
+        for expected in ["UPPERCASE_SENTENCE_START", "WHITESPACE_RULE"] {
+            assert!(
+                text_level_ids.contains(&expected),
+                "expected {expected} in Ukrainian text-level natives, got {text_level_ids:?}"
+            );
+        }
+        assert!(
+            !text_level_ids.contains(&"SENTENCE_WHITESPACE"),
+            "Ukrainian.java:138-179 installs no SentenceWhitespaceRule and the natives already \
+             carry MultipleWhitespace, so uk must leave the generic text-level block, got \
+             {text_level_ids:?}"
+        );
+        assert!(
+            !text_level_ids.contains(&"UNPAIRED_BRACKETS"),
+            "Ukrainian.java installs no unpaired-brackets rule, got {text_level_ids:?}"
+        );
+        assert!(
+            engine.rule_count() > 100,
+            "expected the five grammar-*.xml extras to load, got {}",
+            engine.rule_count()
+        );
+
+        let text = "УВАГА! Внизу наведено приклад тексту з помилками, які допоможе виправити LanguageTool. Будь-ласка, вставте тутт ваш текст, або перевірте цей текст на предмет помилок. Знайти всі помилки для LanguageTool є не по силах з багатьох причин але дещо він вам все таки підкаже. Порівняно з засобами перевірки орфографії LanguageTool також змайде граматичні та стильові проблеми. LanguageTool — ваш самий кращий помічник.";
+        let result = engine.check(text);
+        let flagged: Vec<(&str, &str)> = result
+            .matches
+            .iter()
+            .map(|m| (m.rule().id(), &text[m.offset()..m.offset() + m.length()]))
+            .collect();
+        assert_eq!(
+            flagged,
+            vec![
+                ("UK_SIMPLE_REPLACE", "Будь-ласка"),
+                ("PO_VS_OTHER", "по силах"),
+                ("comma_before_but", "причин але"),
+                ("WORDS_WITH_DASH", "все таки"),
+            ],
+            "UkrainianTest.testLanguage oracles that survive without the POS dictionary: \
+             UK_SIMPLE_REPLACE proving the natives arm, comma_before_but proving \
+             grammar-grammar.xml loads, WORDS_WITH_DASH proving the extras load"
+        );
+    }
+
+    #[test]
+    fn chinese_engine_registers_java_relevant_natives() {
+        let engine =
+            LanguageEngine::for_code("zh").expect("Chinese engine must be registered via for_code");
+        let ids = engine.rule_ids();
+        for expected in ["DOUBLE_PUNCTUATION", "COMMA_PARENTHESIS_WHITESPACE"] {
+            assert!(
+                ids.contains(&expected),
+                "expected {expected} from the generic path (Chinese.java:82-87 installs \
+                 DoublePunctuation + MultipleWhitespace, both covered generically - the ja \
+                 no-double-install pattern), got {ids:?}"
+            );
+        }
+        assert!(
+            ids.iter()
+                .all(|i| !i.contains("SPELL") && !i.contains("MORFOLOGIK")),
+            "Chinese.java installs no speller and resource/zh carries no .dict, got {ids:?}"
+        );
+        let text_level_ids = engine.text_level_rule_ids();
+        for expected in ["WHITESPACE_RULE", "SENTENCE_WHITESPACE"] {
+            assert!(
+                text_level_ids.contains(&expected),
+                "expected {expected} in Chinese text-level natives, got {text_level_ids:?}"
+            );
+        }
+        assert!(
+            !text_level_ids.contains(&"UNPAIRED_BRACKETS"),
+            "Chinese.java installs no unpaired-brackets rule, got {text_level_ids:?}"
+        );
+        assert!(
+            engine.tagger.is_none(),
+            "ChineseTagger is folded into ChineseWordTokenizer and resource/zh has no \
+             .dict/added.txt, so the engine tagger stays None like ja"
+        );
+        assert!(
+            engine.rule_count() > 600,
+            "expected grammar.xml to load through the BOM normalizer, got {}",
+            engine.rule_count()
+        );
+
+        let text = "将文本粘贴在此，或者检测以下文本：我和她去看了二部电影。";
+        let result = engine.check(text);
+        let ids: Vec<&str> = result.matches.iter().map(|m| m.rule().id()).collect();
+        assert_eq!(
+            ids,
+            vec!["wa5"],
+            "ChineseTest.testLanguage expects exactly the wa5 match on '二部' (suggests 两部)"
+        );
+        let flagged = &text
+            [result.matches[0].offset()..result.matches[0].offset() + result.matches[0].length()];
+        assert_eq!(flagged, "二部");
+        assert!(
+            result.matches[0]
+                .replacements()
+                .iter()
+                .any(|r| r.value() == "两部"),
+            "wa5 must suggest '两部': {:?}",
+            result.matches[0].replacements()
         );
     }
 
