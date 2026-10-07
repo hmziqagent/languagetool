@@ -399,6 +399,11 @@ impl XmlCompiler {
             match_no_postag_regexp: token.match_no_postag_regexp,
             match_no_postag_replace: token.match_no_postag_replace.clone(),
             match_no_setpos: token.match_no_setpos,
+            match_no_regexp_replace: token.match_no_regexp_replace.clone(),
+            compiled_match_no_regex: token
+                .match_no_regexp_match
+                .as_deref()
+                .and_then(|p| self.cached_regex(p)),
         }
     }
 
@@ -959,6 +964,8 @@ pub struct CompiledPatternToken {
     pub match_no_postag_regexp: bool,
     pub match_no_postag_replace: Option<String>,
     pub match_no_setpos: bool,
+    pub match_no_regexp_replace: Option<String>,
+    pub compiled_match_no_regex: Option<regex::Regex>,
 }
 
 #[derive(Debug, Clone)]

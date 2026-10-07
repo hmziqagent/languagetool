@@ -1,6 +1,6 @@
 #[test]
-fn probe_klanv_needs_the_token_level_match_transform() {
-    let (rules, sentences, events) =
+fn probe_klanv_compiles_the_token_level_match_transform() {
+    let (rules, sentences, _) =
         crate::br::example_suite::trace_rule_matches("KLANV_PE_GLANVOCH", "Klañv pe klañvoc’h.");
     assert!(
         !rules.is_empty(),
@@ -16,50 +16,41 @@ fn probe_klanv_needs_the_token_level_match_transform() {
             .readings()
             .iter()
             .any(|r| r.pos_tags().iter().any(|t| t == "J cmp")),
-        "the dictionary carries the J cmp reading, so the residue is not tagger-side: {:?}",
+        "the dictionary carries the J cmp reading, so the transform is the sole gate: {:?}",
         klañvoc_h.readings()
-    );
-    let backref_gate = events.iter().find(|e| {
-        e.token == "klañvoc’h" && e.pattern_idx == 2 && e.cause.starts_with("backref-no=Some(0)")
-    });
-    assert!(
-        backref_gate.is_some(),
-        "the third element must fail exactly at the dropped <match no=\"0\"> transform \
-         (og-xml parser.rs drops regexp_match/regexp_replace, backreference_matches then \
-         falls back to text equality with element 1's 'Klañv'); got {events:#?}"
     );
     let matched = crate::br::example_suite::all_grammar_matches("Klañv pe klañvoc’h.");
     assert!(
-        !matched.iter().any(|(id, _, _)| id == "KLANV_PE_GLANVOCH"),
-        "flips when the shared engine gains the token-level <match no=\"0\"> transform"
+        matched.iter().any(|(id, _, _)| id == "KLANV_PE_GLANVOCH"),
+        "Java PatternToken.doCompile substitutes matchState.toTokenString() for the \\3 \
+         reference: ‘Klañv’ through ^.(.*)→(k|c’h)$1oc’h becomes the regexp alternation \
+         ‘(k|c’h)lañvoc’h’, which ‘klañvoc’h’ must match: {matched:?}"
+    );
+    let matched = crate::br::example_suite::all_grammar_matches("Klañv pe c’hlañvoc’h.");
+    assert!(
+        matched.iter().any(|(id, _, _)| id == "KLANV_PE_GLANVOCH"),
+        "the c’h alternative of the transformed regexp must match ‘c’hlañvoc’h’: {matched:?}"
     );
 }
 
 #[test]
-fn probe_och_an_needs_the_token_level_match_transform() {
-    let (rules, _, events) = crate::br::example_suite::trace_rule_matches(
+fn probe_och_an_compiles_the_token_level_match_transform() {
+    let (rules, _, _) = crate::br::example_suite::trace_rule_matches(
         "OCH_AN",
         "Diaesoc’h diaesañ eo kavout labour.",
     );
     assert!(!rules.is_empty(), "OCH_AN sub-rules must compile");
-    let backref_gate = events.iter().find(|e| {
-        e.token == "diaesañ" && e.pattern_idx == 1 && e.cause.starts_with("backref-no=Some(0)")
-    });
-    assert!(
-        backref_gate.is_some(),
-        "the second element must fail exactly at the dropped <match no=\"0\"> transform \
-         (Java compiles 'Diaesoc’h' through oc’h$→añ into 'Diaesañ'); got {events:#?}"
-    );
     let matched =
         crate::br::example_suite::all_grammar_matches("Diaesoc’h diaesañ eo kavout labour.");
     assert!(
-        !matched.iter().any(|(id, _, _)| id == "OCH_AN"),
-        "flips when the shared engine gains the token-level <match no=\"0\"> transform"
+        matched.iter().any(|(id, _, _)| id == "OCH_AN"),
+        "Java compiles ‘Diaesoc’h’ through oc’h$→añ into the literal ‘Diaesañ’, which the \
+         non-regexp second element must equal case-insensitively: {matched:?}"
     );
 }
 
 #[test]
-fn probe_deiz_deiziad_month_with_u2019_is_trimmed_by_the_shared_date_filter() {
+fn probe_deiz_deiziad_month_with_u2019_survives_the_shared_date_filter_trim() {
     let (_, sentences, _) = crate::br::example_suite::trace_rule_matches(
         "DEIZ_DEIZIAD",
         "D’ar Merc’her 6 a viz C’hwevrer 2014.",
@@ -77,11 +68,10 @@ fn probe_deiz_deiziad_month_with_u2019_is_trimmed_by_the_shared_date_filter() {
     let curly =
         crate::br::example_suite::all_grammar_matches("D’ar Merc’her 6 a viz C’hwevrer 2014.");
     assert!(
-        !curly.iter().any(|(id, _, _)| id == "DEIZ_DEIZIAD"),
-        "C’hwevrer (U+2019) month must currently stay dropped: Java’s \
-         StringTools.trimSpecialCharacters (StringTools.java:91) keeps U+2019 via \
-         (?U)\\p{{Punct}} (Unicode Pf), while the shared trim_special_chars helper \
-         (pattern_rule.rs:4736) only keeps is_ascii_punctuation and strips it"
+        curly.iter().any(|(id, _, _)| id == "DEIZ_DEIZIAD"),
+        "Java’s StringTools.trimSpecialCharacters (StringTools.java:91) keeps U+2019 via \
+         (?U)\\p{{Punct}} (Unicode Pf), so the shared trim_special_chars helper must keep \
+         Unicode punctuation and the C’hwevrer month must parse like the ASCII variant"
     );
     let ascii =
         crate::br::example_suite::all_grammar_matches("D’ar Merc’her 6 a viz Gwengolo 2014.");

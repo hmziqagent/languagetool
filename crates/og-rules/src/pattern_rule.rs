@@ -1062,6 +1062,37 @@ impl PatternRuleEngine {
             });
             return Some(if pattern_token.negate { !hit } else { hit });
         }
+        if let Some(re) = pattern_token.compiled_match_no_regex.as_ref() {
+            let replace = pattern_token
+                .match_no_regexp_replace
+                .as_deref()
+                .unwrap_or("");
+            let transformed = re
+                .replace_all(&entry.text, java_replacement(replace).as_ref())
+                .into_owned();
+            let matches = if pattern_token.is_regexp {
+                let anchored = format!("^(?:{transformed})$");
+                let target = if pattern_token.case_sensitive {
+                    regex::Regex::new(&anchored).ok()
+                } else {
+                    og_xml::java_case_fold::compile_java_ci(&anchored)
+                };
+                target.is_some_and(|target| target.is_match(surface_text(token)))
+            } else {
+                let ref_text = normalize_apostrophes(&transformed);
+                let token_text = normalize_apostrophes(surface_text(token));
+                if pattern_token.case_sensitive {
+                    token_text == ref_text
+                } else {
+                    eq_ignore_case(&token_text, &ref_text)
+                }
+            };
+            return Some(if pattern_token.negate {
+                !matches
+            } else {
+                matches
+            });
+        }
         if let Some(postag) = pattern_token.match_no_postag.as_deref() {
             let ref_token = tokens.get(entry.token_idx)?;
             let synth = self
@@ -4734,9 +4765,11 @@ enum DateLang {
 }
 
 fn trim_special_chars(s: &str) -> String {
-    s.chars()
-        .filter(|c| c.is_alphanumeric() || c.is_whitespace() || c.is_ascii_punctuation())
-        .collect()
+    static NOT_KEPT: OnceLock<regex::Regex> = OnceLock::new();
+    NOT_KEPT
+        .get_or_init(|| regex::Regex::new(r"[^\p{Alphabetic}\p{Nd}\s\p{P}]").unwrap())
+        .replace_all(s, "")
+        .into_owned()
 }
 
 fn parse_month_for(lang: DateLang, s: &str) -> u32 {

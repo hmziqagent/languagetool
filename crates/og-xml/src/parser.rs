@@ -446,6 +446,16 @@ impl XmlRuleParser {
                                 {
                                     token.match_no_setpos = val == "yes";
                                 }
+                                if key == "regexp_match"
+                                    && let Some(ref mut token) = current_token
+                                {
+                                    token.match_no_regexp_match = Some(val.clone());
+                                }
+                                if key == "regexp_replace"
+                                    && let Some(ref mut token) = current_token
+                                {
+                                    token.match_no_regexp_replace = Some(val.clone());
+                                }
                             }
                         }
                         "example" => {
@@ -798,6 +808,16 @@ impl XmlRuleParser {
                                     && let Some(ref mut token) = current_token
                                 {
                                     token.match_no_setpos = val == "yes";
+                                }
+                                if key == "regexp_match"
+                                    && let Some(ref mut token) = current_token
+                                {
+                                    token.match_no_regexp_match = Some(val.clone());
+                                }
+                                if key == "regexp_replace"
+                                    && let Some(ref mut token) = current_token
+                                {
+                                    token.match_no_regexp_replace = Some(val.clone());
                                 }
                             }
                         }

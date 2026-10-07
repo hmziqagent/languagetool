@@ -157,6 +157,10 @@ pub struct XmlPatternToken {
     pub match_no_postag_replace: Option<String>,
     #[serde(default)]
     pub match_no_setpos: bool,
+    #[serde(default)]
+    pub match_no_regexp_match: Option<String>,
+    #[serde(default)]
+    pub match_no_regexp_replace: Option<String>,
 }
 
 impl XmlPatternToken {
