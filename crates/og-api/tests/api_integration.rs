@@ -680,6 +680,71 @@ async fn test_v2_check_irish_engine_registered() {
 }
 
 #[tokio::test]
+async fn test_v2_check_galician_engine_registered() {
+    let app = app();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/check?language=gl&text=O+problema+%C3%A9+acuciante.")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["language"]["code"].as_str(), Some("gl"));
+    assert!(json["matches"].is_array());
+    let flagged: Vec<&str> = json["matches"]
+        .as_array()
+        .map(|ms| ms.iter().filter_map(|m| m["rule"]["id"].as_str()).collect())
+        .unwrap_or_default();
+    assert!(
+        flagged.contains(&"GL_CAST_WORDS"),
+        "GalicianSimpleReplaceRule must flag the castelanismo 'acuciante', got {flagged:?}"
+    );
+}
+
+#[tokio::test]
+async fn test_v2_check_icelandic_engine_registered() {
+    let app = app();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/check?language=is&text=%C3%9Eetta+er+qvist+setning.")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["language"]["code"].as_str(), Some("is"));
+    assert!(json["matches"].is_array());
+    let speller: Vec<&serde_json::Value> = json["matches"]
+        .as_array()
+        .map(|ms| {
+            ms.iter()
+                .filter(|m| m["rule"]["id"] == "HUNSPELL_NO_SUGGEST_RULE")
+                .collect()
+        })
+        .unwrap_or_default();
+    assert_eq!(
+        speller.len(),
+        1,
+        "HunspellNoSuggestionRule must flag the non-word 'qvist', got {json:?}"
+    );
+    assert!(
+        speller[0]["replacements"]
+            .as_array()
+            .is_none_or(|r| r.is_empty()),
+        "HunspellNoSuggestionRule.java:73-76 never offers replacements"
+    );
+}
+
+#[tokio::test]
 async fn test_v2_languages_lists_all_registered_engines() {
     let json = check_response("/v2/languages").await;
     let codes: Vec<&str> = json
@@ -693,7 +758,7 @@ async fn test_v2_languages_lists_all_registered_engines() {
         .unwrap_or_default();
     for code in [
         "en-US", "de-DE", "fr", "es", "pt-BR", "pt-PT", "pt-AO", "pt-MZ", "nl", "pl", "ru", "it",
-        "ar", "ast", "be", "br", "ca", "crh", "da", "el", "eo", "fa", "ga", "gl", "ro", "sv",
+        "ar", "ast", "be", "br", "ca", "crh", "da", "el", "eo", "fa", "ga", "gl", "is", "ro", "sv",
     ] {
         assert!(codes.contains(&code), "missing {code} in {codes:?}");
     }

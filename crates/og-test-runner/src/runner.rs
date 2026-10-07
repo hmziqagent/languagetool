@@ -46,6 +46,7 @@ enum TestWordTokenizer {
     Catalan(og_langs::ca::word_tokenizer::CatalanWordTokenizer),
     Greek(og_langs::el::word_tokenizer::GreekWordTokenizer),
     Persian(og_langs::fa::word_tokenizer::PersianWordTokenizer),
+    Galician(og_langs::gl::word_tokenizer::GalicianWordTokenizer),
 }
 
 impl WordTokenizer for TestWordTokenizer {
@@ -97,6 +98,7 @@ impl WordTokenizer for TestWordTokenizer {
             TestWordTokenizer::Catalan(tz) => og_tokenizer::WordTokenizer::tokenize(tz, text),
             TestWordTokenizer::Greek(tz) => og_tokenizer::WordTokenizer::tokenize(tz, text),
             TestWordTokenizer::Persian(tz) => og_tokenizer::WordTokenizer::tokenize(tz, text),
+            TestWordTokenizer::Galician(tz) => og_tokenizer::WordTokenizer::tokenize(tz, text),
         };
         tokens
             .into_iter()
@@ -146,6 +148,7 @@ pub fn generic_dict_stem(code: &str) -> Option<&'static str> {
         ("fa", ""),
         ("ga", "irish"),
         ("gl", "galician"),
+        ("is", ""),
         ("ro", "romanian"),
         ("sk", "slovak"),
         ("sv", "swedish"),
@@ -169,6 +172,7 @@ pub enum AnyTagger {
     Polish(Arc<og_langs::pl::tagger::PolishTagger>),
     Breton(Arc<og_langs::br::BretonTagger>),
     Catalan(Arc<og_langs::ca::CatalanTagger>),
+    Galician(Arc<og_langs::gl::GalicianTagger>),
 }
 
 impl AnyTagger {
@@ -185,6 +189,7 @@ impl AnyTagger {
             AnyTagger::Polish(t) => Tagger::tag(t.as_ref(), tokens),
             AnyTagger::Breton(t) => Tagger::tag(t.as_ref(), tokens),
             AnyTagger::Catalan(t) => Tagger::tag(t.as_ref(), tokens),
+            AnyTagger::Galician(t) => Tagger::tag(t.as_ref(), tokens),
         }
     }
 }
@@ -252,6 +257,11 @@ impl TestRunner {
                 {
                     return AnyTagger::Catalan(tagger);
                 }
+                if code == "gl"
+                    && let Some(tagger) = og_langs::gl::GalicianTagger::shared_arc()
+                {
+                    return AnyTagger::Galician(tagger);
+                }
                 if let Some(stem) = generic_dict_stem(code)
                     && resource_dir.exists()
                 {
@@ -314,6 +324,11 @@ impl TestRunner {
                 }
                 if code == "ga"
                     && let Some(chain) = og_langs::ga::build_ga_disambiguator(&resource_dir)
+                {
+                    return Some(Arc::new(chain));
+                }
+                if code == "gl"
+                    && let Some(chain) = og_langs::gl::build_gl_disambiguator(&resource_dir)
                 {
                     return Some(Arc::new(chain));
                 }
@@ -463,7 +478,7 @@ impl TestRunner {
             )))
         });
 
-        let sentence_splitter = if matches!(code, "gl" | "eo" | "zh") {
+        let sentence_splitter = if matches!(code, "eo" | "zh") {
             None
         } else {
             og_tokenizer::srx::srx_splitter(code)
@@ -521,6 +536,9 @@ impl TestRunner {
             None if self.language == "fa" => {
                 TestWordTokenizer::Persian(og_langs::fa::word_tokenizer::PersianWordTokenizer::new())
             }
+            None if self.language == "gl" => TestWordTokenizer::Galician(
+                og_langs::gl::word_tokenizer::GalicianWordTokenizer::new(),
+            ),
             None => TestWordTokenizer::Default(self.language == "en"),
         };
         let mut sentence = AnalyzedSentence::new(text, 0, text.len());
@@ -2354,6 +2372,12 @@ fn test_real_irish_grammar_examples() {
 #[ignore]
 fn test_real_galician_grammar_examples() {
     run_generic_example_suite("gl");
+}
+
+#[test]
+#[ignore]
+fn test_real_icelandic_grammar_examples() {
+    run_generic_example_suite("is");
 }
 
 #[test]

@@ -786,6 +786,7 @@ impl LanguageEngine {
             "eo" => ("", "HUNSPELL_RULE_EO"),
             "fa" => ("", ""),
             "ga" => ("irish", "MORFOLOGIK_RULE_GA_IE"),
+            "is" => ("", ""),
             _ => return None,
         };
 
@@ -858,6 +859,10 @@ impl LanguageEngine {
             engine.disambiguator = Some(Arc::new(disambiguator));
         } else if short == "ga"
             && let Some(chain) = crate::ga::build_ga_disambiguator(&resource_dir)
+        {
+            engine.disambiguator = Some(Arc::new(chain));
+        } else if short == "gl"
+            && let Some(chain) = crate::gl::build_gl_disambiguator(&resource_dir)
         {
             engine.disambiguator = Some(Arc::new(chain));
         } else if disambig_path.exists()
@@ -1024,6 +1029,10 @@ impl LanguageEngine {
                     vec!["]", ")", "}", "“", "«", "»", "\""],
                 ),
             ))
+        } else if short == "gl" {
+            Some(Arc::new(crate::gl::galician_unpaired_brackets_rule()) as Arc<dyn TextLevelRule>)
+        } else if short == "is" {
+            Some(Arc::new(crate::is::icelandic_unpaired_brackets_rule()) as Arc<dyn TextLevelRule>)
         } else {
             Some(Arc::new(
                 og_rules::text_level_rules::GenericUnpairedBracketsRule::new(),
@@ -1216,6 +1225,21 @@ impl LanguageEngine {
                 let native = crate::ga::irish_native_rules();
                 engine.add_rules(native.rules);
                 engine.add_text_level_rules(native.text_level_rules);
+            }
+            "gl" => {
+                if let Some(tagger) = crate::gl::GalicianTagger::shared_arc() {
+                    engine.tagger = Some(tagger);
+                }
+                let native = crate::gl::galician_native_rules();
+                engine.add_rules(native.rules);
+                engine.add_text_level_rules(native.text_level_rules);
+            }
+            "is" => {
+                engine.add_rules([
+                    Arc::new(crate::is::IcelandicSpellerRule::new()) as Arc<dyn Rule>,
+                    Arc::new(og_rules::native_rules::UppercaseSentenceStartRule::new()),
+                    Arc::new(og_rules::native_rules::WordRepeatRule::new()),
+                ]);
             }
             "ca" => {
                 if let Some(tagger) = crate::ca::CatalanTagger::shared_arc() {
@@ -1854,6 +1878,7 @@ enum WordTokenizerBridge {
     Catalan(crate::ca::word_tokenizer::CatalanWordTokenizer),
     Greek(crate::el::word_tokenizer::GreekWordTokenizer),
     Persian(crate::fa::word_tokenizer::PersianWordTokenizer),
+    Galician(crate::gl::word_tokenizer::GalicianWordTokenizer),
 }
 
 impl WordTokenizerBridge {
@@ -1908,6 +1933,9 @@ impl WordTokenizerBridge {
         }
         if code == "fa" {
             return Self::Persian(crate::fa::word_tokenizer::PersianWordTokenizer::new());
+        }
+        if code == "gl" {
+            return Self::Galician(crate::gl::word_tokenizer::GalicianWordTokenizer::new());
         }
         if code != "fr" {
             return Self::Default(false);
@@ -1975,6 +2003,7 @@ impl WordTokenizer for WordTokenizerBridge {
             Self::Catalan(tz) => og_tokenizer::WordTokenizer::tokenize(tz, text),
             Self::Greek(tz) => og_tokenizer::WordTokenizer::tokenize(tz, text),
             Self::Persian(tz) => og_tokenizer::WordTokenizer::tokenize(tz, text),
+            Self::Galician(tz) => og_tokenizer::WordTokenizer::tokenize(tz, text),
         };
         tokens
             .into_iter()
@@ -2367,6 +2396,148 @@ mod tests {
             !ids.iter()
                 .any(|id| id.starts_with("MORFOLOGIK_RULE") || id.contains("HUNSPELL")),
             "a correct Irish sentence must stay unflagged by spellers, got {ids:?}"
+        );
+    }
+
+    #[test]
+    fn galician_engine_registers_java_relevant_natives() {
+        let engine = LanguageEngine::for_code("gl")
+            .expect("Galician engine must be registered via for_code");
+        let ids = engine.rule_ids();
+        for expected in [
+            "COMMA_PARENTHESIS_WHITESPACE",
+            "DOUBLE_PUNCTUATION",
+            "HUNSPELL_RULE",
+            "UPPERCASE_SENTENCE_START",
+            "WHITESPACE_PARAGRAPH_BEGIN",
+            "GL_SIMPLE_REPLACE",
+            "GL_CAST_WORDS",
+            "GL_REDUNDANCY_REPLACE",
+            "GL_WORDINESS_REPLACE",
+            "GL_BARBARISM_REPLACE",
+            "GL_WIKIPEDIA_COMMON_ERRORS",
+        ] {
+            assert!(
+                ids.contains(&expected),
+                "expected {expected} in Galician natives, got {ids:?}"
+            );
+        }
+        let text_level_ids = engine.text_level_rule_ids();
+        for expected in [
+            "UNPAIRED_BRACKETS",
+            "WHITESPACE_RULE",
+            "SENTENCE_WHITESPACE",
+            "TOO_LONG_SENTENCE",
+            "TOO_LONG_PARAGRAPH",
+            "WHITESPACE_PARAGRAPH",
+            "EMPTY_LINE",
+            "PARAGRAPH_REPEAT_BEGINNING_RULE",
+            "PUNCTUATION_PARAGRAPH_END2",
+        ] {
+            assert!(
+                text_level_ids.contains(&expected),
+                "expected {expected} in Galician text-level natives, got {text_level_ids:?}"
+            );
+        }
+        assert!(
+            engine.tagger.is_some(),
+            "GalicianTagger must replace the generic tagger so the gl tag() quirks apply"
+        );
+
+        let result = engine.check("O problema é acuciante.");
+        let cast = result
+            .matches
+            .iter()
+            .find(|m| m.rule().id() == "GL_CAST_WORDS")
+            .expect("GL_CAST_WORDS must flag the castelanismo 'acuciante'");
+        assert!(
+            cast.replacements().iter().any(|r| r.value() == "urxente"),
+            "got {:?}",
+            cast.replacements()
+        );
+        let result = engine.check("O gato comeu qxzxv.");
+        assert!(
+            result
+                .matches
+                .iter()
+                .any(|m| m.rule().id() == "HUNSPELL_RULE"),
+            "the wordlist speller must fire with Java's HunspellRule id, got {:?}",
+            result
+                .matches
+                .iter()
+                .map(|m| m.rule().id())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn icelandic_engine_registers_java_relevant_natives() {
+        let engine = LanguageEngine::for_code("is")
+            .expect("Icelandic engine must be registered via for_code");
+        let ids = engine.rule_ids();
+        for expected in [
+            "COMMA_PARENTHESIS_WHITESPACE",
+            "DOUBLE_PUNCTUATION",
+            "HUNSPELL_NO_SUGGEST_RULE",
+            "UPPERCASE_SENTENCE_START",
+            "WORD_REPEAT_RULE",
+        ] {
+            assert!(
+                ids.contains(&expected),
+                "expected {expected} in Icelandic natives, got {ids:?}"
+            );
+        }
+        let text_level_ids = engine.text_level_rule_ids();
+        for expected in [
+            "UNPAIRED_BRACKETS",
+            "WHITESPACE_RULE",
+            "SENTENCE_WHITESPACE",
+        ] {
+            assert!(
+                text_level_ids.contains(&expected),
+                "expected {expected} in Icelandic text-level natives, got {text_level_ids:?}"
+            );
+        }
+        assert!(
+            engine.tagger.is_none(),
+            "Icelandic.java:63-65 uses DemoTagger and is carries no dict/added.txt: {ids:?}"
+        );
+        assert_eq!(
+            ids.iter()
+                .filter(|id| **id == "HUNSPELL_NO_SUGGEST_RULE")
+                .count(),
+            1,
+            "Icelandic.java:74-82 installs exactly one speller, got {ids:?}"
+        );
+        assert!(
+            !ids.contains(&"HUNSPELL_RULE"),
+            "the is hunspell/spelling.txt is comment-only so the wordlist-speller block must be \
+             skipped like fa, got {ids:?}"
+        );
+
+        let result = engine.check("Þetta er qvist setning.");
+        let speller = result
+            .matches
+            .iter()
+            .find(|m| m.rule().id() == "HUNSPELL_NO_SUGGEST_RULE")
+            .expect("the hunspell speller must flag the non-word 'qvist'");
+        assert!(
+            speller.replacements().is_empty(),
+            "HunspellNoSuggestionRule.java:73-76 never offers replacements, got {:?}",
+            speller.replacements()
+        );
+        let result = engine.check("Hann sagði \"þetta er gott.");
+        assert!(
+            result
+                .matches
+                .iter()
+                .any(|m| m.rule().id() == "UNPAIRED_BRACKETS"),
+            "the is brackets arm must track Java's 5 default symbol pairs incl. quotes, got {:?}",
+            result
+                .matches
+                .iter()
+                .map(|m| m.rule().id())
+                .collect::<Vec<_>>()
         );
     }
 
