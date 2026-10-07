@@ -211,8 +211,14 @@ impl SimpleReplace2Rule {
         if let Some(url) = &self.url {
             rm_rule = rm_rule.with_urls(vec![url.clone()]);
         }
-        let ctx_start = from_pos.saturating_sub(40);
-        let ctx_end = std::cmp::min(to_pos + 40, sentence.text().len());
+        let mut ctx_start = from_pos.saturating_sub(40);
+        while ctx_start > 0 && !sentence.text().is_char_boundary(ctx_start) {
+            ctx_start -= 1;
+        }
+        let mut ctx_end = std::cmp::min(to_pos + 40, sentence.text().len());
+        while ctx_end < sentence.text().len() && !sentence.text().is_char_boundary(ctx_end) {
+            ctx_end += 1;
+        }
         let context_text = sentence.text()[ctx_start..ctx_end].to_string();
         Some(
             RuleMatch::new(

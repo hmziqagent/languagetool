@@ -317,8 +317,14 @@ impl TextLevelRule for GenericUnpairedBracketsRule {
         for entry in &stack {
             let start = entry.start_pos;
             let end = start + entry.symbol.len();
-            let context_start = start.saturating_sub(30);
-            let context_end = std::cmp::min(end + 30, text.len());
+            let mut context_start = start.saturating_sub(30);
+            while context_start > 0 && !text.is_char_boundary(context_start) {
+                context_start -= 1;
+            }
+            let mut context_end = std::cmp::min(end + 30, text.len());
+            while context_end < text.len() && !text.is_char_boundary(context_end) {
+                context_end += 1;
+            }
             let context_text = text[context_start..context_end].to_string();
 
             let other = if entry.is_opening {
