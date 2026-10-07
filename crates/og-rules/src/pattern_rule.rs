@@ -1019,6 +1019,10 @@ impl PatternRuleEngine {
         let match_no = pattern_token.match_no?;
         let ref_idx = match_no as usize;
         let entry = matched.get(ref_idx)?;
+        let ref_text = match pattern_token.match_no_case_conversion.as_deref() {
+            Some(cc) => apply_case_conversion(&entry.text, cc),
+            None => entry.text.clone(),
+        };
         if pattern_token.match_no_setpos {
             let ref_token = tokens.get(entry.token_idx)?;
             let pos_pattern = pattern_token.match_no_postag.as_deref()?;
@@ -1068,7 +1072,7 @@ impl PatternRuleEngine {
                 .as_deref()
                 .unwrap_or("");
             let transformed = re
-                .replace_all(&entry.text, java_replacement(replace).as_ref())
+                .replace_all(&ref_text, java_replacement(replace).as_ref())
                 .into_owned();
             let matches = if pattern_token.is_regexp {
                 let anchored = format!("^(?:{transformed})$");
@@ -1124,7 +1128,12 @@ impl PatternRuleEngine {
                 }
             }
             if forms.is_empty() {
-                forms.push(entry.text.clone());
+                forms.push(ref_text.clone());
+            }
+            if let Some(cc) = pattern_token.match_no_case_conversion.as_deref() {
+                for form in &mut forms {
+                    *form = apply_case_conversion(form, cc);
+                }
             }
             let matches = if pattern_token.inflected {
                 token.readings().iter().any(|r| {
@@ -1155,12 +1164,12 @@ impl PatternRuleEngine {
                 matches
             });
         }
-        let ref_text = normalize_apostrophes(&entry.text);
+        let ref_norm = normalize_apostrophes(&ref_text);
         let token_text = normalize_apostrophes(surface_text(token));
         let matches = if pattern_token.case_sensitive {
-            token_text == ref_text
+            token_text == ref_norm
         } else {
-            eq_ignore_case(&token_text, &ref_text)
+            eq_ignore_case(&token_text, &ref_norm)
         };
         if pattern_token.negate {
             Some(!matches)
@@ -5801,6 +5810,41 @@ mod tests {
             matches.len(),
             1,
             "Java immunizes only the marker token 'bar' (startPositionCorrection=1), so 'foo' stays matchable"
+        );
+    }
+
+    #[test]
+    fn antipattern_match_reference_applies_case_conversion() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <rule id="M_CASE" name="antipattern with case-converted backreference">
+                <antipattern case_sensitive="yes">
+                    <token>as</token>
+                    <token regexp="yes">[a-z]+</token>
+                    <token>as</token>
+                    <token><match no="1" case_conversion="startupper"/></token>
+                    <token regexp="yes">[A-Z][a-z]+</token>
+                </antipattern>
+                <pattern>
+                    <token>as</token>
+                    <marker>
+                        <token>big</token>
+                        <token>as</token>
+                        <token>big</token>
+                    </marker>
+                </pattern>
+                <message>m</message>
+            </rule>
+        </rules>"#;
+        assert_eq!(
+            compile_and_match(xml, "He needed a bell as big as Big Ben.").len(),
+            0,
+            "Java resolveReference compiles the reference with the match's case conversion, \
+             so startupper('big')='Big' immunizes the 'as big as Big Ben' antipattern"
+        );
+        assert_eq!(
+            compile_and_match(xml, "He needed a bell as big as big Ben.").len(),
+            1
         );
     }
 

@@ -149,6 +149,7 @@ pub struct XmlPatternToken {
     pub chunk_re: Option<String>,
     #[serde(default)]
     pub match_no: Option<i32>,
+    pub match_no_case_conversion: Option<String>,
     #[serde(default)]
     pub match_no_postag: Option<String>,
     #[serde(default)]

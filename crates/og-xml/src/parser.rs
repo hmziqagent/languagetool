@@ -456,6 +456,11 @@ impl XmlRuleParser {
                                 {
                                     token.match_no_regexp_replace = Some(val.clone());
                                 }
+                                if key == "case_conversion"
+                                    && let Some(ref mut token) = current_token
+                                {
+                                    token.match_no_case_conversion = Some(val.clone());
+                                }
                             }
                         }
                         "example" => {
@@ -818,6 +823,11 @@ impl XmlRuleParser {
                                     && let Some(ref mut token) = current_token
                                 {
                                     token.match_no_regexp_replace = Some(val.clone());
+                                }
+                                if key == "case_conversion"
+                                    && let Some(ref mut token) = current_token
+                                {
+                                    token.match_no_case_conversion = Some(val.clone());
                                 }
                             }
                         }
