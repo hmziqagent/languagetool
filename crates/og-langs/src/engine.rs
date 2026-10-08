@@ -71,6 +71,10 @@ impl Rule for XmlPatternRule {
         self.compiled.default_on
     }
 
+    fn is_picky(&self) -> bool {
+        self.compiled.picky
+    }
+
     fn category(&self) -> Category {
         self.category.clone()
     }

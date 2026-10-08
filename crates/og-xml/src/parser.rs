@@ -152,6 +152,10 @@ impl XmlRuleParser {
                                     "name" => group.name = Some(val),
                                     "default" => group.default_on = Some(val == "on"),
                                     "type" => group.issue_type = Some(val),
+                                    "tags" => {
+                                        group.tags =
+                                            val.split_whitespace().map(str::to_string).collect()
+                                    }
                                     _ => {}
                                 }
                             }
@@ -177,6 +181,10 @@ impl XmlRuleParser {
                                     "default" => rule.default_on = val == "on",
                                     "deprecated" => rule.deprecated = val == "yes",
                                     "type" => rule.issue_type = Some(val),
+                                    "tags" => {
+                                        rule.tags =
+                                            val.split_whitespace().map(str::to_string).collect()
+                                    }
                                     _ => {}
                                 }
                             }
@@ -913,11 +921,18 @@ impl XmlRuleParser {
                         "rulegroup" => {
                             if let Some(mut group) = current_group.take() {
                                 let group_antipatterns = group.antipatterns.clone();
+                                let group_tags = std::mem::take(&mut group.tags);
                                 for rule in &mut group.rules {
                                     let mut combined = group_antipatterns.clone();
                                     combined.append(&mut rule.antipatterns);
                                     rule.antipatterns = combined;
+                                    for tag in &group_tags {
+                                        if !rule.tags.iter().any(|t| t == tag) {
+                                            rule.tags.push(tag.clone());
+                                        }
+                                    }
                                 }
+                                group.tags = group_tags;
                                 file.rule_groups.push(group);
                             }
                         }

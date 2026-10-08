@@ -42,6 +42,8 @@ pub struct XmlRule {
     pub issue_type: Option<String>,
     #[serde(default)]
     pub suppress_misspelled: bool,
+    #[serde(default)]
+    pub tags: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -250,6 +252,8 @@ pub struct XmlRuleGroup {
     pub rules: Vec<XmlRule>,
     #[serde(default)]
     pub issue_type: Option<String>,
+    #[serde(default)]
+    pub tags: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

@@ -158,6 +158,7 @@ impl XmlCompiler {
             name: rule.name.clone(),
             description: rule.description.clone(),
             source_file: None,
+            picky: rule.tags.iter().any(|t| t == "picky"),
             category: rule.category.clone(),
             antipatterns: rule
                 .antipatterns
@@ -911,6 +912,7 @@ pub struct CompiledRule {
     pub filter: Option<crate::types::XmlFilter>,
     pub issue_type: String,
     pub suppress_misspelled: bool,
+    pub picky: bool,
 }
 
 #[derive(Debug, Clone)]

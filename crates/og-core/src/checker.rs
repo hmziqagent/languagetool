@@ -48,11 +48,11 @@ impl CheckRequest {
         if self.disabled_rules.iter().any(|r| r == rule_id) {
             return false;
         }
+        let picky_level = self.picky || self.level.as_deref() == Some("picky");
         let explicitly_enabled = self.enabled_rules.iter().any(|r| r == rule_id);
         if !default_on {
-            return explicitly_enabled;
+            return explicitly_enabled || (picky_tagged && picky_level);
         }
-        let picky_level = self.picky || self.level.as_deref() == Some("picky");
         !(picky_tagged && !picky_level && !explicitly_enabled)
     }
 
@@ -93,11 +93,11 @@ impl CheckRequest {
         if self.disabled_categories.iter().any(|c| c == category_id) {
             return false;
         }
+        let picky_level = self.picky || self.level.as_deref() == Some("picky");
         let explicitly_enabled = self.enabled_rules.iter().any(|r| r == rule_id);
         if !default_on {
-            return explicitly_enabled;
+            return explicitly_enabled || (picky_tagged && picky_level);
         }
-        let picky_level = self.picky || self.level.as_deref() == Some("picky");
         !(picky_tagged && !picky_level && !explicitly_enabled)
     }
 }
