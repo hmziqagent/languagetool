@@ -604,4 +604,87 @@ mod tests {
             .unwrap_or_default();
         assert!(english > 50, "{english}");
     }
+
+    fn de_segments(text: &str) -> Vec<String> {
+        let Some(s) = srx_splitter("de") else {
+            return Vec::new();
+        };
+        s.split(text).iter().map(|x| x.text().to_string()).collect()
+    }
+
+    #[test]
+    fn german_srx_keeps_abbreviations_and_dates_together() {
+        assert_eq!(
+            de_segments("Dies ist ein Satz. Noch einer."),
+            vec!["Dies ist ein Satz. ", "Noch einer."]
+        );
+        assert_eq!(
+            de_segments("Dies ist, z. B., ein Satz.").len(),
+            1,
+            "'z. B.' must not split"
+        );
+        assert_eq!(
+            de_segments("Das Schreiben ist auf den 3.10.2000 datiert.").len(),
+            1,
+            "dates must not split"
+        );
+        assert_eq!(
+            de_segments("Orangen, Äpfel etc. werden gekauft.").len(),
+            1,
+            "'etc.' must not split"
+        );
+        assert_eq!(
+            de_segments("Das gilt lt. aktuellem Plan.").len(),
+            1,
+            "'lt.' must not split"
+        );
+        assert_eq!(
+            de_segments("In der 1. Bundesliga kam es zum Eklat.").len(),
+            1,
+            "ordinal before noun must not split"
+        );
+        assert_eq!(
+            de_segments("Diese Periode begann im 13. oder 14. Jahrhundert und damit bla.").len(),
+            1
+        );
+        assert_eq!(
+            de_segments("Friedrich II. öfter auch bekannt als Friedrich der Große.").len(),
+            1,
+            "roman ordinal must not split"
+        );
+    }
+
+    #[test]
+    fn german_srx_splits_on_terminators_and_ellipses() {
+        assert_eq!(
+            de_segments("Dies ist ein Satz."),
+            vec!["Dies ist ein Satz."]
+        );
+        assert_eq!(
+            de_segments("Ein Satz! Noch einer."),
+            vec!["Ein Satz! ", "Noch einer."]
+        );
+        assert_eq!(
+            de_segments("Ein Satz... Noch einer."),
+            vec!["Ein Satz... ", "Noch einer."]
+        );
+        assert_eq!(
+            de_segments("Das ist es.. So geht es weiter."),
+            vec!["Das ist es.. ", "So geht es weiter."]
+        );
+        assert_eq!(
+            de_segments("Stimme am lautesten heraustönte …. Sobald er auf der Straße war").len(),
+            2,
+            "ellipsis terminates"
+        );
+        assert_eq!(
+            de_segments("»Der Papagei ist grün.« Das kam so."),
+            vec!["»Der Papagei ist grün.« ", "Das kam so."]
+        );
+        assert_eq!(
+            de_segments("Dies ist ein Satz. \u{00A0}Noch einer.").len(),
+            2,
+            "non-breaking space still separates sentences"
+        );
+    }
 }

@@ -116,6 +116,16 @@ fn cases() -> Vec<GoldenCase> {
             "fp-guard-prp-have-vb-space-before-colon",
             "He has uses a space before the colon: like this.",
         ),
+        GoldenCase::new(
+            "typewriter-apostrophe-fires-on-curly-apostrophe",
+            "An actress’s role",
+        )
+        .expect_with("TYPEWRITER_APOSTROPHE", 10, 4, vec!["'s"]),
+        GoldenCase::new(
+            "prp-vbg-optional-element-at-tail-bound",
+            "What else she doing?",
+        )
+        .expect_with("PRP_VBG", 0, 13, vec!["What else is she", "What else she is"]),
     ]
 }
 
