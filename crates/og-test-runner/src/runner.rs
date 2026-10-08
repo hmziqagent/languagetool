@@ -1460,16 +1460,8 @@ mod tests {
     fn test_real_english_grammar_examples() {
         const PINNED_EN_RESIDUE: &[(&str, &str)] = &[
             (
-                "ONE_PLURAL",
-                "Expected match on incorrect example but got none: 'I have 1 days left.'",
-            ),
-            (
                 "TYPO_OR_OF",
                 "Expected no match on correct example but got 1: '...t dancers as the 1's (the active couple or actives); the other couple are 2's (or ...'",
-            ),
-            (
-                "VERB_APOSTROPHE_S",
-                "Expected match on incorrect example but got none: 'This vehicle get’s used too much.'",
             ),
             (
                 "REPEATED_VERBS",
@@ -1625,15 +1617,14 @@ mod tests {
             .collect();
         assert_eq!(
             residue, expected,
-            "the English residue must stay pinned byte-exact: ONE_PLURAL and VERB_APOSTROPHE_S \
-             sit on the scope=next exception semantics (Java's shared prevMatched field tests \
-             the next token's first reading in AbstractPatternRulePerformer.java:186-188, but \
-             applying first-reading here breaks I_LOWERCASE's quantity-antipattern the other \
-             way, so the any-reading model keeps the smaller residue without a JVM oracle); \
-             TYPO_OR_OF, REPEATED_VERBS and A_NNS are OpenNLP chunk/tag inference-parity and \
-             guard families (A_NNS traced to 'a feeling private minions' chunking as one \
-             plural NP where Java breaks the NP after 'feeling'); shrink the list deliberately \
-             and update this pin, but any new or changed failure is an engine regression"
+            "the English residue must stay pinned byte-exact: TYPO_OR_OF, REPEATED_VERBS and \
+             A_NNS are OpenNLP chunk/tag inference-parity guard families (A_NNS traced to 'a \
+             feeling private minions' chunking as one plural NP where Java breaks the NP after \
+             'feeling'); the scope=next no-skip arm (reading 0 of the next token per \
+             AbstractPatternRulePerformer.java:186-188) and the morfologik SUFFIX-encoder \
+             reading order fixed ONE_PLURAL, VERB_APOSTROPHE_S and the I_LOWERCASE quantity \
+             antipattern in this round; shrink the list deliberately and update this pin, but \
+             any new or changed failure is an engine regression"
         );
     }
 
