@@ -49,6 +49,11 @@ enum TestWordTokenizer {
     Galician(og_langs::gl::word_tokenizer::GalicianWordTokenizer),
     Japanese(og_langs::ja::JapaneseWordTokenizer),
     Khmer(og_langs::km::KhmerWordTokenizer),
+    Malayalam(og_langs::ml::MalayalamWordTokenizer),
+    Tamil(og_langs::ta::TamilWordTokenizer),
+    Tagalog(og_langs::tl::TagalogWordTokenizer),
+    Ukrainian(og_langs::uk::UkrainianWordTokenizer),
+    Chinese(og_langs::zh::ChineseWordTokenizer),
 }
 
 impl WordTokenizer for TestWordTokenizer {
@@ -105,6 +110,14 @@ impl WordTokenizer for TestWordTokenizer {
                 return WordTokenizer::tokenize(tz, text, offset);
             }
             TestWordTokenizer::Khmer(tz) => og_tokenizer::WordTokenizer::tokenize(tz, text),
+            TestWordTokenizer::Malayalam(tz) => og_tokenizer::WordTokenizer::tokenize(tz, text),
+            TestWordTokenizer::Tamil(tz) => og_tokenizer::WordTokenizer::tokenize(tz, text),
+            TestWordTokenizer::Tagalog(tz) => og_tokenizer::WordTokenizer::tokenize(tz, text),
+            TestWordTokenizer::Ukrainian(tz) => og_tokenizer::WordTokenizer::tokenize(tz, text),
+            TestWordTokenizer::Chinese(tz) => {
+                use og_core::checker::WordTokenizer as _;
+                return tz.tokenize(text, offset);
+            }
         };
         tokens
             .into_iter()
@@ -161,6 +174,9 @@ pub fn generic_dict_stem(code: &str) -> Option<&'static str> {
         ("sk", "slovak"),
         ("sv", "swedish"),
         ("crh", "crimean_tatar"),
+        ("ml", "malayalam"),
+        ("ta", "tamil"),
+        ("tl", "tagalog"),
     ];
     generic_stems
         .iter()
@@ -172,6 +188,7 @@ pub enum AnyTagger {
     English(EnglishTagger),
     German(og_tagger::GermanTagger),
     Generic(og_tagger::GenericTagger),
+    GenericShared(std::sync::Arc<og_tagger::GenericTagger>),
     Arabic(og_tagger::arabic_tagger::ArabicTagger),
     Esperanto(og_tagger::EsperantoTagger),
     Spanish(Arc<og_langs::es::tagger::SpanishTagger>),
@@ -189,6 +206,7 @@ impl AnyTagger {
             AnyTagger::English(t) => Tagger::tag(t, tokens),
             AnyTagger::German(t) => Tagger::tag(t, tokens),
             AnyTagger::Generic(t) => Tagger::tag(t, tokens),
+            AnyTagger::GenericShared(t) => Tagger::tag(t.as_ref(), tokens),
             AnyTagger::Arabic(t) => Tagger::tag(t, tokens),
             AnyTagger::Esperanto(t) => Tagger::tag(t, tokens),
             AnyTagger::Spanish(t) => Tagger::tag(t.as_ref(), tokens),
@@ -270,6 +288,12 @@ impl TestRunner {
                 {
                     return AnyTagger::Galician(tagger);
                 }
+                if code == "sr"
+                    && let Some(tagger) =
+                        og_langs::sr::serbian_tagger(og_langs::sr::SerbianVariant::Ekavian)
+                {
+                    return AnyTagger::GenericShared(tagger);
+                }
                 if let Some(stem) = generic_dict_stem(code)
                     && resource_dir.exists()
                 {
@@ -327,6 +351,15 @@ impl TestRunner {
                 }
                 if code == "br"
                     && let Some(disambiguator) = og_langs::br::build_br_disambiguator(&resource_dir)
+                {
+                    return Some(Arc::new(disambiguator));
+                }
+                if code == "uk"
+                    && let Some(disambiguator) = og_tagger::XmlDisambiguator::from_xml(
+                        &std::fs::read_to_string(resource_dir.join("disambiguation.xml"))
+                            .unwrap_or_default(),
+                    )
+                    .ok()
                 {
                     return Some(Arc::new(disambiguator));
                 }
@@ -552,6 +585,21 @@ impl TestRunner {
             }
             None if self.language == "km" => {
                 TestWordTokenizer::Khmer(og_langs::km::KhmerWordTokenizer::new())
+            }
+            None if self.language == "ml" => {
+                TestWordTokenizer::Malayalam(og_langs::ml::MalayalamWordTokenizer::new())
+            }
+            None if self.language == "ta" => {
+                TestWordTokenizer::Tamil(og_langs::ta::TamilWordTokenizer::new())
+            }
+            None if self.language == "tl" => {
+                TestWordTokenizer::Tagalog(og_langs::tl::TagalogWordTokenizer::new())
+            }
+            None if self.language == "uk" => {
+                TestWordTokenizer::Ukrainian(og_langs::uk::UkrainianWordTokenizer::new())
+            }
+            None if self.language == "zh" => {
+                TestWordTokenizer::Chinese(og_langs::zh::word_tokenizer::ChineseWordTokenizer::new())
             }
             None => TestWordTokenizer::Default(self.language == "en"),
         };
@@ -1034,18 +1082,49 @@ pub mod test_support {
         let path = std::path::PathBuf::from(format!(
             "/home/agent/opengrammar-rs/languagetool/languagetool-language-modules/{code}/src/main/resources/org/languagetool/rules/{code}/grammar.xml"
         ));
-        let xml = std::fs::read_to_string(&path).expect("Failed to read grammar.xml");
-        let xml = match code {
-            "fr" => og_langs::fr::normalize_fr_rules_xml(&xml).into_owned(),
-            "pl" => og_langs::pl::normalize_pl_rules_xml(&xml).into_owned(),
-            "br" => og_langs::br::normalize_br_rules_xml(&xml).into_owned(),
-            _ => xml,
+        let extra_files: &[&str] = match code {
+            "sr" => &og_langs::sr::SR_RULE_FILES,
+            "uk" => &og_langs::uk::UK_RULE_FILES,
+            _ => &[],
         };
-        let compiled: &'static CompiledRuleSet = Box::leak(Box::new(
-            XmlCompiler::new()
-                .compile_file_with_base(&xml, path.parent())
-                .expect("Failed to compile grammar.xml"),
-        ));
+        let normalize = |xml: String| -> String {
+            match code {
+                "fr" => og_langs::fr::normalize_fr_rules_xml(&xml).into_owned(),
+                "pl" => og_langs::pl::normalize_pl_rules_xml(&xml).into_owned(),
+                "br" => og_langs::br::normalize_br_rules_xml(&xml).into_owned(),
+                "uk" => og_langs::uk::normalize_uk_rules_xml(&xml).into_owned(),
+                "zh" => og_langs::zh::normalize_zh_rules_xml(&xml).into_owned(),
+                _ => xml,
+            }
+        };
+        let xml = std::fs::read_to_string(&path).expect("Failed to read grammar.xml");
+        let xml = normalize(xml);
+        let mut rules: Vec<og_xml::compiler::CompiledRule> = Vec::new();
+        let mut categories = Vec::new();
+        let mut unifications = Vec::new();
+        let main = XmlCompiler::new()
+            .compile_file_with_base(&xml, path.parent())
+            .expect("Failed to compile grammar.xml");
+        rules.extend(main.rules);
+        categories.extend(main.categories);
+        unifications.extend(main.unifications);
+        for file in extra_files {
+            let extra_path = path.with_file_name(file);
+            let extra_xml = std::fs::read_to_string(&extra_path)
+                .unwrap_or_else(|e| panic!("Failed to read {file}: {e}"));
+            let extra_xml = normalize(extra_xml);
+            let extra = XmlCompiler::new()
+                .compile_file_with_base(&extra_xml, extra_path.parent())
+                .unwrap_or_else(|e| panic!("Failed to compile {file}: {e}"));
+            rules.extend(extra.rules);
+            categories.extend(extra.categories);
+            unifications.extend(extra.unifications);
+        }
+        let compiled: &'static CompiledRuleSet = Box::leak(Box::new(CompiledRuleSet {
+            rules,
+            categories,
+            unifications,
+        }));
         guard.insert(code, compiled);
         compiled
     }
@@ -2513,6 +2592,54 @@ fn test_real_swedish_grammar_examples() {
 #[ignore]
 fn test_real_slovak_grammar_examples() {
     run_generic_example_suite("sk");
+}
+
+#[test]
+#[ignore]
+fn test_real_slovenian_grammar_examples() {
+    run_generic_example_suite("sl");
+}
+
+#[test]
+#[ignore]
+fn test_real_lithuanian_grammar_examples() {
+    run_generic_example_suite("lt");
+}
+
+#[test]
+#[ignore]
+fn test_real_malayalam_grammar_examples() {
+    run_generic_example_suite("ml");
+}
+
+#[test]
+#[ignore]
+fn test_real_tamil_grammar_examples() {
+    run_generic_example_suite("ta");
+}
+
+#[test]
+#[ignore]
+fn test_real_tagalog_grammar_examples() {
+    run_generic_example_suite("tl");
+}
+
+#[test]
+#[ignore]
+fn test_real_serbian_grammar_examples() {
+    run_generic_example_suite("sr");
+}
+
+#[test]
+#[ignore]
+fn test_real_ukrainian_grammar_examples() {
+    run_generic_example_suite("uk");
+}
+
+#[test]
+#[ignore]
+fn test_real_chinese_grammar_examples() {
+    run_generic_example_suite("zh");
 }
 
 #[test]
