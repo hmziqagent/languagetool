@@ -2921,7 +2921,7 @@ impl PatternRuleEngine {
                 }
             }
             "org.languagetool.rules.patterns.ApostropheTypeFilter" => {
-                if self.apply_apostrophe_type_filter(&filter.args, matched_texts) {
+                if self.apply_apostrophe_type_filter(&filter.args, matched_positions, tokens, &rm) {
                     Some(rm)
                 } else {
                     None
@@ -3602,23 +3602,36 @@ impl PatternRuleEngine {
         true
     }
 
-    fn apply_apostrophe_type_filter(&self, args: &str, matched_texts: &[String]) -> bool {
-        let parsed = self.parse_filter_args(args, matched_texts);
+    fn apply_apostrophe_type_filter(
+        &self,
+        args: &str,
+        matched_positions: &[usize],
+        tokens: &[&AnalyzedTokenReadings],
+        rm: &RuleMatch,
+    ) -> bool {
+        let parsed = self.parse_filter_args(args, &[]);
         let wants_typographic = parsed
             .get("hasTypographicalApostrophe")
-            .map(|v| v == "true")
+            .map(|v| v.eq_ignore_ascii_case("true"))
             .unwrap_or(false);
-
-        if let Some(word) = parsed.get("wordFrom") {
-            let has_typographic = word.contains('\u{2019}');
-            let has_typewriter = word.contains('\'');
-            if wants_typographic {
-                has_typographic && !has_typewriter
-            } else {
-                has_typewriter || !has_typographic
-            }
+        let Some(word_from) = parsed.get("wordFrom") else {
+            return true;
+        };
+        let token_idx = if word_from == "marker" {
+            matched_positions.iter().copied().find(|&pos| {
+                tokens
+                    .get(pos)
+                    .is_some_and(|t| t.token().start() >= rm.offset())
+            })
         } else {
-            true
+            match word_from.parse::<usize>() {
+                Ok(n) if n >= 1 => matched_positions.get(n - 1).copied(),
+                _ => None,
+            }
+        };
+        match token_idx.and_then(|pos| tokens.get(pos)) {
+            Some(atr) => atr.has_typographic_apostrophe() == wants_typographic,
+            None => false,
         }
     }
 
