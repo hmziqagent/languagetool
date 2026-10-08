@@ -1213,6 +1213,7 @@ impl PatternRuleEngine {
             return None;
         }
 
+        let prev_skip = element_prev_skip(elements, element_idx);
         let element = &elements[element_idx];
         match element {
             og_xml::compiler::CompiledPatternElement::Token(pattern_token) => self
@@ -1222,6 +1223,7 @@ impl PatternRuleEngine {
                     tokens,
                     token_idx,
                     element_idx,
+                    prev_skip,
                     matched,
                 ),
             og_xml::compiler::CompiledPatternElement::OrGroup(alternatives) => {
@@ -1232,6 +1234,7 @@ impl PatternRuleEngine {
                         tokens,
                         token_idx,
                         element_idx,
+                        prev_skip,
                         matched,
                     ) {
                         return Some(result);
@@ -1264,7 +1267,7 @@ impl PatternRuleEngine {
                     {
                         br
                     } else {
-                        self.token_matches(c, tokens[token_idx], token_idx, tokens)
+                        self.token_matches(c, tokens[token_idx], token_idx, prev_skip, tokens)
                     }
                 });
                 if all_match {
@@ -1315,7 +1318,14 @@ impl PatternRuleEngine {
                             self.backreference_matches(c, tokens[token_idx], matched, tokens),
                             Some(false)
                         );
-                        br_failed || !self.token_matches(c, tokens[token_idx], token_idx, tokens)
+                        br_failed
+                            || !self.token_matches(
+                                c,
+                                tokens[token_idx],
+                                token_idx,
+                                prev_skip,
+                                tokens,
+                            )
                     })
                 {
                     self.trace_element_failure(
@@ -1332,6 +1342,7 @@ impl PatternRuleEngine {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn match_token_element(
         &self,
         pattern_token: &og_xml::compiler::CompiledPatternToken,
@@ -1339,6 +1350,7 @@ impl PatternRuleEngine {
         tokens: &[&AnalyzedTokenReadings],
         token_idx: usize,
         element_idx: usize,
+        prev_skip: i32,
         matched: &[MatchedTraceEntry],
     ) -> Option<PatternMatchResult> {
         let skip = pattern_token.skip;
@@ -1352,9 +1364,9 @@ impl PatternRuleEngine {
 
         let token_ok = |pos: usize, mt: &[MatchedTraceEntry]| -> bool {
             if let Some(br) = self.backreference_matches(pattern_token, tokens[pos], mt, tokens) {
-                br && self.token_matches(pattern_token, tokens[pos], pos, tokens)
+                br && self.token_matches(pattern_token, tokens[pos], pos, prev_skip, tokens)
             } else {
-                self.token_matches(pattern_token, tokens[pos], pos, tokens)
+                self.token_matches(pattern_token, tokens[pos], pos, prev_skip, tokens)
             }
         };
 
@@ -1426,24 +1438,22 @@ impl PatternRuleEngine {
                     token_idx: i,
                 });
             }
-            let next_scope_exceptions: Vec<&og_xml::compiler::CompiledException> = pattern_token
-                .exceptions
-                .iter()
-                .filter(|exc| exc.scope.as_deref() == Some("next"))
-                .collect();
+            let has_next_element = element_idx + 1 < elements.len();
             for gap in 0..=max_skip {
                 let after = token_idx + count + gap;
                 if after > tokens.len() {
                     break;
                 }
-                if self.scope_next_exception_blocks(
-                    &next_scope_exceptions,
-                    tokens,
-                    token_idx + count,
-                    after,
-                    max_skip,
-                ) {
-                    continue;
+                if has_next_element
+                    && self.scope_next_arm1_blocks(
+                        pattern_token,
+                        skip,
+                        tokens,
+                        token_idx + count,
+                        after,
+                    )
+                {
+                    return None;
                 }
                 if !self.next_element_commits_at(elements, tokens, after, element_idx + 1, &new_mt)
                 {
@@ -1476,24 +1486,22 @@ impl PatternRuleEngine {
                 text: tokens[token_idx].token().token().to_string(),
                 token_idx,
             });
-            let next_scope_exceptions: Vec<&og_xml::compiler::CompiledException> = pattern_token
-                .exceptions
-                .iter()
-                .filter(|exc| exc.scope.as_deref() == Some("next"))
-                .collect();
+            let has_next_element = element_idx + 1 < elements.len();
             for gap in 0..=max_skip {
                 let after = token_idx + 1 + gap;
                 if after > tokens.len() {
                     break;
                 }
-                if self.scope_next_exception_blocks(
-                    &next_scope_exceptions,
-                    tokens,
-                    token_idx + 1,
-                    after,
-                    max_skip,
-                ) {
-                    continue;
+                if has_next_element
+                    && self.scope_next_arm1_blocks(
+                        pattern_token,
+                        skip,
+                        tokens,
+                        token_idx + 1,
+                        after,
+                    )
+                {
+                    return None;
                 }
                 if !self.next_element_commits_at(elements, tokens, after, element_idx + 1, &new_mt)
                 {
@@ -1553,6 +1561,11 @@ impl PatternRuleEngine {
 
         let pattern_token = &pattern_tokens[pattern_idx];
         let text_token = tokens[token_idx];
+        let prev_skip = if pattern_idx == 0 {
+            0
+        } else {
+            pattern_tokens[pattern_idx - 1].skip
+        };
 
         if pattern_token.min == Some(0)
             && self.later_token_matches_at(pattern_tokens, tokens, token_idx, pattern_idx, matched)
@@ -1571,9 +1584,9 @@ impl PatternRuleEngine {
         let matches = if let Some(br) =
             self.backreference_matches(pattern_token, text_token, matched, tokens)
         {
-            br && self.token_matches(pattern_token, text_token, token_idx, tokens)
+            br && self.token_matches(pattern_token, text_token, token_idx, prev_skip, tokens)
         } else {
-            self.token_matches(pattern_token, text_token, token_idx, tokens)
+            self.token_matches(pattern_token, text_token, token_idx, prev_skip, tokens)
         };
 
         if !matches && crate::pattern_trace::enabled() {
@@ -1611,6 +1624,7 @@ impl PatternRuleEngine {
                         pattern_token,
                         tokens[last_token_idx + 1],
                         last_token_idx + 1,
+                        prev_skip,
                         tokens,
                     )
                 } else {
@@ -1618,6 +1632,7 @@ impl PatternRuleEngine {
                         pattern_token,
                         tokens[last_token_idx + 1],
                         last_token_idx + 1,
+                        prev_skip,
                         tokens,
                     )
                 };
@@ -1666,25 +1681,22 @@ impl PatternRuleEngine {
                 }
             }
 
-            let next_scope_exceptions: Vec<&og_xml::compiler::CompiledException> = pattern_token
-                .exceptions
-                .iter()
-                .filter(|exc| exc.scope.as_deref() == Some("next"))
-                .collect();
-
+            let has_next_pattern = pattern_idx + 1 < pattern_tokens.len();
             for next_offset in 0..=max_skip {
                 let next_token_idx = last_token_idx + 1 + next_offset;
                 if next_token_idx > tokens.len() && next_offset > 0 {
                     break;
                 }
-                if self.scope_next_exception_blocks(
-                    &next_scope_exceptions,
-                    tokens,
-                    last_token_idx + 1,
-                    next_token_idx,
-                    max_skip,
-                ) {
-                    continue;
+                if has_next_pattern
+                    && self.scope_next_arm1_blocks(
+                        pattern_token,
+                        skip,
+                        tokens,
+                        last_token_idx + 1,
+                        next_token_idx,
+                    )
+                {
+                    return None;
                 }
                 if !self.next_token_commits_at(
                     pattern_tokens,
@@ -1838,13 +1850,14 @@ impl PatternRuleEngine {
         pattern_token: &og_xml::compiler::CompiledPatternToken,
         token: &AnalyzedTokenReadings,
         token_idx: usize,
+        prev_skip: i32,
         tokens: &[&AnalyzedTokenReadings],
         matched: &[MatchedTraceEntry],
     ) -> bool {
         if let Some(br) = self.backreference_matches(pattern_token, token, matched, tokens) {
-            br && self.token_matches(pattern_token, token, token_idx, tokens)
+            br && self.token_matches(pattern_token, token, token_idx, prev_skip, tokens)
         } else {
-            self.token_matches(pattern_token, token, token_idx, tokens)
+            self.token_matches(pattern_token, token, token_idx, prev_skip, tokens)
         }
     }
 
@@ -1862,13 +1875,24 @@ impl PatternRuleEngine {
         let Some(token) = tokens.get(token_idx) else {
             return false;
         };
+        let prev_skip = if pattern_idx == 0 {
+            0
+        } else {
+            pattern_tokens[pattern_idx - 1].skip
+        };
         if pattern_token.min == Some(0)
             && self.later_token_matches_at(pattern_tokens, tokens, token_idx, pattern_idx, matched)
         {
             return true;
         }
-        let commits =
-            self.pattern_token_matches_at(pattern_token, token, token_idx, tokens, matched);
+        let commits = self.pattern_token_matches_at(
+            pattern_token,
+            token,
+            token_idx,
+            prev_skip,
+            tokens,
+            matched,
+        );
         if !commits && crate::pattern_trace::enabled() {
             self.trace_element_failure(
                 pattern_token,
@@ -1896,13 +1920,15 @@ impl PatternRuleEngine {
         let Some(token) = tokens.get(token_idx) else {
             return false;
         };
+        let prev_skip = element_prev_skip(elements, element_idx);
         if let og_xml::compiler::CompiledPatternElement::Token(t) = element
             && t.min == Some(0)
             && self.later_element_matches_at(elements, tokens, token_idx, element_idx, matched)
         {
             return true;
         }
-        let commits = self.element_matches_at(element, token, token_idx, tokens, matched);
+        let commits =
+            self.element_matches_at(element, token, token_idx, prev_skip, tokens, matched);
         if !commits
             && crate::pattern_trace::enabled()
             && let og_xml::compiler::CompiledPatternElement::Token(t) = element
@@ -1917,19 +1943,22 @@ impl PatternRuleEngine {
         element: &og_xml::compiler::CompiledPatternElement,
         token: &AnalyzedTokenReadings,
         token_idx: usize,
+        prev_skip: i32,
         tokens: &[&AnalyzedTokenReadings],
         matched: &[MatchedTraceEntry],
     ) -> bool {
         match element {
             og_xml::compiler::CompiledPatternElement::Token(t) => {
-                self.pattern_token_matches_at(t, token, token_idx, tokens, matched)
+                self.pattern_token_matches_at(t, token, token_idx, prev_skip, tokens, matched)
             }
-            og_xml::compiler::CompiledPatternElement::OrGroup(alts) => alts
-                .iter()
-                .any(|a| self.pattern_token_matches_at(a, token, token_idx, tokens, matched)),
-            og_xml::compiler::CompiledPatternElement::AndGroup(constraints) => constraints
-                .iter()
-                .all(|c| self.pattern_token_matches_at(c, token, token_idx, tokens, matched)),
+            og_xml::compiler::CompiledPatternElement::OrGroup(alts) => alts.iter().any(|a| {
+                self.pattern_token_matches_at(a, token, token_idx, prev_skip, tokens, matched)
+            }),
+            og_xml::compiler::CompiledPatternElement::AndGroup(constraints) => {
+                constraints.iter().all(|c| {
+                    self.pattern_token_matches_at(c, token, token_idx, prev_skip, tokens, matched)
+                })
+            }
         }
     }
 
@@ -1943,7 +1972,14 @@ impl PatternRuleEngine {
     ) -> bool {
         for k2 in pattern_idx + 1..pattern_tokens.len() {
             let tok = &pattern_tokens[k2];
-            if self.pattern_token_matches_at(tok, tokens[token_idx], token_idx, tokens, matched) {
+            if self.pattern_token_matches_at(
+                tok,
+                tokens[token_idx],
+                token_idx,
+                pattern_tokens[k2 - 1].skip,
+                tokens,
+                matched,
+            ) {
                 return true;
             }
             if tok.min.unwrap_or(1) > 0 {
@@ -1963,8 +1999,14 @@ impl PatternRuleEngine {
     ) -> bool {
         for k2 in element_idx + 1..elements.len() {
             let element = &elements[k2];
-            let matched =
-                self.element_matches_at(element, tokens[token_idx], token_idx, tokens, matched);
+            let matched = self.element_matches_at(
+                element,
+                tokens[token_idx],
+                token_idx,
+                element_prev_skip(elements, k2),
+                tokens,
+                matched,
+            );
             if matched {
                 return true;
             }
@@ -2032,9 +2074,9 @@ impl PatternRuleEngine {
                 format!("space_before={sb}")
             } else if let Some(vetoed) = pattern.exceptions.iter().find_map(|exc| {
                 let exc_matches = match exc.scope.as_deref() {
-                    Some("next") if pattern.skip == 0 => tokens
+                    Some("next") => tokens
                         .get(token_idx + 1)
-                        .is_some_and(|next| self.exception_matches(exc, next, true)),
+                        .is_some_and(|next| exception_matches_reading0(exc, next, true)),
                     Some("previous") => token_idx
                         .checked_sub(1)
                         .and_then(|prev| tokens.get(prev))
@@ -2064,6 +2106,7 @@ impl PatternRuleEngine {
         pattern: &og_xml::compiler::CompiledPatternToken,
         token: &AnalyzedTokenReadings,
         token_idx: usize,
+        prev_skip: i32,
         tokens: &[&AnalyzedTokenReadings],
     ) -> bool {
         if token.is_immunized() {
@@ -2100,13 +2143,9 @@ impl PatternRuleEngine {
 
         for exc in &pattern.exceptions {
             let exc_matches = match exc.scope.as_deref() {
-                Some("next") if pattern.skip == 0 => self.scope_next_exception_blocks(
-                    &[exc],
-                    tokens,
-                    token_idx + 1,
-                    token_idx + 1,
-                    0,
-                ),
+                Some("next") if prev_skip == 0 => tokens.get(token_idx + 1).is_some_and(|next| {
+                    exception_matches_reading0(exc, next, has_space_before(tokens, token_idx + 1))
+                }),
                 Some("next") => false,
                 Some("previous") => {
                     if token_idx > 0 {
@@ -2162,24 +2201,79 @@ impl PatternRuleEngine {
             .any(|r| reading_matches_exception(exc, surface, r, untagged))
     }
 
-    fn scope_next_exception_blocks(
+    fn scope_next_arm1_blocks(
         &self,
-        exceptions: &[&og_xml::compiler::CompiledException],
+        pattern_token: &og_xml::compiler::CompiledPatternToken,
+        skip: i32,
         tokens: &[&AnalyzedTokenReadings],
         matched_end: usize,
-        next_idx: usize,
-        _declared_skip: usize,
+        candidate: usize,
     ) -> bool {
-        if exceptions.is_empty() {
+        if candidate >= tokens.len() {
             return false;
         }
-        let last = next_idx.min(tokens.len().saturating_sub(1));
-        (matched_end..=last).any(|q| {
-            exceptions
-                .iter()
-                .any(|exc| self.exception_matches(exc, tokens[q], has_space_before(tokens, q)))
+        let effective_skip = if skip < 0 && matched_end < tokens.len() {
+            (tokens.len() - matched_end - 1) as i32
+        } else {
+            skip
+        };
+        if effective_skip <= 0 {
+            return false;
+        }
+        pattern_token.exceptions.iter().any(|exc| {
+            exc.scope.as_deref() == Some("next")
+                && self.exception_matches(
+                    exc,
+                    tokens[candidate],
+                    has_space_before(tokens, candidate),
+                )
         })
     }
+}
+
+fn element_prev_skip(
+    elements: &[og_xml::compiler::CompiledPatternElement],
+    element_idx: usize,
+) -> i32 {
+    if element_idx == 0 {
+        return 0;
+    }
+    match &elements[element_idx - 1] {
+        og_xml::compiler::CompiledPatternElement::Token(t) => t.skip,
+        og_xml::compiler::CompiledPatternElement::OrGroup(alts) => {
+            alts.iter().map(|a| a.skip).max().unwrap_or(0)
+        }
+        og_xml::compiler::CompiledPatternElement::AndGroup(c) => {
+            c.first().map(|c| c.skip).unwrap_or(0)
+        }
+    }
+}
+
+fn exception_matches_reading0(
+    exc: &og_xml::compiler::CompiledException,
+    token: &AnalyzedTokenReadings,
+    token_space_before: bool,
+) -> bool {
+    if exc
+        .space_before
+        .is_some_and(|required| required != token_space_before)
+    {
+        return false;
+    }
+    let has_string =
+        exc.compiled_regexp.is_some() || exc.compiled_regexp_fancy.is_some() || exc.text.is_some();
+    if !has_string && exc.postag.is_none() {
+        return false;
+    }
+    let Some(reading0) = token.readings().first() else {
+        return false;
+    };
+    let untagged = has_no_tag_reading(token);
+    if !has_string {
+        return !exc.negate && exception_reading_pos_ok(exc, reading0, untagged);
+    }
+    let surface = surface_text(token);
+    reading_matches_exception(exc, surface, reading0, untagged)
 }
 
 fn exception_reading_pos_ok(
