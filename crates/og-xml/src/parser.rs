@@ -28,7 +28,12 @@ fn renumber_phrase_refs(tokens: &mut [XmlPatternToken], phrase_ranges: &[(usize,
             .iter()
             .any(|&(start, len)| idx >= start && idx < start + len);
         if in_phrase {
-            token.match_no = Some(token.match_no.unwrap_or(0) + idx as i32 - 1);
+            let old_no = token.match_no.unwrap_or(0);
+            let new_no = old_no + idx as i32 - 1;
+            token.match_no = Some(new_no);
+            if let Some(text) = token.text.as_mut() {
+                *text = text.replace(&format!("\\{old_no}"), &format!("\\{new_no}"));
+            }
         }
     }
 }
@@ -428,6 +433,7 @@ impl XmlRuleParser {
                             suggestion_parts.push(SuggestionPart::Match(m));
                         }
                         "match" if current_token.is_some() => {
+                            let mut marker_no: Option<String> = None;
                             for attr in e.attributes().flatten() {
                                 let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
                                 let val = crate::decode_attr_value(&attr.value);
@@ -435,6 +441,9 @@ impl XmlRuleParser {
                                     && let Some(ref mut token) = current_token
                                 {
                                     token.match_no = val.parse().ok();
+                                    if token.match_no.is_some() {
+                                        marker_no = Some(val.clone());
+                                    }
                                 }
                                 if key == "postag"
                                     && let Some(ref mut token) = current_token
@@ -471,6 +480,10 @@ impl XmlRuleParser {
                                 {
                                     token.match_no_case_conversion = Some(val.clone());
                                 }
+                            }
+                            if let Some(no) = marker_no {
+                                current_text.push('\\');
+                                current_text.push_str(&no);
                             }
                         }
                         "example" => {
@@ -796,6 +809,7 @@ impl XmlRuleParser {
                             suggestion_parts.push(SuggestionPart::Match(m));
                         }
                         "match" if current_token.is_some() => {
+                            let mut marker_no: Option<String> = None;
                             for attr in e.attributes().flatten() {
                                 let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
                                 let val = crate::decode_attr_value(&attr.value);
@@ -803,6 +817,9 @@ impl XmlRuleParser {
                                     && let Some(ref mut token) = current_token
                                 {
                                     token.match_no = val.parse().ok();
+                                    if token.match_no.is_some() {
+                                        marker_no = Some(val.clone());
+                                    }
                                 }
                                 if key == "postag"
                                     && let Some(ref mut token) = current_token
@@ -839,6 +856,10 @@ impl XmlRuleParser {
                                 {
                                     token.match_no_case_conversion = Some(val.clone());
                                 }
+                            }
+                            if let Some(no) = marker_no {
+                                current_text.push('\\');
+                                current_text.push_str(&no);
                             }
                         }
                         "url" => {}

@@ -1024,6 +1024,57 @@ impl PatternRuleEngine {
         let ref_idx = match_no as usize;
         let entry = matched.get(ref_idx)?;
         let ref_text = entry.text.clone();
+        let marker = format!("\\{match_no}");
+        let compose = |substitute: &str| -> String {
+            let base = pattern_token.text.as_deref().unwrap_or(marker.as_str());
+            base.replace(&marker, substitute)
+        };
+        let eval_targets = |targets: &[String]| -> bool {
+            if pattern_token.is_regexp {
+                targets.iter().any(|t| {
+                    let anchored = format!("^(?:{t})$");
+                    let re = if pattern_token.case_sensitive {
+                        regex::Regex::new(&anchored).ok()
+                    } else {
+                        og_xml::java_case_fold::compile_java_ci(&anchored)
+                    };
+                    let surface = surface_text(token);
+                    re.is_some_and(|re| {
+                        if pattern_token.inflected {
+                            token
+                                .readings()
+                                .iter()
+                                .any(|r| re.is_match(r.lemma().unwrap_or(surface)))
+                        } else {
+                            re.is_match(surface)
+                        }
+                    })
+                })
+            } else if pattern_token.inflected {
+                let surface = surface_text(token);
+                token.readings().iter().any(|r| {
+                    let test = normalize_apostrophes(r.lemma().unwrap_or(surface));
+                    targets.iter().any(|t| {
+                        let t = normalize_apostrophes(t);
+                        if pattern_token.case_sensitive {
+                            test == t
+                        } else {
+                            eq_ignore_case(test.as_ref(), t.as_ref())
+                        }
+                    })
+                })
+            } else {
+                let token_text = normalize_apostrophes(surface_text(token));
+                targets.iter().any(|t| {
+                    let t = normalize_apostrophes(t);
+                    if pattern_token.case_sensitive {
+                        token_text == t
+                    } else {
+                        eq_ignore_case(&token_text, &t)
+                    }
+                })
+            }
+        };
         if pattern_token.match_no_setpos {
             let ref_token = tokens.get(entry.token_idx)?;
             let pos_pattern = pattern_token.match_no_postag.as_deref()?;
@@ -1060,11 +1111,27 @@ impl PatternRuleEngine {
                 None => tags.last().copied().unwrap_or(pos_pattern).to_string(),
             };
             let target_re = whole_match_regex(&target, true)?;
-            let hit = token.readings().iter().any(|r| {
+            let mut hit = token.readings().iter().any(|r| {
                 r.pos_tags()
                     .iter()
                     .any(|t| !t.is_empty() && target_re.is_match(t))
             });
+            if hit {
+                let residual = pattern_token
+                    .text
+                    .as_deref()
+                    .map(|t| t.replace(&marker, ""))
+                    .unwrap_or_default();
+                if !residual.is_empty() {
+                    let residual_norm = normalize_apostrophes(&residual);
+                    let token_text = normalize_apostrophes(surface_text(token));
+                    hit = if pattern_token.case_sensitive {
+                        token_text == residual_norm
+                    } else {
+                        eq_ignore_case(&token_text, &residual_norm)
+                    };
+                }
+            }
             return Some(if pattern_token.negate { !hit } else { hit });
         }
         if let Some(re) = pattern_token.compiled_match_no_regex.as_ref() {
@@ -1079,23 +1146,8 @@ impl PatternRuleEngine {
                 Some(cc) => apply_case_conversion(&transformed, cc),
                 None => transformed,
             };
-            let matches = if pattern_token.is_regexp {
-                let anchored = format!("^(?:{transformed})$");
-                let target = if pattern_token.case_sensitive {
-                    regex::Regex::new(&anchored).ok()
-                } else {
-                    og_xml::java_case_fold::compile_java_ci(&anchored)
-                };
-                target.is_some_and(|target| target.is_match(surface_text(token)))
-            } else {
-                let ref_text = normalize_apostrophes(&transformed);
-                let token_text = normalize_apostrophes(surface_text(token));
-                if pattern_token.case_sensitive {
-                    token_text == ref_text
-                } else {
-                    eq_ignore_case(&token_text, &ref_text)
-                }
-            };
+            let composed = compose(&transformed);
+            let matches = eval_targets(&[composed]);
             return Some(if pattern_token.negate {
                 !matches
             } else {
@@ -1113,13 +1165,8 @@ impl PatternRuleEngine {
                     Some(cc) => apply_case_conversion(&entry.text, cc),
                     None => entry.text.clone(),
                 };
-                let ref_text = normalize_apostrophes(&raw);
-                let token_text = normalize_apostrophes(surface_text(token));
-                let matches = if pattern_token.case_sensitive {
-                    token_text == ref_text
-                } else {
-                    eq_ignore_case(&token_text, &ref_text)
-                };
+                let composed = compose(&raw);
+                let matches = eval_targets(&[composed]);
                 return Some(if pattern_token.negate {
                     !matches
                 } else {
@@ -1144,29 +1191,8 @@ impl PatternRuleEngine {
                     *form = apply_case_conversion(form, cc);
                 }
             }
-            let matches = if pattern_token.inflected {
-                token.readings().iter().any(|r| {
-                    r.lemma().is_some_and(|lemma| {
-                        forms.iter().any(|f| {
-                            if pattern_token.case_sensitive {
-                                lemma == f.as_str()
-                            } else {
-                                eq_ignore_case(lemma, f)
-                            }
-                        })
-                    })
-                })
-            } else {
-                let token_text = normalize_apostrophes(surface_text(token));
-                forms.iter().any(|f| {
-                    let f = normalize_apostrophes(f);
-                    if pattern_token.case_sensitive {
-                        token_text == f
-                    } else {
-                        eq_ignore_case(&token_text, &f)
-                    }
-                })
-            };
+            let forms: Vec<String> = forms.iter().map(|f| compose(f)).collect();
+            let matches = eval_targets(&forms);
             return Some(if pattern_token.negate {
                 !matches
             } else {
@@ -1177,13 +1203,8 @@ impl PatternRuleEngine {
             Some(cc) => apply_case_conversion(&ref_text, cc),
             None => ref_text,
         };
-        let ref_norm = normalize_apostrophes(&case_converted);
-        let token_text = normalize_apostrophes(surface_text(token));
-        let matches = if pattern_token.case_sensitive {
-            token_text == ref_norm
-        } else {
-            eq_ignore_case(&token_text, &ref_norm)
-        };
+        let composed = compose(&case_converted);
+        let matches = eval_targets(&[composed]);
         if pattern_token.negate {
             Some(!matches)
         } else {
@@ -1805,6 +1826,7 @@ impl PatternRuleEngine {
             || first.min == Some(0)
             || first.skip != 0
             || first.compiled_regexp.is_some()
+            || first.match_no.is_some()
         {
             return None;
         }
@@ -2396,9 +2418,16 @@ fn element_matches_readings(
     pattern: &og_xml::compiler::CompiledPatternToken,
     token: &AnalyzedTokenReadings,
 ) -> bool {
-    let has_string = pattern.text.is_some()
-        || pattern.compiled_regexp.is_some()
-        || pattern.compiled_regexp_fancy.is_some();
+    let string_is_reference = pattern
+        .match_no
+        .is_some_and(|no| match pattern.text.as_deref() {
+            Some(text) => text.contains(&format!("\\{no}")),
+            None => false,
+        });
+    let has_string = !string_is_reference
+        && (pattern.text.is_some()
+            || pattern.compiled_regexp.is_some()
+            || pattern.compiled_regexp_fancy.is_some());
     let untagged = has_no_tag_reading(token);
     let any_pos_ok = |readings: &[og_core::AnalyzedToken]| {
         if readings.is_empty() {

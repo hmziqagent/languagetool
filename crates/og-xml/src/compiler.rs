@@ -330,23 +330,37 @@ impl XmlCompiler {
             t
         };
         let token = &resolved;
+        let is_reference = token.match_no.is_some_and(|no| {
+            token
+                .text
+                .as_deref()
+                .is_some_and(|t| t.contains(&format!("\\{no}")))
+        });
         let raw_pattern = if token.regexp.as_deref() == Some("yes") {
             token.text.clone()
         } else {
             token.regexp.clone()
         };
         let decoded_pattern = raw_pattern.as_deref().map(decode_surrogate_pairs);
-        let compiled_re = decoded_pattern.as_ref().and_then(|p| {
-            let anchored = Self::anchor_regex(p);
-            self.cached_regex(&anchored)
-        });
-        let compiled_re_ci = decoded_pattern
-            .as_ref()
-            .filter(|p| !is_property_sequence(p))
-            .and_then(|p| {
+        let compiled_re = if is_reference {
+            None
+        } else {
+            decoded_pattern.as_ref().and_then(|p| {
                 let anchored = Self::anchor_regex(p);
-                self.cached_regex_ci(&anchored)
-            });
+                self.cached_regex(&anchored)
+            })
+        };
+        let compiled_re_ci = if is_reference {
+            None
+        } else {
+            decoded_pattern
+                .as_ref()
+                .filter(|p| !is_property_sequence(p))
+                .and_then(|p| {
+                    let anchored = Self::anchor_regex(p);
+                    self.cached_regex_ci(&anchored)
+                })
+        };
         let postag_source = if token.postag_regexp.as_deref() == Some("yes") {
             token.postag.clone()
         } else {
@@ -363,7 +377,9 @@ impl XmlCompiler {
             None
         };
 
-        let text_value = if token.regexp.as_deref() == Some("yes") {
+        let text_value = if is_reference {
+            token.text.clone()
+        } else if token.regexp.as_deref() == Some("yes") {
             None
         } else {
             token.text.clone()
@@ -375,7 +391,11 @@ impl XmlCompiler {
             text: text_value,
             compiled_regexp: compiled_re.clone(),
             compiled_regexp_ci: compiled_re_ci,
-            compiled_regexp_fancy: compile_fancy(compiled_re.is_none(), token),
+            compiled_regexp_fancy: if is_reference {
+                None
+            } else {
+                compile_fancy(compiled_re.is_none(), token)
+            },
             postag: token.postag.clone(),
             compiled_postag_regexp: postag_re,
             compiled_postag_regexp_fancy: postag_fancy,
