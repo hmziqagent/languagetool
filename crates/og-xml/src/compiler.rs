@@ -4,7 +4,11 @@ use rayon::prelude::*;
 
 const REGEX_CACHE_SHARDS: usize = 16;
 
-type RegexCacheShard = std::sync::Mutex<std::collections::HashMap<String, Option<regex::Regex>>>;
+pub type SharedRegex = std::sync::Arc<regex::Regex>;
+pub type SharedFancyRegex = std::sync::Arc<fancy_regex::Regex>;
+type RegexCacheShard = std::sync::Mutex<std::collections::HashMap<String, Option<SharedRegex>>>;
+type FancyRegexCacheShard =
+    std::sync::Mutex<std::collections::HashMap<String, Option<SharedFancyRegex>>>;
 
 fn is_property_sequence(regexp: &str) -> bool {
     regexp.contains("\\p{Lu}") || regexp.contains("\\p{Ll}")
@@ -13,6 +17,7 @@ fn is_property_sequence(regexp: &str) -> bool {
 pub struct XmlCompiler {
     regex_cache: Vec<RegexCacheShard>,
     ci_regex_cache: Vec<RegexCacheShard>,
+    fancy_regex_cache: Vec<FancyRegexCacheShard>,
 }
 
 impl XmlCompiler {
@@ -24,15 +29,18 @@ impl XmlCompiler {
             ci_regex_cache: (0..REGEX_CACHE_SHARDS)
                 .map(|_| std::sync::Mutex::new(std::collections::HashMap::new()))
                 .collect(),
+            fancy_regex_cache: (0..REGEX_CACHE_SHARDS)
+                .map(|_| std::sync::Mutex::new(std::collections::HashMap::new()))
+                .collect(),
         }
     }
 
-    fn cached_regex(&self, pattern: &str) -> Option<regex::Regex> {
+    fn cached_regex(&self, pattern: &str) -> Option<SharedRegex> {
         let shard = &self.regex_cache[Self::shard_index(pattern, REGEX_CACHE_SHARDS)];
         if let Some(hit) = shard.lock().unwrap().get(pattern) {
             return hit.clone();
         }
-        let built = regex::Regex::new(pattern).ok();
+        let built = regex::Regex::new(pattern).ok().map(std::sync::Arc::new);
         shard
             .lock()
             .unwrap()
@@ -40,12 +48,27 @@ impl XmlCompiler {
         built
     }
 
-    fn cached_regex_ci(&self, pattern: &str) -> Option<regex::Regex> {
+    fn cached_regex_ci(&self, pattern: &str) -> Option<SharedRegex> {
         let shard = &self.ci_regex_cache[Self::shard_index(pattern, REGEX_CACHE_SHARDS)];
         if let Some(hit) = shard.lock().unwrap().get(pattern) {
             return hit.clone();
         }
-        let built = crate::java_case_fold::compile_java_ci(pattern);
+        let built = crate::java_case_fold::compile_java_ci(pattern).map(std::sync::Arc::new);
+        shard
+            .lock()
+            .unwrap()
+            .insert(pattern.to_string(), built.clone());
+        built
+    }
+
+    fn cached_fancy_regex(&self, pattern: &str) -> Option<SharedFancyRegex> {
+        let shard = &self.fancy_regex_cache[Self::shard_index(pattern, REGEX_CACHE_SHARDS)];
+        if let Some(hit) = shard.lock().unwrap().get(pattern) {
+            return hit.clone();
+        }
+        let built = fancy_regex::Regex::new(pattern)
+            .ok()
+            .map(std::sync::Arc::new);
         shard
             .lock()
             .unwrap()
@@ -264,17 +287,17 @@ impl XmlCompiler {
                 };
                 let pattern = split_variable_lookbehind(&pattern);
                 let (regex, fancy_regex) = if rr.case_sensitive {
-                    let plain = regex::Regex::new(&pattern).ok();
+                    let plain = self.cached_regex(&pattern);
                     let fancy = if plain.is_none() {
-                        fancy_regex::Regex::new(&pattern).ok()
+                        self.cached_fancy_regex(&pattern)
                     } else {
                         None
                     };
                     (plain, fancy)
                 } else {
-                    let plain = crate::java_case_fold::compile_java_ci(&pattern);
+                    let plain = self.cached_regex_ci(&pattern);
                     let fancy = if plain.is_none() {
-                        fancy_regex::Regex::new(&format!("(?i){pattern}")).ok()
+                        self.cached_fancy_regex(&format!("(?i){pattern}"))
                     } else {
                         None
                     };
@@ -372,7 +395,7 @@ impl XmlCompiler {
         let postag_fancy = if postag_re.is_none() {
             postag_source
                 .as_ref()
-                .and_then(|t| fancy_regex::Regex::new(&Self::anchor_regex(t)).ok())
+                .and_then(|t| self.cached_fancy_regex(&Self::anchor_regex(t)))
         } else {
             None
         };
@@ -394,7 +417,7 @@ impl XmlCompiler {
             compiled_regexp_fancy: if is_reference {
                 None
             } else {
-                compile_fancy(compiled_re.is_none(), token)
+                self.compile_fancy(compiled_re.is_none(), token)
             },
             postag: token.postag.clone(),
             compiled_postag_regexp: postag_re,
@@ -485,14 +508,14 @@ impl XmlCompiler {
             exc.postag
                 .as_ref()
                 .filter(|_| exc.postag_regexp.as_deref() == Some("yes"))
-                .and_then(|t| fancy_regex::Regex::new(&Self::anchor_regex(t)).ok())
+                .and_then(|t| self.cached_fancy_regex(&Self::anchor_regex(t)))
         } else {
             None
         };
         CompiledException {
             text: exc.text.clone(),
             compiled_regexp: compiled_re.clone(),
-            compiled_regexp_fancy: compile_fancy_exception(compiled_re.is_none(), exc),
+            compiled_regexp_fancy: self.compile_fancy_exception(compiled_re.is_none(), exc),
             postag: exc.postag.clone(),
             compiled_postag_regexp: compiled_postag_re,
             compiled_postag_regexp_fancy: compiled_postag_fancy,
@@ -504,27 +527,50 @@ impl XmlCompiler {
             space_before: exc.space_before,
         }
     }
-}
 
-fn compile_fancy(
-    needed: bool,
-    token: &crate::types::XmlPatternToken,
-) -> Option<fancy_regex::Regex> {
-    if !needed {
-        return None;
+    fn compile_fancy(
+        &self,
+        needed: bool,
+        token: &crate::types::XmlPatternToken,
+    ) -> Option<SharedFancyRegex> {
+        if !needed {
+            return None;
+        }
+        let pattern = if token.regexp.as_deref() == Some("yes") {
+            token.text.clone()
+        } else {
+            token.regexp.clone()
+        }?;
+        let anchored = Self::anchor_regex(&pattern);
+        let final_pattern = if token.case_sensitive {
+            anchored
+        } else {
+            format!("(?i){anchored}")
+        };
+        self.cached_fancy_regex(&final_pattern)
     }
-    let pattern = if token.regexp.as_deref() == Some("yes") {
-        token.text.clone()
-    } else {
-        token.regexp.clone()
-    }?;
-    let anchored = XmlCompiler::anchor_regex(&pattern);
-    let final_pattern = if token.case_sensitive {
-        anchored
-    } else {
-        format!("(?i){anchored}")
-    };
-    fancy_regex::Regex::new(&final_pattern).ok()
+
+    fn compile_fancy_exception(
+        &self,
+        needed: bool,
+        exc: &XmlException,
+    ) -> Option<SharedFancyRegex> {
+        if !needed {
+            return None;
+        }
+        let pattern = if exc.regexp.as_deref() == Some("yes") {
+            exc.text.clone()
+        } else {
+            exc.regexp.clone()
+        }?;
+        let anchored = Self::anchor_regex(&pattern);
+        let final_pattern = if exc.case_sensitive {
+            anchored
+        } else {
+            format!("(?i){anchored}")
+        };
+        self.cached_fancy_regex(&final_pattern)
+    }
 }
 
 const BACKSLASH: u8 = 0x5C;
@@ -848,27 +894,6 @@ fn replace_spaces_in_regex(s: &str) -> String {
     out
 }
 
-fn compile_fancy_exception(
-    needed: bool,
-    exc: &crate::types::XmlException,
-) -> Option<fancy_regex::Regex> {
-    if !needed {
-        return None;
-    }
-    let pattern = if exc.regexp.as_deref() == Some("yes") {
-        exc.text.clone()?
-    } else {
-        exc.regexp.clone()?
-    };
-    let anchored = XmlCompiler::anchor_regex(&pattern);
-    let final_pattern = if exc.case_sensitive {
-        anchored
-    } else {
-        format!("(?i){anchored}")
-    };
-    fancy_regex::Regex::new(&final_pattern).ok()
-}
-
 impl Default for XmlCompiler {
     fn default() -> Self {
         Self::new()
@@ -890,16 +915,20 @@ pub struct CompiledUnification {
 
 #[derive(Debug, Clone)]
 pub enum PosMatcher {
-    Plain(regex::Regex),
-    Fancy(fancy_regex::Regex),
+    Plain(SharedRegex),
+    Fancy(SharedFancyRegex),
 }
 
 impl PosMatcher {
     pub fn new_anchored(pattern: &str) -> Option<Self> {
         regex::Regex::new(pattern)
             .ok()
-            .map(PosMatcher::Plain)
-            .or_else(|| fancy_regex::Regex::new(pattern).ok().map(PosMatcher::Fancy))
+            .map(|re| PosMatcher::Plain(std::sync::Arc::new(re)))
+            .or_else(|| {
+                fancy_regex::Regex::new(pattern)
+                    .ok()
+                    .map(|re| PosMatcher::Fancy(std::sync::Arc::new(re)))
+            })
     }
 
     pub fn is_match(&self, text: &str) -> bool {
@@ -937,8 +966,8 @@ pub struct CompiledRule {
 
 #[derive(Debug, Clone)]
 pub struct CompiledRuleRegexp {
-    pub regex: Option<regex::Regex>,
-    pub fancy_regex: Option<fancy_regex::Regex>,
+    pub regex: Option<SharedRegex>,
+    pub fancy_regex: Option<SharedFancyRegex>,
     pub mark: usize,
 }
 
@@ -968,12 +997,12 @@ pub struct CompiledPatternToken {
     pub unify_neutral: bool,
     pub is_regexp: bool,
     pub text: Option<String>,
-    pub compiled_regexp: Option<regex::Regex>,
-    pub compiled_regexp_ci: Option<regex::Regex>,
-    pub compiled_regexp_fancy: Option<fancy_regex::Regex>,
+    pub compiled_regexp: Option<SharedRegex>,
+    pub compiled_regexp_ci: Option<SharedRegex>,
+    pub compiled_regexp_fancy: Option<SharedFancyRegex>,
     pub postag: Option<String>,
-    pub compiled_postag_regexp: Option<regex::Regex>,
-    pub compiled_postag_regexp_fancy: Option<fancy_regex::Regex>,
+    pub compiled_postag_regexp: Option<SharedRegex>,
+    pub compiled_postag_regexp_fancy: Option<SharedFancyRegex>,
     pub negate: bool,
     pub negate_pos: bool,
     pub case_sensitive: bool,
@@ -984,7 +1013,7 @@ pub struct CompiledPatternToken {
     pub exceptions: Vec<CompiledException>,
     pub space_before: Option<String>,
     pub chunk: Option<String>,
-    pub chunk_re: Option<regex::Regex>,
+    pub chunk_re: Option<SharedRegex>,
     pub match_no: Option<i32>,
     pub match_no_case_conversion: Option<String>,
     pub match_no_postag: Option<String>,
@@ -992,17 +1021,17 @@ pub struct CompiledPatternToken {
     pub match_no_postag_replace: Option<String>,
     pub match_no_setpos: bool,
     pub match_no_regexp_replace: Option<String>,
-    pub compiled_match_no_regex: Option<regex::Regex>,
+    pub compiled_match_no_regex: Option<SharedRegex>,
 }
 
 #[derive(Debug, Clone)]
 pub struct CompiledException {
     pub text: Option<String>,
-    pub compiled_regexp: Option<regex::Regex>,
-    pub compiled_regexp_fancy: Option<fancy_regex::Regex>,
+    pub compiled_regexp: Option<SharedRegex>,
+    pub compiled_regexp_fancy: Option<SharedFancyRegex>,
     pub postag: Option<String>,
-    pub compiled_postag_regexp: Option<regex::Regex>,
-    pub compiled_postag_regexp_fancy: Option<fancy_regex::Regex>,
+    pub compiled_postag_regexp: Option<SharedRegex>,
+    pub compiled_postag_regexp_fancy: Option<SharedFancyRegex>,
     pub negate: bool,
     pub negate_pos: bool,
     pub inflected: bool,

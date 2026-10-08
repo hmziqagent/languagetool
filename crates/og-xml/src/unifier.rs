@@ -74,8 +74,8 @@ pub fn has_no_tag_reading(token: &og_core::AnalyzedTokenReadings) -> bool {
 
 pub fn reading_pos_matches(
     postag: &str,
-    postag_re: Option<&regex::Regex>,
-    postag_fancy: Option<&fancy_regex::Regex>,
+    postag_re: Option<&crate::compiler::SharedRegex>,
+    postag_fancy: Option<&crate::compiler::SharedFancyRegex>,
     tags: &[String],
     token_untagged: bool,
 ) -> bool {

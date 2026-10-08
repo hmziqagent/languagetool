@@ -37,7 +37,7 @@ struct PartialPosTagFilterSpec {
 }
 
 struct FirstRegexFilter {
-    re: regex::Regex,
+    re: og_xml::compiler::SharedRegex,
     inflected: bool,
 }
 
@@ -2099,10 +2099,11 @@ fn apply_filterall(
     let Some(postag) = pattern_token.postag.as_deref() else {
         return;
     };
-    let re = pattern_token
-        .compiled_postag_regexp
-        .clone()
-        .or_else(|| regex::Regex::new(&format!("^(?:{})$", postag)).ok());
+    let re = pattern_token.compiled_postag_regexp.clone().or_else(|| {
+        regex::Regex::new(&format!("^(?:{})$", postag))
+            .ok()
+            .map(std::sync::Arc::new)
+    });
     let Some(re) = re else {
         return;
     };
