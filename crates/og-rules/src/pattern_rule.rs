@@ -1393,7 +1393,9 @@ impl PatternRuleEngine {
             let mut matched_count = 0;
             let mut cur = token_idx;
             let remaining_elems = elements.len() - element_idx - 1;
-            while matched_count < max_count && cur < tokens.len().saturating_sub(remaining_elems) {
+            while matched_count < max_count
+                && (matched_count == 0 || cur < tokens.len().saturating_sub(remaining_elems))
+            {
                 if token_ok(cur, matched) {
                     matched_count += 1;
                     cur += 1;
@@ -1434,13 +1436,13 @@ impl PatternRuleEngine {
                 if after > tokens.len() {
                     break;
                 }
-                if !next_scope_exceptions.is_empty()
-                    && ((token_idx + count)..=after.min(tokens.len() - 1)).any(|q| {
-                        next_scope_exceptions.iter().any(|exc| {
-                            self.exception_matches(exc, tokens[q], has_space_before(tokens, q))
-                        })
-                    })
-                {
+                if self.scope_next_exception_blocks(
+                    &next_scope_exceptions,
+                    tokens,
+                    token_idx + count,
+                    after,
+                    max_skip,
+                ) {
                     continue;
                 }
                 if !self.next_element_commits_at(elements, tokens, after, element_idx + 1, &new_mt)
@@ -1484,13 +1486,13 @@ impl PatternRuleEngine {
                 if after > tokens.len() {
                     break;
                 }
-                if !next_scope_exceptions.is_empty()
-                    && ((token_idx + 1)..=after.min(tokens.len() - 1)).any(|q| {
-                        next_scope_exceptions.iter().any(|exc| {
-                            self.exception_matches(exc, tokens[q], has_space_before(tokens, q))
-                        })
-                    })
-                {
+                if self.scope_next_exception_blocks(
+                    &next_scope_exceptions,
+                    tokens,
+                    token_idx + 1,
+                    after,
+                    max_skip,
+                ) {
                     continue;
                 }
                 if !self.next_element_commits_at(elements, tokens, after, element_idx + 1, &new_mt)
@@ -1675,13 +1677,13 @@ impl PatternRuleEngine {
                 if next_token_idx > tokens.len() && next_offset > 0 {
                     break;
                 }
-                if !next_scope_exceptions.is_empty()
-                    && ((token_idx + 1)..=next_token_idx.min(tokens.len() - 1)).any(|q| {
-                        next_scope_exceptions.iter().any(|exc| {
-                            self.exception_matches(exc, tokens[q], has_space_before(tokens, q))
-                        })
-                    })
-                {
+                if self.scope_next_exception_blocks(
+                    &next_scope_exceptions,
+                    tokens,
+                    last_token_idx + 1,
+                    next_token_idx,
+                    max_skip,
+                ) {
                     continue;
                 }
                 if !self.next_token_commits_at(
@@ -2098,17 +2100,13 @@ impl PatternRuleEngine {
 
         for exc in &pattern.exceptions {
             let exc_matches = match exc.scope.as_deref() {
-                Some("next") if pattern.skip == 0 => {
-                    if token_idx + 1 < tokens.len() {
-                        self.exception_matches(
-                            exc,
-                            tokens[token_idx + 1],
-                            has_space_before(tokens, token_idx + 1),
-                        )
-                    } else {
-                        false
-                    }
-                }
+                Some("next") if pattern.skip == 0 => self.scope_next_exception_blocks(
+                    &[exc],
+                    tokens,
+                    token_idx + 1,
+                    token_idx + 1,
+                    0,
+                ),
                 Some("next") => false,
                 Some("previous") => {
                     if token_idx > 0 {
@@ -2138,6 +2136,7 @@ impl PatternRuleEngine {
         token: &AnalyzedTokenReadings,
         token_space_before: bool,
     ) -> bool {
+        let readings = token.readings();
         if exc
             .space_before
             .is_some_and(|required| required != token_space_before)
@@ -2153,16 +2152,33 @@ impl PatternRuleEngine {
         let untagged = has_no_tag_reading(token);
         if !has_string {
             return !exc.negate
-                && token
-                    .readings()
+                && readings
                     .iter()
                     .any(|r| exception_reading_pos_ok(exc, r, untagged));
         }
         let surface = surface_text(token);
-        token
-            .readings()
+        readings
             .iter()
             .any(|r| reading_matches_exception(exc, surface, r, untagged))
+    }
+
+    fn scope_next_exception_blocks(
+        &self,
+        exceptions: &[&og_xml::compiler::CompiledException],
+        tokens: &[&AnalyzedTokenReadings],
+        matched_end: usize,
+        next_idx: usize,
+        _declared_skip: usize,
+    ) -> bool {
+        if exceptions.is_empty() {
+            return false;
+        }
+        let last = next_idx.min(tokens.len().saturating_sub(1));
+        (matched_end..=last).any(|q| {
+            exceptions
+                .iter()
+                .any(|exc| self.exception_matches(exc, tokens[q], has_space_before(tokens, q)))
+        })
     }
 }
 
@@ -2253,7 +2269,8 @@ fn element_surface_text_matches(
     pattern: &og_xml::compiler::CompiledPatternToken,
     token: &AnalyzedTokenReadings,
 ) -> bool {
-    let token_text = normalize_apostrophes(surface_text(token));
+    let raw_text = surface_text(token);
+    let token_text = normalize_apostrophes(raw_text);
     if let Some(ref text) = pattern.text {
         let norm_text = normalize_apostrophes(text);
         if pattern.case_sensitive {
@@ -2261,18 +2278,23 @@ fn element_surface_text_matches(
         } else {
             eq_ignore_case(&token_text, &norm_text)
         }
-    } else if let Some(ref re) = pattern.compiled_regexp_fancy {
-        re.is_match(&token_text).unwrap_or(false)
-    } else if let Some(ref re) = pattern.compiled_regexp {
-        if pattern.case_sensitive {
-            re.is_match(&token_text)
-        } else if let Some(ref ci_re) = pattern.compiled_regexp_ci {
-            ci_re.is_match(&token_text)
-        } else {
-            re.is_match(&token_text)
-        }
     } else {
-        true
+        let regex_hit = |target: &str| {
+            if let Some(ref re) = pattern.compiled_regexp_fancy {
+                re.is_match(target).unwrap_or(false)
+            } else if let Some(ref re) = pattern.compiled_regexp {
+                if !pattern.case_sensitive
+                    && let Some(ref ci_re) = pattern.compiled_regexp_ci
+                {
+                    ci_re.is_match(target)
+                } else {
+                    re.is_match(target)
+                }
+            } else {
+                true
+            }
+        };
+        regex_hit(raw_text) || token_text.as_ref() != raw_text && regex_hit(token_text.as_ref())
     }
 }
 
@@ -6686,6 +6708,52 @@ mod tests {
     }
 
     #[test]
+    fn optional_element_matches_even_at_the_token_tail_bound() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <category id="GRAMMAR" name="Grammar">
+                <rule id="TEST" name="Test">
+                    <pattern>
+                        <token>what</token>
+                        <token min="0" regexp="yes">else|ever</token>
+                        <token>she</token>
+                        <token>doing</token>
+                        <token>?</token>
+                    </pattern>
+                    <message>Test</message>
+                </rule>
+            </category>
+        </rules>"#;
+        assert_eq!(
+            compile_and_match(xml, "What else she doing?").len(),
+            1,
+            "the optional element's first occurrence must ignore the remaining-elements bound"
+        );
+    }
+
+    #[test]
+    fn regexp_element_matches_the_raw_typographic_quote_token() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <category id="GRAMMAR" name="Grammar">
+                <rule id="TEST" name="Test">
+                    <pattern>
+                        <token>its</token>
+                        <token>that</token>
+                        <token regexp="yes">[“”„]|‘</token>
+                    </pattern>
+                    <message>Test</message>
+                </rule>
+            </category>
+        </rules>"#;
+        assert_eq!(
+            compile_and_match(xml, "its that ‘collection’ element").len(),
+            1,
+            "regexes containing typographic quotes must match the raw token text"
+        );
+    }
+
+    #[test]
     fn exception_text_and_postag_must_hold_on_one_reading() {
         let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
         <rules lang="en">
@@ -7078,7 +7146,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn test_parallel_matching() {
         let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
         <rules lang="en">
@@ -7110,7 +7177,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn test_indexed_rules_performance() {
         let grammar_path = "/home/agent/opengrammar-rs/languagetool/languagetool-language-modules/en/src/main/resources/org/languagetool/rules/en/grammar.xml";
         if !std::path::Path::new(grammar_path).exists() {

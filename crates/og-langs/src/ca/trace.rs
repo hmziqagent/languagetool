@@ -704,18 +704,14 @@ mod tests {
     fn round21_cometes_rectes_residue_is_the_regexp_normalization_asymmetry() {
         assert_eq!(
             count_matches_unsplit("COMETES_RECTES", None, "És de ‘gran qualitat\"."),
-            0,
-            "COMETES_RECTES (2 fails, both modes): sub-rule 2's <token regexp=\"yes\">[‘’]\
-             </token> can never match because the shared engine normalizes the token surface \
-             (‘→') at pattern_rule.rs:2203 and matches the UNnormalized pattern regex \
-             against it (:2211-2219) - Java compares the raw string with no apostrophe fold \
-             anywhere in the matcher path (StringMatcher.java:44-46), so [‘’] matches the \
-             raw ‘ token and the grammar.xml:83049 example passes upstream. Fix site for \
-             the shared owner: match regexps against the unnormalized surface (or fold the \
-             pattern source at compile time); note the plain-text arm at :2204-2210 folds \
-             both sides, which Java also does not - the two arms should be made raw/raw. \
-             This is the ONLY remaining engine-side surface family once the harness runs \
-             the Java-lenient unsplit branch"
+            1,
+            "COMETES_RECTES sub-rule 2's <token regexp=\"yes\">[‘’]</token> now matches: \
+             element_surface_text_matches tries the raw surface first and the apostrophe-\
+             normalized form second, so regexes written against typographic quotes see the \
+             raw token like Java's StringMatcher (no fold anywhere in the matcher path) \
+             while straight-apostrophe regexes keep matching typographic tokens. The \
+             grammar.xml:83049 example therefore passes; this was the last engine-side \
+             surface-normalization family in the ca residue"
         );
     }
 
