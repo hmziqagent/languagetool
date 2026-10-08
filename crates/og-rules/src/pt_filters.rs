@@ -194,20 +194,20 @@ pub fn confusion_check_filter(
 
     let relevant_words = confusion_pairs(variant == "pt-BR");
     let mut replacement: Option<&str> = None;
-    if let Some(entry) = relevant_words.get(&form) {
-        if entry.tags.iter().any(|t| full_match(postag, t)) {
-            if let Some(desired) = desired {
-                if entry.tags.first().is_some_and(|t| full_match(desired, t)) {
-                    replacement = Some(entry.word.as_str());
-                }
-            } else if gendernumber_from.is_none() {
+    if let Some(entry) = relevant_words.get(&form)
+        && entry.tags.iter().any(|t| full_match(postag, t))
+    {
+        if let Some(desired) = desired {
+            if entry.tags.first().is_some_and(|t| full_match(desired, t)) {
                 replacement = Some(entry.word.as_str());
             }
+        } else if gendernumber_from.is_none() {
+            replacement = Some(entry.word.as_str());
         }
     }
     let replacement = replacement?.to_string();
     let mut message = rm.message().to_string();
-    if !(has_diacritics(&replacement) && !has_diacritics(&form)) {
+    if !has_diacritics(&replacement) || has_diacritics(&form) {
         message = message.replace("se escribe con tilde", "se escribe de otra manera");
     }
     rm.set_message(message);
@@ -308,9 +308,7 @@ pub fn regular_irregular_participle_filter(
         }
     }
     let selected = selected?;
-    let Some(last) = desired_postag.pop() else {
-        return None;
-    };
+    let last = desired_postag.pop()?;
     if last == 'C' {
         desired_postag.push_str("[MC]");
     } else {
@@ -439,8 +437,8 @@ pub fn roman_numeral_filter(
 }
 
 pub fn convert_pronoun_to_accusative(pronoun_tag: &str) -> String {
-    if pronoun_tag.ends_with("N00") {
-        format!("{}A00", &pronoun_tag[..pronoun_tag.len() - 3])
+    if let Some(prefix) = pronoun_tag.strip_suffix("N00") {
+        format!("{prefix}A00")
     } else {
         pronoun_tag.to_string()
     }
@@ -905,13 +903,9 @@ pub fn regexp_group_texts(
 pub fn apply_engine_pt_filter(
     rule: &CompiledRule,
     filter: &XmlFilter,
-    matched_texts: &[String],
-    matched_positions: &[usize],
-    tokens: &[&AnalyzedTokenReadings],
     sentence_text: &str,
     rm: RuleMatch,
-    synthesizer: Option<&LangSynthesizer>,
-    variant: &str,
+    call: PtFilterCall<'_>,
 ) -> Option<RuleMatch> {
     let group_texts = rule
         .regexp
@@ -921,36 +915,18 @@ pub fn apply_engine_pt_filter(
         .iter()
         .flat_map(|v| v.iter().map(String::as_str))
         .collect();
-    apply_engine_pt_filter_with_groups(
-        filter,
-        &group_refs,
-        matched_texts,
-        matched_positions,
-        tokens,
-        rm,
-        synthesizer,
-        variant,
-    )
+    apply_engine_pt_filter_with_groups(filter, &group_refs, call, rm)
 }
 
 pub fn apply_engine_pt_filter_with_groups(
     filter: &XmlFilter,
     groups: &[&str],
-    matched_texts: &[String],
-    matched_positions: &[usize],
-    tokens: &[&AnalyzedTokenReadings],
+    call: PtFilterCall<'_>,
     rm: RuleMatch,
-    synthesizer: Option<&LangSynthesizer>,
-    variant: &str,
 ) -> Option<RuleMatch> {
     let call = PtFilterCall {
-        variant,
-        args: &filter.args,
-        matched_texts,
-        matched_positions,
-        tokens,
         regexp_groups: (!groups.is_empty()).then_some(groups),
-        synthesizer,
+        ..call
     };
     apply_pt_filter(&filter.class, call, rm)
 }

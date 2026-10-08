@@ -358,7 +358,7 @@ impl PatternRuleEngine {
 
         if first_element_is_group {
             for start_idx in 0..tokens.len() {
-                if let Some(rule_match) = self.try_match_at(rule, &tokens, start_idx, sentence) {
+                if let Some(rule_match) = self.try_match_at(rule, tokens, start_idx, sentence) {
                     matches.push(rule_match);
                 }
             }
@@ -409,7 +409,7 @@ impl PatternRuleEngine {
         };
 
         for start_idx in start_positions {
-            if let Some(rule_match) = self.try_match_at(rule, &tokens, start_idx, sentence) {
+            if let Some(rule_match) = self.try_match_at(rule, tokens, start_idx, sentence) {
                 matches.push(rule_match);
             }
         }
@@ -520,7 +520,7 @@ impl PatternRuleEngine {
                         }
                         SuggestedReplacement::new(&resolved)
                     } else {
-                        SuggestedReplacement::new(&resolve_regexp_message(&s.text, &group_texts))
+                        SuggestedReplacement::new(resolve_regexp_message(&s.text, &group_texts))
                     }
                 })
                 .collect();
@@ -600,12 +600,16 @@ impl PatternRuleEngine {
                 let Some(rm) = crate::pt_filters::apply_engine_pt_filter_with_groups(
                     filter,
                     &group_texts,
-                    &matched_texts,
-                    &matched_positions,
-                    &tokens,
+                    crate::pt_filters::PtFilterCall {
+                        variant: "pt-PT",
+                        args: &filter.args,
+                        matched_texts: &matched_texts,
+                        matched_positions: &matched_positions,
+                        tokens: &tokens,
+                        regexp_groups: None,
+                        synthesizer: self.synthesizer.as_deref(),
+                    },
                     rm,
-                    self.synthesizer.as_deref(),
-                    "pt-PT",
                 ) else {
                     continue;
                 };
@@ -765,13 +769,15 @@ impl PatternRuleEngine {
                 .filter_map(|elem| match_result.last_position_for_pattern(elem))
                 .collect();
             return self.apply_filter(
-                rule,
+                FilterContext {
+                    rule,
+                    matched_texts: &match_result.matched_texts,
+                    matched_positions: &match_result.matched_positions,
+                    element_positions: &element_positions,
+                    tokens,
+                    sentence,
+                },
                 filter,
-                &match_result.matched_texts,
-                &match_result.matched_positions,
-                &element_positions,
-                tokens,
-                sentence,
                 rm,
             );
         }
@@ -2054,8 +2060,7 @@ impl PatternRuleEngine {
         ) {
             return false;
         }
-        for k2 in pattern_idx + 1..pattern_tokens.len() {
-            let tok = &pattern_tokens[k2];
+        for tok in &pattern_tokens[pattern_idx + 1..] {
             if self.pattern_token_matches_at(
                 tok,
                 tokens[token_idx],
@@ -2087,8 +2092,7 @@ impl PatternRuleEngine {
         {
             return false;
         }
-        for k2 in element_idx + 1..elements.len() {
-            let element = &elements[k2];
+        for element in &elements[element_idx + 1..] {
             let matched = self.element_matches_at(
                 element,
                 tokens[token_idx],
@@ -2948,18 +2952,30 @@ impl Default for PatternRuleEngine {
     }
 }
 
+struct FilterContext<'a> {
+    rule: &'a CompiledRule,
+    matched_texts: &'a [String],
+    matched_positions: &'a [usize],
+    element_positions: &'a [usize],
+    tokens: &'a [&'a AnalyzedTokenReadings],
+    sentence: &'a AnalyzedSentence,
+}
+
 impl PatternRuleEngine {
     fn apply_filter(
         &self,
-        rule: &CompiledRule,
+        ctx: FilterContext<'_>,
         filter: &og_xml::types::XmlFilter,
-        matched_texts: &[String],
-        matched_positions: &[usize],
-        element_positions: &[usize],
-        tokens: &[&AnalyzedTokenReadings],
-        sentence: &AnalyzedSentence,
         rm: RuleMatch,
     ) -> Option<RuleMatch> {
+        let FilterContext {
+            rule,
+            matched_texts,
+            matched_positions,
+            element_positions,
+            tokens,
+            sentence,
+        } = ctx;
         match filter.class.as_str() {
             "org.languagetool.rules.en.FutureDateFilter" => {
                 if self.apply_future_date_filter(&filter.args, matched_texts, DateLang::En) {
@@ -3182,13 +3198,17 @@ impl PatternRuleEngine {
             c if crate::pt_filters::is_pt_filter(c) => crate::pt_filters::apply_engine_pt_filter(
                 rule,
                 filter,
-                matched_texts,
-                matched_positions,
-                tokens,
                 sentence.text(),
                 rm,
-                self.synthesizer.as_deref(),
-                "pt-PT",
+                crate::pt_filters::PtFilterCall {
+                    variant: "pt-PT",
+                    args: &filter.args,
+                    matched_texts,
+                    matched_positions,
+                    tokens,
+                    regexp_groups: None,
+                    synthesizer: self.synthesizer.as_deref(),
+                },
             ),
             _ => Some(rm),
         }
@@ -3310,9 +3330,7 @@ impl PatternRuleEngine {
         if claimed == 0 {
             return None;
         }
-        let Some((year, month, day)) = self.parse_filter_date(&parsed, lang, false) else {
-            return None;
-        };
+        let (year, month, day) = self.parse_filter_date(&parsed, lang, false)?;
         let actual = compute_weekday(year, month, day);
         if claimed == actual {
             return None;
@@ -3356,9 +3374,7 @@ impl PatternRuleEngine {
         lang: DateLang,
         rm: RuleMatch,
     ) -> Option<RuleMatch> {
-        let Some((year, month, _day)) = self.parse_filter_date(parsed, lang, true) else {
-            return None;
-        };
+        let (year, month, _day) = self.parse_filter_date(parsed, lang, true)?;
         if !logic_is_january() || month == 12 || year + 1 != logic_current_year() {
             return None;
         }
@@ -3522,7 +3538,7 @@ impl PatternRuleEngine {
             |j: usize| j > 0 && tokens[j].token().start() > tokens[j - 1].token().end();
         let mut first_suggestion = String::new();
         let mut first = true;
-        for j in start_tok..=end_tok {
+        for (j, tok) in tokens.iter().enumerate().take(end_tok + 1).skip(start_tok) {
             if !first && whitespace_before(j) {
                 first_suggestion.push(' ');
             }
@@ -3530,10 +3546,10 @@ impl PatternRuleEngine {
             if j == week_day_pos {
                 first_suggestion.push_str(&preserve_case(real_name, &week_day_str));
             } else {
-                first_suggestion.push_str(tokens[j].token().token());
+                first_suggestion.push_str(tok.token().token());
             }
         }
-        let mut replacements = vec![SuggestedReplacement::new(&adjust_suggestion(
+        let mut replacements = vec![SuggestedReplacement::new(adjust_suggestion(
             lang,
             &first_suggestion,
         ))];
@@ -3557,7 +3573,7 @@ impl PatternRuleEngine {
             let corrected_str = corrected.to_string();
             let mut second_suggestion = String::new();
             let mut first = true;
-            for j in start_tok..=end_tok {
+            for (j, tok) in tokens.iter().enumerate().take(end_tok + 1).skip(start_tok) {
                 if !first && whitespace_before(j) {
                     second_suggestion.push(' ');
                 }
@@ -3576,11 +3592,11 @@ impl PatternRuleEngine {
                         ));
                     }
                 } else {
-                    second_suggestion.push_str(tokens[j].token().token());
+                    second_suggestion.push_str(tok.token().token());
                 }
             }
             if !second_suggestion.is_empty() {
-                replacements.push(SuggestedReplacement::new(&adjust_suggestion(
+                replacements.push(SuggestedReplacement::new(adjust_suggestion(
                     lang,
                     &second_suggestion,
                 )));
@@ -3715,21 +3731,20 @@ impl PatternRuleEngine {
                                 "{} {} {} {},",
                                 parts[0], parts[1], parts[2], parts[3]
                             ));
-                        } else if parts.len() == 4 && pos0_verbs && is_der_etc(&tokens) {
-                            suggestions.push(format!("{}, {}", parts[0], rest1));
-                        } else if has(&t1, "VER:") && has(&t2, "PRO:POS:") && has(&t3, "SUB:") {
+                        } else if (parts.len() == 4 && pos0_verbs && is_der_etc(tokens))
+                            || (has(&t1, "VER:") && has(&t2, "PRO:POS:") && has(&t3, "SUB:"))
+                        {
                             suggestions.push(format!("{}, {}", parts[0], rest1));
                         } else if has(&t1, "VER:") && has(&t2, "PRO:PER:") && has(&t3, "ADV:INR") {
                             suggestions.push(format!("{} {}, {}", parts[0], parts[1], rest2));
-                        } else if has(&t1, "VER:") && has(&t2, "PRO:POS:") && has(&t3, "ADJ:") {
-                            suggestions.push(format!("{}, {}", parts[0], rest1));
-                        } else if is_denke_etc(parts[0]) && has(&t2, "PRO:DEM:") && has(&t3, "SUB:")
-                        {
-                            suggestions.push(format!("{}, {}", parts[0], rest1));
-                        } else if pattern_token_pos == 1
-                            && is_bei_fuer_mit(parts[1])
-                            && is_dir_etc(parts[2])
-                            && has(&t4, "VER:")
+                        } else if (has(&t1, "VER:") && has(&t2, "PRO:POS:") && has(&t3, "ADJ:"))
+                            || (is_denke_etc(parts[0])
+                                && has(&t2, "PRO:DEM:")
+                                && has(&t3, "SUB:"))
+                            || (pattern_token_pos == 1
+                                && is_bei_fuer_mit(parts[1])
+                                && is_dir_etc(parts[2])
+                                && has(&t4, "VER:"))
                         {
                             suggestions.push(format!("{}, {}", parts[0], rest1));
                         }
@@ -4787,7 +4802,7 @@ fn days_in_month(year: u32, month: u32) -> u32 {
         1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
         4 | 6 | 9 | 11 => 30,
         2 => {
-            if (year % 4 == 0 && year % 100 != 0) || year % 400 == 0 {
+            if (year.is_multiple_of(4) && !year.is_multiple_of(100)) || year.is_multiple_of(400) {
                 29
             } else {
                 28
@@ -5608,13 +5623,8 @@ fn parse_weekday_esperanto(s: &str) -> u32 {
         3
     } else if n.starts_with("mer") {
         4
-    } else if n.starts_with("ĵaŭ") {
-        5
-    } else if n.starts_with("jau") {
-        5
-    } else if n.starts_with("jhau") {
-        5
-    } else if n.starts_with("jxau") {
+    } else if n.starts_with("ĵaŭ") || n.starts_with("jau") || n.starts_with("jhau") || n.starts_with("jxau")
+    {
         5
     } else if n.starts_with("ven") {
         6

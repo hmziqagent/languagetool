@@ -328,6 +328,8 @@ enum SynthLang {
     Swedish,
 }
 
+type LemmaForms = HashMap<Box<str>, Vec<(Box<str>, Box<str>)>>;
+
 pub struct LangSynthesizer {
     dictionary: Option<Arc<MorfologikDictionary>>,
     seek: Option<Arc<og_tagger::morfologik::SynthDictionary>>,
@@ -337,7 +339,7 @@ pub struct LangSynthesizer {
     lang: SynthLang,
     article: crate::en_article::ArticleData,
     possible_tags: Vec<Box<str>>,
-    lemma_forms: OnceLock<HashMap<Box<str>, Vec<(Box<str>, Box<str>)>>>,
+    lemma_forms: OnceLock<LemmaForms>,
 }
 
 const GERMAN_REMOVE: &[&str] = &[
@@ -523,9 +525,9 @@ impl LangSynthesizer {
         self.lang == SynthLang::Spanish
     }
 
-    fn forms(&self) -> &HashMap<Box<str>, Vec<(Box<str>, Box<str>)>> {
+    fn forms(&self) -> &LemmaForms {
         self.lemma_forms.get_or_init(|| {
-            let mut map: HashMap<Box<str>, Vec<(Box<str>, Box<str>)>> = HashMap::new();
+            let mut map: LemmaForms = HashMap::new();
             if let Some(dict) = &self.dictionary {
                 if let Some(synth) = dict.synth_forms_by_lemma() {
                     for (lemma, entries) in synth {
@@ -1138,9 +1140,9 @@ pub(crate) fn accept_es(
     while i > j && keep {
         let cur = i - j;
         let current = token_at(cur);
-        if mp(current, &t.nom_det) && mp(current, gn) {
-            return None;
-        } else if !mp(current, &t.gn_any) && mp(current, subst) {
+        if (mp(current, &t.nom_det) && mp(current, gn))
+            || (!mp(current, &t.gn_any) && mp(current, subst))
+        {
             return None;
         }
         keep = !mp(current, &t.nom_det);
@@ -1170,9 +1172,9 @@ pub(crate) fn accept_es(
         while i > j && keep_counting_es(token_at(i - j), &apparitions, t) && (level > 1 || j < 4) {
             let cur = i - j;
             let current = token_at(cur);
-            if !mp(current, &t.gn_any) && mp(current, &t.nom_det) && mp(current, subst) {
-                return None;
-            } else if mp(current, gn) {
+            if (!mp(current, &t.gn_any) && mp(current, &t.nom_det) && mp(current, subst))
+                || mp(current, gn)
+            {
                 return None;
             }
             if let Some(current) = current {
@@ -1261,10 +1263,9 @@ fn keep_counting_es(
         return false;
     };
     let text = a.token().token();
-    if (apparitions.adverb && apparitions.conjunction)
-        || (apparitions.adverb && apparitions.punctuation)
-        || (apparitions.conjunction && apparitions.punctuation)
-        || (apparitions.punctuation && mp(Some(a), &t.puntuacio))
+    if (mp(Some(a), &t.puntuacio) || apparitions.conjunction || apparitions.adverb)
+        && (apparitions.punctuation || apparitions.conjunction)
+        && (apparitions.punctuation || apparitions.adverb)
     {
         return false;
     }
@@ -1409,7 +1410,7 @@ pub(crate) fn accept_fr(
         }
         if i > j + 1 {
             let text = current.map(|c| c.token().token()).unwrap_or_default();
-            if mr(text, &b.prepo_nivell)
+            if (mr(text, &b.prepo_nivell)
                 && mp(current, &b.preposicions)
                 && !mp(current, &b.conjuncio)
                 && !mr(
@@ -1418,13 +1419,11 @@ pub(crate) fn accept_fr(
                         .unwrap_or_default(),
                     &b.coord_ioni,
                 )
-                && !mp(token_at(cur + 1), &b.adverbi)
-            {
-                level += 1;
-            } else if text.eq_ignore_ascii_case("d'")
-                && token_at(cur + 1)
-                    .map(|c| c.token().token().eq_ignore_ascii_case("environ"))
-                    .unwrap_or(false)
+                && !mp(token_at(cur + 1), &b.adverbi))
+                || (text.eq_ignore_ascii_case("d'")
+                    && token_at(cur + 1)
+                        .map(|c| c.token().token().eq_ignore_ascii_case("environ"))
+                        .unwrap_or(false))
             {
                 level += 1;
             }
@@ -1515,9 +1514,9 @@ pub(crate) fn accept_fr(
     while i > j && keep {
         let cur = i - j;
         let current = token_at(cur);
-        if mp(current, &b.nom_det) && mp(current, gn) {
-            return None;
-        } else if !mp(current, &b.gn_any) && mp(current, subst) {
+        if (mp(current, &b.nom_det) && mp(current, gn))
+            || (!mp(current, &b.gn_any) && mp(current, subst))
+        {
             return None;
         }
         keep = !mp(current, &b.nom_det);
@@ -1547,9 +1546,9 @@ pub(crate) fn accept_fr(
         while i > j && keep_counting_fr(token_at(i - j), &apparitions, t) && (level > 1 || j < 4) {
             let cur = i - j;
             let current = token_at(cur);
-            if !mp(current, &b.gn_any) && mp(current, &b.nom_det) && mp(current, subst) {
-                return None;
-            } else if mp(current, gn) {
+            if (!mp(current, &b.gn_any) && mp(current, &b.nom_det) && mp(current, subst))
+                || mp(current, gn)
+            {
                 return None;
             }
             j = update_j_value_fr(tokens, i, j, t);
@@ -1651,12 +1650,10 @@ fn keep_counting_fr(
     if text == "." {
         return true;
     }
-    if (apparitions.adverb && apparitions.conjunction)
-        || (apparitions.adverb && apparitions.punctuation)
-        || (apparitions.conjunction && apparitions.punctuation)
-        || (apparitions.punctuation && mp(Some(a), &b.puntuacio))
-        || (apparitions.infinitive && mr(text, &b.coord_ioni))
-        || (apparitions.infinitive && apparitions.adverb)
+    if ((mp(Some(a), &b.puntuacio) || apparitions.conjunction || apparitions.adverb)
+        && (apparitions.punctuation || apparitions.conjunction)
+        && (apparitions.punctuation || apparitions.adverb))
+        || (apparitions.infinitive && (mr(text, &b.coord_ioni) || apparitions.adverb))
     {
         return false;
     }

@@ -101,7 +101,7 @@ impl WordTokenizer for GermanWordTokenizer {
             }
             let start = byte;
             let mut end = byte;
-            let mut rest = text[byte..].chars();
+            let rest = text[byte..].chars();
             for rc in rest {
                 if rc.is_whitespace() || Self::is_delimiter(rc) {
                     break;

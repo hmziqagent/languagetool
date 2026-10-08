@@ -1,4 +1,4 @@
-use crate::pt::filters::{apply_engine_pt_filter, is_pt_filter};
+use crate::pt::filters::{PtFilterCall, apply_engine_pt_filter, is_pt_filter};
 use crate::pt::test_support::PortuguesePipeline;
 use og_core::{AnalyzedSentence, AnalyzedTokenReadings, RuleMatch};
 use og_rules::pattern_rule::PatternRuleEngine;
@@ -240,13 +240,17 @@ pub(crate) fn apply_suite_filter(
     apply_engine_pt_filter(
         rule,
         filter,
-        &matched_texts,
-        &matched_positions,
-        tokens,
         sentence.text(),
         m,
-        synthesizer,
-        "pt-PT",
+        PtFilterCall {
+            variant: "pt-PT",
+            args: &filter.args,
+            matched_texts: &matched_texts,
+            matched_positions: &matched_positions,
+            tokens,
+            regexp_groups: None,
+            synthesizer,
+        },
     )
 }
 

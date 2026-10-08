@@ -258,7 +258,7 @@ impl MultitokenSpeller {
         let mut weighted: Vec<(String, i64)> = Vec::new();
 
         if let Some(candidates) = self.no_spaces.get(&normalized.replace(' ', "")) {
-            if stop_searching(candidates, &original_word, self.variant) {
+            if stop_searching(candidates, original_word, self.variant) {
                 return Vec::new();
             }
             for candidate in candidates {
@@ -272,7 +272,7 @@ impl MultitokenSpeller {
                 .get(&normalized.chars().next().unwrap_or(' '))
         {
             for (normalized_candidate, candidates) in bucket {
-                if stop_searching(candidates, &original_word, self.variant) {
+                if stop_searching(candidates, original_word, self.variant) {
                     return Vec::new();
                 }
                 if normalized_candidate
@@ -500,7 +500,7 @@ fn is_exception(variant: SpellerVariant, original: &str, candidate: &str) -> boo
     let chars: Vec<char> = original.chars().collect();
     match variant {
         SpellerVariant::German => {
-            if chars.len() > 1 && &chars[..chars.len() - 1].iter().collect::<String>() == candidate
+            if chars.len() > 1 && chars[..chars.len() - 1].iter().collect::<String>() == candidate
             {
                 return original.ends_with('s') || original.ends_with('-');
             }
@@ -508,10 +508,10 @@ fn is_exception(variant: SpellerVariant, original: &str, candidate: &str) -> boo
         }
         SpellerVariant::Dutch => {
             if chars.len() > 2 {
-                if &chars[..chars.len() - 1].iter().collect::<String>() == candidate {
+                if chars[..chars.len() - 1].iter().collect::<String>() == candidate {
                     return original.ends_with('s') || original.ends_with('-');
                 }
-                if &chars[..chars.len() - 2].iter().collect::<String>() == candidate {
+                if chars[..chars.len() - 2].iter().collect::<String>() == candidate {
                     return original.ends_with("'s") || original.ends_with("\u{2019}s");
                 }
             }
@@ -683,6 +683,19 @@ fn plain_levenshtein(a: &str, b: &str) -> usize {
     prev[b.len()]
 }
 
+pub fn german_hunspell_words(resource_dir: &Path) -> Vec<String> {
+    let Ok(content) = std::fs::read_to_string(resource_dir.join("hunspell/de_DE.dic")) else {
+        return Vec::new();
+    };
+    content
+        .lines()
+        .filter_map(|line| {
+            let word = line.split('/').next().unwrap_or("").trim();
+            (!word.is_empty() && !word.starts_with('#')).then(|| word.to_string())
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -808,17 +821,4 @@ mod tests {
         assert_eq!(levenshtein_distance("abc", "acb"), 1);
         assert_eq!(levenshtein_distance("knight", "knyght"), 0);
     }
-}
-
-pub fn german_hunspell_words(resource_dir: &Path) -> Vec<String> {
-    let Ok(content) = std::fs::read_to_string(resource_dir.join("hunspell/de_DE.dic")) else {
-        return Vec::new();
-    };
-    content
-        .lines()
-        .filter_map(|line| {
-            let word = line.split('/').next().unwrap_or("").trim();
-            (!word.is_empty() && !word.starts_with('#')).then(|| word.to_string())
-        })
-        .collect()
 }

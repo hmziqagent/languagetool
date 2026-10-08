@@ -71,12 +71,12 @@ impl Rule for WordRepeatRule {
             let prev_text = prev.token().token().to_lowercase();
             let curr_text = curr.token().token().to_lowercase();
 
-            if prev_text == curr_text
-                && !prev.is_whitespace()
-                && !curr.is_whitespace()
-                && prev_text.chars().any(|c| c.is_alphabetic())
-                && !self.ignored_words.contains(&prev_text)
-                && !(self.ignore_single_letter_repeats && prev_text.chars().count() == 1)
+            if !(prev_text != curr_text
+                || prev.is_whitespace()
+                || curr.is_whitespace()
+                || !prev_text.chars().any(|c| c.is_alphabetic())
+                || self.ignored_words.contains(&prev_text)
+                || self.ignore_single_letter_repeats && prev_text.chars().count() == 1)
             {
                 let start = curr.token().start();
                 let end = curr.token().end();
@@ -856,7 +856,7 @@ mod tests {
     fn make_sentence_with_start(text: &str) -> AnalyzedSentence {
         use og_core::{AnalyzedToken, AnalyzedTokenReadings};
         let mut sentence = make_sentence(text);
-        let mut tokens = sentence.tokens_mut();
+        let tokens = sentence.tokens_mut();
         tokens.insert(
             0,
             AnalyzedTokenReadings::new(
