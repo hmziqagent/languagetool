@@ -972,7 +972,7 @@ pub mod test_support {
     use super::*;
     use std::sync::OnceLock;
 
-    const GRAMMAR_PATH: &str = "/home/agent/opengrammar-rs/languagetool/languagetool-language-modules/en/src/main/resources/org/languagetool/rules/en/grammar.xml";
+    pub const GRAMMAR_PATH: &str = "/home/agent/opengrammar-rs/languagetool/languagetool-language-modules/en/src/main/resources/org/languagetool/rules/en/grammar.xml";
     const DE_GRAMMAR_PATH: &str = "/home/agent/opengrammar-rs/languagetool/languagetool-language-modules/de/src/main/resources/org/languagetool/rules/de/grammar.xml";
 
     pub fn german_runner() -> &'static TestRunner {
@@ -1474,6 +1474,43 @@ mod tests {
         let summary = runner.run_rule_set_example_tests(rules);
 
         eprintln!("Total examples tested: {}", summary.total);
+        {
+            let xml = std::fs::read_to_string(test_support::GRAMMAR_PATH).unwrap_or_default();
+            let mut without_comments = String::with_capacity(xml.len());
+            let mut rest = xml.as_str();
+            while let Some(start) = rest.find("<!--") {
+                without_comments.push_str(&rest[..start]);
+                rest = match rest[start..].find("-->") {
+                    Some(end) => &rest[start + end + 3..],
+                    None => "",
+                };
+            }
+            without_comments.push_str(rest);
+            let live = without_comments.matches("<example").count();
+            let raw = xml.matches("<example").count();
+            let mut in_antipattern_examples = 0usize;
+            let mut depth = 0usize;
+            let mut offset = 0usize;
+            while let Some(rel) = without_comments[offset..].find('<') {
+                let tag = &without_comments[offset + rel..];
+                if tag.starts_with("<antipattern") {
+                    depth += 1;
+                } else if tag.starts_with("</antipattern") && depth > 0 {
+                    depth -= 1;
+                } else if depth > 0 && tag.starts_with("<example") {
+                    in_antipattern_examples += 1;
+                }
+                offset += rel + 1;
+            }
+            eprintln!(
+                "Evaluated-vs-live accounting: {}/{} live <example> tags evaluated ({} raw, {} inside comments, {} live examples sit inside <antipattern> blocks)",
+                summary.total,
+                live,
+                raw,
+                raw - live,
+                in_antipattern_examples
+            );
+        }
         eprintln!("Passed: {}", summary.passed);
         eprintln!("Failed: {}", summary.failed);
         eprintln!(
