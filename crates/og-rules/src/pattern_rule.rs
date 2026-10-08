@@ -864,9 +864,6 @@ impl PatternRuleEngine {
             return vec![String::new()];
         };
         let mut text = token.token().token().to_string();
-        if let Some(ref cc) = m.case_conversion {
-            text = apply_case_conversion(&text, cc);
-        }
         if let Some(ref rm) = m.regexp_match
             && let Ok(re) = regex::Regex::new(rm)
         {
@@ -874,6 +871,9 @@ impl PatternRuleEngine {
             text = re
                 .replace_all(&text, java_replacement(replace).as_ref())
                 .to_string();
+        }
+        if let Some(ref cc) = m.case_conversion {
+            text = apply_case_conversion(&text, cc);
         }
         if let Some(ref mode) = m.include_skipped
             && mode != "none"
@@ -1019,10 +1019,7 @@ impl PatternRuleEngine {
         let match_no = pattern_token.match_no?;
         let ref_idx = match_no as usize;
         let entry = matched.get(ref_idx)?;
-        let ref_text = match pattern_token.match_no_case_conversion.as_deref() {
-            Some(cc) => apply_case_conversion(&entry.text, cc),
-            None => entry.text.clone(),
-        };
+        let ref_text = entry.text.clone();
         if pattern_token.match_no_setpos {
             let ref_token = tokens.get(entry.token_idx)?;
             let pos_pattern = pattern_token.match_no_postag.as_deref()?;
@@ -1074,6 +1071,10 @@ impl PatternRuleEngine {
             let transformed = re
                 .replace_all(&ref_text, java_replacement(replace).as_ref())
                 .into_owned();
+            let transformed = match pattern_token.match_no_case_conversion.as_deref() {
+                Some(cc) => apply_case_conversion(&transformed, cc),
+                None => transformed,
+            };
             let matches = if pattern_token.is_regexp {
                 let anchored = format!("^(?:{transformed})$");
                 let target = if pattern_token.case_sensitive {
@@ -1104,7 +1105,11 @@ impl PatternRuleEngine {
                 .as_deref()
                 .or(self.suggestion_synth.as_deref());
             let Some(synth) = synth else {
-                let ref_text = normalize_apostrophes(&entry.text);
+                let raw = match pattern_token.match_no_case_conversion.as_deref() {
+                    Some(cc) => apply_case_conversion(&entry.text, cc),
+                    None => entry.text.clone(),
+                };
+                let ref_text = normalize_apostrophes(&raw);
                 let token_text = normalize_apostrophes(surface_text(token));
                 let matches = if pattern_token.case_sensitive {
                     token_text == ref_text
@@ -1164,7 +1169,11 @@ impl PatternRuleEngine {
                 matches
             });
         }
-        let ref_norm = normalize_apostrophes(&ref_text);
+        let case_converted = match pattern_token.match_no_case_conversion.as_deref() {
+            Some(cc) => apply_case_conversion(&ref_text, cc),
+            None => ref_text,
+        };
+        let ref_norm = normalize_apostrophes(&case_converted);
         let token_text = normalize_apostrophes(surface_text(token));
         let matches = if pattern_token.case_sensitive {
             token_text == ref_norm
