@@ -743,15 +743,18 @@ impl LangSynthesizer {
 
     fn lookup_matching(&self, lemma: &str, matches_tag: &impl Fn(&str) -> bool) -> Vec<String> {
         let mut results = Vec::new();
-        if let Some(dict) = &self.dictionary
-            && let Some(entries) = dict.forms_by_lemma().get(lemma)
-        {
-            let mut sorted: Vec<(&str, &str)> =
-                entries.iter().map(|(t, form)| (&**t, &**form)).collect();
-            sorted.sort_unstable();
-            for (t, form) in sorted {
-                if matches_tag(t) && self.german_lookup_ok(lemma, form) {
-                    results.push(form.to_string());
+        if let Some(dict) = &self.dictionary {
+            let entries = dict
+                .synth_forms_by_lemma()
+                .unwrap_or_else(|| dict.forms_by_lemma());
+            if let Some(entries) = entries.get(lemma) {
+                let mut sorted: Vec<(&str, &str)> =
+                    entries.iter().map(|(t, form)| (&**t, &**form)).collect();
+                sorted.sort_unstable();
+                for (t, form) in sorted {
+                    if matches_tag(t) && self.german_lookup_ok(lemma, form) {
+                        results.push(form.to_string());
+                    }
                 }
             }
         }
