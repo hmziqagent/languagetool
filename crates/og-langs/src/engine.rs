@@ -134,23 +134,54 @@ impl LanguageEngine {
         }
     }
 
-    pub fn shared_for_code(code: &str) -> Option<&'static LanguageEngine> {
+    pub fn shared_for_code(code: &str) -> Option<Arc<Self>> {
         static CACHE: std::sync::OnceLock<
-            std::sync::Mutex<HashMap<String, &'static LanguageEngine>>,
+            std::sync::Mutex<HashMap<String, std::sync::Weak<LanguageEngine>>>,
         > = std::sync::OnceLock::new();
-        let cache = CACHE.get_or_init(Default::default);
-        let mut guard = cache.lock().unwrap();
-        if let Some(engine) = guard.get(code) {
+        static IN_FLIGHT: std::sync::OnceLock<
+            std::sync::Mutex<
+                HashMap<String, Arc<std::sync::OnceLock<Option<Arc<LanguageEngine>>>>>,
+            >,
+        > = std::sync::OnceLock::new();
+        if let Some(cache) = CACHE.get()
+            && let Ok(guard) = cache.lock()
+            && let Some(engine) = guard.get(code).and_then(std::sync::Weak::upgrade)
+        {
             return Some(engine);
         }
-        let engine = match code {
-            "en" => Self::english(),
-            "de" => Self::german(),
-            other => Self::for_code(other)?,
+        let slot = {
+            let in_flight = IN_FLIGHT.get_or_init(Default::default);
+            let mut guard = in_flight.lock().unwrap();
+            guard
+                .entry(code.to_string())
+                .or_insert_with(|| Arc::new(std::sync::OnceLock::new()))
+                .clone()
         };
-        let leaked: &'static LanguageEngine = Box::leak(Box::new(engine));
-        guard.insert(code.to_string(), leaked);
-        Some(leaked)
+        let built = slot
+            .get_or_init(|| {
+                let engine = match code {
+                    "en" => Some(Self::english()),
+                    "de" => Some(Self::german()),
+                    other => Self::for_code(other),
+                };
+                let engine = engine.map(Arc::new);
+                if let Some(engine) = engine.as_ref()
+                    && let Some(cache) = CACHE.get()
+                    && let Ok(mut guard) = cache.lock()
+                {
+                    guard.insert(code.to_string(), Arc::downgrade(engine));
+                }
+                engine
+            })
+            .clone();
+        if let Some(in_flight) = IN_FLIGHT.get()
+            && let Ok(mut guard) = in_flight.lock()
+            && let Some(existing) = guard.get(code)
+            && Arc::ptr_eq(existing, &slot)
+        {
+            guard.remove(code);
+        }
+        built
     }
 
     pub fn english() -> Self {
@@ -2281,20 +2312,14 @@ pub fn grammar_xml_path(lang_code: &str, lt_root: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Arc, OnceLock};
+    use std::sync::Arc;
 
     fn shared_english() -> Arc<LanguageEngine> {
-        static ENGINE: OnceLock<Arc<LanguageEngine>> = OnceLock::new();
-        ENGINE
-            .get_or_init(|| Arc::new(LanguageEngine::english()))
-            .clone()
+        LanguageEngine::shared_for_code("en").expect("english engine")
     }
 
     fn shared_german() -> Arc<LanguageEngine> {
-        static ENGINE: OnceLock<Arc<LanguageEngine>> = OnceLock::new();
-        ENGINE
-            .get_or_init(|| Arc::new(LanguageEngine::german()))
-            .clone()
+        LanguageEngine::shared_for_code("de").expect("german engine")
     }
 
     #[test]

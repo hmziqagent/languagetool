@@ -1822,7 +1822,7 @@ fn first_pos_tag_lc(readings: &[AnalyzedToken]) -> Option<&str> {
 mod tests {
     use crate::engine::LanguageEngine;
 
-    fn shared_engine() -> &'static LanguageEngine {
+    fn shared_engine() -> std::sync::Arc<LanguageEngine> {
         crate::engine::LanguageEngine::shared_for_code("de").expect("german engine")
     }
 

@@ -359,11 +359,7 @@ mod tests {
         let mut enabled_request = og_core::CheckRequest::new("", language);
         enabled_request.enabled_rules = vec![rule.id().to_string()];
         assert!(
-            !enabled_request.rule_enabled_by_id(
-                rule.id(),
-                rule.is_default_on(),
-                rule.is_picky()
-            ),
+            !enabled_request.rule_enabled_by_id(rule.id(), rule.is_default_on(), rule.is_picky()),
             "JLanguageTool.java:1228 suppresses picky-tagged rules at Level.DEFAULT and \
              getActiveRulesForLevelAndToneTags (:1263) filters them after ignoreRule, so \
              enabledRules never opens the default-level picky gate"
