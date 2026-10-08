@@ -901,15 +901,9 @@ impl XmlDisambiguator {
                                     );
                                 }
                             }
-                        } else if matches!(rule.disambig, DisambigAction::RemovePostag(_)) {
-                            if let Some(&first) = target_indices.first() {
-                                pending_actions.push((
-                                    first,
-                                    &rule.disambig,
-                                    &self.action_regexes[rule_idx],
-                                ));
-                            }
-                        } else if matches!(rule.disambig, DisambigAction::Match(_)) {
+                        } else if matches!(rule.disambig, DisambigAction::RemovePostag(_))
+                            | matches!(rule.disambig, DisambigAction::Match(_))
+                        {
                             if let Some(&first) = target_indices.first() {
                                 pending_actions.push((
                                     first,
@@ -1219,9 +1213,9 @@ fn match_tokens_recursive(
     }
 
     let first_matched = if pattern_idx == 0 && first_text_verified {
-        token_matches_text_verified(pt, tokens, token_idx, token_idx > 0)
+        token_matches_text_verified(pt, tokens, token_idx)
     } else {
-        token_matches(pt, tokens, token_idx, token_idx > 0)
+        token_matches(pt, tokens, token_idx)
     } && reference_text_matches(pt, tokens, token_idx, matched_so_far);
 
     if !first_matched {
@@ -1251,7 +1245,7 @@ fn match_tokens_recursive(
     let mut count = 1usize;
     while count < max_occurrences
         && ((token_idx + count) as isize) < guard
-        && token_matches(pt, tokens, token_idx + count, true)
+        && token_matches(pt, tokens, token_idx + count)
         && reference_text_matches(pt, tokens, token_idx + count, matched_so_far)
     {
         count += 1;
@@ -1307,9 +1301,8 @@ fn later_token_matches_at(
     pattern_idx: usize,
     matched_so_far: &[usize],
 ) -> bool {
-    for k2 in pattern_idx + 1..pattern_tokens.len() {
-        let pt = &pattern_tokens[k2];
-        if token_matches(pt, tokens, token_idx, token_idx > 0)
+    for pt in &pattern_tokens[pattern_idx + 1..] {
+        if token_matches(pt, tokens, token_idx)
             && reference_text_matches(pt, tokens, token_idx, matched_so_far)
         {
             return true;
@@ -1347,7 +1340,7 @@ fn next_token_commits_at(
     {
         return true;
     }
-    token_matches(pt, tokens, token_idx, token_idx > 0)
+    token_matches(pt, tokens, token_idx)
         && reference_text_matches(pt, tokens, token_idx, matched_so_far)
 }
 
@@ -1355,7 +1348,6 @@ fn token_matches_text_verified(
     pt: &CompiledPatternToken,
     tokens: &[&AnalyzedTokenReadings],
     token_idx: usize,
-    has_previous: bool,
 ) -> bool {
     if token_idx >= tokens.len() {
         return false;
@@ -1459,12 +1451,11 @@ fn exception_reading_text_matches(
         };
         return matched;
     }
-    let matched = if exc.case_sensitive {
+    if exc.case_sensitive {
         surface == exc_text
     } else {
         og_xml::unifier::eq_ignore_case(surface, exc_text)
-    };
-    matched
+    }
 }
 
 fn exception_reading_pos_matches(exc: &CompiledException, r: &og_core::AnalyzedToken) -> bool {
@@ -1560,9 +1551,7 @@ fn match_elements(
                 }
             });
             if all_optional {
-                for _ in elem_idx..elements.len() {
-                    counts.push(0);
-                }
+                counts.extend(std::iter::repeat_n(0, elements.len() - elem_idx));
                 return Some(MatchResult {
                     matched_positions: positions,
                     element_counts: counts,
@@ -1571,30 +1560,22 @@ fn match_elements(
             return None;
         }
 
-        let has_previous = token_idx > start_idx;
         if element_min(elem).unwrap_or(1) == 0
-            && later_element_matches_at(
-                elements,
-                tokens,
-                token_idx,
-                elem_idx,
-                has_previous,
-                &matched_before,
-            )
+            && later_element_matches_at(elements, tokens, token_idx, elem_idx, &matched_before)
         {
             counts.push(0);
             continue;
         }
         let (matched, rep, min) = match elem {
             CompiledPatternElement::Token(pt) => (
-                token_matches(pt, tokens, token_idx, has_previous)
+                token_matches(pt, tokens, token_idx)
                     && reference_text_matches(pt, tokens, token_idx, &matched_before),
                 Some(pt.as_ref()),
                 pt.min,
             ),
             CompiledPatternElement::OrGroup(alternatives) => (
                 alternatives.iter().any(|alt| {
-                    token_matches(alt, tokens, token_idx, has_previous)
+                    token_matches(alt, tokens, token_idx)
                         && reference_text_matches(alt, tokens, token_idx, &matched_before)
                 }),
                 alternatives.first(),
@@ -1602,7 +1583,7 @@ fn match_elements(
             ),
             CompiledPatternElement::AndGroup(constraints) => (
                 constraints.iter().all(|c| {
-                    token_matches(c, tokens, token_idx, has_previous)
+                    token_matches(c, tokens, token_idx)
                         && reference_text_matches(c, tokens, token_idx, &matched_before)
                 }),
                 constraints.first(),
@@ -1632,7 +1613,7 @@ fn match_elements(
         let mut count = 1usize;
         while count < max_occurrences
             && ((token_idx + count) as isize) < guard
-            && element_matches_full(elem, tokens, token_idx + count, true, &matched_before)
+            && element_matches_full(elem, tokens, token_idx + count, &matched_before)
         {
             count += 1;
         }
@@ -1664,14 +1645,7 @@ fn match_elements(
             let mut next_prior = matched_before.clone();
             next_prior.extend(positions.iter().copied());
             next_prior.extend(token_idx..token_idx + count);
-            if !element_commits_at(
-                &elements[elem_idx + 1..],
-                tokens,
-                next,
-                0,
-                false,
-                &next_prior,
-            ) {
+            if !element_commits_at(&elements[elem_idx + 1..], tokens, next, 0, &next_prior) {
                 continue;
             }
             if let Some(rest) = match_elements(&elements[elem_idx + 1..], tokens, next, &next_prior)
@@ -1711,21 +1685,17 @@ fn element_matches_full(
     element: &CompiledPatternElement,
     tokens: &[&AnalyzedTokenReadings],
     pos: usize,
-    has_previous: bool,
     prior: &[usize],
 ) -> bool {
     match element {
         CompiledPatternElement::Token(pt) => {
-            token_matches(pt, tokens, pos, has_previous)
-                && reference_text_matches(pt, tokens, pos, prior)
+            token_matches(pt, tokens, pos) && reference_text_matches(pt, tokens, pos, prior)
         }
         CompiledPatternElement::OrGroup(alts) => alts.iter().any(|alt| {
-            token_matches(alt, tokens, pos, has_previous)
-                && reference_text_matches(alt, tokens, pos, prior)
+            token_matches(alt, tokens, pos) && reference_text_matches(alt, tokens, pos, prior)
         }),
         CompiledPatternElement::AndGroup(cs) => cs.iter().all(|c| {
-            token_matches(c, tokens, pos, has_previous)
-                && reference_text_matches(c, tokens, pos, prior)
+            token_matches(c, tokens, pos) && reference_text_matches(c, tokens, pos, prior)
         }),
     }
 }
@@ -1735,14 +1705,13 @@ fn later_element_matches_at(
     tokens: &[&AnalyzedTokenReadings],
     pos: usize,
     elem_idx: usize,
-    has_previous: bool,
     prior: &[usize],
 ) -> bool {
-    for k2 in elem_idx + 1..elements.len() {
-        if element_matches_full(&elements[k2], tokens, pos, has_previous, prior) {
+    for el in &elements[elem_idx + 1..] {
+        if element_matches_full(el, tokens, pos, prior) {
             return true;
         }
-        if element_min(&elements[k2]).unwrap_or(1) > 0 {
+        if element_min(el).unwrap_or(1) > 0 {
             return false;
         }
     }
@@ -1754,7 +1723,6 @@ fn element_commits_at(
     tokens: &[&AnalyzedTokenReadings],
     pos: usize,
     elem_idx: usize,
-    has_previous: bool,
     prior: &[usize],
 ) -> bool {
     let Some(element) = elements.get(elem_idx) else {
@@ -1766,11 +1734,11 @@ fn element_commits_at(
             .all(|e| element_min(e).unwrap_or(1) == 0);
     }
     if element_min(element).unwrap_or(1) == 0
-        && later_element_matches_at(elements, tokens, pos, elem_idx, has_previous, prior)
+        && later_element_matches_at(elements, tokens, pos, elem_idx, prior)
     {
         return true;
     }
-    element_matches_full(element, tokens, pos, has_previous, prior)
+    element_matches_full(element, tokens, pos, prior)
 }
 
 fn space_before_at(tokens: &[&AnalyzedTokenReadings], idx: usize) -> bool {
@@ -1898,7 +1866,6 @@ fn token_matches(
     pt: &CompiledPatternToken,
     tokens: &[&AnalyzedTokenReadings],
     token_idx: usize,
-    has_previous: bool,
 ) -> bool {
     if token_idx >= tokens.len() {
         return false;
@@ -2134,8 +2101,7 @@ fn apply_filterall(
     };
     let re = pattern_token
         .compiled_postag_regexp
-        .as_ref()
-        .map(|re| re.clone())
+        .clone()
         .or_else(|| regex::Regex::new(&format!("^(?:{})$", postag)).ok());
     let Some(re) = re else {
         return;
@@ -2222,7 +2188,7 @@ fn match_new_token(
     }
     readings
         .iter()
-        .filter(|r| r.pos_tags().first().is_some())
+        .filter(|r| !r.pos_tags().is_empty())
         .map(|_| {
             let mut at = AnalyzedToken::new(token, base.start(), base.end());
             at.set_pos_tags(vec![pos_tag.to_string()]);
@@ -2639,10 +2605,8 @@ fn apply_disambiguation(
                 }
             });
             if let Some(postag) = spec.postag.as_deref() {
-                let source: &[AnalyzedToken] = working
-                    .as_ref()
-                    .map(|w| w.as_slice())
-                    .unwrap_or_else(|| atr.readings());
+                let source: &[AnalyzedToken] =
+                    working.as_deref().unwrap_or_else(|| atr.readings());
                 let Some(first) = source.first() else {
                     return;
                 };
@@ -3340,13 +3304,14 @@ mod tests {
         let disambig = XmlDisambiguator::from_xml(xml).unwrap();
 
         let mut sentence = AnalyzedSentence::new("cron job", 0, 8);
-        let mut tokens = Vec::new();
-        tokens.push(AnalyzedTokenReadings::new(
-            AnalyzedToken::new("cron", 0, 4).with_pos_tags(vec!["NN".to_string()]),
-        ));
-        tokens.push(AnalyzedTokenReadings::new(
-            AnalyzedToken::new("job", 5, 8).with_pos_tags(vec!["NN".to_string()]),
-        ));
+        let tokens = vec![
+            AnalyzedTokenReadings::new(
+                AnalyzedToken::new("cron", 0, 4).with_pos_tags(vec!["NN".to_string()]),
+            ),
+            AnalyzedTokenReadings::new(
+                AnalyzedToken::new("job", 5, 8).with_pos_tags(vec!["NN".to_string()]),
+            ),
+        ];
         sentence.set_tokens(tokens);
         disambig.disambiguate(&mut sentence);
         assert!(sentence.tokens()[0].is_ignored_by_speller());
@@ -3354,13 +3319,14 @@ mod tests {
         assert!(sentence.tokens()[0].has_pos_tag("NN"));
 
         let mut sentence = AnalyzedSentence::new("ca n't", 0, 5);
-        let mut tokens = Vec::new();
-        tokens.push(AnalyzedTokenReadings::new(
-            AnalyzedToken::new("ca", 0, 2).with_pos_tags(vec!["NN".to_string()]),
-        ));
-        tokens.push(AnalyzedTokenReadings::new(
-            AnalyzedToken::new("n't", 2, 5).with_pos_tags(vec!["RB".to_string()]),
-        ));
+        let tokens = vec![
+            AnalyzedTokenReadings::new(
+                AnalyzedToken::new("ca", 0, 2).with_pos_tags(vec!["NN".to_string()]),
+            ),
+            AnalyzedTokenReadings::new(
+                AnalyzedToken::new("n't", 2, 5).with_pos_tags(vec!["RB".to_string()]),
+            ),
+        ];
         sentence.set_tokens(tokens);
         disambig.disambiguate(&mut sentence);
         assert!(sentence.tokens()[0].is_ignored_by_speller());

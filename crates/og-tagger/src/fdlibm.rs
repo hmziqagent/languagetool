@@ -108,7 +108,7 @@ pub fn log(x: f64) -> f64 {
             return -TWO54 / 0.0;
         }
         if hx < 0 {
-            return (x - x) / 0.0;
+            return f64::NAN;
         }
         k -= 54;
         x *= TWO54;
@@ -131,7 +131,7 @@ pub fn log(x: f64) -> f64 {
             let dk = k as f64;
             return dk * LN2_HI + dk * LN2_LO;
         }
-        let r = f * f * (0.5 - 0.33333333333333333 * f);
+        let r = f * f * (0.5 - 0.333_333_333_333_333_3 * f);
         let dk = k as f64;
         if k == 0 {
             return f - r;
@@ -153,14 +153,15 @@ pub fn log(x: f64) -> f64 {
         if k == 0 {
             return f - (hfsq - s * (hfsq + r));
         }
-        return dk * LN2_HI - ((hfsq - (s * (hfsq + r) + dk * LN2_LO)) - f);
+        dk * LN2_HI - ((hfsq - (s * (hfsq + r) + dk * LN2_LO)) - f)
     } else if k == 0 {
-        return f - s * (f - r);
+        f - s * (f - r)
     } else {
-        return dk * LN2_HI - ((s * (f - r) - dk * LN2_LO) - f);
+        dk * LN2_HI - ((s * (f - r) - dk * LN2_LO) - f)
     }
 }
 
+#[cfg(test)]
 fn ulp_distance(a: f64, b: f64) -> u64 {
     if a == b {
         return 0;
@@ -171,8 +172,10 @@ fn ulp_distance(a: f64, b: f64) -> u64 {
     a.abs().to_bits().abs_diff(b.abs().to_bits())
 }
 
+#[cfg(test)]
 struct Lcg(u64);
 
+#[cfg(test)]
 impl Lcg {
     fn next(&mut self) -> u64 {
         self.0 = self

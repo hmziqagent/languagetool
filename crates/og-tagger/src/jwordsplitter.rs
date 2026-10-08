@@ -351,18 +351,20 @@ fn split(word: &str, allow_interfix_removal: bool, strict: bool) -> Option<Vec<S
         let mut parts = split_from_right(word, strict);
         if parts.is_none() && is_simple_word(word) {
             parts = Some(vec![word.to_string()]);
-        } else if let Some(ref mut p) = parts {
-            if is_simple_word(word) && !p.iter().any(|x| x == word) {
-                p.push(word.to_string());
-            }
+        } else if let Some(ref mut p) = parts
+            && is_simple_word(word)
+            && !p.iter().any(|x| x == word)
+        {
+            p.push(word.to_string());
         }
-        if parts.is_none() && ends_with_interfix(&lc_word) {
-            if let Some(mut inner) = split_from_right(word_without_interfix, strict) {
-                if let Some(interfix) = removable_interfix {
-                    inner.push(interfix.to_string());
-                }
-                parts = Some(inner);
+        if parts.is_none()
+            && ends_with_interfix(&lc_word)
+            && let Some(mut inner) = split_from_right(word_without_interfix, strict)
+        {
+            if let Some(interfix) = removable_interfix {
+                inner.push(interfix.to_string());
             }
+            parts = Some(inner);
         }
         parts
     }

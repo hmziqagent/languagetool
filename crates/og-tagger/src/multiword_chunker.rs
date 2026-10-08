@@ -557,7 +557,7 @@ impl MultiWordChunkerDisambiguator {
             params.allow_first_capitalized,
             params.allow_all_uppercase,
             params.allow_titlecase,
-            params.default_tag.as_deref(),
+            params.default_tag,
             params.remove_previous_tags,
             params.add_ignore_spelling,
         )?;

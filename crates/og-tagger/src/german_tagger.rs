@@ -823,6 +823,12 @@ const TAGS_FOR_ADJ_ES: &[&str] = &[
 
 type SentTokens<'a> = &'a [(&'a str, usize, usize)];
 
+struct Occurrence<'a> {
+    word: &'a str,
+    start: usize,
+    end: usize,
+}
+
 struct TokenCtx {
     first_word: bool,
     prev_word: Option<String>,
@@ -1183,12 +1189,13 @@ impl GermanTagger {
             ctx.first_word = !is_alphanumeric(word);
         } else if ctx.pos == 0 {
             tagger_tokens.extend(self.word_tag(&lower));
-        } else if ctx.pos > 1 && tagger_tokens.is_empty() {
-            if let Some(idx) = tokens.iter().position(|t| t.0 == word).filter(|i| *i > 2) {
-                if tokens[idx - 1].0 == "„" && tokens[idx - 3].0 == ":" {
-                    tagger_tokens.extend(self.word_tag(&lower));
-                }
-            }
+        } else if ctx.pos > 1
+            && tagger_tokens.is_empty()
+            && let Some(idx) = tokens.iter().position(|t| t.0 == word).filter(|i| *i > 2)
+            && tokens[idx - 1].0 == "„"
+            && tokens[idx - 3].0 == ":"
+        {
+            tagger_tokens.extend(self.word_tag(&lower));
         }
 
         let mut readings: Vec<AnalyzedToken> = Vec::new();
@@ -1241,7 +1248,13 @@ impl GermanTagger {
                 }
             }
         } else {
-            self.expand_unknown(word, start, end, tokens, token_idx, ctx, &mut readings);
+            self.expand_unknown(
+                Occurrence { word, start, end },
+                tokens,
+                token_idx,
+                ctx,
+                &mut readings,
+            );
         }
         if readings.is_empty() {
             readings.push(no_info_token(word, start, end));
@@ -1251,14 +1264,13 @@ impl GermanTagger {
 
     fn expand_unknown(
         &self,
-        word: &str,
-        start: usize,
-        end: usize,
+        at: Occurrence<'_>,
         tokens: SentTokens,
         token_idx: usize,
         ctx: &mut TokenCtx,
         readings: &mut Vec<AnalyzedToken>,
     ) {
+        let Occurrence { word, start, end } = at;
         let expansions = self.expansions();
         let add_noun_tags = !NOUN_TAG_EXPANSION_EXCEPTIONS.contains(&word);
         let verb_info = expansions.verb_infos.get(word);
@@ -1468,7 +1480,11 @@ impl GermanTagger {
                     if last_part.chars().count() > 2 {
                         let first_part = word.strip_suffix(last_part.as_str()).unwrap_or("");
                         self.expand_separable_verb(
-                            word, start, end, tokens, first_part, &last_part, readings,
+                            Occurrence { word, start, end },
+                            tokens,
+                            first_part,
+                            &last_part,
+                            readings,
                         );
                     }
                 } else {
@@ -1502,14 +1518,13 @@ impl GermanTagger {
 
     fn expand_separable_verb(
         &self,
-        word: &str,
-        start: usize,
-        end: usize,
+        at: Occurrence<'_>,
         tokens: SentTokens,
         first_part: &str,
         last_part: &str,
         readings: &mut Vec<AnalyzedToken>,
     ) {
+        let Occurrence { word, start, end } = at;
         if let Some(infinitiv) = last_part.strip_prefix("zu") {
             let infs = self.word_tag(infinitiv);
             for (lemma, tag) in &infs {
@@ -1795,7 +1810,7 @@ impl GermanTagger {
         ]
         .iter()
         .any(|p| p.eq_ignore_ascii_case(previous_word));
-        if !(ctx.pos == 0 && tokens.len() > 1) && !prev_ok {
+        if !(prev_ok || ctx.pos == 0 && tokens.len() > 1) {
             return Vec::new();
         }
         let w = if ctx.pos == 0 || previous_word == "„" {

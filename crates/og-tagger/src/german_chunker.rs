@@ -896,7 +896,7 @@ mod tests {
         )];
         let mut offset = 0;
         for (word, atr) in words.iter().zip(tagged) {
-            let mut next = if atr.readings().is_empty() {
+            let next = if atr.readings().is_empty() {
                 AnalyzedTokenReadings::new(AnalyzedToken::new(
                     word.as_str(),
                     offset,

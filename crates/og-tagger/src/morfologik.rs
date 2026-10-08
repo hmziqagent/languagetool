@@ -1040,7 +1040,7 @@ impl MorfologikDictionary {
         };
         let key: &'static str = Box::leak(word.to_string().into_boxed_str());
         let mut cache = dict.cache.write().unwrap();
-        *cache.entry(key).or_insert(leaked)
+        cache.entry(key).or_insert(leaked)
     }
 
     pub fn len(&self) -> usize {

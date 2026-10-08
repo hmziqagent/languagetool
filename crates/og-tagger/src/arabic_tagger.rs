@@ -125,8 +125,7 @@ pub(crate) fn has_pronoun(postag: &str) -> bool {
 
 pub(crate) fn has_conjunction(postag: &str) -> bool {
     let flag = get_flag(postag, "CONJ");
-    (is_noun(postag) && flag != '-')
-        || (is_verb(postag) && flag != '-')
+    ((is_noun(postag) || is_verb(postag)) && flag != '-')
         || (is_stopword_tag(postag) && flag != 'W')
 }
 
@@ -636,7 +635,7 @@ fn get_tags(chars: &[char], pos_start: usize, pos_end: usize, new_style: bool) -
     if prefix.starts_with('\u{648}') || prefix.starts_with('\u{641}') {
         tags.push("CONJ;W".to_string());
         prefix = prefix
-            .trim_start_matches(|c| c == '\u{648}' || c == '\u{641}')
+            .trim_start_matches(['\u{648}', '\u{641}'])
             .to_string();
     }
     if prefix.starts_with('\u{643}') {
@@ -757,7 +756,7 @@ mod tests {
             "/home/agent/opengrammar-rs/languagetool/languagetool-language-modules/ar/src/main/resources/org/languagetool/resource/ar",
         );
         let t = ArabicTagger::from_resource_dir(dir);
-        let toks = vec!["مليونين".to_string()];
+        let toks = ["مليونين".to_string()];
         let refs: Vec<&str> = toks.iter().map(|s| s.as_str()).collect();
         let out = crate::Tagger::tag(&t, &refs);
         for atr in &out {

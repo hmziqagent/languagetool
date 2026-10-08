@@ -1236,7 +1236,6 @@ mod tests {
     #[test]
     fn chunker_preserves_typographic_apostrophe_marker() {
         let Some(chunker) = chunker() else { return };
-        let text = "An actress’s role";
         let mut readings = Vec::new();
         let mut pos = 0;
         for part in ["An", " ", "actress", "’s", " ", "role"] {
@@ -1594,16 +1593,11 @@ mod opennlp_docs_parity_tests {
 
     #[test]
     fn mapping_skips_whitespace_between_readings() {
-        let mut readings: Vec<og_core::AnalyzedTokenReadings> = vec![];
-        readings.push(og_core::AnalyzedTokenReadings::new(
-            og_core::AnalyzedToken::new("a", 0, 1),
-        ));
-        readings.push(og_core::AnalyzedTokenReadings::new(
-            og_core::AnalyzedToken::new(" ", 1, 2),
-        ));
-        readings.push(og_core::AnalyzedTokenReadings::new(
-            og_core::AnalyzedToken::new("b", 2, 3),
-        ));
+        let readings: Vec<og_core::AnalyzedTokenReadings> = vec![
+            og_core::AnalyzedTokenReadings::new(og_core::AnalyzedToken::new("a", 0, 1)),
+            og_core::AnalyzedTokenReadings::new(og_core::AnalyzedToken::new(" ", 1, 2)),
+            og_core::AnalyzedTokenReadings::new(og_core::AnalyzedToken::new("b", 2, 3)),
+        ];
         let token_texts: Vec<&str> = vec!["a", "b"];
         let mapped = map_tokens_to_readings(&token_texts, &readings);
         assert_eq!(mapped[0], Some(0));
