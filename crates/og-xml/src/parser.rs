@@ -13,6 +13,8 @@ pub enum XmlParseError {
     Io(#[from] std::io::Error),
 }
 
+type PhraseVariants = Vec<(Vec<XmlPatternToken>, Vec<XmlPatternElement>)>;
+
 struct PatternRefUse {
     idref: String,
     split_tok: usize,
@@ -106,10 +108,9 @@ impl XmlRuleParser {
         let mut phrase_id = String::new();
         let mut phrase_run_tokens: Vec<XmlPatternToken> = Vec::new();
         let mut phrase_run_elements: Vec<XmlPatternElement> = Vec::new();
-        let mut phrase_variants: Vec<(Vec<XmlPatternToken>, Vec<XmlPatternElement>)> = Vec::new();
+        let mut phrase_variants: PhraseVariants = Vec::new();
         let mut phrase_after_ref = false;
-        let mut phrase_map: HashMap<String, Vec<(Vec<XmlPatternToken>, Vec<XmlPatternElement>)>> =
-            HashMap::new();
+        let mut phrase_map: HashMap<String, PhraseVariants> = HashMap::new();
         let mut pattern_ref_uses: Vec<PatternRefUse> = Vec::new();
         let mut in_exception = false;
         let mut current_exception: Option<XmlException> = None;
@@ -317,10 +318,8 @@ impl XmlRuleParser {
                                         exc.case_sensitive_set = true;
                                     }
                                     "scope" => exc.scope = Some(val),
-                                    "spacebefore" => {
-                                        if val != "ignore" {
-                                            exc.space_before = Some(val == "yes");
-                                        }
+                                    "spacebefore" if val != "ignore" => {
+                                        exc.space_before = Some(val == "yes");
                                     }
                                     _ => {}
                                 }
@@ -770,10 +769,8 @@ impl XmlRuleParser {
                                         exc.case_sensitive_set = true;
                                     }
                                     "scope" => exc.scope = Some(val),
-                                    "spacebefore" => {
-                                        if val != "ignore" {
-                                            exc.space_before = Some(val == "yes");
-                                        }
+                                    "spacebefore" if val != "ignore" => {
+                                        exc.space_before = Some(val == "yes");
                                     }
                                     _ => {}
                                 }
@@ -1072,27 +1069,25 @@ impl XmlRuleParser {
                         "phrases" => {
                             in_phrases = false;
                         }
-                        "phrase" => {
-                            if in_phrases {
-                                let mut alts = std::mem::take(&mut phrase_variants);
-                                if alts.is_empty() {
-                                    alts.push((
-                                        std::mem::take(&mut phrase_run_tokens),
-                                        std::mem::take(&mut phrase_run_elements),
-                                    ));
-                                } else {
-                                    for alt in &mut alts {
-                                        alt.0.extend(phrase_run_tokens.iter().cloned());
-                                        alt.1.extend(phrase_run_elements.iter().cloned());
-                                    }
-                                    phrase_run_tokens.clear();
-                                    phrase_run_elements.clear();
+                        "phrase" if in_phrases => {
+                            let mut alts = std::mem::take(&mut phrase_variants);
+                            if alts.is_empty() {
+                                alts.push((
+                                    std::mem::take(&mut phrase_run_tokens),
+                                    std::mem::take(&mut phrase_run_elements),
+                                ));
+                            } else {
+                                for alt in &mut alts {
+                                    alt.0.extend(phrase_run_tokens.iter().cloned());
+                                    alt.1.extend(phrase_run_elements.iter().cloned());
                                 }
-                                if !phrase_id.is_empty() {
-                                    phrase_map.insert(phrase_id.clone(), alts);
-                                }
-                                phrase_after_ref = false;
+                                phrase_run_tokens.clear();
+                                phrase_run_elements.clear();
                             }
+                            if !phrase_id.is_empty() {
+                                phrase_map.insert(phrase_id.clone(), alts);
+                            }
+                            phrase_after_ref = false;
                         }
                         "phraseref" => {}
                         "pattern" => {

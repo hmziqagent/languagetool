@@ -612,7 +612,7 @@ fn expand_bounded_negative_lookbehind(inner: &str) -> Option<String> {
             total = total.saturating_mul(max - min + 1);
         }
     }
-    if has_empty || total < 2 || total > MAX_LOOKBEHIND_ALTERNATIVES {
+    if has_empty || !(2..=MAX_LOOKBEHIND_ALTERNATIVES).contains(&total) {
         return None;
     }
     let mut alternatives: Vec<String> = vec![String::new()];
