@@ -134,6 +134,7 @@ fn rule_groups(rule_set: &CompiledRuleSet) -> Vec<Vec<&CompiledRule>> {
 
 #[test]
 fn chinese_grammar_examples_with_zh_pipeline() {
+    let _release_guard = crate::release_guard();
     let rule_set = compiled_rules();
     let groups = rule_groups(rule_set);
     let engine = PatternRuleEngine::new();

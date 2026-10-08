@@ -6,6 +6,20 @@ pub use en::*;
 pub use engine::*;
 pub use registry::*;
 
+pub(crate) fn release_guard() -> impl Drop {
+    struct ReleaseOnDrop(og_core::releasable::HeavyGuard);
+    impl Drop for ReleaseOnDrop {
+        fn drop(&mut self) {
+            og_core::releasable::release_all();
+            #[cfg(target_os = "linux")]
+            unsafe {
+                libc::malloc_trim(0);
+            }
+        }
+    }
+    ReleaseOnDrop(og_core::releasable::heavy_guard())
+}
+
 pub(crate) fn weak_shared<T>(
     build: impl FnOnce() -> Option<std::sync::Arc<T>>,
 ) -> Option<std::sync::Arc<T>>

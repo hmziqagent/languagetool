@@ -276,6 +276,7 @@ fn matches_for_example(
 
 #[test]
 fn slovak_grammar_examples_with_sk_pipeline() {
+    let _release_guard = crate::release_guard();
     let engine = suite_engine();
     let pipeline = sk_pipeline();
     og_rules::pattern_rule::set_test_date_hack(true);

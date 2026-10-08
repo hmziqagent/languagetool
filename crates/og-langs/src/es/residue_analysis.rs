@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 #[test]
 #[ignore]
 fn classify_failures_by_dict_coverage() {
+    let _release_guard = crate::release_guard();
     let artifact =
         std::fs::read_to_string("/tmp/test_failures_es_module.txt").expect("failure artifact");
     let pipeline = SpanishPipeline::shared();
@@ -67,6 +68,7 @@ fn classify_failures_by_dict_coverage() {
 #[test]
 #[ignore]
 fn compare_failing_word_readings_across_dicts() {
+    let _release_guard = crate::release_guard();
     use og_tagger::morfologik::MorfologikDictionary;
     use std::path::PathBuf;
     let artifact =
@@ -136,12 +138,14 @@ fn compare_failing_word_readings_across_dicts() {
 #[test]
 #[ignore]
 fn classify_failures_by_direct_dict_lookup() {
+    let _release_guard = crate::release_guard();
     classify_artifact_by_direct_dict_lookup("/tmp/test_failures_es_module.txt");
 }
 
 #[test]
 #[ignore]
 fn classify_style_failures_by_direct_dict_lookup() {
+    let _release_guard = crate::release_guard();
     classify_artifact_by_direct_dict_lookup("/tmp/test_failures_es_style_module.txt");
 }
 

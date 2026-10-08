@@ -63,3 +63,11 @@ pub fn release_all() {
         }
     }
 }
+
+pub struct HeavyGuard(std::sync::MutexGuard<'static, ()>);
+
+pub fn heavy_guard() -> HeavyGuard {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    let lock = LOCK.get_or_init(|| Mutex::new(()));
+    HeavyGuard(lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner()))
+}

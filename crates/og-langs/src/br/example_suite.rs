@@ -240,6 +240,7 @@ const DATE_TRIM_RESIDUE: &[(&str, &str)] = &[
 #[test]
 #[ignore]
 fn breton_grammar_examples_with_br_pipeline() {
+    let _release_guard = crate::release_guard();
     let rule_set = compiled_rules();
     let groups = rule_groups(rule_set);
     let engine = PatternRuleEngine::new();

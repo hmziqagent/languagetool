@@ -1059,10 +1059,15 @@ impl GermanTagger {
         if let Some(cached) = self.expansion.get() {
             return cached;
         }
-        static SHARED: std::sync::OnceLock<
+        static SHARED: og_core::releasable::Releasable<
             std::sync::Mutex<std::collections::HashMap<std::path::PathBuf, Arc<ExpansionInfos>>>,
-        > = std::sync::OnceLock::new();
-        let shared = SHARED.get_or_init(Default::default);
+        > = og_core::releasable::Releasable::new();
+        let shared = og_core::releasable::shared_get_or_build(&SHARED, || {
+            Some(std::sync::Arc::new(std::sync::Mutex::new(
+                std::collections::HashMap::new(),
+            )))
+        })
+        .expect("expansion cache");
         let key = self
             .resource_dir
             .clone()

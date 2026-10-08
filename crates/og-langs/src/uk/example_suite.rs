@@ -262,6 +262,7 @@ fn shared_pattern_engine() -> &'static PatternRuleEngine {
 #[test]
 #[ignore]
 fn ukrainian_grammar_examples_with_uk_pipeline() {
+    let _release_guard = crate::release_guard();
     let groups = rule_groups();
     let engine = shared_pattern_engine();
     let pipeline = uk_pipeline();

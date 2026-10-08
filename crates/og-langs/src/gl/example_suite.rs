@@ -281,6 +281,7 @@ const PINNED_NO_MATCH: [&str; 11] = [
 #[test]
 #[ignore]
 fn galician_grammar_examples_with_gl_pipeline() {
+    let _release_guard = crate::release_guard();
     let rule_set = compiled_rules();
     let groups = rule_groups(rule_set);
     let engine = suite_engine();

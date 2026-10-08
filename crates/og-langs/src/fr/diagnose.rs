@@ -575,30 +575,35 @@ fn suppressor_pattern_probe() {
 #[test]
 #[ignore]
 fn fr_diagnose_tokenizer() {
+    let _release_guard = crate::release_guard();
     tokenizer_probe();
 }
 
 #[test]
 #[ignore]
 fn fr_diagnose_suppressor_patterns() {
+    let _release_guard = crate::release_guard();
     suppressor_pattern_probe();
 }
 
 #[test]
 #[ignore]
 fn fr_diagnose_adj_adj_fps() {
+    let _release_guard = crate::release_guard();
     adj_adj_fps_probe();
 }
 
 #[test]
 #[ignore]
 fn fr_diagnose_tagger() {
+    let _release_guard = crate::release_guard();
     tagger_probe();
 }
 
 #[test]
 #[ignore]
 fn fr_diagnose_offsets() {
+    let _release_guard = crate::release_guard();
     let pipeline = FrenchPipeline::shared();
     for text in ["alors il faut partir", "dans ce cas il est certain"] {
         println!("SPLIT {text:?} => {:?}", pipeline.sentence_ranges(text));
@@ -625,17 +630,20 @@ fn fr_diagnose_offsets() {
 #[test]
 #[ignore]
 fn fr_diagnose_disambig_bisect() {
+    let _release_guard = crate::release_guard();
     disambig_bisect_probe();
 }
 
 #[test]
 #[ignore]
 fn fr_diagnose_readings() {
+    let _release_guard = crate::release_guard();
     readings_probe();
 }
 
 #[test]
 #[ignore]
 fn fr_diagnose_rule_matches() {
+    let _release_guard = crate::release_guard();
     rule_match_probe();
 }

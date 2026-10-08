@@ -35,9 +35,10 @@ pub(crate) struct FrenchPipeline {
 }
 
 impl FrenchPipeline {
-    pub fn shared() -> &'static FrenchPipeline {
-        static PIPE: OnceLock<FrenchPipeline> = OnceLock::new();
-        PIPE.get_or_init(|| {
+    pub fn shared() -> std::sync::Arc<FrenchPipeline> {
+        static PIPE: og_core::releasable::Releasable<FrenchPipeline> =
+            og_core::releasable::Releasable::new();
+        og_core::releasable::shared_get_or_build(&PIPE, || {
             let resource_dir = fr_resource_dir().expect("fr resource dir with french.dict");
             let tagger = Arc::new(crate::fr::tagger::FrenchTagger::from_resource_dir(
                 &resource_dir,
@@ -47,13 +48,14 @@ impl FrenchPipeline {
                 move |w: &str| tagger.inner_is_word_tagged(w)
             }));
             let disambiguator = crate::fr::build_fr_disambiguator(&resource_dir);
-            FrenchPipeline {
+            Some(std::sync::Arc::new(FrenchPipeline {
                 tokenizer,
                 tagger,
                 disambiguator,
                 splitter: og_tokenizer::srx::srx_splitter("fr"),
-            }
+            }))
         })
+        .expect("fr pipeline")
     }
 
     pub fn tagger_ref(&self) -> &crate::fr::tagger::FrenchTagger {

@@ -264,6 +264,7 @@ enum Outcome {
 #[test]
 #[ignore]
 fn portuguese_grammar_examples_with_pt_pipeline() {
+    let _release_guard = crate::release_guard();
     evaluate_examples_file(
         &grammar_path(),
         "grammar.xml",
@@ -455,6 +456,7 @@ pub(crate) fn collect_style_antipattern_examples(nc: &str) -> StyleAntipatternEx
 #[test]
 #[ignore]
 fn portuguese_style_examples_with_pt_pipeline() {
+    let _release_guard = crate::release_guard();
     evaluate_style_examples_with_antipatterns();
 }
 

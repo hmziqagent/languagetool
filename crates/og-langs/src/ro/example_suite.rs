@@ -153,6 +153,7 @@ fn shared_pattern_engine() -> &'static PatternRuleEngine {
 #[test]
 #[ignore]
 fn romanian_grammar_examples_with_ro_pipeline() {
+    let _release_guard = crate::release_guard();
     let rule_set = compiled_rules();
     let groups = rule_groups(rule_set);
     let engine = shared_pattern_engine();

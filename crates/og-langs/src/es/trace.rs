@@ -174,6 +174,7 @@ pub fn dump_stages(text: &str) {
 #[test]
 #[ignore]
 fn probe_gn_readings() {
+    let _release_guard = crate::release_guard();
     dump("África es bonito.");
     dump("Los dragones son guay.");
     dump("La tres reglas son estas.");
@@ -183,6 +184,7 @@ fn probe_gn_readings() {
 #[test]
 #[ignore]
 fn probe_direct_ok_failures() {
+    let _release_guard = crate::release_guard();
     dump("hace dos años atrás");
     dump("hace dos semanas y media atrás");
     dump("Alguien explíqueme que sucede aquí.");
@@ -193,6 +195,7 @@ fn probe_direct_ok_failures() {
 #[test]
 #[ignore]
 fn probe_synth_lookups() {
+    let _release_guard = crate::release_guard();
     use crate::es::es_resource_dir;
     let dir = es_resource_dir().expect("es dir");
     let dict = og_tagger::morfologik::MorfologikDictionary::load(
@@ -231,6 +234,7 @@ fn probe_synth_lookups() {
 
 #[test]
 fn tokenizer_pins_java_spanish_word_tokenizer_test() {
+    let _release_guard = crate::release_guard();
     use og_tokenizer::WordTokenizer as _;
     let t = crate::es::word_tokenizer::SpanishWordTokenizer::new();
     let cases: Vec<(&str, Vec<&str>)> = vec![
@@ -266,6 +270,7 @@ fn tokenizer_pins_java_spanish_word_tokenizer_test() {
 
 #[test]
 fn sentence_splits_pin_java_spanish_sentence_tokenizer_test() {
+    let _release_guard = crate::release_guard();
     use og_tokenizer::SentenceTokenizer as _;
     let splitter = og_tokenizer::srx::srx_splitter("es").expect("es srx");
     let cases: Vec<(&str, Vec<&str>)> = vec![
@@ -338,6 +343,7 @@ fn sentence_splits_pin_java_spanish_sentence_tokenizer_test() {
 
 #[test]
 fn disambiguator_expands_external_entities() {
+    let _release_guard = crate::release_guard();
     let pipeline = crate::es::test_support::SpanishPipeline::shared();
     let sentence = &pipeline.analyze_text("Me junto con él en el patio.")[0];
     let junto = sentence
@@ -358,6 +364,7 @@ fn disambiguator_expands_external_entities() {
 
 #[test]
 fn perifrasis_verbal_addchunk_rules_do_not_strip_interim_readings() {
+    let _release_guard = crate::release_guard();
     let pipeline = crate::es::test_support::SpanishPipeline::shared();
     let sentence = &pipeline.analyze_text("Nos hemos ido desarrollado")[0];
     let ido = sentence
@@ -377,6 +384,7 @@ fn perifrasis_verbal_addchunk_rules_do_not_strip_interim_readings() {
 #[test]
 #[ignore]
 fn probe_comillas_apostrofo_quote_equality_divergence() {
+    let _release_guard = crate::release_guard();
     run_rule(
         "COMILLAS_APOSTROFO",
         "Ha ilustrado ‘El Hobbit’, ‘El Señor de los Anillos‘ y ‘Los hijos de Húrin’.",
@@ -390,6 +398,7 @@ fn probe_comillas_apostrofo_quote_equality_divergence() {
 #[test]
 #[ignore]
 fn probe_postponed_antipattern_suppression() {
+    let _release_guard = crate::release_guard();
     let xml = std::fs::read_to_string(grammar_path()).expect("grammar.xml");
     let rule_set = XmlCompiler::new()
         .compile_file_with_base(&xml, grammar_path().parent())
@@ -455,6 +464,7 @@ fn probe_postponed_antipattern_suppression() {
 #[test]
 #[ignore]
 fn probe_minimal_postponed_element() {
+    let _release_guard = crate::release_guard();
     let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
 <rules lang="es">
     <rule id="T1">
@@ -511,6 +521,7 @@ fn probe_minimal_postponed_element() {
 #[test]
 #[ignore]
 fn probe_raw_dict_lookups() {
+    let _release_guard = crate::release_guard();
     use crate::es::es_resource_dir;
     let dir = es_resource_dir().expect("es dir");
     let dict = og_tagger::morfologik::MorfologikDictionary::load(
@@ -551,6 +562,7 @@ fn probe_raw_dict_lookups() {
 #[test]
 #[ignore]
 fn probe_all_tagged_no_match_families() {
+    let _release_guard = crate::release_guard();
     run_rule("MI_TILDE", "Y a mi solo mil.");
     dump("Y a mi solo mil.");
     run_rule("MI_TILDE", "Y a mi mil.");
@@ -586,6 +598,7 @@ fn probe_all_tagged_no_match_families() {
 #[test]
 #[ignore]
 fn probe_mydia01_fp() {
+    let _release_guard = crate::release_guard();
     run_rule(
         "MYDIA01",
         "Sin embargo, si capitulo, es en verdad por pura debilidad;",
@@ -596,6 +609,7 @@ fn probe_mydia01_fp() {
 #[test]
 #[ignore]
 fn probe_diacritics02_no_match() {
+    let _release_guard = crate::release_guard();
     run_rule("DIACRITICS_02", "Maquina de pelar patatas.");
     dump_stages("Maquina de pelar patatas.");
 }
@@ -603,6 +617,7 @@ fn probe_diacritics02_no_match() {
 #[test]
 #[ignore]
 fn probe_el_tilde_fp() {
+    let _release_guard = crate::release_guard();
     run_rule(
         "EL_TILDE",
         "ni siquiera el anime era lo suficientemente expresivo",
@@ -613,6 +628,7 @@ fn probe_el_tilde_fp() {
 #[test]
 #[ignore]
 fn probe_que_tilde2_fp() {
+    let _release_guard = crate::release_guard();
     run_rule(
         "QUE_TILDE2",
         "con la salvedad de que dicha comunicación de datos este amparada en una obligación legal",
@@ -625,6 +641,7 @@ fn probe_que_tilde2_fp() {
 #[test]
 #[ignore]
 fn probe_no_separado_fp() {
+    let _release_guard = crate::release_guard();
     run_rule("NO_SEPARADO", "en la tonalidad de re bemol menor.");
     run_rule("NO_SEPARADO", "Se re activa.");
     dump("en la tonalidad de re bemol menor.");
@@ -633,6 +650,7 @@ fn probe_no_separado_fp() {
 #[test]
 #[ignore]
 fn probe_hace_un_mes_atras_no_match() {
+    let _release_guard = crate::release_guard();
     run_rule("HACE_UN_MES_ATRAS", "hace dos años atrás");
     dump("hace dos años atrás");
 }
@@ -640,6 +658,7 @@ fn probe_hace_un_mes_atras_no_match() {
 #[test]
 #[ignore]
 fn probe_agreement_ordinals_no_match() {
+    let _release_guard = crate::release_guard();
     run_rule("AGREEMENT_ORDINALS", "vigésimo primera");
     run_rule("AGREEMENT_ORDINALS", "vigésimo primeros");
     dump("vigésimo primera");
@@ -667,6 +686,7 @@ fn probe_agreement_ordinals_no_match() {
 #[test]
 #[ignore]
 fn probe_agreement_det_noun_medio_no_match() {
+    let _release_guard = crate::release_guard();
     run_rule("AGREEMENT_DET_NOUN", "medio millones de euros");
     dump("medio millones de euros");
     use crate::es::es_resource_dir;

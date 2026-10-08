@@ -161,6 +161,7 @@ fn rule_groups(rule_set: &CompiledRuleSet) -> Vec<Vec<&CompiledRule>> {
 #[test]
 #[ignore]
 fn esperanto_grammar_examples_with_eo_pipeline() {
+    let _release_guard = crate::release_guard();
     let rule_set = compiled_rules();
     let groups = rule_groups(rule_set);
     let engine = PatternRuleEngine::new();

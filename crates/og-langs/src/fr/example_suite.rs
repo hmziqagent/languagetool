@@ -53,6 +53,7 @@ enum Outcome {
 #[test]
 #[ignore]
 fn french_grammar_examples_with_fr_pipeline() {
+    let _release_guard = crate::release_guard();
     evaluate_examples_file(
         &grammar_path(),
         "grammar.xml",
@@ -63,6 +64,7 @@ fn french_grammar_examples_with_fr_pipeline() {
 #[test]
 #[ignore]
 fn french_style_examples_with_fr_pipeline() {
+    let _release_guard = crate::release_guard();
     let style_path = crate::fr::test_support::fr_rules_dir()
         .expect("fr rules dir")
         .join("style.xml");

@@ -164,6 +164,7 @@ fn matches_for_example(
 #[test]
 #[ignore]
 fn crimean_tatar_grammar_examples_with_crh_pipeline() {
+    let _release_guard = crate::release_guard();
     let rule_set = compiled_rules();
     let groups = rule_groups(rule_set);
     let engine = PatternRuleEngine::new();

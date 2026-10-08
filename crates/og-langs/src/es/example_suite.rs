@@ -266,6 +266,7 @@ enum Outcome {
 #[test]
 #[ignore]
 fn spanish_grammar_examples_with_es_pipeline() {
+    let _release_guard = crate::release_guard();
     evaluate_examples_file(
         &grammar_path(),
         "grammar",
@@ -312,6 +313,7 @@ fn dispatch_drives_the_compiled_comma_rule_end_to_end() {
 #[test]
 #[ignore]
 fn spanish_style_examples_with_es_pipeline() {
+    let _release_guard = crate::release_guard();
     evaluate_examples_file(
         &style_path(),
         "style",

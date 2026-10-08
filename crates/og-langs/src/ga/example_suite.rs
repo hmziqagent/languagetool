@@ -301,6 +301,7 @@ fn evaluate_all_examples() -> SuiteOutcome {
 #[test]
 #[ignore]
 fn irish_grammar_examples_with_ga_pipeline() {
+    let _release_guard = crate::release_guard();
     let outcome = evaluate_all_examples();
     let total = outcome.passed + outcome.fail_lines.len() + outcome.correction_failures.len();
     eprintln!(

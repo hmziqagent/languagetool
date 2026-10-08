@@ -215,6 +215,7 @@ fn collect_antipattern_examples(nc: &str) -> AntipatternExamples {
 #[test]
 #[ignore]
 fn dutch_grammar_examples_with_nl_pipeline() {
+    let _release_guard = crate::release_guard();
     evaluate_examples_file(
         &grammar_path(),
         "grammar.xml",
@@ -225,6 +226,7 @@ fn dutch_grammar_examples_with_nl_pipeline() {
 #[test]
 #[ignore]
 fn dutch_style_examples_with_nl_pipeline() {
+    let _release_guard = crate::release_guard();
     evaluate_examples_file(
         &style_path(),
         "style.xml",
@@ -235,6 +237,7 @@ fn dutch_style_examples_with_nl_pipeline() {
 #[test]
 #[ignore]
 fn dutch_variant_grammar_examples_with_nl_pipeline() {
+    let _release_guard = crate::release_guard();
     evaluate_examples_file(
         &variant_grammar_path(),
         "nl-NL/grammar.xml",

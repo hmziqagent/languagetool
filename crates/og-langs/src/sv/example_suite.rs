@@ -218,6 +218,7 @@ fn rule_groups(rule_set: &CompiledRuleSet) -> Vec<Vec<&CompiledRule>> {
 
 #[test]
 fn swedish_grammar_examples_with_sv_pipeline() {
+    let _release_guard = crate::release_guard();
     let engine = suite_engine();
     let pipeline = sv_pipeline();
     og_rules::pattern_rule::set_test_date_hack(true);

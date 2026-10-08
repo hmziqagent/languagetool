@@ -164,6 +164,7 @@ fn shared_pattern_engine() -> &'static PatternRuleEngine {
 #[test]
 #[ignore]
 fn serbian_grammar_examples_with_sr_pipeline() {
+    let _release_guard = crate::release_guard();
     let groups = rule_groups();
     let engine = shared_pattern_engine();
     let pipeline = sr_pipeline();

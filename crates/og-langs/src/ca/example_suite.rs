@@ -18,9 +18,10 @@ pub(crate) fn ca_rules_dir() -> Option<std::path::PathBuf> {
 }
 
 impl CatalanPipeline {
-    pub fn shared() -> &'static CatalanPipeline {
-        static PIPE: OnceLock<CatalanPipeline> = OnceLock::new();
-        PIPE.get_or_init(|| {
+    pub fn shared() -> std::sync::Arc<CatalanPipeline> {
+        static PIPE: og_core::releasable::Releasable<CatalanPipeline> =
+            og_core::releasable::Releasable::new();
+        og_core::releasable::shared_get_or_build(&PIPE, || {
             let resource_dir = super::tagger::ca_resource_dir().expect("ca resource dir");
             let disambiguator = std::fs::read_to_string(resource_dir.join("disambiguation.xml"))
                 .ok()
@@ -30,14 +31,15 @@ impl CatalanPipeline {
                         og_tagger::hybrid_disambiguator("ca", &resource_dir, &core, xml)
                     })
                 });
-            CatalanPipeline {
+            Some(std::sync::Arc::new(CatalanPipeline {
                 tokenizer: super::word_tokenizer::CatalanWordTokenizer::new(),
                 tagger: super::tagger::CatalanTagger::shared_arc()
                     .expect("ca tagger over added.txt"),
                 disambiguator,
                 splitter: og_tokenizer::srx::srx_splitter("ca"),
-            }
+            }))
         })
+        .expect("ca pipeline")
     }
 
     pub fn sentence_ranges(&self, text: &str) -> Vec<(usize, usize)> {
@@ -169,6 +171,7 @@ fn rule_needs_tags(rule: &CompiledRule) -> bool {
 #[test]
 #[ignore]
 fn catalan_grammar_examples_with_ca_pipeline() {
+    let _release_guard = crate::release_guard();
     let rule_set = compiled_rules();
     let groups = rule_groups(rule_set);
     let engine = PatternRuleEngine::new();

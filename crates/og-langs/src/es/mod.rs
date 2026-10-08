@@ -288,20 +288,22 @@ pub(crate) mod test_support {
     }
 
     impl SpanishPipeline {
-        pub fn shared() -> &'static SpanishPipeline {
-            static PIPE: OnceLock<SpanishPipeline> = OnceLock::new();
-            PIPE.get_or_init(|| {
+        pub fn shared() -> Arc<SpanishPipeline> {
+            static PIPE: og_core::releasable::Releasable<SpanishPipeline> =
+                og_core::releasable::Releasable::new();
+            og_core::releasable::shared_get_or_build(&PIPE, || {
                 let resource_dir =
                     es_resource_dir().expect("es resource dir with spanish.dict present");
                 let tagger = Arc::new(tagger::SpanishTagger::from_resource_dir(&resource_dir));
                 let disambiguator = build_es_disambiguator(&resource_dir);
-                SpanishPipeline {
+                Some(Arc::new(SpanishPipeline {
                     tokenizer: word_tokenizer::SpanishWordTokenizer::new(),
                     tagger,
                     disambiguator,
                     splitter: og_tokenizer::srx::srx_splitter("es"),
-                }
+                }))
             })
+            .expect("es pipeline")
         }
 
         pub fn tagger_ref(&self) -> &tagger::SpanishTagger {

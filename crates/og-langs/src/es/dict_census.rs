@@ -3,7 +3,9 @@ use std::path::PathBuf;
 
 #[test]
 fn pinned_dict_gaps_block_the_eight_direct_ok_residue_rules() {
-    let tagger = crate::es::test_support::SpanishPipeline::shared().tagger_ref();
+    let _release_guard = crate::release_guard();
+    let pipeline = crate::es::test_support::SpanishPipeline::shared();
+    let tagger = pipeline.tagger_ref();
     let primera = tagger.lookup("primera");
     assert!(
         primera.contains(&("1", "AO0FS0")),
@@ -34,7 +36,9 @@ fn pinned_dict_gaps_block_the_eight_direct_ok_residue_rules() {
 
 #[test]
 fn pinned_dict_era_numeral_readings_block_mi_tilde_and_el_menos() {
-    let tagger = crate::es::test_support::SpanishPipeline::shared().tagger_ref();
+    let _release_guard = crate::release_guard();
+    let pipeline = crate::es::test_support::SpanishPipeline::shared();
+    let tagger = pipeline.tagger_ref();
     let mil = tagger.lookup("mil");
     assert!(
         mil.contains(&("mil", "AQ0CP0")) && mil.iter().all(|(_, tag)| !tag.starts_with("DN")),
@@ -57,7 +61,9 @@ fn pinned_dict_era_numeral_readings_block_mi_tilde_and_el_menos() {
 #[test]
 #[ignore]
 fn probe_dict_era_reading_evidence() {
-    let tagger = crate::es::test_support::SpanishPipeline::shared().tagger_ref();
+    let _release_guard = crate::release_guard();
+    let pipeline = crate::es::test_support::SpanishPipeline::shared();
+    let tagger = pipeline.tagger_ref();
     for w in [
         "mil",
         "tres",
@@ -79,6 +85,7 @@ fn probe_dict_era_reading_evidence() {
 #[test]
 #[ignore]
 fn compare_failing_words_across_spanish_dicts() {
+    let _release_guard = crate::release_guard();
     let resource_dir = crate::es::es_resource_dir().expect("es resource dir");
     let on_disk = MorfologikDictionary::load(
         &resource_dir.join("spanish.dict"),
@@ -172,6 +179,7 @@ fn compare_failing_words_across_spanish_dicts() {
 #[test]
 #[ignore]
 fn probe_suppress_misspelled_suggestion_words() {
+    let _release_guard = crate::release_guard();
     let resource_dir = crate::es::es_resource_dir().expect("es resource dir");
     let dict = MorfologikDictionary::load(
         &resource_dir.join("spanish.dict"),
@@ -217,6 +225,7 @@ fn probe_suppress_misspelled_suggestion_words() {
 #[test]
 #[ignore]
 fn probe_style_failure_words() {
+    let _release_guard = crate::release_guard();
     let resource_dir = crate::es::es_resource_dir().expect("es resource dir");
     let dict = MorfologikDictionary::load(
         &resource_dir.join("spanish.dict"),

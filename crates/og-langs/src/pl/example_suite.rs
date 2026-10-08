@@ -116,6 +116,7 @@ enum Outcome {
 #[test]
 #[ignore]
 fn polish_grammar_examples_with_pl_pipeline() {
+    let _release_guard = crate::release_guard();
     evaluate_examples_file(
         &grammar_path(),
         "grammar.xml",

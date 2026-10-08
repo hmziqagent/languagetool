@@ -164,7 +164,8 @@ pub fn probe(example_fragment: &str) {
 }
 
 pub fn probe_dict(words: &[&str]) {
-    let tagger = FrenchPipeline::shared().tagger_ref();
+    let pipeline = FrenchPipeline::shared();
+    let tagger = pipeline.tagger_ref();
     let tagged = og_tagger::Tagger::tag(tagger, words);
     for (word, atr) in words.iter().zip(tagged.iter()) {
         let readings: Vec<String> = atr
