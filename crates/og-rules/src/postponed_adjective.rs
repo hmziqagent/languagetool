@@ -328,8 +328,6 @@ enum SynthLang {
     Swedish,
 }
 
-type LemmaForms = HashMap<Box<str>, Vec<(Box<str>, Box<str>)>>;
-
 pub struct LangSynthesizer {
     dictionary: Option<Arc<MorfologikDictionary>>,
     seek: Option<Arc<og_tagger::morfologik::SynthDictionary>>,
@@ -339,7 +337,6 @@ pub struct LangSynthesizer {
     lang: SynthLang,
     article: crate::en_article::ArticleData,
     possible_tags: Vec<Box<str>>,
-    lemma_forms: OnceLock<LemmaForms>,
 }
 
 const GERMAN_REMOVE: &[&str] = &[
@@ -505,7 +502,6 @@ impl LangSynthesizer {
             lang,
             article,
             possible_tags,
-            lemma_forms: OnceLock::new(),
         })
     }
 
@@ -523,33 +519,6 @@ impl LangSynthesizer {
 
     fn is_spanish(&self) -> bool {
         self.lang == SynthLang::Spanish
-    }
-
-    fn forms(&self) -> &LemmaForms {
-        self.lemma_forms.get_or_init(|| {
-            let mut map: LemmaForms = HashMap::new();
-            if let Some(dict) = &self.dictionary {
-                if let Some(synth) = dict.synth_forms_by_lemma() {
-                    for (lemma, entries) in synth {
-                        let list = map.entry(Box::from(*lemma)).or_default();
-                        for (tag, form) in entries {
-                            list.push((Box::from(*tag), Box::from(*form)));
-                        }
-                    }
-                } else {
-                    for (lemma, entries) in dict.forms_by_lemma() {
-                        let list = map.entry(Box::from(*lemma)).or_default();
-                        for (tag, form) in entries {
-                            list.push((Box::from(*tag), Box::from(*form)));
-                        }
-                    }
-                }
-            }
-            for list in map.values_mut() {
-                list.sort();
-            }
-            map
-        })
     }
 
     pub fn synthesize(&self, lemma: &str, tag: &Regex) -> Vec<String> {
@@ -774,8 +743,13 @@ impl LangSynthesizer {
 
     fn lookup_matching(&self, lemma: &str, matches_tag: &impl Fn(&str) -> bool) -> Vec<String> {
         let mut results = Vec::new();
-        if let Some(entries) = self.forms().get(lemma) {
-            for (t, form) in entries {
+        if let Some(dict) = &self.dictionary
+            && let Some(entries) = dict.forms_by_lemma().get(lemma)
+        {
+            let mut sorted: Vec<(&str, &str)> =
+                entries.iter().map(|(t, form)| (&**t, &**form)).collect();
+            sorted.sort_unstable();
+            for (t, form) in sorted {
                 if matches_tag(t) && self.german_lookup_ok(lemma, form) {
                     results.push(form.to_string());
                 }

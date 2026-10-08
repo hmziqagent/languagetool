@@ -218,10 +218,10 @@ impl VerbAgreementRule {
                     continue;
                 }
                 if (starts_with_lowercase(word) == lc_lemma || verb_lemma == "mein")
-                    && !SYNTH_REMOVE.contains(word)
-                    && !suggestions.iter().any(|s| s == word)
+                    && !SYNTH_REMOVE.contains(&&**word)
+                    && !suggestions.iter().any(|s| s == &**word)
                 {
-                    suggestions.push((*word).to_string());
+                    suggestions.push(word.to_string());
                 }
             }
         }

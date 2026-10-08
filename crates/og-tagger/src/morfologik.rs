@@ -1,10 +1,12 @@
 use std::path::Path;
 
 type ReadingList = Vec<(&'static str, &'static str)>;
-type EntriesMap = FxHashMap<&'static str, Box<[(&'static str, &'static str)]>>;
-pub type FormsByLemma = FxHashMap<&'static str, Vec<(&'static str, &'static str)>>;
+type EntriesMap = FxHashMap<Box<str>, Box<[(Box<str>, Box<str>)]>>;
+pub type FormsByLemma = FxHashMap<Box<str>, Vec<(Box<str>, Box<str>)>>;
 type SynthByLemma = FormsByLemma;
 type VerbForms = std::collections::HashMap<String, Vec<String>>;
+type LookupCache =
+    std::sync::RwLock<FxHashMap<&'static str, &'static [(&'static str, &'static str)]>>;
 
 #[derive(Default)]
 pub struct FxHasher {
@@ -63,12 +65,16 @@ pub type FxBuildHasher = std::hash::BuildHasherDefault<FxHasher>;
 pub type FxHashMap<K, V> = std::collections::HashMap<K, V, FxBuildHasher>;
 pub type FxHashSet<T> = std::collections::HashSet<T, FxBuildHasher>;
 
-fn intern<'a>(cache: &mut FxHashSet<&'a str>, owned: String) -> &'a str {
-    if let Some(existing) = cache.get(owned.as_str()) {
+fn global_intern(owned: String) -> &'static str {
+    static POOL: std::sync::OnceLock<std::sync::Mutex<FxHashSet<&'static str>>> =
+        std::sync::OnceLock::new();
+    let pool = POOL.get_or_init(|| std::sync::Mutex::new(FxHashSet::default()));
+    let mut guard = pool.lock().unwrap();
+    if let Some(existing) = guard.get(owned.as_str()) {
         return existing;
     }
-    let leaked: &'a str = Box::leak(owned.into_boxed_str());
-    cache.insert(leaked);
+    let leaked: &'static str = Box::leak(owned.into_boxed_str());
+    guard.insert(leaked);
     leaked
 }
 
@@ -974,22 +980,35 @@ struct FsaDict {
     encoding: DictEncoding,
     frequency_included: bool,
     cache: std::sync::RwLock<FxHashMap<&'static str, &'static [(&'static str, &'static str)]>>,
-    interner: std::sync::Mutex<FxHashSet<&'static str>>,
 }
 
 struct Materialized {
-    entries: EntriesMap,
-    synth_by_lemma: Option<SynthByLemma>,
+    entries: std::sync::OnceLock<EntriesMap>,
+    synth_by_lemma: std::sync::OnceLock<Option<SynthByLemma>>,
     forms_by_lemma: std::sync::OnceLock<FormsByLemma>,
     verb_forms: std::sync::OnceLock<VerbForms>,
+}
+
+impl Materialized {
+    fn empty() -> Self {
+        Self {
+            entries: std::sync::OnceLock::new(),
+            synth_by_lemma: std::sync::OnceLock::new(),
+            forms_by_lemma: std::sync::OnceLock::new(),
+            verb_forms: std::sync::OnceLock::new(),
+        }
+    }
 }
 
 enum Source {
     Fsa {
         dict: FsaDict,
-        materialized: std::sync::OnceLock<Materialized>,
+        materialized: Materialized,
     },
-    Decoded(Materialized),
+    Decoded {
+        materialized: Materialized,
+        cache: LookupCache,
+    },
 }
 
 pub struct MorfologikDictionary {
@@ -1014,7 +1033,6 @@ impl FsaDict {
         };
         let mut readings: ReadingList = Vec::new();
         {
-            let mut interner = self.interner.lock().unwrap();
             self.fsa
                 .separator_suffixes(node, self.separator, &mut |suffix: &[u8]| {
                     let mut fields = suffix.split(|b| *b == self.separator);
@@ -1024,80 +1042,118 @@ impl FsaDict {
                     let Some(lemma_bytes) = self.decode_lemma(&word_bytes, second) else {
                         return;
                     };
-                    let tag = intern(
-                        &mut interner,
+                    let tag = global_intern(
                         trim_frequency_tag(self.frequency_included, &self.encoding.decode(tag_raw))
                             .to_string(),
                     );
-                    let lemma = intern(&mut interner, self.encoding.decode(&lemma_bytes));
+                    let lemma = global_intern(self.encoding.decode(&lemma_bytes));
                     readings.push((lemma, tag));
                 });
         }
         readings
     }
 
-    fn materialize(&self) -> Materialized {
-        let mut interner = self.interner.lock().unwrap();
-        let mut entries: FxHashMap<&'static str, ReadingList> = FxHashMap::default();
-        let mut synth_map: SynthByLemma = FxHashMap::default();
-        let mut forms: FormsByLemma = FxHashMap::default();
-        let mut verb_forms: VerbForms = std::collections::HashMap::new();
+    fn build_entries(&self) -> EntriesMap {
+        let mut entries: FxHashMap<Box<str>, Vec<(Box<str>, Box<str>)>> = FxHashMap::default();
         self.fsa.for_each_sequence(&mut |sequence: &[u8]| {
             let mut fields = sequence.split(|b| *b == self.separator);
             let (word_raw, second, tag_raw) = match (fields.next(), fields.next(), fields.next()) {
-                (Some(w), Some(s), Some(t)) => (w, s, Some(t)),
-                (Some(w), Some(s), None) => (w, s, None),
+                (Some(w), Some(s), Some(t)) => (w, s, t),
                 _ => return,
             };
             let Some(lemma_bytes) = self.decode_lemma(word_raw, second) else {
                 return;
             };
             let word = self.encoding.decode(word_raw);
-            match tag_raw {
-                None => {
-                    let Some((lemma, tag)) = word.split_once('|') else {
-                        return;
-                    };
-                    let lemma_id = intern(&mut interner, lemma.to_string());
-                    let tag_id = intern(&mut interner, tag.to_string());
-                    let form_id = intern(&mut interner, self.encoding.decode(&lemma_bytes));
-                    synth_map
-                        .entry(lemma_id)
-                        .or_default()
-                        .push((tag_id, form_id));
-                }
-                Some(tag_raw) => {
-                    let tag = intern(
-                        &mut interner,
-                        trim_frequency_tag(self.frequency_included, &self.encoding.decode(tag_raw))
-                            .to_string(),
-                    );
-                    let lemma = intern(&mut interner, self.encoding.decode(&lemma_bytes));
-                    let word_id = intern(&mut interner, word);
-                    entries.entry(word_id).or_default().push((lemma, tag));
-                    forms.entry(lemma).or_default().push((tag, word_id));
-                    if tag.starts_with("VER:") {
-                        let entry = verb_forms.entry(lemma.to_string()).or_default();
-                        if !entry.iter().any(|w| w.as_str() == word_id) {
-                            entry.push(word_id.to_string());
-                        }
-                    }
-                }
+            let tag = trim_frequency_tag(self.frequency_included, &self.encoding.decode(tag_raw))
+                .to_string();
+            let lemma = self.encoding.decode(&lemma_bytes);
+            entries
+                .entry(Box::from(word.as_str()))
+                .or_default()
+                .push((Box::from(lemma.as_str()), Box::from(tag.as_str())));
+        });
+        entries
+            .into_iter()
+            .map(|(word, readings)| (word, readings.into_boxed_slice()))
+            .collect()
+    }
+
+    fn build_synth(&self) -> Option<SynthByLemma> {
+        let mut synth_map: SynthByLemma = FxHashMap::default();
+        self.fsa.for_each_sequence(&mut |sequence: &[u8]| {
+            let mut fields = sequence.split(|b| *b == self.separator);
+            let (word_raw, second) = match (fields.next(), fields.next(), fields.next()) {
+                (Some(w), Some(s), None) => (w, s),
+                _ => return,
+            };
+            let Some(lemma_bytes) = self.decode_lemma(word_raw, second) else {
+                return;
+            };
+            let word = self.encoding.decode(word_raw);
+            let Some((lemma, tag)) = word.split_once('|') else {
+                return;
+            };
+            let form = self.encoding.decode(&lemma_bytes);
+            synth_map
+                .entry(Box::from(lemma))
+                .or_default()
+                .push((Box::from(tag), Box::from(form)));
+        });
+        if synth_map.is_empty() {
+            None
+        } else {
+            Some(synth_map)
+        }
+    }
+
+    fn build_forms(&self) -> FormsByLemma {
+        let mut forms: FormsByLemma = FxHashMap::default();
+        self.fsa.for_each_sequence(&mut |sequence: &[u8]| {
+            let mut fields = sequence.split(|b| *b == self.separator);
+            let (word_raw, second, tag_raw) = match (fields.next(), fields.next(), fields.next()) {
+                (Some(w), Some(s), Some(t)) => (w, s, t),
+                _ => return,
+            };
+            let Some(lemma_bytes) = self.decode_lemma(word_raw, second) else {
+                return;
+            };
+            let word = self.encoding.decode(word_raw);
+            let tag = trim_frequency_tag(self.frequency_included, &self.encoding.decode(tag_raw))
+                .to_string();
+            let lemma = self.encoding.decode(&lemma_bytes);
+            forms
+                .entry(Box::from(lemma.as_str()))
+                .or_default()
+                .push((Box::from(tag.as_str()), Box::from(word.as_str())));
+        });
+        forms
+    }
+
+    fn build_verb_forms(&self) -> VerbForms {
+        let mut verb_forms: VerbForms = std::collections::HashMap::new();
+        self.fsa.for_each_sequence(&mut |sequence: &[u8]| {
+            let mut fields = sequence.split(|b| *b == self.separator);
+            let (word_raw, second, tag_raw) = match (fields.next(), fields.next(), fields.next()) {
+                (Some(w), Some(s), Some(t)) => (w, s, t),
+                _ => return,
+            };
+            let Some(lemma_bytes) = self.decode_lemma(word_raw, second) else {
+                return;
+            };
+            let tag = trim_frequency_tag(self.frequency_included, &self.encoding.decode(tag_raw))
+                .to_string();
+            if !tag.starts_with("VER:") {
+                return;
+            }
+            let word = self.encoding.decode(word_raw);
+            let lemma = self.encoding.decode(&lemma_bytes);
+            let entry = verb_forms.entry(lemma).or_default();
+            if !entry.iter().any(|w| *w == word) {
+                entry.push(word);
             }
         });
-        Materialized {
-            entries: entries
-                .into_iter()
-                .map(|(word, readings)| (word, readings.into_boxed_slice()))
-                .collect(),
-            synth_by_lemma: if synth_map.is_empty() {
-                None
-            } else {
-                Some(synth_map)
-            },
-            forms_by_lemma: std::sync::OnceLock::from(forms),
-            verb_forms: std::sync::OnceLock::from(verb_forms),
-        }
+        verb_forms
     }
 }
 
@@ -1130,16 +1186,14 @@ impl MorfologikDictionary {
                     encoding,
                     frequency_included,
                     cache: std::sync::RwLock::new(FxHashMap::default()),
-                    interner: std::sync::Mutex::new(FxHashSet::default()),
                 },
-                materialized: std::sync::OnceLock::new(),
+                materialized: Materialized::empty(),
             },
         })
     }
 
     pub fn from_decoded_text(data: &str) -> Self {
-        let mut interned: FxHashSet<&'static str> = FxHashSet::default();
-        let mut map: FxHashMap<&'static str, ReadingList> = FxHashMap::default();
+        let mut map: FxHashMap<Box<str>, Vec<(Box<str>, Box<str>)>> = FxHashMap::default();
         let mut forms: FormsByLemma = FxHashMap::default();
         let mut verb_forms: VerbForms = std::collections::HashMap::new();
         for line in data.lines() {
@@ -1157,54 +1211,74 @@ impl MorfologikDictionary {
                 continue;
             }
             let lemma: &str = if lemma.is_empty() { form } else { lemma };
-            let tag = intern(&mut interned, tag.to_string());
-            let lemma = intern(&mut interned, lemma.to_string());
-            let form_id = intern(&mut interned, form.to_string());
-            map.entry(form_id).or_default().push((lemma, tag));
-            forms.entry(lemma).or_default().push((tag, form_id));
+            map.entry(Box::from(form))
+                .or_default()
+                .push((Box::from(lemma), Box::from(tag)));
+            forms
+                .entry(Box::from(lemma))
+                .or_default()
+                .push((Box::from(tag), Box::from(form)));
             if tag.starts_with("VER:") {
                 let entry = verb_forms.entry(lemma.to_string()).or_default();
-                if !entry.iter().any(|w| w.as_str() == form_id) {
-                    entry.push(form_id.to_string());
+                if !entry.iter().any(|w| w == form) {
+                    entry.push(form.to_string());
                 }
             }
         }
         Self {
-            source: Source::Decoded(Materialized {
-                entries: map
-                    .into_iter()
-                    .map(|(word, readings)| (word, readings.into_boxed_slice()))
-                    .collect(),
-                synth_by_lemma: None,
-                forms_by_lemma: std::sync::OnceLock::from(forms),
-                verb_forms: std::sync::OnceLock::from(verb_forms),
-            }),
+            source: Source::Decoded {
+                materialized: Materialized {
+                    entries: std::sync::OnceLock::from(
+                        map.into_iter()
+                            .map(|(word, readings)| (word, readings.into_boxed_slice()))
+                            .collect::<EntriesMap>(),
+                    ),
+                    synth_by_lemma: std::sync::OnceLock::from(None),
+                    forms_by_lemma: std::sync::OnceLock::from(forms),
+                    verb_forms: std::sync::OnceLock::from(verb_forms),
+                },
+                cache: std::sync::RwLock::new(FxHashMap::default()),
+            },
         }
     }
 
     fn materialized(&self) -> &Materialized {
         match &self.source {
-            Source::Fsa { dict, materialized } => materialized.get_or_init(|| dict.materialize()),
-            Source::Decoded(m) => m,
+            Source::Fsa { materialized, .. } | Source::Decoded { materialized, .. } => materialized,
+        }
+    }
+
+    fn entries_map(&self) -> &EntriesMap {
+        let m = self.materialized();
+        match &self.source {
+            Source::Fsa { dict, materialized } => {
+                materialized.entries.get_or_init(|| dict.build_entries())
+            }
+            Source::Decoded { .. } => m.entries.get_or_init(EntriesMap::default),
         }
     }
 
     pub fn synth_forms_by_lemma(&self) -> Option<&SynthByLemma> {
-        self.materialized().synth_by_lemma.as_ref()
+        let m = self.materialized();
+        match &self.source {
+            Source::Fsa { dict, materialized } => materialized
+                .synth_by_lemma
+                .get_or_init(|| dict.build_synth())
+                .as_ref(),
+            Source::Decoded { .. } => m.synth_by_lemma.get_or_init(|| None).as_ref(),
+        }
     }
 
     pub fn word_list(&self) -> Vec<String> {
-        self.materialized()
-            .entries
-            .keys()
-            .map(|k| k.to_string())
-            .collect()
+        self.entries_map().keys().map(|k| k.to_string()).collect()
     }
 
     pub fn has_entries(&self) -> bool {
         match &self.source {
             Source::Fsa { dict, .. } => dict.fsa.has_sequence(),
-            Source::Decoded(m) => !m.entries.is_empty(),
+            Source::Decoded { materialized, .. } => {
+                !materialized.entries.get().is_some_and(|e| e.is_empty())
+            }
         }
     }
 
@@ -1228,80 +1302,81 @@ impl MorfologikDictionary {
     }
 
     pub fn keys(&self) -> impl Iterator<Item = &str> + '_ {
-        self.materialized().entries.keys().copied()
+        self.entries_map().keys().map(|k| &**k)
     }
 
     pub fn forms_by_lemma(&self) -> &FormsByLemma {
-        self.materialized().forms_by_lemma.get_or_init(|| {
-            let mut reverse: FormsByLemma = FxHashMap::default();
-            let m = self.materialized();
-            for (word, readings) in m.entries.iter() {
-                for (lemma, tag) in readings.iter() {
-                    reverse.entry(*lemma).or_default().push((*tag, word));
-                }
-            }
-            reverse
-        })
+        match &self.source {
+            Source::Fsa { dict, materialized } => materialized
+                .forms_by_lemma
+                .get_or_init(|| dict.build_forms()),
+            Source::Decoded { materialized, .. } => materialized
+                .forms_by_lemma
+                .get_or_init(FormsByLemma::default),
+        }
     }
 
     pub fn verb_forms_by_lemma(&self) -> &VerbForms {
-        self.materialized().verb_forms.get_or_init(|| {
-            let mut reverse: VerbForms = std::collections::HashMap::new();
-            let m = self.materialized();
-            for (word, readings) in m.entries.iter() {
-                for (lemma, tag) in readings.iter() {
-                    if tag.starts_with("VER:") {
-                        let entry = reverse.entry(lemma.to_string()).or_default();
-                        if !entry.iter().any(|w| w == *word) {
-                            entry.push(word.to_string());
-                        }
-                    }
-                }
+        match &self.source {
+            Source::Fsa { dict, materialized } => materialized
+                .verb_forms
+                .get_or_init(|| dict.build_verb_forms()),
+            Source::Decoded { materialized, .. } => {
+                materialized.verb_forms.get_or_init(VerbForms::default)
             }
-            reverse
-        })
+        }
     }
 
     pub fn lookup(&self, word: &str) -> &[(&'static str, &'static str)] {
-        let Source::Fsa { dict, .. } = &self.source else {
-            return self
-                .materialized()
-                .entries
-                .get(word)
-                .map(|v| &**v)
-                .unwrap_or(&[]);
+        let (cache, miss) = match &self.source {
+            Source::Fsa { dict, .. } => (&dict.cache, dict.lookup_uncached(word)),
+            Source::Decoded { cache, .. } => {
+                let miss: ReadingList = self
+                    .entries_map()
+                    .get(word)
+                    .map(|v| {
+                        v.iter()
+                            .map(|(lemma, tag)| {
+                                (
+                                    global_intern(lemma.to_string()),
+                                    global_intern(tag.to_string()),
+                                )
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                (cache, miss)
+            }
         };
         {
-            let cache = dict.cache.read().unwrap();
-            if let Some(hit) = cache.get(word) {
+            let guard = cache.read().unwrap();
+            if let Some(hit) = guard.get(word) {
                 return hit;
             }
         }
-        let readings = dict.lookup_uncached(word);
-        let leaked: &'static [(&'static str, &'static str)] = if readings.is_empty() {
+        let leaked: &'static [(&'static str, &'static str)] = if miss.is_empty() {
             &[]
         } else {
-            Box::leak(readings.into_boxed_slice())
+            Box::leak(miss.into_boxed_slice())
         };
         let key: &'static str = Box::leak(word.to_string().into_boxed_str());
-        let mut cache = dict.cache.write().unwrap();
-        cache.entry(key).or_insert(leaked)
+        let mut guard = cache.write().unwrap();
+        guard.entry(key).or_insert(leaked)
     }
 
     pub fn len(&self) -> usize {
-        self.materialized().entries.len()
+        self.entries_map().len()
     }
 
     pub fn is_empty(&self) -> bool {
         match &self.source {
-            Source::Fsa { dict, materialized } => {
-                if let Some(m) = materialized.get() {
-                    m.entries.is_empty()
-                } else {
-                    !dict.fsa.has_sequence()
-                }
+            Source::Fsa { dict, materialized } => match materialized.entries.get() {
+                Some(entries) => entries.is_empty(),
+                None => !dict.fsa.has_sequence(),
+            },
+            Source::Decoded { materialized, .. } => {
+                materialized.entries.get().is_none_or(|e| e.is_empty())
             }
-            Source::Decoded(m) => m.entries.is_empty(),
         }
     }
 }
@@ -1437,15 +1512,20 @@ mod tests {
             &dir.join(format!("{stem}.info")),
         )
         .unwrap_or_else(|| panic!("load {stem} dict"));
-        let materialized = dict.materialized();
-        assert!(
-            !materialized.entries.is_empty(),
-            "{stem} dictionary must enumerate"
-        );
-        for (word, readings) in materialized.entries.iter() {
+        let entries = dict.entries_map();
+        assert!(!entries.is_empty(), "{stem} dictionary must enumerate");
+        for (word, readings) in entries.iter() {
             let lazy = dict.lookup(word);
+            let lazy_pairs: Vec<(String, String)> = lazy
+                .iter()
+                .map(|(lemma, tag)| (lemma.to_string(), tag.to_string()))
+                .collect();
+            let eager_pairs: Vec<(String, String)> = readings
+                .iter()
+                .map(|(lemma, tag)| (lemma.to_string(), tag.to_string()))
+                .collect();
             assert_eq!(
-                lazy, &**readings,
+                lazy_pairs, eager_pairs,
                 "{stem}: lazy lookup diverged for {word}: {lazy:?} vs {readings:?}"
             );
         }
@@ -1490,9 +1570,9 @@ mod tests {
         let forms = dict.forms_by_lemma();
         let friend = forms.get("friend").expect("lemma inversion");
         assert_eq!(friend.len(), 2);
-        let joined: Vec<&str> = friend.iter().map(|(t, _)| *t).collect();
+        let joined: Vec<&str> = friend.iter().map(|(t, _)| &**t).collect();
         assert!(joined.contains(&"NN") && joined.contains(&"NNS"));
-        assert!(friend.iter().any(|(_, f)| *f == "friends"));
+        assert!(friend.iter().any(|(_, f)| &**f == "friends"));
     }
 
     #[test]

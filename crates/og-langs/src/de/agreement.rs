@@ -1469,12 +1469,12 @@ impl<'a> AgreementSuggestor<'a> {
         let lc_lemma = starts_with_lowercase(lemma);
         let mut out: Vec<String> = Vec::new();
         for (tag, word) in entries {
-            if *tag != pos {
+            if &**tag != pos {
                 continue;
             }
             if (starts_with_lowercase(word) == lc_lemma || lemma == "mein")
-                && !SYNTH_REMOVE.contains(word)
-                && !out.iter().any(|w| w == word)
+                && !SYNTH_REMOVE.contains(&&**word)
+                && !out.iter().any(|w| w == &**word)
             {
                 out.push(word.to_string());
             }

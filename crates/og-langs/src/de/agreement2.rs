@@ -41,13 +41,13 @@ impl AgreementRule2 {
         let lc_lemma = lemma.chars().next().is_some_and(|c| c.is_lowercase());
         let mut out: Vec<String> = Vec::new();
         for (tag, word) in entries {
-            if *tag != pos {
+            if &**tag != pos {
                 continue;
             }
             if word.chars().next().is_some_and(|c| c.is_lowercase()) != lc_lemma {
                 continue;
             }
-            if !out.iter().any(|w| w == word) {
+            if !out.iter().any(|w| w == &**word) {
                 out.push(word.to_string());
             }
         }
