@@ -69,8 +69,8 @@ impl TextLevelRule for RomanianWordRepeatBeginningRule {
             }
             if tokens.len() > 3 {
                 let analyzed_token = tokens[1];
-                let is_word = !(token.chars().count() == 1
-                    && !token.chars().next().is_some_and(char::is_alphabetic));
+                let is_word = token.chars().count() != 1
+                    || token.chars().next().is_some_and(char::is_alphabetic);
                 let prev_ended_like_sentence = prev_sentence.is_some_and(|prev| {
                     let trimmed = prev.text().trim();
                     let java_dot =
@@ -127,8 +127,6 @@ impl TextLevelRule for RomanianWordRepeatBeginningRule {
 mod tests {
     use super::*;
     use crate::ro::example_suite::ro_pipeline;
-    use og_core::rule::TextLevelRule as _;
-
     #[test]
     fn flags_two_sentences_beginning_with_the_same_adverb() {
         let rule = RomanianWordRepeatBeginningRule::new();

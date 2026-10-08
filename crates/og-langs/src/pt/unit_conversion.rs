@@ -42,11 +42,11 @@ impl Unit {
         }
     }
 
-    fn to_base(&self, value: f64) -> f64 {
+    fn scale_to_base(self, value: f64) -> f64 {
         value * self.factor + self.offset
     }
 
-    fn from_base(&self, value: f64) -> f64 {
+    fn scale_from_base(self, value: f64) -> f64 {
         (value - self.offset) / self.factor
     }
 }
@@ -374,10 +374,9 @@ impl PortugueseUnitConversionRule {
                 metric_units.push(def.unit);
             }
         }
-        let converted_re = regex::Regex::new(&format!(
-            r"\s*\((?:ca. )?(-?[0-9]{{1,32}}[0-9,.]{{0,32}})\s*([^)]+)\s*\)"
-        ))
-        .unwrap();
+        let converted_re =
+            regex::Regex::new(r"\s*\((?:ca. )?(-?[0-9]{1,32}[0-9,.]{0,32})\s*([^)]+)\s*\)")
+                .unwrap();
         let feet_inch_re = regex::Regex::new(r#"(\d+)(?:ft|′|')\s*(\d+)\s*(?:in|"|″)?"#).unwrap();
         let feet_inch_shape_re = regex::Regex::new(r"^\(\d+ (?:feet|ft) \d+ inch\)$").unwrap();
         let number_range_part_re = regex::Regex::new(&format!("{NUMBER_REGEX}$")).unwrap();
@@ -423,7 +422,7 @@ impl PortugueseUnitConversionRule {
         let mut out: Vec<(Unit, f64)> = Vec::new();
         for metric in &self.metric_units {
             if metric.dim == unit.dim {
-                out.push((*metric, metric.from_base(unit.to_base(value))));
+                out.push((*metric, metric.scale_from_base(unit.scale_to_base(value))));
             }
         }
         if out.is_empty() {
@@ -551,7 +550,7 @@ impl PortugueseUnitConversionRule {
             return;
         };
         if let Some(converted) = converted.as_ref()
-            && converted.iter().any(|s| *s == inner)
+            && converted.contains(&inner)
         {
             return;
         }
@@ -600,10 +599,10 @@ impl PortugueseUnitConversionRule {
                     ));
                     return;
                 }
-                let unit_converted = converted_unit.from_base(unit.to_base(value));
+                let unit_converted = converted_unit.scale_from_base(unit.scale_to_base(value));
                 if (unit_converted - value_in).abs() > DELTA {
                     let reverse = self.format_conversions(&[(converted_unit, unit_converted)]);
-                    if reverse.iter().any(|s| *s == inner) {
+                    if reverse.contains(&inner) {
                         return;
                     }
                     let g1 = caps.get(1).map(|m| end + m.start()).unwrap_or(abs_start);
@@ -864,8 +863,8 @@ impl Rule for PortugueseUnitConversionRule {
                         break;
                     };
                     by_start.retain(|m| {
-                        !(found.start() <= m.offset() && found.end() >= m.offset())
-                            && !(found.start() <= m.offset() + m.length()
+                        !(found.start() <= m.offset() && found.end() >= m.offset()
+                            || found.start() <= m.offset() + m.length()
                                 && found.end() >= m.offset() + m.length())
                     });
                     pos = found.end() + 1;

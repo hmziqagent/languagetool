@@ -76,8 +76,7 @@ impl Rule for RussianWordRepeatRule {
         let mut inflected_words: BTreeSet<String> = BTreeSet::new();
         let mut cur_token = 0usize;
 
-        for i in 1..tokens.len() {
-            let token = tokens[i];
+        for (i, &token) in tokens.iter().enumerate().skip(1) {
             let token_text = token.token().token();
             let mut is_word = token_text.chars().count() >= 2;
             let mut has_lemma = true;

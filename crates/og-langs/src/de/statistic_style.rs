@@ -995,8 +995,6 @@ impl TextLevelRule for StatisticWordStyleRule {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::engine::LanguageEngine;
 
     #[test]
     fn passive_sentences_flagged_when_frequent() {

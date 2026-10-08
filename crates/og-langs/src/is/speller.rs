@@ -50,7 +50,7 @@ fn is_ignore_words(resource_dir: &Path) -> HashSet<String> {
 
 impl IcelandicSpellerRule {
     pub fn new() -> Self {
-        let resource_dir = is_resource_dir().unwrap_or_else(|| std::path::PathBuf::new());
+        let resource_dir = is_resource_dir().unwrap_or_default();
         Self {
             hunspell: shared_hunspell(),
             ignore_words: is_ignore_words(&resource_dir),

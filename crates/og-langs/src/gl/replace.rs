@@ -230,12 +230,7 @@ impl Rule for GalicianSimpleReplaceRule {
                     context_window(sentence, from, to, 40),
                 )
                 .with_short_message(self.short.to_string())
-                .with_replacements(
-                    replacements
-                        .iter()
-                        .map(|r| SuggestedReplacement::new(r))
-                        .collect(),
-                )
+                .with_replacements(replacements.iter().map(SuggestedReplacement::new).collect())
                 .with_sentence(sentence.text().to_string()),
             );
         }

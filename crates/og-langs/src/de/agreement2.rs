@@ -185,7 +185,6 @@ impl Rule for AgreementRule2 {
 
 #[cfg(test)]
 mod tests {
-    use crate::engine::LanguageEngine;
 
     #[test]
     fn fires_on_kleiner_haus() {

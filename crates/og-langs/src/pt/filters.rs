@@ -212,7 +212,7 @@ mod tests {
         let mut message = "se escribe con tilde".to_string();
         let replacement = "casa";
         let form = "kasa";
-        if !(has_diacritics(replacement) && !has_diacritics(form)) {
+        if !has_diacritics(replacement) || has_diacritics(form) {
             message = message.replace("se escribe con tilde", "se escribe de otra manera");
         }
         assert_eq!(message, "se escribe de otra manera");

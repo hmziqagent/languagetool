@@ -94,7 +94,6 @@ impl Rule for GermanDashRule {
 
 #[cfg(test)]
 mod tests {
-    use crate::engine::LanguageEngine;
 
     #[test]
     fn detects_space_after_hyphen() {

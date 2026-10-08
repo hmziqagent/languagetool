@@ -124,7 +124,6 @@ impl TextLevelRule for DuUpperLowerCaseRule {
 
 #[cfg(test)]
 mod tests {
-    use crate::engine::LanguageEngine;
 
     #[test]
     fn detects_inconsistent_du() {

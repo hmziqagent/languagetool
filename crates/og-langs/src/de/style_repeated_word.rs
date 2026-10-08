@@ -413,7 +413,6 @@ impl TextLevelRule for GermanStyleRepeatedWordRule {
 
 #[cfg(test)]
 mod tests {
-    use crate::engine::LanguageEngine;
 
     #[test]
     fn flags_repeated_verb_when_enabled() {

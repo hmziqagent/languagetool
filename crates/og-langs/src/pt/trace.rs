@@ -312,7 +312,6 @@ mod round2_tests {
     struct FailureLine {
         rule_id: String,
         outcome: &'static str,
-        detail: String,
         text: String,
     }
 
@@ -329,17 +328,16 @@ mod round2_tests {
                 let rest = &line[id_end + 1..];
                 let text_start = rest.find(": '")? + 3;
                 let text = rest[text_start..].strip_suffix('\'')?.to_string();
-                let (outcome, detail) = if rest.starts_with(" Expected match") {
-                    ("no_match", "")
+                let outcome = if rest.starts_with(" Expected match") {
+                    "no_match"
                 } else if rest.starts_with(" Expected no match") {
-                    ("fp", rest.trim_end_matches(&format!(": '{text}'")))
+                    "fp"
                 } else {
-                    ("marker", rest.trim_end_matches(&format!(": '{text}'")))
+                    "marker"
                 };
                 Some(FailureLine {
                     rule_id,
                     outcome,
-                    detail: detail.to_string(),
                     text,
                 })
             })
@@ -409,7 +407,7 @@ mod round2_tests {
                 eprintln!("  -- [{}] '{}'", f.outcome, f.text);
                 for (sentence, sentence_start) in pipeline.analyze_offset_text(&f.text) {
                     dump_compact_readings(&sentence);
-                    let tokens: Vec<&og_core::AnalyzedTokenReadings> =
+                    let _tokens: Vec<&og_core::AnalyzedTokenReadings> =
                         sentence.non_whitespace_tokens();
                     for (si, rule) in sub_rules.iter().enumerate() {
                         og_rules::pattern_trace::clear();

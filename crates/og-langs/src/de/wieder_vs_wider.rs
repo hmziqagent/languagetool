@@ -90,7 +90,6 @@ impl Rule for WiederVsWiderRule {
 
 #[cfg(test)]
 mod tests {
-    use crate::engine::LanguageEngine;
 
     #[test]
     fn fires_on_spiegelt_wieder() {

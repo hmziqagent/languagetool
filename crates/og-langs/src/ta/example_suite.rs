@@ -2,7 +2,6 @@ use og_core::checker::Tagger as _;
 use og_core::match_filters::{
     BaseLanguageMatchFilter, LanguageMatchFilter as _, clean_overlapping_filter,
 };
-use og_core::rule::Rule as _;
 use og_core::{AnalyzedSentence, AnalyzedToken, AnalyzedTokenReadings, CheckRequest, Language};
 use og_rules::pattern_rule::PatternRuleEngine;
 use og_xml::compiler::{CompiledRule, CompiledRuleSet, XmlCompiler};

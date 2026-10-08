@@ -496,7 +496,6 @@ impl Rule for CompoundInfinitivRule {
 
 #[cfg(test)]
 mod tests {
-    use crate::engine::LanguageEngine;
 
     #[test]
     fn fires_on_getrenntes_zu_infinitiv() {

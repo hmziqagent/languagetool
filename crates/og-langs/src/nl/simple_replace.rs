@@ -268,11 +268,12 @@ impl SimpleReplace2Engine {
                 *check_case_covered_upto = end_index;
                 return;
             }
-            if !first_word_in_sugg_is_camel_case && !original.chars().any(char::is_lowercase) {
-                if self.ignore_short_uppercase_words || original.len() > MAX_LENGTH_SHORT_WORDS {
-                    *check_case_covered_upto = end_index;
-                    return;
-                }
+            if !first_word_in_sugg_is_camel_case
+                && !original.chars().any(char::is_lowercase)
+                && (self.ignore_short_uppercase_words || original.len() > MAX_LENGTH_SHORT_WORDS)
+            {
+                *check_case_covered_upto = end_index;
+                return;
             }
         }
 
@@ -324,7 +325,7 @@ impl SimpleReplace2Engine {
         .with_replacements(
             final_replacements
                 .iter()
-                .map(|r| SuggestedReplacement::new(r))
+                .map(SuggestedReplacement::new)
                 .collect(),
         );
         if let Some(last) = matches.last()

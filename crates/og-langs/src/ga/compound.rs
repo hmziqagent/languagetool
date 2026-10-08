@@ -195,8 +195,7 @@ impl Rule for IrishCompoundRule {
         let mut rule_matches: Vec<RuleMatch> = Vec::new();
         let mut prev_from: Option<usize> = None;
         for i in 0..n + MAX_TERMS {
-            let current: Option<(&AnalyzedTokenReadings, bool)> =
-                if i < n { Some(toks[i]) } else { None };
+            let current: Option<(&AnalyzedTokenReadings, bool)> = toks.get(i).copied();
             if i == 0 {
                 if let Some(pair) = current {
                     prev_tokens.push_back(pair);

@@ -158,7 +158,7 @@ pub fn find_similar_words(word: &str) -> Vec<String> {
     let mut exact: Vec<&str> = Vec::new();
     let mut near: Vec<&str> = Vec::new();
     for candidate in &oracle.surfaces {
-        if candidate.as_bytes().len() + 1 < word_chars.len() {
+        if candidate.len() + 1 < word_chars.len() {
             continue;
         }
         if *candidate == word {

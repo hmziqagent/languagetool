@@ -51,8 +51,6 @@ pub fn slovenian_native_rules() -> SlovenianNativeRules {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use og_core::rule::TextLevelRule as _;
-
     #[test]
     fn natives_use_java_ids_in_relevant_rules_order() {
         let natives = slovenian_native_rules();

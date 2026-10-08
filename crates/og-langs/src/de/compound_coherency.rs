@@ -33,11 +33,11 @@ fn lemma_of(atr: &og_core::AnalyzedTokenReadings) -> Option<String> {
         let lemma_chars: Vec<char> = lemma.chars().collect();
         let mut lemma_builder = String::new();
         let mut token_pos = 0usize;
-        for lemma_pos in 0..lemma_chars.len() {
+        for (lemma_pos, lemma_char) in lemma_chars.iter().enumerate() {
+            let lemma_char = *lemma_char;
             if token_pos >= token_chars.len() {
                 break;
             }
-            let lemma_char = lemma_chars[lemma_pos];
             let token_char = token_chars[token_pos];
             if lemma_char == token_char {
                 lemma_builder.push(lemma_char);
@@ -132,7 +132,6 @@ impl TextLevelRule for CompoundCoherencyRule {
 
 #[cfg(test)]
 mod tests {
-    use crate::engine::LanguageEngine;
 
     #[test]
     fn detects_helpdesk_inconsistency() {

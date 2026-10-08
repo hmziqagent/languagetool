@@ -1,7 +1,7 @@
 use og_core::rule::{Rule, TextLevelRule};
 use og_core::{
-    AnalyzedSentence, AnalyzedToken, AnalyzedTokenReadings, Category, IssueType, RuleMatch,
-    RuleMatchContext, RuleMatchRule, SuggestedReplacement,
+    AnalyzedSentence, AnalyzedTokenReadings, Category, IssueType, RuleMatch, RuleMatchContext,
+    RuleMatchRule, SuggestedReplacement,
 };
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
@@ -220,8 +220,7 @@ impl Rule for CheckCaseRule {
                     }
                     if number_of_spaces > 0
                         && let Some(entry) = self.full_space.get(&original.to_lowercase())
-                    {
-                        if let Some(rule_match) = self.create_case_match(
+                        && let Some(rule_match) = self.create_case_match(
                             entry,
                             &original,
                             &tokens,
@@ -232,9 +231,9 @@ impl Rule for CheckCaseRule {
                             &mut check_case_covered_upto,
                             &mut rule_matches,
                             MAX_LENGTH_SHORT_WORDS,
-                        ) {
-                            rule_matches.push(rule_match);
-                        }
+                        )
+                    {
+                        rule_matches.push(rule_match);
                     }
                     end_index += 1;
                 }
@@ -251,8 +250,8 @@ impl Rule for CheckCaseRule {
                     }
                     key_builder.push_str(tokens[end_index].token().token());
                     let original = key_builder.clone();
-                    if let Some(entry) = self.full_no_space.get(&original.to_lowercase()) {
-                        if let Some(rule_match) = self.create_case_match(
+                    if let Some(entry) = self.full_no_space.get(&original.to_lowercase())
+                        && let Some(rule_match) = self.create_case_match(
                             entry,
                             &original,
                             &tokens,
@@ -263,9 +262,9 @@ impl Rule for CheckCaseRule {
                             &mut check_case_covered_upto,
                             &mut rule_matches,
                             MAX_LENGTH_SHORT_WORDS,
-                        ) {
-                            rule_matches.push(rule_match);
-                        }
+                        )
+                    {
+                        rule_matches.push(rule_match);
                     }
                     end_index += 1;
                 }
@@ -317,11 +316,12 @@ impl CheckCaseRule {
             *check_case_covered_upto = end_index;
             return None;
         }
-        if !first_word_in_sugg_is_camel_case && original.chars().all(|c| !c.is_lowercase()) {
-            if original.chars().count() > max_length_short_words {
-                *check_case_covered_upto = end_index;
-                return None;
-            }
+        if !first_word_in_sugg_is_camel_case
+            && original.chars().all(|c| !c.is_lowercase())
+            && original.chars().count() > max_length_short_words
+        {
+            *check_case_covered_upto = end_index;
+            return None;
         }
         let mut final_replacements: Vec<String> = Vec::new();
         for repl in &replacements {
@@ -360,7 +360,7 @@ impl CheckCaseRule {
             .with_replacements(
                 final_replacements
                     .iter()
-                    .map(|r| SuggestedReplacement::new(r))
+                    .map(SuggestedReplacement::new)
                     .collect(),
             ),
         )
@@ -809,7 +809,7 @@ impl Rule for CatalanWrongWordInContextRule {
                 if matched_word[0] && matched_word[1] {
                     break;
                 }
-                if token.all_pos_tags().iter().any(|t| *t == "IS_URL") {
+                if token.all_pos_tags().contains(&"IS_URL") {
                     continue;
                 }
                 let surface = token.token().token();
@@ -949,7 +949,9 @@ pub fn catalan_word_coherency_rule() -> crate::en::WordCoherencyRule {
     .with_message_template("No és coherent usar '{word1}' i '{word2}' dins d'un mateix text.")
 }
 
+#[cfg(test)]
 pub(crate) fn sentence_with_readings(words: &[(&str, &[(&str, &str)])]) -> AnalyzedSentence {
+    use og_core::AnalyzedToken;
     let text = words.iter().map(|(w, _)| *w).collect::<Vec<_>>().join(" ");
     let mut s = AnalyzedSentence::new(&text, 0, text.len());
     let mut tokens = vec![AnalyzedTokenReadings::new(

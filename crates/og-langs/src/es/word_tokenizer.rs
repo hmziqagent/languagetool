@@ -74,7 +74,7 @@ impl SpanishWordTokenizer {
     }
 
     pub fn tokenize_strings(&self, text: &str) -> Vec<String> {
-        let aux_text = text.replace('\u{2010}', "-").replace('\u{2011}', "-");
+        let aux_text = text.replace(['\u{2010}', '\u{2011}'], "-");
         let aux_text = decimal_point_re()
             .replace_all(
                 &aux_text,
@@ -174,10 +174,13 @@ fn join_emails(list: Vec<String>) -> Vec<String> {
 
 fn url_starts_at(i: usize, list: &[String]) -> bool {
     let token = list[i].as_str();
-    if is_protocol(token) && list.len() > i + 3 {
-        if list[i + 1] == ":" && list[i + 2] == "/" && list[i + 3] == "/" {
-            return true;
-        }
+    if is_protocol(token)
+        && list.len() > i + 3
+        && list[i + 1] == ":"
+        && list[i + 2] == "/"
+        && list[i + 3] == "/"
+    {
+        return true;
     }
     if list.len() > i + 1 && token == "www" && list[i + 1] == "." {
         return true;

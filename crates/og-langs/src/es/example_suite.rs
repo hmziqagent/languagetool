@@ -295,7 +295,7 @@ fn dispatch_drives_the_compiled_comma_rule_end_to_end() {
     let text = "En primer lugar hablaremos de un tema importante.";
     for (sentence, _start) in pipeline.analyze_offset_text(text) {
         let tokens: Vec<&og_core::AnalyzedTokenReadings> = sentence.non_whitespace_tokens();
-        for m in engine.match_rule(rule, &sentence) {
+        if let Some(m) = engine.match_rule(rule, &sentence).into_iter().next() {
             let out = apply_es_filters(rule, &tokens, sentence.text(), m).expect("match kept");
             let values: Vec<String> = out
                 .replacements()

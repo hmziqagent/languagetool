@@ -263,12 +263,11 @@ impl LanguageEngine {
                         {
                             chain.insert(0, Arc::new(multiword));
                         }
-                        if let Some(core_resource_dir) = find_lt_core_resource_dir() {
-                            if let Some(global) =
+                        if let Some(core_resource_dir) = find_lt_core_resource_dir()
+                            && let Some(global) =
                                 MultiWordChunkerDisambiguator::spelling_global(&core_resource_dir)
-                            {
-                                chain.insert(0, Arc::new(global));
-                            }
+                        {
+                            chain.insert(0, Arc::new(global));
                         }
                         engine.disambiguator = Some(Arc::new(ChainedDisambiguator::new(chain)));
                     }

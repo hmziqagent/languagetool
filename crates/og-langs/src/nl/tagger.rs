@@ -296,11 +296,7 @@ impl DutchTagger {
         start: usize,
         end: usize,
     ) -> (Vec<AnalyzedToken>, bool) {
-        let word = original
-            .replace('`', "'")
-            .replace('\u{2019}', "'")
-            .replace('\u{2018}', "'")
-            .replace('\u{00B4}', "'");
+        let word = original.replace(['`', '\u{2019}', '\u{2018}', '\u{00B4}'], "'");
         let lower_word = word.to_lowercase();
         let is_lowercase = word == lower_word;
         let is_mixed = is_mixed_case(&word);

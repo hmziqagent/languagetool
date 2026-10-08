@@ -6,6 +6,8 @@ use og_tagger::GenericTagger;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, OnceLock};
 
+static DIGIT_RE: OnceLock<regex::Regex> = OnceLock::new();
+
 const MAX_TERMS: usize = 5;
 const COMPOUNDS_TXT: &str = include_str!(
     "../../../../languagetool/languagetool-language-modules/fr/src/main/resources/org/languagetool/resource/fr/compounds.txt"
@@ -211,9 +213,9 @@ impl Rule for CompoundRule {
         let synthetic = AnalyzedTokenReadings::new(AnalyzedToken::new("", 0, 0));
         let mut rule_matches: Vec<RuleMatch> = Vec::new();
         let mut prev_from: Option<usize> = None;
+        let digit_re = DIGIT_RE.get_or_init(|| regex::Regex::new(r"\d+").unwrap());
         for i in 0..n + MAX_TERMS {
-            let current: Option<(&AnalyzedTokenReadings, bool)> =
-                if i < n { Some(toks[i]) } else { None };
+            let current: Option<(&AnalyzedTokenReadings, bool)> = toks.get(i).copied();
             if i == 0 {
                 if let Some(pair) = current {
                     prev_tokens.push_back(pair);
@@ -247,12 +249,8 @@ impl Rule for CompoundRule {
                 let key = strings[k].to_lowercase();
                 let contains_digits =
                     self.data.has_digit_patterns && strings[k].split(' ').any(is_numeric);
-                let digit_key = contains_digits.then(|| {
-                    static RE: OnceLock<regex::Regex> = OnceLock::new();
-                    RE.get_or_init(|| regex::Regex::new(r"\d+").unwrap())
-                        .replace_all(&key, "\\d+")
-                        .into_owned()
-                });
+                let digit_key =
+                    contains_digits.then(|| digit_re.replace_all(&key, "\\d+").into_owned());
                 let hit = self.data.incorrect.contains(key.as_str())
                     || digit_key
                         .as_deref()

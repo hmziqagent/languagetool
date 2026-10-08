@@ -148,7 +148,7 @@ pub(crate) fn module_checker() -> &'static og_core::checker::Checker {
                     og_spell::morfologik_view::MorfologikView::new(shared),
                 ))
             })
-            .unwrap_or_else(og_spell::Dictionary::new);
+            .unwrap_or_default();
         if let Ok(extra) = std::fs::read_to_string(resource_dir.join("hunspell/spelling.txt")) {
             for line in extra.lines() {
                 let word = line.trim();

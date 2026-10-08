@@ -227,7 +227,6 @@ fn replace_first_ci(text: &str, from: &str, to: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use crate::engine::LanguageEngine;
 
     #[test]
     fn detects_mine_miene_confusion() {

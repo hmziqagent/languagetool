@@ -171,8 +171,7 @@ impl Rule for PolishDashRule {
             let replacement = covered
                 .replace(" \u{2013} ", "-")
                 .replace(" \u{2014} ", "-")
-                .replace('\u{2013}', "-")
-                .replace('\u{2014}', "-");
+                .replace(['\u{2013}', '\u{2014}'], "-");
             let rm_rule = RuleMatchRule::new(self.id(), self.description())
                 .with_category(self.category())
                 .with_issue_type(self.issue_type().as_str());

@@ -247,9 +247,7 @@ fn persian_grammar_examples_with_fa_pipeline() {
     );
     assert_eq!(
         all_failures,
-        vec![concat!(
-            "CORRECTION: [RemoveAdditionMarks]: '۱۹٬' expected '۱۹' got [\"۱۹٬\"]"
-        )],
+        vec!["CORRECTION: [RemoveAdditionMarks]: '۱۹٬' expected '۱۹' got [\"۱۹٬\"]"],
         "the residue is exactly the RemoveAdditionMarks correction: its token regex \
          '([۰-۹]+)[٫٬](?![۰-۹])' carries a negative lookahead the regex crate cannot compile, so \
          the engine falls back to literal whole-token matching (the match and span are still \

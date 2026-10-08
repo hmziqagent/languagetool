@@ -289,12 +289,7 @@ impl Rule for RomanianCompoundRule {
                     rm_rule,
                     RuleMatchContext::new(context_text, ctx_start, ctx_end - ctx_start),
                 )
-                .with_replacements(
-                    filtered
-                        .iter()
-                        .map(|r| SuggestedReplacement::new(r))
-                        .collect(),
-                )
+                .with_replacements(filtered.iter().map(SuggestedReplacement::new).collect())
                 .with_sentence(sentence.text().to_string());
                 if let Some(short) = &self.short_desc {
                     rule_match = rule_match.with_short_message(short.clone());

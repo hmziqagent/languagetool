@@ -42,11 +42,11 @@ impl Unit {
         }
     }
 
-    fn to_base(&self, value: f64) -> f64 {
+    fn scale_to_base(self, value: f64) -> f64 {
         value * self.factor + self.offset
     }
 
-    fn from_base(&self, value: f64) -> f64 {
+    fn scale_from_base(self, value: f64) -> f64 {
         (value - self.offset) / self.factor
     }
 }
@@ -225,7 +225,7 @@ impl UnitConversionRule {
             if !metric || *candidate == unit || candidate.dim != unit.dim {
                 continue;
             }
-            let converted = candidate.from_base(unit.to_base(value));
+            let converted = candidate.scale_from_base(unit.scale_to_base(value));
             out.push((*candidate, converted, *symbol));
             if out.len() > 16 {
                 break;

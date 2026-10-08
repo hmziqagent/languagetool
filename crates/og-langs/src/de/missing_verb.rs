@@ -114,7 +114,6 @@ impl Rule for MissingVerbRule {
 
 #[cfg(test)]
 mod tests {
-    use crate::engine::LanguageEngine;
 
     fn check_enabled(text: &str) -> og_core::CheckResult {
         let engine = crate::engine::LanguageEngine::shared_for_code("de").expect("german engine");

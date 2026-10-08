@@ -85,7 +85,7 @@ pub(crate) fn replace_words() -> &'static HashMap<String, Vec<String>> {
 }
 
 fn clean_token(token: &str) -> String {
-    token.replace('\u{00AD}', "").replace('\u{0301}', "")
+    token.replace(['\u{00AD}', '\u{0301}'], "")
 }
 
 fn uppercase_first(s: &str) -> String {

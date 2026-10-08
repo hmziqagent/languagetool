@@ -249,7 +249,7 @@ fn catalan_grammar_examples_with_ca_pipeline() {
                 og_xml::types::XmlExampleType::TriggersError => None,
             };
             evaluated += 1;
-            if evaluated % 2000 == 0 {
+            if evaluated.is_multiple_of(2000) {
                 eprintln!(
                     "ca suite progress: {evaluated} examples, {:.1}s",
                     started.elapsed().as_secs_f64()

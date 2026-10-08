@@ -7,8 +7,9 @@ use og_core::{
 pub const KM_WORD_REPEAT_RULE: &str = "KM_WORD_REPEAT_RULE";
 
 const REPETITION: &str = "កំហុសវាយអក្សរ: អ្នកធ្វើឲ្យពាក្យជាន់គ្នា";
-const DESC_REPETITION: &str = "មាន​​វារេណវាក្យ​ពាក្យ​ (ឧទាហរណ៍ «បាន​បាន»)";
-const DESC_REPETITION_SHORT: &str = "មាន​​វារេណវាក្យ​ពាក្យ";
+const DESC_REPETITION: &str =
+    "មាន\u{200B}\u{200B}វារេណវាក្យ\u{200B}ពាក្យ\u{200B} (ឧទាហរណ៍ «បាន\u{200B}បាន»)";
+const DESC_REPETITION_SHORT: &str = "មាន\u{200B}\u{200B}វារេណវាក្យ\u{200B}ពាក្យ";
 const REPETITION_SIGN: char = '\u{17D7}';
 
 pub struct KhmerWordRepeatRule {

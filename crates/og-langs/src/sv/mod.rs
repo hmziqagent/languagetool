@@ -80,7 +80,7 @@ fn swedish_wordlist_dictionary(resource_dir: &std::path::Path) -> og_spell::Dict
                 og_spell::morfologik_view::MorfologikView::new(shared),
             ))
         })
-        .unwrap_or_else(og_spell::Dictionary::new);
+        .unwrap_or_default();
     if let Ok(extra) = std::fs::read_to_string(resource_dir.join("hunspell/spelling.txt")) {
         for line in extra.lines() {
             let word = line.trim();
@@ -155,8 +155,6 @@ pub fn swedish_native_rules() -> SwedishNativeRules {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use og_core::rule::TextLevelRule as _;
-
     #[test]
     fn natives_carry_the_java_inventory_order() {
         let natives = swedish_native_rules();

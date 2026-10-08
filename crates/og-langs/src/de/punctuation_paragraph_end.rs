@@ -153,7 +153,7 @@ impl TextLevelRule for GermanPunctuationMarkAtParagraphEnd {
                             let replacements: Vec<SuggestedReplacement> = PUNCTUATION_MARKS
                                 .iter()
                                 .map(|mark| {
-                                    SuggestedReplacement::new(&format!("{last_token}{mark}"))
+                                    SuggestedReplacement::new(format!("{last_token}{mark}"))
                                 })
                                 .collect();
                             rule_matches.push(
@@ -183,7 +183,6 @@ impl TextLevelRule for GermanPunctuationMarkAtParagraphEnd {
 
 #[cfg(test)]
 mod tests {
-    use crate::engine::LanguageEngine;
 
     #[test]
     fn detects_missing_punctuation_at_paragraph_end() {

@@ -185,7 +185,7 @@ impl PortugueseTagger {
     fn dict_lookup(&self, word: &str) -> Readings {
         self.dict
             .as_ref()
-            .map(|d| d.lookup(word).iter().copied().collect())
+            .map(|d| d.lookup(word).to_vec())
             .unwrap_or_default()
     }
 

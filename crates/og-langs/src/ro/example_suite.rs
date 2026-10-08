@@ -449,44 +449,6 @@ fn disambiguator_runs_over_the_module_pipeline() {
     assert!(!readings.is_empty());
 }
 
-struct RoSentenceTokenizer;
-
-impl og_core::checker::SentenceTokenizer for RoSentenceTokenizer {
-    fn split(&self, text: &str) -> Vec<og_core::checker::SentenceRange> {
-        use og_tokenizer::SentenceTokenizer as _;
-        match og_tokenizer::srx::srx_splitter("ro") {
-            Some(srx) => srx
-                .split(text)
-                .into_iter()
-                .map(|s| og_core::checker::SentenceRange {
-                    start: s.start(),
-                    end: s.end(),
-                })
-                .collect(),
-            None => vec![og_core::checker::SentenceRange {
-                start: 0,
-                end: text.len(),
-            }],
-        }
-    }
-}
-
-struct RoWordTokenizerBridge;
-
-impl og_core::checker::WordTokenizer for RoWordTokenizerBridge {
-    fn tokenize(&self, text: &str, offset: usize) -> Vec<AnalyzedTokenReadings> {
-        use og_tokenizer::WordTokenizer as _;
-        super::RomanianWordTokenizer::new()
-            .tokenize(text)
-            .into_iter()
-            .map(|t| {
-                let at = AnalyzedToken::new(t.text(), t.start() + offset, t.end() + offset);
-                AnalyzedTokenReadings::new(at)
-            })
-            .collect()
-    }
-}
-
 pub(crate) fn module_check(text: &str) -> Vec<og_core::RuleMatch> {
     let pipeline = ro_pipeline();
     let natives = super::romanian_native_rules();

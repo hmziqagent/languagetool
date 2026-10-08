@@ -270,7 +270,7 @@ impl ArabicSimpleReplaceRule2 {
         .with_replacements(
             final_replacements
                 .iter()
-                .map(|r| SuggestedReplacement::new(r))
+                .map(SuggestedReplacement::new)
                 .collect(),
         );
         if let Some(last) = matches.last()
@@ -457,7 +457,7 @@ mod tests {
 
     #[test]
     fn multiword_phrases_match_beyond_three_tokens() {
-        let mut rule = rule_with("هناك خطأ في العبارة=في العبارة خطأ");
+        let rule = rule_with("هناك خطأ في العبارة=في العبارة خطأ");
         let matches = rule.match_sentence(&sentence_from_parts(&["هناك", "خطأ", "في", "العبارة"]));
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].replacements()[0].value(), "في العبارة خطأ");
@@ -465,7 +465,7 @@ mod tests {
 
     #[test]
     fn longest_match_suppresses_the_prefix_key() {
-        let mut rule = rule_with("هضبة=هَضْبَة\nهضبة الجولان=هضبة الجَوْلان");
+        let rule = rule_with("هضبة=هَضْبَة\nهضبة الجولان=هضبة الجَوْلان");
         let matches = rule.match_sentence(&sentence_from_parts(&["هضبة", "الجولان"]));
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].replacements()[0].value(), "هضبة الجَوْلان");
@@ -473,7 +473,7 @@ mod tests {
 
     #[test]
     fn no_space_run_concatenates_like_java() {
-        let mut rule = rule_with("أبالفقيد=أبو الفقيد");
+        let rule = rule_with("أبالفقيد=أبو الفقيد");
         let text = "أبالفقيد";
         let mut sentence = AnalyzedSentence::new(text, 0, text.len());
         sentence.set_tokens(vec![

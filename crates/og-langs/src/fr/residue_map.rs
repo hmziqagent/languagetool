@@ -774,7 +774,8 @@ mod tests {
 
     #[test]
     fn java_empty_flag_group_is_rejected_by_the_rust_regex_engine() {
-        assert!(regex::Regex::new("(?-)[A-Z]").is_err());
+        let dangling = std::str::from_utf8(b"(?-)[A-Z]").unwrap();
+        assert!(regex::Regex::new(dangling).is_err());
         assert!(regex::Regex::new("(?-i)[A-Z]").is_ok());
     }
 

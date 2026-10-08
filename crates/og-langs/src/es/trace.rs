@@ -98,7 +98,7 @@ pub fn staged_sentence(text: &str) -> og_core::AnalyzedSentence {
         let token_idx = i + 1;
         if token_idx < tokens_mut.len() && !atr.readings().is_empty() {
             let readings = atr.into_readings();
-            let mut merged = og_core::AnalyzedTokenReadings::new(og_core::AnalyzedToken::new(
+            let merged = og_core::AnalyzedTokenReadings::new(og_core::AnalyzedToken::new(
                 tokens_mut[token_idx].token().token(),
                 tokens_mut[token_idx].token().start(),
                 tokens_mut[token_idx].token().end(),
@@ -169,69 +169,6 @@ pub fn dump_stages(text: &str) {
     let d = og_tagger::XmlDisambiguator::from_xml(&xml).unwrap();
     d.disambiguate(&mut s);
     show("xml", &s);
-}
-
-fn readings_of(sentence: &og_core::AnalyzedSentence, word: &str) -> String {
-    sentence
-        .tokens()
-        .iter()
-        .filter(|t| t.token().token() == word)
-        .map(|t| {
-            format!(
-                "[{}]",
-                t.readings()
-                    .iter()
-                    .map(|r| format!("{}/{}", r.lemma().unwrap_or("-"), r.pos_tags().join("|")))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )
-        })
-        .collect::<String>()
-}
-
-pub fn bisect_word_change(text: &str, word: &str) {
-    let resource_dir = crate::es::es_resource_dir().expect("es dir");
-    let raw = std::fs::read_to_string(resource_dir.join("disambiguation.xml")).unwrap();
-    let xml = og_xml::parser::XmlRuleParser::expand_entities_with_base(&raw, Some(&resource_dir));
-    let d = og_tagger::XmlDisambiguator::from_xml(&xml).unwrap();
-    let n = d.rule_count();
-    eprintln!("disambig rules: {n}");
-    let snapshot = |through: usize| -> String {
-        let mut s = staged_sentence(text);
-        if let Some(last) = s.tokens_mut().last_mut() {
-            last.add_sent_end();
-        }
-        d.apply_rules_through(&mut s, through);
-        readings_of(&s, word)
-    };
-    let before = snapshot(0);
-    eprintln!("before: {word}={before}");
-    let after = snapshot(n);
-    eprintln!("after:  {word}={after}");
-    if before == after {
-        eprintln!("no change; done");
-        return;
-    }
-    let (mut lo, mut hi) = (0usize, n);
-    while lo + 1 < hi {
-        let mid = (lo + hi) / 2;
-        if snapshot(mid) == before {
-            lo = mid;
-        } else {
-            hi = mid;
-        }
-    }
-    eprintln!(
-        "first rule index changing {word}: {lo} id={:?} pattern={}",
-        d.rule_id(lo).unwrap_or("?"),
-        d.rule_pattern_debug(lo)
-    );
-    let mut s = staged_sentence(text);
-    if let Some(last) = s.tokens_mut().last_mut() {
-        last.add_sent_end();
-    }
-    d.apply_rule(&mut s, lo);
-    eprintln!("after single rule: {word}={}", readings_of(&s, word));
 }
 
 #[test]

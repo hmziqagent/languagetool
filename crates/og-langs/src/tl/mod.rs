@@ -116,8 +116,6 @@ pub fn tagalog_native_rules() -> TagalogNativeRules {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use og_core::rule::Rule as _;
-
     #[test]
     fn natives_use_java_ids_in_relevant_rules_order() {
         let natives = tagalog_native_rules();

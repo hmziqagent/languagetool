@@ -400,17 +400,16 @@ impl TextLevelRule for CatalanUnpairedBracketsRule {
                     rule_matches: &mut Vec<RuleMatch>,
                     rule_match_stack: &mut Vec<MatchStackEntry>|
          -> Option<RuleMatch> {
-            if let Some(top) = rule_match_stack.last() {
-                if let Some(index) = CA_END_SYMBOLS
+            if let Some(top) = rule_match_stack.last()
+                && let Some(index) = CA_END_SYMBOLS
                     .iter()
                     .position(|s| *s == locator.symbol.as_str())
-                {
-                    if top.symbol == CA_START_SYMBOLS[index] && rule_matches.len() > top.index {
-                        rule_matches.remove(top.index);
-                        rule_match_stack.pop();
-                        return None;
-                    }
-                }
+                && top.symbol == CA_START_SYMBOLS[index]
+                && rule_matches.len() > top.index
+            {
+                rule_matches.remove(top.index);
+                rule_match_stack.pop();
+                return None;
             }
             rule_match_stack.push(MatchStackEntry {
                 symbol: locator.symbol.clone(),

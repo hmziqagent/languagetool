@@ -640,7 +640,7 @@ mod tests {
         assert!(
             matches
                 .iter()
-                .any(|(msg, _, repl)| msg.contains("Subjekt (Ich)") && repl.first().is_some()),
+                .any(|(msg, _, repl)| msg.contains("Subjekt (Ich)") && !repl.is_empty()),
             "got {matches:?}"
         );
     }

@@ -153,7 +153,6 @@ impl TextLevelRule for GermanParagraphRepeatBeginningRule {
 
 #[cfg(test)]
 mod tests {
-    use crate::engine::LanguageEngine;
 
     #[test]
     fn detects_repeated_paragraph_beginning() {

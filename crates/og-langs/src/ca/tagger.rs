@@ -368,8 +368,7 @@ impl CatalanTagger {
         start: usize,
         end: usize,
     ) -> Vec<AnalyzedToken> {
-        if lower_word.starts_with("en") {
-            let stem = &lower_word[2..];
+        if let Some(stem) = lower_word.strip_prefix("en") {
             let mut selected: Vec<(String, String)> = Vec::new();
             let mut lemma = String::new();
             for (candidate_lemma, tag) in self.dict.lookup(stem) {

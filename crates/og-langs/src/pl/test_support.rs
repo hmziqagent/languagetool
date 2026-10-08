@@ -157,6 +157,10 @@ impl PolishPipeline {
     }
 }
 
+pub(crate) fn analyze_undisambiguated(text: &str, start: usize, end: usize) -> AnalyzedSentence {
+    PolishPipeline::shared().build_sentence(text, start, end)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -267,8 +271,4 @@ mod tests {
             "the tagger alone still offers the fused readings: {raw:?}"
         );
     }
-}
-
-pub(crate) fn analyze_undisambiguated(text: &str, start: usize, end: usize) -> AnalyzedSentence {
-    PolishPipeline::shared().build_sentence(text, start, end)
 }

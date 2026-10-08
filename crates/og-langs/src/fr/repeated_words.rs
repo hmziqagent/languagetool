@@ -84,8 +84,8 @@ fn adjust_postag(postag: &str) -> String {
         ("f sp", "[fe] s?p?"),
     ];
     for (suffix, target) in replacements {
-        if postag.ends_with(suffix) {
-            return format!("{}{}", &postag[..postag.len() - suffix.len()], target);
+        if let Some(prefix) = postag.strip_suffix(suffix) {
+            return format!("{prefix}{target}");
         }
     }
     postag.to_string()
@@ -235,7 +235,7 @@ impl TextLevelRule for FrenchRepeatedWordsRule {
                     let Some(&seen) = words_last_seen.get(lemma) else {
                         continue;
                     };
-                    if lemmas_in_sentence.iter().any(|l| *l == lemma)
+                    if lemmas_in_sentence.contains(&lemma)
                         || word_number.saturating_sub(seen) > MAX_WORDS_DISTANCE
                     {
                         continue;
@@ -260,10 +260,10 @@ impl TextLevelRule for FrenchRepeatedWordsRule {
                         adjust_postag(reading.pos_tags().first().map(String::as_str).unwrap_or(""));
                     for synonym in &data.synonyms {
                         let mut forms = Vec::new();
-                        if let Some(synth) = &self.synthesizer {
-                            if let Ok(re) = Regex::new(&format!("^(?:{adjusted})$")) {
-                                forms = synth.synthesize(synonym, &re);
-                            }
+                        if let Some(synth) = &self.synthesizer
+                            && let Ok(re) = Regex::new(&format!("^(?:{adjusted})$"))
+                        {
+                            forms = synth.synthesize(synonym, &re);
                         }
                         if forms.is_empty() {
                             forms.push(synonym.clone());
@@ -303,7 +303,7 @@ impl TextLevelRule for FrenchRepeatedWordsRule {
                 for lemma in lemmas {
                     if self.words.contains_key(lemma) {
                         words_last_seen.insert(lemma, word_number);
-                        if !lemmas_in_sentence.iter().any(|l| *l == lemma) {
+                        if !lemmas_in_sentence.contains(&lemma) {
                             lemmas_in_sentence.push(lemma);
                         }
                     }

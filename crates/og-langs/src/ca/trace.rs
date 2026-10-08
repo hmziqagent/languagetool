@@ -438,10 +438,10 @@ mod tests {
         };
         let mut fails: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
         for line in lines.lines() {
-            if let Some(rest) = line.strip_prefix("FAIL: [") {
-                if let Some((id, _)) = rest.split_once(']') {
-                    *fails.entry(id.to_string()).or_default() += 1;
-                }
+            if let Some(rest) = line.strip_prefix("FAIL: [")
+                && let Some((id, _)) = rest.split_once(']')
+            {
+                *fails.entry(id.to_string()).or_default() += 1;
             }
         }
         let implemented_filters = [
@@ -466,19 +466,16 @@ mod tests {
                     unimplemented_filter = true;
                 }
             }
-            if sub_rules == 0 {
-                dict_side += n;
-            } else if tokenizer_dict_families.contains(&id.as_str()) {
-                dict_side += n;
-            } else if reading_subs > 0 {
-                dict_side += n;
-            } else if unimplemented_filter
-                && compiled_rules().rules.iter().any(|r| {
-                    &r.id == id
-                        && r.filter
-                            .as_ref()
-                            .is_some_and(|f| dict_blocked_filters.contains(&f.class.as_str()))
-                })
+            if sub_rules == 0
+                || tokenizer_dict_families.contains(&id.as_str())
+                || reading_subs > 0
+                || (unimplemented_filter
+                    && compiled_rules().rules.iter().any(|r| {
+                        &r.id == id
+                            && r.filter
+                                .as_ref()
+                                .is_some_and(|f| dict_blocked_filters.contains(&f.class.as_str()))
+                    }))
             {
                 dict_side += n;
             } else if unimplemented_filter {

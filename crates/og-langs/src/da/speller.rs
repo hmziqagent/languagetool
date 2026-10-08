@@ -72,7 +72,7 @@ fn da_ignore_words(resource_dir: &Path) -> HashSet<String> {
 
 impl DanishSpellerRule {
     pub fn new() -> Self {
-        let resource_dir = da_resource_dir().unwrap_or_else(|| std::path::PathBuf::new());
+        let resource_dir = da_resource_dir().unwrap_or_default();
         let dictionary = Arc::new(speller_dictionary(&resource_dir));
         Self {
             hunspell: shared_hunspell(),

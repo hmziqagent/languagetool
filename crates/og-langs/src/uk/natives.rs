@@ -7,7 +7,7 @@ use regex::Regex;
 use std::sync::LazyLock;
 
 pub(crate) fn clean_token(token: &str) -> String {
-    token.replace('\u{00AD}', "").replace('\u{0301}', "")
+    token.replace(['\u{00AD}', '\u{0301}'], "")
 }
 
 fn context_for(sentence: &AnalyzedSentence, start: usize, end: usize) -> RuleMatchContext {
@@ -43,18 +43,30 @@ fn non_ws_with_ws_before(sentence: &AnalyzedSentence) -> (Vec<&AnalyzedTokenRead
     (tokens, ws_before)
 }
 
-fn make_match(
-    id: &str,
-    description: &str,
+struct MatchSpec<'a> {
+    id: &'a str,
+    description: &'a str,
+    short: &'a str,
+    message: String,
     category: Category,
     issue: IssueType,
-    short: &str,
-    message: String,
     start: usize,
     end: usize,
     replacements: Vec<String>,
-    sentence: &AnalyzedSentence,
-) -> RuleMatch {
+}
+
+fn make_match(spec: MatchSpec<'_>, sentence: &AnalyzedSentence) -> RuleMatch {
+    let MatchSpec {
+        id,
+        description,
+        short,
+        message,
+        category,
+        issue,
+        start,
+        end,
+        replacements,
+    } = spec;
     let rule = RuleMatchRule::new(id, description)
         .with_category(category)
         .with_issue_type(issue.as_str());
@@ -142,15 +154,17 @@ impl Rule for UkrainianTypographyRule {
                     dashed.replace(['\u{2013}', '\u{2014}'], " \u{2014} "),
                 ];
                 rule_matches.push(make_match(
-                    self.id(),
-                    self.description(),
-                    self.category(),
-                    self.issue_type(),
-                    "Коротка риска",
-                    dash_msg.to_string(),
-                    tokens[i].token().start(),
-                    tokens[i].token().end(),
-                    replacements,
+                    MatchSpec {
+                        id: self.id(),
+                        description: self.description(),
+                        category: self.category(),
+                        issue: self.issue_type(),
+                        short: "Коротка риска",
+                        message: dash_msg.to_string(),
+                        start: tokens[i].token().start(),
+                        end: tokens[i].token().end(),
+                        replacements,
+                    },
                     sentence,
                 ));
                 continue;
@@ -200,15 +214,17 @@ impl Rule for UkrainianTypographyRule {
                     }
                     replacements.push(repl);
                     rule_matches.push(make_match(
-                        self.id(),
-                        self.description(),
-                        self.category(),
-                        self.issue_type(),
-                        "Коротка риска",
-                        dash_msg.to_string(),
-                        start_pos,
-                        end_pos,
-                        replacements,
+                        MatchSpec {
+                            id: self.id(),
+                            description: self.description(),
+                            category: self.category(),
+                            issue: self.issue_type(),
+                            short: "Коротка риска",
+                            message: dash_msg.to_string(),
+                            start: start_pos,
+                            end: end_pos,
+                            replacements,
+                        },
                         sentence,
                     ));
                 }
@@ -260,15 +276,17 @@ impl Rule for UkrainianHiddenCharacterRule {
                     "{token_str} містить невидимий знак м’якого перенесення: «{highlighted}», виправлення: {replacement}"
                 );
                 rule_matches.push(make_match(
-                    self.id(),
-                    self.description(),
-                    self.category(),
-                    self.issue_type(),
-                    "Приховані символи",
-                    msg,
-                    token.token().start(),
-                    token.token().end(),
-                    vec![replacement],
+                    MatchSpec {
+                        id: self.id(),
+                        description: self.description(),
+                        category: self.category(),
+                        issue: self.issue_type(),
+                        short: "Приховані символи",
+                        message: msg,
+                        start: token.token().start(),
+                        end: token.token().end(),
+                        replacements: vec![replacement],
+                    },
                     sentence,
                 ));
             }
@@ -409,15 +427,17 @@ impl Rule for UkrainianMixedAlphabetsRule {
                     replacements: Vec<String>,
                     msg: &str| {
             rule_matches.push(make_match(
-                "UK_MIXED_ALPHABETS",
-                self.description(),
-                self.category(),
-                self.issue_type(),
-                "Мішанина розкладок",
-                msg.to_string(),
-                tokens[idx].token().start(),
-                tokens[idx].token().end(),
-                replacements,
+                MatchSpec {
+                    id: "UK_MIXED_ALPHABETS",
+                    description: self.description(),
+                    category: self.category(),
+                    issue: self.issue_type(),
+                    short: "Мішанина розкладок",
+                    message: msg.to_string(),
+                    start: tokens[idx].token().start(),
+                    end: tokens[idx].token().end(),
+                    replacements,
+                },
                 sentence,
             ));
         };
@@ -448,15 +468,12 @@ impl Rule for UkrainianMixedAlphabetsRule {
                         && matches!(
                             clean_token(tokens[i + 1].token().token()).as_str(),
                             "квартал" | "півріччя" | "тисячоліття" | "половина"
-                        )))
-            {
-                let msg = "Вжито кириличну літеру замість латинської";
-                push(&mut rule_matches, i, vec![to_latin(&token_string)], msg);
-            } else if token_string == "І."
-                && i > 1
-                && tokens[i - 1].token().token() != "Тому"
-                && tokens[i - 1].token().token() != "Франко"
-                && tokens[i - 1].has_pos_tag_matching("(?!.*:abbr).*fname.*")
+                        ))
+                    || (token_string == "І."
+                        && i > 1
+                        && tokens[i - 1].token().token() != "Тому"
+                        && tokens[i - 1].token().token() != "Франко"
+                        && tokens[i - 1].has_pos_tag_matching("(?!.*:abbr).*fname.*")))
             {
                 let msg = "Вжито кириличну літеру замість латинської";
                 push(&mut rule_matches, i, vec![to_latin(&token_string)], msg);
@@ -518,14 +535,14 @@ impl Rule for UkrainianMixedAlphabetsRule {
                 push(&mut rule_matches, i, replacements, &msg);
             }
 
-            if token_string.contains('\u{0306}') || token_string.contains('\u{0308}') {
-                if token_string.contains("и\u{0306}") || token_string.contains("і\u{0308}") {
-                    let fix = token_string
-                        .replace("и\u{0306}", "й")
-                        .replace("і\u{0308}", "ї");
-                    let msg = "Вжито комбіновані символи замість українських літер";
-                    push(&mut rule_matches, i, vec![fix], msg);
-                }
+            if (token_string.contains('\u{0306}') || token_string.contains('\u{0308}'))
+                && (token_string.contains("и\u{0306}") || token_string.contains("і\u{0308}"))
+            {
+                let fix = token_string
+                    .replace("и\u{0306}", "й")
+                    .replace("і\u{0308}", "ї");
+                let msg = "Вжито комбіновані символи замість українських літер";
+                push(&mut rule_matches, i, vec![fix], msg);
             }
         }
         rule_matches
@@ -612,15 +629,17 @@ impl Rule for UkrainianWordRepeatRule {
                     replacements.push("I і".to_string());
                 }
                 rule_matches.push(make_match(
-                    self.id(),
-                    self.description(),
-                    self.category(),
-                    self.issue_type(),
-                    "Повторення слів",
-                    msg,
-                    tokens[i - 1].token().start(),
-                    tokens[i].token().start() + prev_token.len(),
-                    replacements,
+                    MatchSpec {
+                        id: self.id(),
+                        description: self.description(),
+                        category: self.category(),
+                        issue: self.issue_type(),
+                        short: "Повторення слів",
+                        message: msg,
+                        start: tokens[i - 1].token().start(),
+                        end: tokens[i].token().start() + prev_token.len(),
+                        replacements,
+                    },
                     sentence,
                 ));
             }
@@ -820,12 +839,11 @@ impl Rule for UkrainianCommaWhitespaceRule {
                     if !domain && !file_ext && !proper_noun {
                         msg = Some("Не ставте пробіл перед крапкою.");
                         suggestion_text = ".".to_string();
-                        if DIGIT_OR_DOT.is_match(next) {
-                            msg = None;
-                        } else if tokens.get(i + 1).is_some_and(|t| t.token().token() == "/")
-                            && tokens
-                                .get(i + 2)
-                                .is_some_and(|t| SLASH_CMD.is_match(t.token().token()))
+                        if DIGIT_OR_DOT.is_match(next)
+                            || (tokens.get(i + 1).is_some_and(|t| t.token().token() == "/")
+                                && tokens
+                                    .get(i + 2)
+                                    .is_some_and(|t| SLASH_CMD.is_match(t.token().token())))
                         {
                             msg = None;
                         }
@@ -833,7 +851,7 @@ impl Rule for UkrainianCommaWhitespaceRule {
                 }
             }
             if let Some(message) = msg
-                && !self.is_exception(&sentence.tokens(), i)
+                && !self.is_exception(sentence.tokens(), i)
                 && !tokens[i].is_immunized()
             {
                 let from_idx = if two_suggestions { i - 2 } else { i - 1 };
@@ -854,15 +872,17 @@ impl Rule for UkrainianCommaWhitespaceRule {
                     vec![suggestion_text.clone()]
                 };
                 rule_matches.push(make_match(
-                    self.id(),
-                    self.description(),
-                    self.category(),
-                    self.issue_type(),
-                    self.description(),
-                    message.to_string(),
-                    from_pos,
-                    to_pos,
-                    replacements,
+                    MatchSpec {
+                        id: self.id(),
+                        description: self.description(),
+                        category: self.category(),
+                        issue: self.issue_type(),
+                        short: self.description(),
+                        message: message.to_string(),
+                        start: from_pos,
+                        end: to_pos,
+                        replacements,
+                    },
                     sentence,
                 ));
             }
@@ -1039,15 +1059,17 @@ impl TextLevelRule for UkrainianUppercaseSentenceStartRule {
                 {
                     let target = tokens[match_token_pos];
                     rule_matches.push(make_match(
-                        self.id(),
-                        self.description(),
-                        self.category(),
-                        self.issue_type(),
-                        "Великі літери",
-                        "Це речення не починається з великої літери.".to_string(),
-                        target.token().start(),
-                        target.token().end(),
-                        vec![capitalized],
+                        MatchSpec {
+                            id: self.id(),
+                            description: self.description(),
+                            category: self.category(),
+                            issue: self.issue_type(),
+                            short: "Великі літери",
+                            message: "Це речення не починається з великої літери.".to_string(),
+                            start: target.token().start(),
+                            end: target.token().end(),
+                            replacements: vec![capitalized],
+                        },
                         sentence,
                     ));
                 }

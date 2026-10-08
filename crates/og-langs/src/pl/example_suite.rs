@@ -128,10 +128,10 @@ fn evaluate_examples_file(rules_path: &Path, file_label: &str, artifact: &str) {
     let xml = crate::pl::normalize_pl_rules_xml(&xml);
     let xml = xml.as_ref();
     let raw_example_count = xml.matches("<example").count();
-    let without_comments = strip_xml_comments(&xml);
+    let without_comments = strip_xml_comments(xml);
     let comment_example_count = raw_example_count - without_comments.matches("<example").count();
     let rule_set = XmlCompiler::new()
-        .compile_file_with_base(&xml, rules_path.parent())
+        .compile_file_with_base(xml, rules_path.parent())
         .expect("compile rules xml");
 
     let mut group_index: HashMap<(String, Option<String>), usize> = HashMap::new();
@@ -293,11 +293,7 @@ mod tests {
 
     fn compiled_rules_from(path: PathBuf) -> &'static CompiledRuleSet {
         static GRAMMAR: OnceLock<CompiledRuleSet> = OnceLock::new();
-        let slot = if path.ends_with("grammar.xml") {
-            &GRAMMAR
-        } else {
-            &GRAMMAR
-        };
+        let slot = &GRAMMAR;
         slot.get_or_init(|| {
             let xml = std::fs::read_to_string(&path).unwrap();
             let xml = crate::pl::normalize_pl_rules_xml(&xml);

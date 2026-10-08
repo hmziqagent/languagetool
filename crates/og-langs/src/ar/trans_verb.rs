@@ -50,7 +50,7 @@ impl ArabicTransVerbRule {
 
     fn is_attached_transitive_verb(&self, token: &AnalyzedTokenReadings) -> bool {
         for reading in token.readings() {
-            if reading.pos_tags().first().is_some()
+            if !reading.pos_tags().is_empty()
                 && reading
                     .lemma()
                     .is_some_and(|lemma| self.wrong_words.contains_key(lemma))
@@ -64,7 +64,7 @@ impl ArabicTransVerbRule {
     fn prepositions_for(&self, token: &AnalyzedTokenReadings) -> &[String] {
         const EMPTY: &[String] = &[];
         for reading in token.readings() {
-            if reading.pos_tags().first().is_some()
+            if !reading.pos_tags().is_empty()
                 && let Some(lemma) = reading.lemma()
                 && let Some(prepositions) = self.wrong_words.get(lemma)
             {

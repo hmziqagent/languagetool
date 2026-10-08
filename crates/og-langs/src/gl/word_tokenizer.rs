@@ -109,8 +109,7 @@ fn prepare(text: &str) -> Prepared {
         } else if c.is_ascii_digit()
             && let Some(end_index) = spaced_decimal_end(&original, i)
         {
-            for k in i..end_index {
-                let (k_byte, k_char) = original[k];
+            for &(k_byte, k_char) in &original[i..end_index] {
                 chars.push(if k_char == ' ' || k_char == '\u{00A0}' {
                     NON_BREAKING_SPACE_SUBST
                 } else {

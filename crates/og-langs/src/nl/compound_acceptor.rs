@@ -171,8 +171,7 @@ impl CompoundAcceptor {
             .map(|(i, _)| i)
             .chain(std::iter::once(word.len()))
             .collect();
-        for part1_chars in 3..char_count.saturating_sub(3) {
-            let split = boundaries[part1_chars];
+        for &split in &boundaries[3..char_count.saturating_sub(3)] {
             let (part1, part2) = (&word[..split], &word[split..]);
             if part1 != part2 && self.accept_compound_parts(part1, part2) {
                 return Some((part1.to_string(), part2.to_string()));

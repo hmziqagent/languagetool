@@ -527,7 +527,8 @@ mod tests {
     fn trans_verb_rule_matches_java_test() {
         let rule =
             super::super::trans_verb::ArabicTransVerbRule::from_resource_dir(&resource_dir());
-        for text in ["كان أَفَاضَ في الحديث"] {
+        {
+            let text = "كان أَفَاضَ في الحديث";
             assert!(sentence_matches(&rule, text).is_empty(), "{text}");
         }
         for text in [

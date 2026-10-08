@@ -139,7 +139,9 @@ impl Rule for SpanishCompoundRule {
     }
 }
 
-pub fn native_rules() -> (Vec<Arc<dyn Rule>>, Vec<Arc<dyn TextLevelRule>>) {
+pub type SpanishNativeRules = (Vec<Arc<dyn Rule>>, Vec<Arc<dyn TextLevelRule>>);
+
+pub fn native_rules() -> SpanishNativeRules {
     let sentence_rules: Vec<Arc<dyn Rule>> = vec![
         Arc::new(simple_replace::SimpleReplaceRule::spanish()),
         Arc::new(SpanishWrongWordInContextRule::new()),

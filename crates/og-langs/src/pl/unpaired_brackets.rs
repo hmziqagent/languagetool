@@ -257,14 +257,14 @@ impl PolishUnpairedBracketsRule {
         matches: &mut Vec<RuleMatch>,
         rule_match_stack: &mut Vec<(&'static str, usize)>,
     ) -> Option<RuleMatch> {
-        if let Some(&(sym, r_idx)) = rule_match_stack.last() {
-            if let Some(index) = END_SYMBOLS.iter().position(|s| *s == loc.symbol) {
-                if sym == START_SYMBOLS[index] && matches.len() > r_idx {
-                    matches.remove(r_idx);
-                    rule_match_stack.pop();
-                    return None;
-                }
-            }
+        if let Some(&(sym, r_idx)) = rule_match_stack.last()
+            && let Some(index) = END_SYMBOLS.iter().position(|s| *s == loc.symbol)
+            && sym == START_SYMBOLS[index]
+            && matches.len() > r_idx
+        {
+            matches.remove(r_idx);
+            rule_match_stack.pop();
+            return None;
         }
         rule_match_stack.push((loc.symbol, matches.len()));
         if list_item_guard(text, loc) {
@@ -365,13 +365,11 @@ impl TextLevelRule for PolishUnpairedBracketsRule {
             for loc in &stack {
                 if let Some(m) =
                     self.create_match(text, sentences, loc, &mut matches, &mut rule_match_stack)
-                {
-                    if !loc.opening
+                    && (!loc.opening
                         || ends_like_real_sentence(sentences[loc.sentence_idx].text())
-                        || sentences.len() - 1 > loc.sentence_idx
-                    {
-                        matches.push(m);
-                    }
+                        || sentences.len() - 1 > loc.sentence_idx)
+                {
+                    matches.push(m);
                 }
             }
         }

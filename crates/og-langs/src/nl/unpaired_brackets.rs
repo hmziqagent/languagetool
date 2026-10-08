@@ -143,22 +143,13 @@ fn fill_symbol_stack(
         });
         return true;
     }
-    if is_special_case || views[i].sentence_end {
-        if token == END_SYMBOLS[j] {
-            if let Some(last) = stack.last() {
-                if last.symbol == START_SYMBOLS[j] && last.is_opening {
-                    stack.pop();
-                    return true;
-                }
-                if end_symbol_is_unique(END_SYMBOLS[j]) || j == END_SYMBOLS.len() - 1 {
-                    stack.push(StackEntry {
-                        symbol: END_SYMBOLS[j],
-                        is_opening: false,
-                        start_pos,
-                    });
-                    return true;
-                }
-            } else {
+    if (is_special_case || views[i].sentence_end) && token == END_SYMBOLS[j] {
+        if let Some(last) = stack.last() {
+            if last.symbol == START_SYMBOLS[j] && last.is_opening {
+                stack.pop();
+                return true;
+            }
+            if end_symbol_is_unique(END_SYMBOLS[j]) || j == END_SYMBOLS.len() - 1 {
                 stack.push(StackEntry {
                     symbol: END_SYMBOLS[j],
                     is_opening: false,
@@ -166,6 +157,13 @@ fn fill_symbol_stack(
                 });
                 return true;
             }
+        } else {
+            stack.push(StackEntry {
+                symbol: END_SYMBOLS[j],
+                is_opening: false,
+                start_pos,
+            });
+            return true;
         }
     }
     false

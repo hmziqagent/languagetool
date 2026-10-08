@@ -5,7 +5,7 @@ use og_core::{
 };
 use og_spell::Dictionary;
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
 pub const MORFOLOGIK_RULE_AST: &str = "MORFOLOGIK_RULE_AST";
@@ -31,7 +31,7 @@ pub enum AsturianSpellerSource {
     TaggerApproximation,
 }
 
-fn hunspell_word_set(dir: &PathBuf) -> Option<Vec<String>> {
+fn hunspell_word_set(dir: &Path) -> Option<Vec<String>> {
     let dict_path = dir.join("ast_ES.dict");
     let info_path = dir.join("ast_ES.info");
     if !dict_path.exists() || !info_path.exists() {

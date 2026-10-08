@@ -193,7 +193,7 @@ impl Rule for SpaceInCompoundRule {
             if start > 0 && is_ascii_letter(text[..start].chars().next_back().unwrap_or(' ')) {
                 continue;
             }
-            if text[start..].chars().next() == Some(' ') {
+            if text[start..].starts_with(' ') {
                 continue;
             }
             let word_end = text[start..]

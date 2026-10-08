@@ -235,8 +235,8 @@ fn is_article_without_sub(gender: &str, tokens: &[&AnalyzedTokenReadings], n: us
 fn skip_sub(tokens: &[&AnalyzedTokenReadings], n: usize, to: usize) -> isize {
     let gender = get_gender(tokens[n]);
     let s_str = format!("(SUB|EIG):.*{gender}.*");
-    for i in (n + 1)..to {
-        if matches_pos_tag_regex(tokens[i], &s_str) {
+    for (i, token) in tokens.iter().enumerate().take(to).skip(n + 1) {
+        if matches_pos_tag_regex(token, &s_str) {
             return i as isize;
         }
     }
@@ -373,8 +373,8 @@ fn is_kon_after_verb(tokens: &[&AnalyzedTokenReadings], start: usize, end: usize
         if start + 3 == end {
             return true;
         }
-        for i in (start + 2)..end {
-            if matches_pos_tag_regex(tokens[i], "(SUB|PRO:PER).*") {
+        for token in &tokens[start + 2..end] {
+            if matches_pos_tag_regex(token, "(SUB|PRO:PER).*") {
                 return true;
             }
         }
@@ -490,13 +490,9 @@ fn get_comma_behind(
             if verbs[0] + 1 == verbs[1] && is_three_combined_verbs(tokens, verbs[0], verbs[2]) {
                 return verbs[2] as isize;
             }
-        } else if verbs[0] + 3 == verbs[2] && is_four_combined_verbs(tokens, verbs[0], verbs[2]) {
-            if is_separator_or_inf(tokens, verbs[2] + 1) {
-                return -1;
-            }
-            return verbs[2] as isize;
-        } else if has_pos_tag_starting_with(tokens[verbs[2]], "VER:MOD:")
-            && is_special_pair(tokens, verbs[0], verbs[1])
+        } else if (verbs[0] + 3 == verbs[2] && is_four_combined_verbs(tokens, verbs[0], verbs[2]))
+            || (has_pos_tag_starting_with(tokens[verbs[2]], "VER:MOD:")
+                && is_special_pair(tokens, verbs[0], verbs[1]))
         {
             if is_separator_or_inf(tokens, verbs[2] + 1) {
                 return -1;
@@ -783,7 +779,8 @@ mod tests {
     #[test]
     fn behind_flags_missing_comma_after_relative_clause() {
         let engine = shared_engine();
-        for text in ["Die Frau, die vor dem Auto steht hat schwarze Haare."] {
+        {
+            let text = "Die Frau, die vor dem Auto steht hat schwarze Haare.";
             let matches = engine.check(text);
             assert!(
                 matches

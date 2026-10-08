@@ -99,7 +99,7 @@ fn dash_matches(id: &str, variants: &[String], sentence: &AnalyzedSentence) -> V
                 .map(move |(i, _)| (i, variant.len()))
         })
         .collect();
-    hits.sort_by(|a, b| b.0.cmp(&a.0));
+    hits.sort_by_key(|&(begin, _)| std::cmp::Reverse(begin));
     for (begin, len) in hits {
         if start_positions.contains(&begin) {
             continue;
@@ -121,8 +121,7 @@ fn dash_matches(id: &str, variants: &[String], sentence: &AnalyzedSentence) -> V
         let suggestion = covered
             .replace(" – ", "-")
             .replace(" — ", "-")
-            .replace('–', "-")
-            .replace('—', "-");
+            .replace(['–', '—'], "-");
         let rm_rule = RuleMatchRule::new(id, "Travessões no lugar de hífens")
             .with_category(Category::new("TYPOGRAPHY", "Typography"))
             .with_issue_type(IssueType::Typographical.as_str());

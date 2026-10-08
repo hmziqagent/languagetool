@@ -6,7 +6,7 @@ use og_core::{AnalyzedSentence, AnalyzedToken, AnalyzedTokenReadings, RuleMatch}
 use og_rules::pattern_rule::PatternRuleEngine;
 use og_xml::compiler::{CompiledRule, CompiledRuleSet, XmlCompiler};
 use std::collections::HashMap;
-use std::sync::{Arc, OnceLock};
+use std::sync::OnceLock;
 
 pub(crate) struct JaPipeline {
     tokenizer: JapaneseWordTokenizer,

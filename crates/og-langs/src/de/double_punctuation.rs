@@ -17,7 +17,6 @@ pub fn german_double_punctuation_rule() -> DoublePunctuationRule {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
 
     #[test]
     fn german_rule_flags_double_dots_after_abbreviation() {

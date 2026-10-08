@@ -187,22 +187,10 @@ pub(crate) fn disambiguated_sentence(text: &str) -> AnalyzedSentence {
         .expect("text must yield at least one sentence")
 }
 
-#[derive(Debug)]
-pub(crate) struct TraceDump {
-    pub pattern_idx: usize,
-    pub token_idx: usize,
-    pub token: String,
-    pub cause: String,
-}
-
 pub(crate) fn trace_rule_matches(
     id: &str,
     text: &str,
-) -> (
-    Vec<&'static CompiledRule>,
-    Vec<AnalyzedSentence>,
-    Vec<TraceDump>,
-) {
+) -> (Vec<&'static CompiledRule>, Vec<AnalyzedSentence>) {
     let engine = PatternRuleEngine::new();
     let pipeline = BretonPipeline::shared();
     og_rules::pattern_rule::set_test_date_hack(true);
@@ -216,24 +204,12 @@ pub(crate) fn trace_rule_matches(
         .into_iter()
         .map(|(s, _)| s)
         .collect();
-    og_rules::pattern_trace::set_enabled(true);
-    og_rules::pattern_trace::clear();
     for rule in &rules {
         for sentence in &sentences {
             engine.match_rule(rule, sentence);
         }
     }
-    let events = og_rules::pattern_trace::take()
-        .into_iter()
-        .map(|e| TraceDump {
-            pattern_idx: e.pattern_idx,
-            token_idx: e.token_idx,
-            token: e.token,
-            cause: e.cause,
-        })
-        .collect();
-    og_rules::pattern_trace::set_enabled(false);
-    (rules, sentences, events)
+    (rules, sentences)
 }
 
 const TOKEN_REFERENCE_RESIDUE: &[(&str, &str)] = &[

@@ -191,8 +191,8 @@ impl TextLevelRule for CatalanWordRepeatBeginningRule {
                 token = tokens[1].token().token().to_string();
                 if tokens.len() > 3 {
                     let analyzed_token = tokens[1];
-                    let is_word = !(token.chars().count() == 1
-                        && !token.chars().next().is_some_and(char::is_alphabetic));
+                    let is_word = token.chars().count() != 1
+                        || token.chars().next().is_some_and(char::is_alphabetic);
                     let tok2 = tokens[2].token().token();
                     let tok3 = tokens[3].token().token();
                     if is_word

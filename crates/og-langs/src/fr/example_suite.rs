@@ -221,6 +221,25 @@ fn evaluate_examples_file(rules_path: &std::path::Path, file_label: &str, artifa
     assert!(passed + failed > 0, "suite must evaluate examples");
 }
 
+fn strip_xml_comments(xml: &str) -> String {
+    let mut out = String::with_capacity(xml.len());
+    let mut rest = xml;
+    while let Some(start) = rest.find("<!--") {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + 4..];
+        match after.find("-->") {
+            Some(end) => {
+                rest = &after[end + 3..];
+            }
+            None => {
+                rest = "";
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -317,23 +336,4 @@ mod tests {
         let matches = filtered_matches("APOS_ESPACE", "La surface du mur ne s'abîme.");
         assert!(matches.is_empty(), "{matches:?}");
     }
-}
-
-fn strip_xml_comments(xml: &str) -> String {
-    let mut out = String::with_capacity(xml.len());
-    let mut rest = xml;
-    while let Some(start) = rest.find("<!--") {
-        out.push_str(&rest[..start]);
-        let after = &rest[start + 4..];
-        match after.find("-->") {
-            Some(end) => {
-                rest = &after[end + 3..];
-            }
-            None => {
-                rest = "";
-            }
-        }
-    }
-    out.push_str(rest);
-    out
 }

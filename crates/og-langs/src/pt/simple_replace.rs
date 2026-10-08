@@ -200,12 +200,7 @@ impl Rule for SimpleReplaceRule {
                     RuleMatchContext::new(context_text, ctx_start, ctx_end - ctx_start),
                 )
                 .with_short_message(self.short.clone())
-                .with_replacements(
-                    replacements
-                        .iter()
-                        .map(|r| SuggestedReplacement::new(r))
-                        .collect(),
-                )
+                .with_replacements(replacements.iter().map(SuggestedReplacement::new).collect())
                 .with_sentence(sentence.text().to_string()),
             );
         }

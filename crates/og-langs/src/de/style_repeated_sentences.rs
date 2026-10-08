@@ -293,7 +293,6 @@ fn flush_beginning(
 
 #[cfg(test)]
 mod tests {
-    use crate::engine::LanguageEngine;
 
     #[test]
     fn detects_staccato_sentences() {

@@ -131,126 +131,110 @@ impl PortugueseAccentuationCheckRule {
 
         if let Some(entry) = noun_entry.clone()
             && !matches_postag(tokens[i], &GN)
-        {
-            if tokens[i - 1].has_pos_tag("SPS00")
+            && ((tokens[i - 1].has_pos_tag("SPS00")
                 && !tokens[i - 1].has_pos_tag("RG")
                 && !matches_postag(tokens[i - 1], &DETERMINANTE)
-                && !matches_postag(tokens[i], &INFINITIVO)
-            {
-                replacement = Some(entry.0.clone());
-            } else if (matches_postag(tokens[i - 1], &DETERMINANTE_MS)
-                && matches_data_postag(&entry, &NOME_MS))
+                && !matches_postag(tokens[i], &INFINITIVO))
+                || (matches_postag(tokens[i - 1], &DETERMINANTE_MS)
+                    && matches_data_postag(&entry, &NOME_MS))
                 || (matches_postag(tokens[i - 1], &DETERMINANTE_MP)
                     && matches_data_postag(&entry, &NOME_MP))
                 || (matches_postag(tokens[i - 1], &DETERMINANTE_FS)
                     && matches_data_postag(&entry, &NOME_FS))
                 || (matches_postag(tokens[i - 1], &DETERMINANTE_FP)
                     && matches_data_postag(&entry, &NOME_FP))
-            {
-                replacement = Some(entry.0.clone());
-            } else if i > 2
-                && matches_postag(tokens[i - 2], &VERBO_CONJUGADO)
-                && ((matches_postag(tokens[i - 1], &DETERMINANTE_MS)
-                    && matches_data_postag(&entry, &NOME_MS))
-                    || (matches_postag(tokens[i - 1], &DETERMINANTE_MP)
-                        && matches_data_postag(&entry, &NOME_MP))
-                    || (matches_postag(tokens[i - 1], &DETERMINANTE_FS)
-                        && matches_data_postag(&entry, &NOME_FS))
-                    || (matches_postag(tokens[i - 1], &DETERMINANTE_FP)
-                        && matches_data_postag(&entry, &NOME_FP)))
-            {
-                replacement = Some(entry.0.clone());
-            } else if i > 2
-                && matches_postag(tokens[i - 2], &VERBO_CONJUGADO)
-                && ((ARTIGO_O_MS.is_match(prev_token) && matches_data_postag(&entry, &NOME_MS))
-                    || (ARTIGO_O_MP.is_match(prev_token) && matches_data_postag(&entry, &NOME_MP))
-                    || (ARTIGO_O_FS.is_match(prev_token) && matches_data_postag(&entry, &NOME_FS))
-                    || (ARTIGO_O_FP.is_match(prev_token) && matches_data_postag(&entry, &NOME_FP)))
-            {
-                replacement = Some(entry.0.clone());
-            } else if !matches_postag(tokens[i], &PARTICIPIO_MS)
-                && !matches_postag(tokens[i - 1], &NOT_IN_PREV_TOKEN)
-                && i < tokens.len() - 2
-                && !matches_postag(tokens[i + 2], &INFINITIVO)
-                && !EXCEPCOES_ANTES_DE.is_match(next_next_token)
-                && !tokens[i - 1].has_pos_tag("RG")
-            {
-                replacement = Some(entry.0.clone());
-            } else if ((ARTIGO_O_MS.is_match(prev_token) && matches_data_postag(&entry, &NOME_MS))
-                || (ARTIGO_O_FS.is_match(prev_token) && matches_data_postag(&entry, &NOME_FS))
-                || (ARTIGO_O_MP.is_match(prev_token) && matches_data_postag(&entry, &NOME_MP))
-                || (ARTIGO_O_FP.is_match(prev_token) && matches_data_postag(&entry, &NOME_FP)))
-                && PREPOSICAO_DE.is_match(next_token)
-            {
-                replacement = Some(entry.0.clone());
-            } else if i < tokens.len() - 1
-                && ((matches_data_postag(&entry, &NOME_MS)
-                    && matches_postag(tokens[i + 1], &ADJETIVO_MS))
-                    || (matches_data_postag(&entry, &NOME_FS)
-                        && matches_postag(tokens[i + 1], &ADJETIVO_FS))
-                    || (matches_data_postag(&entry, &NOME_MP)
-                        && matches_postag(tokens[i + 1], &ADJETIVO_MP))
-                    || (matches_data_postag(&entry, &NOME_FP)
-                        && matches_postag(tokens[i + 1], &ADJETIVO_FP)))
-            {
-                replacement = Some(entry.0.clone());
-            } else if (matches_data_postag(&entry, &NOME_MS)
-                && matches_postag(tokens[i - 1], &ADJETIVO_MS)
-                && !matches_postag(tokens[i], &VERBO_3S)
-                && !matches_postag(tokens[i], &GRUPO_VERBAL))
-                || (matches_data_postag(&entry, &NOME_FS)
-                    && matches_postag(tokens[i - 1], &ADJETIVO_FS)
-                    && !matches_postag(tokens[i], &VERBO_3S))
-                || (matches_data_postag(&entry, &NOME_MP)
-                    && matches_postag(tokens[i - 1], &ADJETIVO_MP))
-                || (matches_data_postag(&entry, &NOME_FP)
-                    && matches_postag(tokens[i - 1], &ADJETIVO_FP))
-            {
-                replacement = Some(entry.0.clone());
-            } else if next_token == "que"
-                && i > 2
-                && ((matches_data_postag(&entry, &NOME_MS)
-                    && matches_postag(tokens[i - 1], &ADJETIVO_MS)
-                    && matches_postag(tokens[i - 2], &DETERMINANTE_MS))
-                    || (matches_data_postag(&entry, &NOME_FS)
-                        && matches_postag(tokens[i - 1], &ADJETIVO_FS)
-                        && matches_postag(tokens[i - 2], &DETERMINANTE_FS))
-                    || (matches_data_postag(&entry, &NOME_MP)
-                        && matches_postag(tokens[i - 1], &ADJETIVO_MP)
-                        && matches_postag(tokens[i - 2], &DETERMINANTE_MP))
-                    || (matches_data_postag(&entry, &NOME_FP)
-                        && matches_postag(tokens[i - 1], &ADJETIVO_FP)
-                        && matches_postag(tokens[i - 2], &DETERMINANTE_FP)))
-            {
-                replacement = Some(entry.0.clone());
-            } else if next_token == "que"
-                && ((ARTIGO_O_MS.is_match(prev_token) && matches_data_postag(&entry, &NOME_MS))
+                || (i > 2
+                    && matches_postag(tokens[i - 2], &VERBO_CONJUGADO)
+                    && ((matches_postag(tokens[i - 1], &DETERMINANTE_MS)
+                        && matches_data_postag(&entry, &NOME_MS))
+                        || (matches_postag(tokens[i - 1], &DETERMINANTE_MP)
+                            && matches_data_postag(&entry, &NOME_MP))
+                        || (matches_postag(tokens[i - 1], &DETERMINANTE_FS)
+                            && matches_data_postag(&entry, &NOME_FS))
+                        || (matches_postag(tokens[i - 1], &DETERMINANTE_FP)
+                            && matches_data_postag(&entry, &NOME_FP))))
+                || (i > 2
+                    && matches_postag(tokens[i - 2], &VERBO_CONJUGADO)
+                    && ((ARTIGO_O_MS.is_match(prev_token)
+                        && matches_data_postag(&entry, &NOME_MS))
+                        || (ARTIGO_O_MP.is_match(prev_token)
+                            && matches_data_postag(&entry, &NOME_MP))
+                        || (ARTIGO_O_FS.is_match(prev_token)
+                            && matches_data_postag(&entry, &NOME_FS))
+                        || (ARTIGO_O_FP.is_match(prev_token)
+                            && matches_data_postag(&entry, &NOME_FP))))
+                || (!matches_postag(tokens[i], &PARTICIPIO_MS)
+                    && !matches_postag(tokens[i - 1], &NOT_IN_PREV_TOKEN)
+                    && i < tokens.len() - 2
+                    && !matches_postag(tokens[i + 2], &INFINITIVO)
+                    && !EXCEPCOES_ANTES_DE.is_match(next_next_token)
+                    && !tokens[i - 1].has_pos_tag("RG"))
+                || ((ARTIGO_O_MS.is_match(prev_token) && matches_data_postag(&entry, &NOME_MS))
                     || (ARTIGO_O_FS.is_match(prev_token) && matches_data_postag(&entry, &NOME_FS))
                     || (ARTIGO_O_MP.is_match(prev_token) && matches_data_postag(&entry, &NOME_MP))
                     || (ARTIGO_O_FP.is_match(prev_token) && matches_data_postag(&entry, &NOME_FP)))
-            {
-                replacement = Some(entry.0.clone());
-            }
-            if i > 2
-                && tokens[i - 2].has_pos_tag("SPS00")
-                && !tokens[i - 2].has_pos_tag("RG")
-                && (matches_data_postag(&entry, &NOME_MS)
+                    && PREPOSICAO_DE.is_match(next_token)
+                || (i < tokens.len() - 1
+                    && ((matches_data_postag(&entry, &NOME_MS)
+                        && matches_postag(tokens[i + 1], &ADJETIVO_MS))
+                        || (matches_data_postag(&entry, &NOME_FS)
+                            && matches_postag(tokens[i + 1], &ADJETIVO_FS))
+                        || (matches_data_postag(&entry, &NOME_MP)
+                            && matches_postag(tokens[i + 1], &ADJETIVO_MP))
+                        || (matches_data_postag(&entry, &NOME_FP)
+                            && matches_postag(tokens[i + 1], &ADJETIVO_FP))))
+                || ((matches_data_postag(&entry, &NOME_MS)
                     && matches_postag(tokens[i - 1], &ADJETIVO_MS)
-                    || matches_data_postag(&entry, &NOME_FS)
+                    && !matches_postag(tokens[i], &VERBO_3S)
+                    && !matches_postag(tokens[i], &GRUPO_VERBAL))
+                    || (matches_data_postag(&entry, &NOME_FS)
                         && matches_postag(tokens[i - 1], &ADJETIVO_FS)
-                    || matches_data_postag(&entry, &NOME_MP)
-                        && matches_postag(tokens[i - 1], &ADJETIVO_MP)
-                    || matches_data_postag(&entry, &NOME_FP)
-                        && matches_postag(tokens[i - 1], &ADJETIVO_FP))
-            {
-                replacement = Some(entry.0.clone());
-            }
+                        && !matches_postag(tokens[i], &VERBO_3S))
+                    || (matches_data_postag(&entry, &NOME_MP)
+                        && matches_postag(tokens[i - 1], &ADJETIVO_MP))
+                    || (matches_data_postag(&entry, &NOME_FP)
+                        && matches_postag(tokens[i - 1], &ADJETIVO_FP)))
+                || (next_token == "que"
+                    && i > 2
+                    && ((matches_data_postag(&entry, &NOME_MS)
+                        && matches_postag(tokens[i - 1], &ADJETIVO_MS)
+                        && matches_postag(tokens[i - 2], &DETERMINANTE_MS))
+                        || (matches_data_postag(&entry, &NOME_FS)
+                            && matches_postag(tokens[i - 1], &ADJETIVO_FS)
+                            && matches_postag(tokens[i - 2], &DETERMINANTE_FS))
+                        || (matches_data_postag(&entry, &NOME_MP)
+                            && matches_postag(tokens[i - 1], &ADJETIVO_MP)
+                            && matches_postag(tokens[i - 2], &DETERMINANTE_MP))
+                        || (matches_data_postag(&entry, &NOME_FP)
+                            && matches_postag(tokens[i - 1], &ADJETIVO_FP)
+                            && matches_postag(tokens[i - 2], &DETERMINANTE_FP))))
+                || (next_token == "que"
+                    && ((ARTIGO_O_MS.is_match(prev_token)
+                        && matches_data_postag(&entry, &NOME_MS))
+                        || (ARTIGO_O_FS.is_match(prev_token)
+                            && matches_data_postag(&entry, &NOME_FS))
+                        || (ARTIGO_O_MP.is_match(prev_token)
+                            && matches_data_postag(&entry, &NOME_MP))
+                        || (ARTIGO_O_FP.is_match(prev_token)
+                            && matches_data_postag(&entry, &NOME_FP))))
+                || (i > 2
+                    && tokens[i - 2].has_pos_tag("SPS00")
+                    && !tokens[i - 2].has_pos_tag("RG")
+                    && (matches_data_postag(&entry, &NOME_MS)
+                        && matches_postag(tokens[i - 1], &ADJETIVO_MS)
+                        || matches_data_postag(&entry, &NOME_FS)
+                            && matches_postag(tokens[i - 1], &ADJETIVO_FS)
+                        || matches_data_postag(&entry, &NOME_MP)
+                            && matches_postag(tokens[i - 1], &ADJETIVO_MP)
+                        || matches_data_postag(&entry, &NOME_FP)
+                            && matches_postag(tokens[i - 1], &ADJETIVO_FP))))
+        {
+            replacement = Some(entry.0.clone());
         }
 
         if let Some(entry) = adj_entry
             && !matches_postag(tokens[i], &GN)
-        {
-            if (matches_data_postag(&entry, &ADJETIVO_MS)
+            && ((matches_data_postag(&entry, &ADJETIVO_MS)
                 && matches_postag(tokens[i - 1], &NOME_MS)
                 && !tokens[i - 1].has_pos_tag("_GN_FS")
                 && matches_postag(tokens[i], &VERBO_CONJUGADO)
@@ -262,41 +246,36 @@ impl PortugueseAccentuationCheckRule {
                     && matches_postag(tokens[i - 1], &NOME_MP))
                 || (matches_data_postag(&entry, &ADJETIVO_FP)
                     && matches_postag(tokens[i - 1], &NOME_FP))
-            {
-                replacement = Some(entry.0.clone());
-            } else if i < tokens.len() - 1
-                && prev_token != "que"
-                && !matches_postag(tokens[i - 1], &NOT_IN_PREV_TOKEN)
-                && ((matches_data_postag(&entry, &ADJETIVO_MS)
-                    && matches_postag(tokens[i + 1], &NOME_MS)
-                    && matches_postag(tokens[i - 1], &BEFORE_ADJECTIVE_MS))
-                    || (matches_data_postag(&entry, &ADJETIVO_FS)
-                        && matches_postag(tokens[i + 1], &NOME_FS)
-                        && matches_postag(tokens[i - 1], &BEFORE_ADJECTIVE_FS))
-                    || (matches_data_postag(&entry, &ADJETIVO_MP)
-                        && matches_postag(tokens[i + 1], &NOME_MP)
-                        && matches_postag(tokens[i - 1], &BEFORE_ADJECTIVE_MP))
-                    || (matches_data_postag(&entry, &ADJETIVO_FP)
-                        && matches_postag(tokens[i + 1], &NOME_FP)
-                        && matches_postag(tokens[i - 1], &BEFORE_ADJECTIVE_FP)))
-            {
-                replacement = Some(entry.0.clone());
-            } else if i < tokens.len() - 1
-                && ((matches_data_postag(&entry, &ADJETIVO_MS)
-                    && matches_postag(tokens[i + 1], &NOME_MS)
-                    && ARTIGO_O_MS.is_match(prev_token))
-                    || (matches_data_postag(&entry, &ADJETIVO_FS)
-                        && matches_postag(tokens[i + 1], &NOME_FS)
-                        && ARTIGO_O_FS.is_match(prev_token))
-                    || (matches_data_postag(&entry, &ADJETIVO_MP)
-                        && matches_postag(tokens[i + 1], &NOME_MP)
-                        && ARTIGO_O_MP.is_match(prev_token))
-                    || (matches_data_postag(&entry, &ADJETIVO_FP)
-                        && matches_postag(tokens[i + 1], &NOME_FP)
-                        && ARTIGO_O_FP.is_match(prev_token)))
-            {
-                replacement = Some(entry.0.clone());
-            }
+                || (i < tokens.len() - 1
+                    && prev_token != "que"
+                    && !matches_postag(tokens[i - 1], &NOT_IN_PREV_TOKEN)
+                    && ((matches_data_postag(&entry, &ADJETIVO_MS)
+                        && matches_postag(tokens[i + 1], &NOME_MS)
+                        && matches_postag(tokens[i - 1], &BEFORE_ADJECTIVE_MS))
+                        || (matches_data_postag(&entry, &ADJETIVO_FS)
+                            && matches_postag(tokens[i + 1], &NOME_FS)
+                            && matches_postag(tokens[i - 1], &BEFORE_ADJECTIVE_FS))
+                        || (matches_data_postag(&entry, &ADJETIVO_MP)
+                            && matches_postag(tokens[i + 1], &NOME_MP)
+                            && matches_postag(tokens[i - 1], &BEFORE_ADJECTIVE_MP))
+                        || (matches_data_postag(&entry, &ADJETIVO_FP)
+                            && matches_postag(tokens[i + 1], &NOME_FP)
+                            && matches_postag(tokens[i - 1], &BEFORE_ADJECTIVE_FP))))
+                || (i < tokens.len() - 1
+                    && ((matches_data_postag(&entry, &ADJETIVO_MS)
+                        && matches_postag(tokens[i + 1], &NOME_MS)
+                        && ARTIGO_O_MS.is_match(prev_token))
+                        || (matches_data_postag(&entry, &ADJETIVO_FS)
+                            && matches_postag(tokens[i + 1], &NOME_FS)
+                            && ARTIGO_O_FS.is_match(prev_token))
+                        || (matches_data_postag(&entry, &ADJETIVO_MP)
+                            && matches_postag(tokens[i + 1], &NOME_MP)
+                            && ARTIGO_O_MP.is_match(prev_token))
+                        || (matches_data_postag(&entry, &ADJETIVO_FP)
+                            && matches_postag(tokens[i + 1], &NOME_FP)
+                            && ARTIGO_O_FP.is_match(prev_token)))))
+        {
+            replacement = Some(entry.0.clone());
         }
         replacement
     }

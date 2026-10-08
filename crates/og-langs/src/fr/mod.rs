@@ -419,7 +419,7 @@ mod tests {
             "only the data-inert AI_FR prefixes may be absent from match_priority.rs"
         );
 
-        use og_core::match_filters::{LanguageMatchFilter as _, base_priority_for_id};
+        use og_core::match_filters::base_priority_for_id;
         let filter = crate::match_priority::for_code("fr");
         for (id, prio) in &java_table {
             assert_eq!(filter.priority_for_id(id), *prio, "behavior drift for {id}");

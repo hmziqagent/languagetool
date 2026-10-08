@@ -303,7 +303,7 @@ mod tests {
             "Considerando extraordinariamente complexas circunstâncias institucionais contemporâneas, \
              extraordinariamente influenciam consideravelmente determinadas transformações estructurais.",
         );
-        let matches = rule.match_text(s1.text(), &[s1.clone()]);
+        let matches = rule.match_text(s1.text(), std::slice::from_ref(&s1));
         assert!(!matches.is_empty());
     }
 

@@ -127,12 +127,10 @@ fn replacers() -> &'static [Replacer] {
 }
 
 fn starts_marker(aux: &[AuxChar], from: usize, marker: &str) -> bool {
-    let mut i = from;
-    for marker_char in marker.chars() {
+    for (i, marker_char) in (from..).zip(marker.chars()) {
         if aux.get(i).is_none_or(|a| a.ch != marker_char) {
             return false;
         }
-        i += 1;
     }
     true
 }
@@ -837,11 +835,10 @@ mod tests {
 
     #[test]
     fn java_pin_contractions_al_del_pel_can() {
-        assert_eq!(
+        assert!(
             texts("Emporta-te'ls a l'observatori dels mars")
                 .windows(2)
                 .any(|w| w == ["de", "ls"]),
-            true,
             "'dels' must split into de+ls"
         );
         assert_eq!(texts("al"), vec!["a", "l"]);

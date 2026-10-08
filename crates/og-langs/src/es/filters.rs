@@ -148,23 +148,23 @@ pub fn confusion_check_filter(
 
     let pairs = confusion_pairs();
     let mut replacement: Option<String> = None;
-    if let Some(entries) = pairs.get(&form) {
-        if entries.iter().any(|(_, tag)| full_match(postag, tag)) {
-            if let Some(desired) = desired {
-                if entries
-                    .first()
-                    .is_some_and(|(_, tag)| full_match(desired, tag))
-                {
-                    replacement = entries.first().map(|(word, _)| word.clone());
-                }
-            } else if gendernumber_from.is_none() {
+    if let Some(entries) = pairs.get(&form)
+        && entries.iter().any(|(_, tag)| full_match(postag, tag))
+    {
+        if let Some(desired) = desired {
+            if entries
+                .first()
+                .is_some_and(|(_, tag)| full_match(desired, tag))
+            {
                 replacement = entries.first().map(|(word, _)| word.clone());
             }
+        } else if gendernumber_from.is_none() {
+            replacement = entries.first().map(|(word, _)| word.clone());
         }
     }
     let mut replacement = replacement?;
     let mut message = rm.message().to_string();
-    if !(has_diacritics(&replacement) && !has_diacritics(&form)) {
+    if !has_diacritics(&replacement) || has_diacritics(&form) {
         message = message.replace("se escribe con tilde", "se escribe de otra manera");
     }
     rm.set_message(message);
@@ -852,10 +852,9 @@ impl PacState {
 }
 
 fn pac_keep_counting(state: &PacState, token: &AnalyzedTokenReadings) -> bool {
-    if (state.adverb && state.conjunction)
-        || (state.adverb && state.punctuation)
-        || (state.conjunction && state.punctuation)
-        || (state.punctuation && pac_pos(token, PAC_PUNCT))
+    if (pac_pos(token, PAC_PUNCT) || state.conjunction || state.adverb)
+        && (state.punctuation || state.conjunction)
+        && (state.punctuation || state.adverb)
     {
         return false;
     }
@@ -1108,12 +1107,11 @@ pub fn postponed_adjective_concordance_filter(
         state.reset();
         while i > j4 && pac_keep_counting(&state, tokens[i - j4]) && (level > 1 || j4 < 4) {
             let cur = i - j4;
-            if !pac_pos(tokens[cur], PAC_GN_ANY)
+            if (!pac_pos(tokens[cur], PAC_GN_ANY)
                 && pac_pos(tokens[cur], PAC_NOM_DET)
-                && pac_pos(tokens[cur], subst)
+                && pac_pos(tokens[cur], subst))
+                || pac_pos(tokens[cur], gn_pat)
             {
-                return None;
-            } else if pac_pos(tokens[cur], gn_pat) {
                 return None;
             }
             state.update(tokens[cur]);
@@ -1123,54 +1121,45 @@ pub fn postponed_adjective_concordance_filter(
     let synth = synthesizer?;
     let target = tokens[i].token().token();
     let mut suggestions: Vec<String> = Vec::new();
-    if let Some(at) = pac_reading(tokens[i], PAC_ADJ_CS) {
-        if let Some(lemma) = at.lemma() {
-            suggestions.extend(synth.synthesize(lemma, pac_re(r"^A..CP.$")));
-        }
+    if let Some(at) = pac_reading(tokens[i], PAC_ADJ_CS)
+        && let Some(lemma) = at.lemma()
+    {
+        suggestions.extend(synth.synthesize(lemma, pac_re(r"^A..CP.$")));
     }
-    if suggestions.is_empty() {
-        if let Some(at) = pac_reading(tokens[i], PAC_ADJ_CP) {
-            if let Some(lemma) = at.lemma() {
-                suggestions.extend(synth.synthesize(lemma, pac_re(r"^A..CS.$")));
-            }
-        }
+    if suggestions.is_empty()
+        && let Some(at) = pac_reading(tokens[i], PAC_ADJ_CP)
+        && let Some(lemma) = at.lemma()
+    {
+        suggestions.extend(synth.synthesize(lemma, pac_re(r"^A..CS.$")));
     }
-    if suggestions.is_empty() && is_plural {
-        if let Some(at) = pac_reading(tokens[i], PAC_ADJ_P) {
-            if let Some(lemma) = at.lemma() {
-                suggestions
-                    .extend(synth.synthesize(lemma, pac_re(r"^(?:A...P.|V.P..P.|PX..P.*)$")));
-            }
-        }
+    if suggestions.is_empty()
+        && is_plural
+        && let Some(at) = pac_reading(tokens[i], PAC_ADJ_P)
+        && let Some(lemma) = at.lemma()
+    {
+        suggestions.extend(synth.synthesize(lemma, pac_re(r"^(?:A...P.|V.P..P.|PX..P.*)$")));
     }
-    if let Some(at) = pac_reading(tokens[i], PAC_ADJ_ANY) {
-        if let Some(lemma) = at.lemma() {
-            if suggestions.is_empty() {
-                if can_be_ms && !is_plural {
-                    suggestions
-                        .extend(synth.synthesize(lemma, pac_re(r"^(?:A..MS.|V.P..SM|PX.MS.*)$")));
-                }
-                if can_be_fs && !is_plural {
-                    suggestions
-                        .extend(synth.synthesize(lemma, pac_re(r"^(?:A..FS.|V.P..SF|PX.FS.*)$")));
-                }
-                if can_be_mp {
-                    suggestions
-                        .extend(synth.synthesize(lemma, pac_re(r"^(?:A..MP.|V.P..PM|PX.MP.*)$")));
-                }
-                if can_be_fp {
-                    suggestions
-                        .extend(synth.synthesize(lemma, pac_re(r"^(?:A..FP.|V.P..PF|PX.FP.*)$")));
-                }
-                if can_be_ms && (is_plural || can_be_p) {
-                    suggestions
-                        .extend(synth.synthesize(lemma, pac_re(r"^(?:A..MP.|V.P..PM|PX.MP.*)$")));
-                }
-                if can_be_fs && !can_be_ms && (is_plural || can_be_p) {
-                    suggestions
-                        .extend(synth.synthesize(lemma, pac_re(r"^(?:A..FP.|V.P..PF|PX.FP.*)$")));
-                }
-            }
+    if let Some(at) = pac_reading(tokens[i], PAC_ADJ_ANY)
+        && let Some(lemma) = at.lemma()
+        && suggestions.is_empty()
+    {
+        if can_be_ms && !is_plural {
+            suggestions.extend(synth.synthesize(lemma, pac_re(r"^(?:A..MS.|V.P..SM|PX.MS.*)$")));
+        }
+        if can_be_fs && !is_plural {
+            suggestions.extend(synth.synthesize(lemma, pac_re(r"^(?:A..FS.|V.P..SF|PX.FS.*)$")));
+        }
+        if can_be_mp {
+            suggestions.extend(synth.synthesize(lemma, pac_re(r"^(?:A..MP.|V.P..PM|PX.MP.*)$")));
+        }
+        if can_be_fp {
+            suggestions.extend(synth.synthesize(lemma, pac_re(r"^(?:A..FP.|V.P..PF|PX.FP.*)$")));
+        }
+        if can_be_ms && (is_plural || can_be_p) {
+            suggestions.extend(synth.synthesize(lemma, pac_re(r"^(?:A..MP.|V.P..PM|PX.MP.*)$")));
+        }
+        if can_be_fs && !can_be_ms && (is_plural || can_be_p) {
+            suggestions.extend(synth.synthesize(lemma, pac_re(r"^(?:A..FP.|V.P..PF|PX.FP.*)$")));
         }
     }
     let lower_target = target.to_lowercase();

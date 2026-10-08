@@ -185,7 +185,7 @@ impl EoHunspell {
         self.need_affix.is_some_and(|n| flags.contains(n))
     }
 
-    fn rule_stem<'a>(&self, idx: usize, chars: &'a [char]) -> Option<Vec<char>> {
+    fn rule_stem(&self, idx: usize, chars: &[char]) -> Option<Vec<char>> {
         let rule = &self.rules[idx];
         let add: Vec<char> = rule.add.chars().collect();
         let strip: Vec<char> = rule.strip.chars().collect();
@@ -218,15 +218,15 @@ impl EoHunspell {
             return true;
         }
         let mut candidates: Vec<usize> = Vec::new();
-        if let Some(last) = chars.last() {
-            if let Some(list) = self.suffix_by_last.get(last) {
-                candidates.extend_from_slice(list);
-            }
+        if let Some(last) = chars.last()
+            && let Some(list) = self.suffix_by_last.get(last)
+        {
+            candidates.extend_from_slice(list);
         }
-        if let Some(first) = chars.first() {
-            if let Some(list) = self.prefix_by_first.get(first) {
-                candidates.extend_from_slice(list);
-            }
+        if let Some(first) = chars.first()
+            && let Some(list) = self.prefix_by_first.get(first)
+        {
+            candidates.extend_from_slice(list);
         }
         candidates.extend_from_slice(&self.zero_add);
         for idx in candidates {
@@ -257,15 +257,15 @@ impl EoHunspell {
             return true;
         }
         let mut candidates: Vec<usize> = Vec::new();
-        if let Some(last) = chars.last() {
-            if let Some(list) = self.suffix_by_last.get(last) {
-                candidates.extend_from_slice(list);
-            }
+        if let Some(last) = chars.last()
+            && let Some(list) = self.suffix_by_last.get(last)
+        {
+            candidates.extend_from_slice(list);
         }
-        if let Some(first) = chars.first() {
-            if let Some(list) = self.prefix_by_first.get(first) {
-                candidates.extend_from_slice(list);
-            }
+        if let Some(first) = chars.first()
+            && let Some(list) = self.prefix_by_first.get(first)
+        {
+            candidates.extend_from_slice(list);
         }
         candidates.extend_from_slice(&self.zero_add);
         for idx in candidates {
@@ -365,7 +365,7 @@ fn is_mixed_case(word: &str) -> bool {
 
 impl EsperantoSpellerRule {
     pub fn new() -> Self {
-        let resource_dir = eo_resource_dir().unwrap_or_else(|| std::path::PathBuf::new());
+        let resource_dir = eo_resource_dir().unwrap_or_default();
         let dictionary = Arc::new(speller_dictionary(&resource_dir));
         Self {
             hunspell: shared_hunspell(),

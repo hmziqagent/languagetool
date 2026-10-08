@@ -312,9 +312,6 @@ mod tests {
             .iter()
             .map(|r| r.value())
             .collect();
-        assert!(
-            replacements.iter().any(|r| *r == "certainly"),
-            "{replacements:?}"
-        );
+        assert!(replacements.contains(&"certainly"), "{replacements:?}");
     }
 }

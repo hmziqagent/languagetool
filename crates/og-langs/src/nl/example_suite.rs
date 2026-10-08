@@ -285,7 +285,7 @@ fn evaluate_examples_file(rules_path: &Path, file_label: &str, artifact: &str) {
     let mut fail_by_rule: HashMap<String, usize> = HashMap::new();
     let started = std::time::Instant::now();
 
-    let mut collect_matches = |targets: &[&CompiledRule], text: &str| -> usize {
+    let collect_matches = |targets: &[&CompiledRule], text: &str| -> usize {
         let mut matches = 0usize;
         for aux in targets {
             for (sentence, _) in pipeline.analyze_offset_text(text) {

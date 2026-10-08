@@ -840,7 +840,7 @@ mod tests {
     fn disambig_variant_effect(rule_id: &str, replacement_rule_xml: &str, text: &str) -> String {
         let resource_dir = crate::pl::tagger::pl_resource_dir().expect("pl resource dir");
         let xml = std::fs::read_to_string(resource_dir.join("disambiguation.xml")).unwrap();
-        let open = format!("<rule ");
+        let open = "<rule ".to_string();
         let needle = format!("id=\"{rule_id}\"");
         let id_pos = xml.find(&needle).unwrap_or_else(|| panic!("{rule_id}"));
         let rule_start = xml[..id_pos].rfind(&open).expect("rule open");
@@ -1116,7 +1116,7 @@ mod tests {
                     eprintln!("   [with] rule {id} (idx {idx}): {}", diffs.join(" ;; "));
                 }
             }
-            for (idx, id) in parsed_without.rule_ids().iter().enumerate() {
+            for (idx, _id) in parsed_without.rule_ids().iter().enumerate() {
                 parsed_without.apply_rule(&mut without_sentence, idx);
             }
             let with_final = fmt(&with_sentence);
@@ -1447,10 +1447,7 @@ mod tests {
         let normalized = crate::pl::normalize_disambiguation_xml(&xml);
         let parsed = og_tagger::XmlDisambiguator::from_xml_with_english(&normalized, None)
             .expect("parse disambiguation.xml");
-        assert!(
-            parsed.rule_ids().iter().any(|id| *id == "K"),
-            "the K rule must parse"
-        );
+        assert!(parsed.rule_ids().contains(&"K"), "the K rule must parse");
         assert_eq!(
             xml.matches("action=\"remove\"><wd lemma").count(),
             95,

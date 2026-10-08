@@ -1,4 +1,4 @@
-use og_core::checker::{Disambiguator as _, Tagger as _};
+use og_core::checker::Tagger as _;
 use og_core::match_filters::{
     BaseLanguageMatchFilter, LanguageMatchFilter as _, clean_overlapping_filter,
 };
@@ -178,7 +178,7 @@ fn module_check(text: &str) -> Vec<og_core::RuleMatch> {
         .filter(|r| r.default_on && !r.deprecated)
     {
         for sentence in &sentences {
-            all_matches.extend(engine.match_rule(compiled, &sentence));
+            all_matches.extend(engine.match_rule(compiled, sentence));
         }
     }
     for rule in &natives.text_level_rules {

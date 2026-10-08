@@ -246,8 +246,6 @@ fn inflect_simple(lemma: &str, from_tag: &str, to_tag: &str, surface: &str) -> O
             let stem = strip_verbal_suffix(surface);
             if stem.ends_with('e') && !stem.ends_with("ee") {
                 format!("{stem}d")
-            } else if ends_consonant_e(&stem) {
-                format!("{stem}ed")
             } else {
                 format!("{stem}ed")
             }
@@ -282,10 +280,6 @@ fn inflect_simple(lemma: &str, from_tag: &str, to_tag: &str, surface: &str) -> O
         _ => return None,
     };
     Some(out)
-}
-
-fn ends_consonant_e(s: &str) -> bool {
-    s.chars().rev().nth(1).is_some_and(|c| !is_vowel(c))
 }
 
 fn ends_consonant_y(s: &str) -> bool {

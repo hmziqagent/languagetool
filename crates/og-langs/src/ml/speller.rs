@@ -5,7 +5,7 @@ use og_core::{
 };
 use og_spell::Dictionary;
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
 pub const MORFOLOGIK_RULE_ML_IN: &str = "MORFOLOGIK_RULE_ML_IN";
@@ -26,7 +26,7 @@ pub(crate) fn hunspell_dir() -> Option<PathBuf> {
     super::ml_resource_dir().map(|dir| dir.join("hunspell"))
 }
 
-fn hunspell_word_set(dir: &PathBuf) -> Option<Vec<String>> {
+fn hunspell_word_set(dir: &Path) -> Option<Vec<String>> {
     let dict_path = dir.join("ml_IN.dict");
     let info_path = dir.join("ml_IN.info");
     if !dict_path.exists() || !info_path.exists() {

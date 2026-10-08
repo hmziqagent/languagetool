@@ -29,6 +29,14 @@ pub struct SimpleReplace2Rule {
     full_no_space: HashMap<String, Suggestion>,
 }
 
+struct MatchSpan<'a> {
+    original: &'a str,
+    from: usize,
+    to: usize,
+    sent_start: usize,
+    start_index: usize,
+}
+
 impl SimpleReplace2Rule {
     pub fn new(id: &str, description: &str, short: &str, message: &str) -> Self {
         Self {
@@ -141,13 +149,16 @@ impl SimpleReplace2Rule {
     fn create_match(
         &self,
         sug: &Suggestion,
-        original_str: &str,
-        from_pos: usize,
-        to_pos: usize,
-        sent_start: usize,
-        start_index: usize,
+        span: MatchSpan<'_>,
         sentence: &AnalyzedSentence,
     ) -> Option<RuleMatch> {
+        let MatchSpan {
+            original: original_str,
+            from: from_pos,
+            to: to_pos,
+            sent_start,
+            start_index,
+        } = span;
         let replacements: Vec<&str> = sug.suggestion.split('|').collect();
         let first_word_in_sugg_is_camel_case = replacements
             .iter()
@@ -232,7 +243,7 @@ impl SimpleReplace2Rule {
             .with_replacements(
                 final_replacements
                     .iter()
-                    .map(|r| SuggestedReplacement::new(r))
+                    .map(SuggestedReplacement::new)
                     .collect(),
             )
             .with_sentence(sentence.text().to_string()),
@@ -322,11 +333,13 @@ impl Rule for SimpleReplace2Rule {
                             && let Some(m) = self
                                 .create_match(
                                     sug,
-                                    &original_str,
-                                    tokens[start_index].token().start(),
-                                    tokens[end_index].token().end(),
-                                    sent_start,
-                                    start_index,
+                                    MatchSpan {
+                                        original: &original_str,
+                                        from: tokens[start_index].token().start(),
+                                        to: tokens[end_index].token().end(),
+                                        sent_start,
+                                        start_index,
+                                    },
                                     sentence,
                                 )
                                 .filter(|m| {
@@ -344,43 +357,40 @@ impl Rule for SimpleReplace2Rule {
                     end_index += 1;
                 }
             }
-            if let Some(first_char) = tok_lower.chars().next() {
-                if self.start_no_space.contains_key(&first_char.to_string()) {
-                    let mut end_index = start_index;
-                    let mut key_builder = String::new();
-                    while end_index < tokens.len()
-                        && end_index - start_index < MAX_TOKENS_IN_MULTIWORD
-                    {
-                        if end_index > start_index && ws_before[end_index] {
-                            break;
-                        }
-                        key_builder.push_str(tokens[end_index].token().token());
-                        let original_str = key_builder.clone();
-                        let key_str = original_str.to_lowercase();
-                        if let Some(sug) = self.full_no_space.get(&key_str)
-                            && let Some(m) = self
-                                .create_match(
-                                    sug,
-                                    &original_str,
-                                    tokens[start_index].token().start(),
-                                    tokens[end_index].token().end(),
+            if let Some(first_char) = tok_lower.chars().next()
+                && self.start_no_space.contains_key(&first_char.to_string())
+            {
+                let mut end_index = start_index;
+                let mut key_builder = String::new();
+                while end_index < tokens.len() && end_index - start_index < MAX_TOKENS_IN_MULTIWORD
+                {
+                    if end_index > start_index && ws_before[end_index] {
+                        break;
+                    }
+                    key_builder.push_str(tokens[end_index].token().token());
+                    let original_str = key_builder.clone();
+                    let key_str = original_str.to_lowercase();
+                    if let Some(sug) = self.full_no_space.get(&key_str)
+                        && let Some(m) = self
+                            .create_match(
+                                sug,
+                                MatchSpan {
+                                    original: &original_str,
+                                    from: tokens[start_index].token().start(),
+                                    to: tokens[end_index].token().end(),
                                     sent_start,
                                     start_index,
-                                    sentence,
-                                )
-                                .filter(|m| {
-                                    !covered_by_last(
-                                        &rule_matches,
-                                        m.offset(),
-                                        m.offset() + m.length(),
-                                    )
-                                })
-                        {
-                            retain_longest(&mut rule_matches, m.offset(), m.offset() + m.length());
-                            rule_matches.push(m);
-                        }
-                        end_index += 1;
+                                },
+                                sentence,
+                            )
+                            .filter(|m| {
+                                !covered_by_last(&rule_matches, m.offset(), m.offset() + m.length())
+                            })
+                    {
+                        retain_longest(&mut rule_matches, m.offset(), m.offset() + m.length());
+                        rule_matches.push(m);
                     }
+                    end_index += 1;
                 }
             }
         }

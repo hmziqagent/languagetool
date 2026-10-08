@@ -1,6 +1,6 @@
 #[test]
 fn probe_klanv_compiles_the_token_level_match_transform() {
-    let (rules, sentences, _) =
+    let (rules, sentences) =
         crate::br::example_suite::trace_rule_matches("KLANV_PE_GLANVOCH", "Klañv pe klañvoc’h.");
     assert!(
         !rules.is_empty(),
@@ -35,7 +35,7 @@ fn probe_klanv_compiles_the_token_level_match_transform() {
 
 #[test]
 fn probe_och_an_compiles_the_token_level_match_transform() {
-    let (rules, _, _) = crate::br::example_suite::trace_rule_matches(
+    let (rules, _) = crate::br::example_suite::trace_rule_matches(
         "OCH_AN",
         "Diaesoc’h diaesañ eo kavout labour.",
     );
@@ -51,7 +51,7 @@ fn probe_och_an_compiles_the_token_level_match_transform() {
 
 #[test]
 fn probe_deiz_deiziad_month_with_u2019_survives_the_shared_date_filter_trim() {
-    let (_, sentences, _) = crate::br::example_suite::trace_rule_matches(
+    let (_, sentences) = crate::br::example_suite::trace_rule_matches(
         "DEIZ_DEIZIAD",
         "D’ar Merc’her 6 a viz C’hwevrer 2014.",
     );

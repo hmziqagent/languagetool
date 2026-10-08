@@ -81,7 +81,7 @@ fn merge_whitespace_sentences(sentences: &[AnalyzedSentence]) -> Vec<AnalyzedSen
             continue;
         }
         match pending_ws.take() {
-            Some(mut pending) => {
+            Some(pending) => {
                 let extra: Vec<_> = sentence
                     .tokens()
                     .iter()

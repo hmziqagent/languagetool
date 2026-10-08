@@ -553,7 +553,7 @@ impl Rule for PersianSpaceBeforeRule {
                     RuleMatchContext::new(context_text, ctx_start, ctx_end - ctx_start),
                 )
                 .with_short_message(self.short.clone())
-                .with_replacements(vec![SuggestedReplacement::new(&format!(" {token}"))])
+                .with_replacements(vec![SuggestedReplacement::new(format!(" {token}"))])
                 .with_sentence(sentence.text().to_string()),
             );
         }

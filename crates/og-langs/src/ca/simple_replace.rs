@@ -1,11 +1,9 @@
-use super::tagger::CatalanTagger;
 use og_core::rule::Rule;
 use og_core::{
     AnalyzedSentence, AnalyzedTokenReadings, Category, IssueType, RuleMatch, RuleMatchContext,
     RuleMatchRule, SuggestedReplacement,
 };
 use std::collections::HashMap;
-use std::sync::Arc;
 
 type WrongWords = HashMap<String, Vec<String>>;
 
@@ -78,7 +76,7 @@ pub struct CaSimpleReplaceRule {
 }
 
 impl CaSimpleReplaceRule {
-    fn message_for(&self, token: &str, replacements: &[String]) -> String {
+    fn message_for(&self, _token: &str, replacements: &[String]) -> String {
         match &self.message {
             MessageKind::FirstSuggestion { prefix, suffix } => match replacements.first() {
                 Some(first) => format!("{prefix}{first}{suffix}"),
@@ -140,12 +138,11 @@ impl Rule for CaSimpleReplaceRule {
                 let mut lemma_replacements: Vec<String> = Vec::new();
                 let mut lemmas: Vec<String> = Vec::new();
                 for reading in token.readings() {
-                    if let Some(lemma) = reading.lemma() {
-                        if self.wrong_words.contains_key(lemma)
-                            && !lemmas.iter().any(|l| l == lemma)
-                        {
-                            lemmas.push(self.cleanup(lemma));
-                        }
+                    if let Some(lemma) = reading.lemma()
+                        && self.wrong_words.contains_key(lemma)
+                        && !lemmas.iter().any(|l| l == lemma)
+                    {
+                        lemmas.push(self.cleanup(lemma));
                     }
                 }
                 for lemma in &lemmas {
@@ -209,12 +206,8 @@ impl Rule for CaSimpleReplaceRule {
                     *replacement = uppercase_first_char(replacement);
                 }
             }
-            rule_match = rule_match.with_replacements(
-                replacements
-                    .iter()
-                    .map(|r| SuggestedReplacement::new(r))
-                    .collect(),
-            );
+            rule_match = rule_match
+                .with_replacements(replacements.iter().map(SuggestedReplacement::new).collect());
             rule_matches.push(rule_match);
         }
         rule_matches
@@ -312,12 +305,7 @@ impl Rule for CaSimpleReplaceLemmasRule {
                     ),
                 )
                 .with_short_message(self.short.clone())
-                .with_replacements(
-                    replacements
-                        .iter()
-                        .map(|r| SuggestedReplacement::new(r))
-                        .collect(),
-                ),
+                .with_replacements(replacements.iter().map(SuggestedReplacement::new).collect()),
             );
         }
         rule_matches
@@ -325,7 +313,7 @@ impl Rule for CaSimpleReplaceLemmasRule {
 }
 
 impl CaSimpleReplaceLemmasRule {
-    fn message_for(&self, token: &str, replacements: &[String]) -> String {
+    fn message_for(&self, _token: &str, replacements: &[String]) -> String {
         match &self.message {
             MessageKind::FirstSuggestion { prefix, suffix } => match replacements.first() {
                 Some(first) => format!("{prefix}{first}{suffix}"),
@@ -344,14 +332,6 @@ macro_rules! rules_path {
             $file
         )
     };
-}
-
-fn default_tagger() -> Arc<CatalanTagger> {
-    CatalanTagger::shared_arc().unwrap_or_else(|| {
-        Arc::new(CatalanTagger::from_resource_dir(std::path::Path::new(
-            "/nonexistent-ca",
-        )))
-    })
 }
 
 pub fn catalan_simple_replace_rule() -> CaSimpleReplaceRule {

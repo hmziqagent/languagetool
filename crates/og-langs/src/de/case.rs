@@ -911,6 +911,20 @@ pub struct CaseRule {
     speller: Option<Arc<og_rules::spelling_support::SpellingSupport>>,
 }
 
+struct LowercaseContext<'a> {
+    token: &'a str,
+    prev_token_is_das: bool,
+    next_token_is_personal_or_reflexive_pronoun: bool,
+    immunized: bool,
+}
+
+struct UppercaseContext<'a> {
+    analyzed_token: &'a AnalyzedTokenReadings,
+    token: &'a str,
+    lowercase_readings: Option<&'a [AnalyzedToken]>,
+    immunized: &'a HashSet<usize>,
+}
+
 impl CaseRule {
     pub fn new(
         tagger: Option<Arc<og_tagger::GermanTagger>>,
@@ -1060,12 +1074,15 @@ impl CaseRule {
         &self,
         rule_matches: &mut Vec<RuleMatch>,
         token_readings: &AnalyzedTokenReadings,
-        prev_token_is_das: bool,
-        token: &str,
-        next_token_is_personal_or_reflexive_pronoun: bool,
+        ctx: LowercaseContext<'_>,
         sentence: &AnalyzedSentence,
-        immunized: bool,
     ) {
+        let LowercaseContext {
+            token,
+            prev_token_is_das,
+            next_token_is_personal_or_reflexive_pronoun,
+            immunized,
+        } = ctx;
         if prev_token_is_das
             && !next_token_is_personal_or_reflexive_pronoun
             && token.chars().next().is_some_and(|c| c.is_lowercase())
@@ -1090,12 +1107,15 @@ impl CaseRule {
         rule_matches: &mut Vec<RuleMatch>,
         tokens: &[&AnalyzedTokenReadings],
         i: usize,
-        analyzed_token: &AnalyzedTokenReadings,
-        token: &str,
-        lowercase_readings: Option<&[AnalyzedToken]>,
+        ctx: UppercaseContext<'_>,
         sentence: &AnalyzedSentence,
-        immunized: &HashSet<usize>,
     ) {
+        let UppercaseContext {
+            analyzed_token,
+            token,
+            lowercase_readings,
+            immunized,
+        } = ctx;
         if i == 0 {
             return;
         }
@@ -1157,16 +1177,8 @@ impl CaseRule {
     }
 
     fn is_language(&self, i: usize, tokens: &[&AnalyzedTokenReadings], token: &str) -> bool {
-        let stripped = if token.ends_with('n') {
-            &token[..token.len() - 1]
-        } else {
-            token
-        };
-        let stripped = if stripped.ends_with('e') {
-            &stripped[..stripped.len() - 1]
-        } else {
-            stripped
-        };
+        let stripped = token.strip_suffix('n').unwrap_or(token);
+        let stripped = stripped.strip_suffix('e').unwrap_or(stripped);
         let maybe_language = (token.ends_with("sch") && LANGUAGE_NAMES.contains(&token))
             || LANGUAGE_NAMES.contains(&stripped);
         let next_readings = tokens.get(i + 1).copied();
@@ -1198,11 +1210,11 @@ impl CaseRule {
         lowercase_readings: Option<&[AnalyzedToken]>,
     ) -> bool {
         let next_readings = tokens.get(i + 1).copied();
-        if starts_with_uppercase(token)
-            && !self.is_number(token)
-            && !(self.has_noun_reading(next_readings)
-                || next_readings.is_some_and(|n| is_numeric(n.token().token())))
-            && !ALLE_NM.is_match(token)
+        if !(!starts_with_uppercase(token)
+            || self.is_number(token)
+            || self.has_noun_reading(next_readings)
+            || next_readings.is_some_and(|n| is_numeric(n.token().token()))
+            || ALLE_NM.is_match(token))
         {
             if lowercase_readings.is_some_and(|lc| {
                 lc.iter()
@@ -1297,11 +1309,12 @@ impl CaseRule {
         let prev_token = tokens.get(i.wrapping_sub(1)).copied();
         let next_readings = tokens.get(i + 1).copied();
         let mut prev_lowercase_readings: Option<Vec<AnalyzedToken>> = None;
-        if i > 1 && SENTENCE_START_EXCEPTIONS.contains(&tokens[i - 2].token().token()) {
-            if let Some(prev) = prev_token {
-                let word = prev.token().token().to_lowercase();
-                prev_lowercase_readings = self.lookup(&word);
-            }
+        if i > 1
+            && SENTENCE_START_EXCEPTIONS.contains(&tokens[i - 2].token().token())
+            && let Some(prev) = prev_token
+        {
+            let word = prev.token().token().to_lowercase();
+            prev_lowercase_readings = self.lookup(&word);
         }
 
         let is_possibly_followed_by_infinitive =
@@ -1324,9 +1337,10 @@ impl CaseRule {
         let is_preceded_by_verb = prev_token.is_some_and(|p| {
             matches_pos_tag_regex(p, "VER:(MOD:|AUX:)?[1-3]:.*") && !p.has_lemma("sein")
         });
-        if !is_prev_determiner
-            && !is_undef_quantifier
-            && !(is_possibly_followed_by_infinitive || is_followed_by_infinitive)
+        if !(is_prev_determiner
+            || is_undef_quantifier
+            || is_possibly_followed_by_infinitive
+            || is_followed_by_infinitive)
             && !(is_preceded_by_verb
                 && lowercase_readings.is_some()
                 && has_partial_tag_opt_lc(lowercase_readings, &["ADJ:", "PA"])
@@ -1344,9 +1358,11 @@ impl CaseRule {
                 } else {
                     None
                 };
-            if !is_preceded_by_verb && lowercase_readings.is_some() && prev_token.is_some() {
-                let lc = lowercase_readings.unwrap();
-                if has_partial_pos_tag(prev_token.unwrap(), "SUB:")
+            if !is_preceded_by_verb
+                && let Some(lc) = lowercase_readings
+                && let Some(prev_token) = prev_token
+            {
+                if has_partial_pos_tag(prev_token, "SUB:")
                     && lc.iter().any(|r| {
                         r.pos_tags().iter().any(|t| {
                             t.starts_with("ADJ:GEN:PLU:MAS:GRU:SOL")
@@ -1357,7 +1373,7 @@ impl CaseRule {
                     return next_readings.is_some_and(|n| !has_partial_pos_tag(n, "SUB:"));
                 } else if next_readings.is_some_and(|n| {
                     n.readings().len() == 1
-                        && has_pos_tag_starting_with(prev_token.unwrap(), "PRO:PER:NOM:")
+                        && has_pos_tag_starting_with(prev_token, "PRO:PER:NOM:")
                         && n.has_pos_tag("ADJ:PRD:GRU")
                 }) {
                     return true;
@@ -1688,7 +1704,7 @@ impl Rule for CaseRule {
             let analyzed_token = tokens[i];
             let token = analyzed_token.token().token();
             let is_baseform =
-                analyzed_token.readings().len() >= 1 && analyzed_token.has_lemma(token);
+                !analyzed_token.readings().is_empty() && analyzed_token.has_lemma(token);
             if (first_pos_tag(analyzed_token).is_none()
                 || has_reading_of_type(analyzed_token, PosType::Verb))
                 && is_baseform
@@ -1722,11 +1738,13 @@ impl Rule for CaseRule {
                 self.potentially_add_lowercase_match(
                     &mut rule_matches,
                     tokens[i],
-                    prev_token_is_das,
-                    token,
-                    next_token_is_personal_or_reflexive_pronoun,
+                    LowercaseContext {
+                        token,
+                        prev_token_is_das,
+                        next_token_is_personal_or_reflexive_pronoun,
+                        immunized: immunized.contains(&i),
+                    },
                     sentence,
-                    immunized.contains(&i),
                 );
             }
             prev_token_is_das = NOUN_INDICATORS.contains(&token.to_lowercase().as_str());
@@ -1772,11 +1790,13 @@ impl Rule for CaseRule {
                 &mut rule_matches,
                 &tokens,
                 i,
-                analyzed_token,
-                token,
-                lowercase_readings.as_deref(),
+                UppercaseContext {
+                    analyzed_token,
+                    token,
+                    lowercase_readings: lowercase_readings.as_deref(),
+                    immunized: &immunized,
+                },
                 sentence,
-                &immunized,
             );
         }
         rule_matches

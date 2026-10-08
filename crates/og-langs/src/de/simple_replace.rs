@@ -25,6 +25,12 @@ fn is_punctuation_start(word: &str) -> bool {
         || word.chars().all(|c| !c.is_alphabetic())
 }
 
+struct MatchSpan<'a> {
+    original: &'a str,
+    start: usize,
+    end: usize,
+}
+
 impl SimpleReplaceRule {
     pub fn new() -> Self {
         let mut rule = Self {
@@ -88,12 +94,15 @@ impl SimpleReplaceRule {
         &self,
         matches: &mut Vec<RuleMatch>,
         entry: &Entry,
-        original: &str,
-        start: usize,
-        end: usize,
+        span: MatchSpan<'_>,
         sentence: &AnalyzedSentence,
         at_sentence_start: bool,
     ) {
+        let MatchSpan {
+            original,
+            start,
+            end,
+        } = span;
         if let Some(last) = matches.last()
             && last.offset() <= start
             && last.offset() + last.length() >= end
@@ -267,9 +276,11 @@ impl Rule for SimpleReplaceRule {
                             self.create_match(
                                 &mut matches,
                                 entry,
-                                &original,
-                                from,
-                                to,
+                                MatchSpan {
+                                    original: &original,
+                                    start: from,
+                                    end: to,
+                                },
                                 sentence,
                                 sent_start == start_index,
                             );
@@ -295,9 +306,11 @@ impl Rule for SimpleReplaceRule {
                         self.create_match(
                             &mut matches,
                             entry,
-                            &key,
-                            from,
-                            to,
+                            MatchSpan {
+                                original: &key,
+                                start: from,
+                                end: to,
+                            },
                             sentence,
                             sent_start == start_index,
                         );

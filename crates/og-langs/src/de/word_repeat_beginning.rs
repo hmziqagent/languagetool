@@ -81,8 +81,8 @@ impl TextLevelRule for GermanWordRepeatBeginningRule {
                 let analyzed_token = tokens[1];
                 token = analyzed_token.token().token();
                 if tokens.len() > 3 {
-                    let is_word = !(token.chars().count() == 1
-                        && !token.chars().next().is_some_and(char::is_alphabetic));
+                    let is_word = token.chars().count() != 1
+                        || token.chars().next().is_some_and(char::is_alphabetic);
                     let prev_ends_sentence =
                         prev_sentence.is_some_and(|p| SENTENCE_END_REGEX.is_match(p.text().trim()));
                     if is_word
@@ -139,7 +139,6 @@ impl TextLevelRule for GermanWordRepeatBeginningRule {
 
 #[cfg(test)]
 mod tests {
-    use crate::engine::LanguageEngine;
 
     #[test]
     fn detects_repeated_sentence_beginning() {

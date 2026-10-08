@@ -93,13 +93,12 @@ fn has_pos_tag_starting_with(atr: &AnalyzedTokenReadings, prefix: &str) -> bool 
 }
 
 fn is_exception(tokens: &[&AnalyzedTokenReadings], i: usize) -> bool {
-    if has_partial_pos_tag(tokens[i], "VMN0000")
+    if (has_partial_pos_tag(tokens[i], "VMN0000")
         || has_partial_pos_tag(tokens[i], "VSN0000")
-        || has_partial_pos_tag(tokens[i], "VAN0000")
+        || has_partial_pos_tag(tokens[i], "VAN0000"))
+        && tokens[i - 1].has_lemma("fer")
     {
-        if tokens[i - 1].has_lemma("fer") {
-            return true;
-        }
+        return true;
     }
     if tokens[i].token().token() == "poder" && has_pos_tag_starting_with(tokens[i - 1], "V") {
         return true;
@@ -264,10 +263,10 @@ impl Rule for PronomFebleDuplicateRule {
                     count_verb += 1;
                     in_verb_group = true;
                     last_verb_pos = Some(i);
-                    if let Some(prep) = reading_with_tag_regex(tokens[i], &SPS00) {
-                        if let Some(lemma) = prep.lemma() {
-                            lemes_preposicions.push(lemma);
-                        }
+                    if let Some(prep) = reading_with_tag_regex(tokens[i], &SPS00)
+                        && let Some(lemma) = prep.lemma()
+                    {
+                        lemes_preposicions.push(lemma);
                     }
                 }
             } else {

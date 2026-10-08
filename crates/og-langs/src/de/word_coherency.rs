@@ -135,7 +135,6 @@ impl TextLevelRule for GermanWordCoherencyRule {
 
 #[cfg(test)]
 mod tests {
-    use crate::engine::LanguageEngine;
 
     #[test]
     fn detects_inconsistent_spelling() {

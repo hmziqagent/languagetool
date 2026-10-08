@@ -235,7 +235,6 @@ impl TextLevelRule for GermanReadabilityRule {
 
 #[cfg(test)]
 mod tests {
-    use crate::engine::LanguageEngine;
 
     fn difficult_text() -> String {
         "Die außerordentlich bedeutsamen Landesinnenministeriumsveranstaltungsunterlagen der vereinten Republik Deutschland wurden einer gründlichen Überprüfung unterzogen. Die zuständigen Behördenvertreterinnen und Behördenvertreter erörterten außerordentlich komplizierte Verwaltungsangelegenheiten.".to_string()
@@ -244,7 +243,7 @@ mod tests {
     #[test]
     fn flags_difficult_paragraph_when_enabled() {
         let engine = crate::engine::LanguageEngine::shared_for_code("de").expect("german engine");
-        let mut request = og_core::CheckRequest::new(&difficult_text(), engine.language().clone());
+        let mut request = og_core::CheckRequest::new(difficult_text(), engine.language().clone());
         request.enabled_rules = vec!["READABILITY_RULE_DIFFICULT_DE".to_string()];
         request.picky = true;
         let matches = engine.check_with_request(&request);

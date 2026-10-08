@@ -341,10 +341,12 @@ fn split_match_len(chars: &[char], i: usize) -> Option<usize> {
             return Some(len);
         }
     }
-    if c == '.' && chars.get(i + 1) == Some(&'.') && chars.get(i + 2) == Some(&'.') {
-        if global_guard_ok(chars, i, 3) {
-            return Some(3);
-        }
+    if c == '.'
+        && chars.get(i + 1) == Some(&'.')
+        && chars.get(i + 2) == Some(&'.')
+        && global_guard_ok(chars, i, 3)
+    {
+        return Some(3);
     }
     if (c == '!' || c == '?') && matches!(chars.get(i + 1), Some('!' | '?' | '.')) {
         let mut max = 1;
@@ -1126,8 +1128,7 @@ fn push_token(buf: &Buf, from: usize, to: usize, tokens: &mut Vec<(String, usize
         .replace(SLASH_SUBST, "/")
         .replace(NON_BREAKING_DOT_SUBST, ".")
         .replace(SOFT_HYPHEN_WRAP_SUBST, "\u{00AD}\n")
-        .replace(NON_BREAKING_PLACEHOLDER, "")
-        .replace(NON_BREAKING_PLACEHOLDER2, "");
+        .replace([NON_BREAKING_PLACEHOLDER, NON_BREAKING_PLACEHOLDER2], "");
     for (placeholder, url) in &buf.urls {
         text = text.replace(*placeholder, url);
     }
@@ -1676,9 +1677,7 @@ mod tests {
                 assert!(text.is_char_boundary(start) && text.is_char_boundary(end));
                 let slice = &text[start..end];
                 let normalized = slice
-                    .replace('\u{2019}', "'")
-                    .replace('\u{02BC}', "'")
-                    .replace('\u{2018}', "'")
+                    .replace(['\u{2019}', '\u{02BC}', '\u{2018}'], "'")
                     .replace('\u{201A}', ",")
                     .replace('\u{2011}', "-");
                 assert!(

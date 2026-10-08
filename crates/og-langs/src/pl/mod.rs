@@ -402,7 +402,7 @@ fn expand_optional_unify_ignore_tokens(xml: &str) -> String {
             out.push_str(rule_text);
         } else {
             out.push_str(rule_text);
-            out.push_str("\n");
+            out.push('\n');
             out.push_str(&strip_optional_unify_ignore_tokens(rule_text));
         }
         pos = rule_end;
@@ -1104,7 +1104,7 @@ mod tests {
         let sentences = pipeline.analyze_text(text);
         let matches = og_core::rule::TextLevelRule::match_text(&rule, text, &sentences);
         assert!(
-            matches.len() >= 1,
+            !matches.is_empty(),
             "the Polish quote symbols are tracked: {matches:?}"
         );
         let text = "To jest zdanie z \u{201e}cudzys\u{142}owem\u{201d}.";
@@ -1119,9 +1119,9 @@ mod dict_probe {
 
     fn polish_dict() -> MorfologikDictionary {
         let dir = super::tagger::pl_resource_dir().expect("pl resource dir");
-        let dict = MorfologikDictionary::load(&dir.join("polish.dict"), &dir.join("polish.info"))
-            .expect("polish.dict loads");
-        dict
+
+        MorfologikDictionary::load(&dir.join("polish.dict"), &dir.join("polish.info"))
+            .expect("polish.dict loads")
     }
 
     #[ignore]

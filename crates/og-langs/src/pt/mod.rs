@@ -178,8 +178,7 @@ pub fn variant_native_rules(variant: PtVariant) -> PortugueseNativeRules {
             simple_replace2::wikipedia_brazil(),
         ),
     };
-    let agreement =
-        (variant == PtVariant::Portugal).then(|| simple_replace::agreement_replace_rule());
+    let agreement = (variant == PtVariant::Portugal).then(simple_replace::agreement_replace_rule);
     PortugueseNativeRules {
         rules: std::iter::once(
             Arc::new(compound::PortugueseCompoundRule::post_reform()) as Arc<dyn Rule>
