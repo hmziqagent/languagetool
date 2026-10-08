@@ -1,34 +1,97 @@
 use axum::Router;
 use axum::routing::{get, post};
 use og_langs::engine::LanguageEngine;
-use std::collections::HashMap;
-use std::sync::{Arc, OnceLock};
+use std::collections::{HashMap, VecDeque};
+use std::sync::{Arc, Mutex, OnceLock};
 use tower_http::cors::CorsLayer;
 use tracing::info;
 
 pub const MAX_TEXT_LENGTH: usize = 100_000;
 
+const DEFAULT_ENGINE_CACHE_CAPACITY: usize = 3;
+
+struct EngineCache {
+    entries: HashMap<String, Arc<LanguageEngine>>,
+    order: VecDeque<String>,
+    capacity: usize,
+}
+
+impl EngineCache {
+    fn touch(&mut self, code: &str) {
+        if let Some(pos) = self.order.iter().position(|c| c == code) {
+            self.order.remove(pos);
+        }
+        self.order.push_front(code.to_string());
+    }
+
+    fn insert(&mut self, code: String, engine: Arc<LanguageEngine>) {
+        if self.entries.insert(code.clone(), engine).is_some() {
+            if let Some(pos) = self.order.iter().position(|c| *c == code) {
+                self.order.remove(pos);
+            }
+        }
+        self.order.push_front(code);
+        while self.order.len() > self.capacity
+            && let Some(evicted) = self.order.pop_back()
+        {
+            self.entries.remove(&evicted);
+        }
+    }
+}
+
 pub struct AppState {
-    engines: HashMap<String, OnceLock<Arc<LanguageEngine>>>,
+    engines: Mutex<EngineCache>,
+    building: Mutex<HashMap<String, Arc<OnceLock<Arc<LanguageEngine>>>>>,
 }
 
 impl AppState {
     pub fn new() -> Self {
+        let capacity = std::env::var("OG_ENGINE_CACHE_CAPACITY")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .filter(|cap| *cap > 0)
+            .unwrap_or(DEFAULT_ENGINE_CACHE_CAPACITY);
         Self {
-            engines: ENGINE_CODES
-                .iter()
-                .map(|code| (code.to_string(), OnceLock::new()))
-                .collect(),
+            engines: Mutex::new(EngineCache {
+                entries: HashMap::new(),
+                order: VecDeque::new(),
+                capacity,
+            }),
+            building: Mutex::new(HashMap::new()),
         }
     }
 
-    pub fn engine_for(&self, code: &str) -> Option<&Arc<LanguageEngine>> {
-        let lock = self.engines.get(code)?;
-        Some(lock.get_or_init(|| build_engine_for(code)))
+    pub fn engine_for(&self, code: &str) -> Option<Arc<LanguageEngine>> {
+        let canonical = canonical_engine_key(code)?;
+        {
+            let mut cache = self.engines.lock().unwrap();
+            if let Some(engine) = cache.entries.get(&canonical).cloned() {
+                cache.touch(&canonical);
+                return Some(engine);
+            }
+        }
+        let slot = {
+            let mut building = self.building.lock().unwrap();
+            building
+                .entry(canonical.clone())
+                .or_insert_with(|| Arc::new(OnceLock::new()))
+                .clone()
+        };
+        let built = slot.get_or_init(|| build_engine_for(&canonical)).clone();
+        if let Some(mut cache) = self.engines.lock().ok() {
+            cache.insert(canonical.clone(), built.clone());
+        }
+        if let Ok(mut building) = self.building.lock()
+            && let Some(existing) = building.get(&canonical)
+            && Arc::ptr_eq(existing, &slot)
+        {
+            building.remove(&canonical);
+        }
+        Some(built)
     }
 
     pub fn language_codes(&self) -> Vec<&str> {
-        let mut codes: Vec<&str> = self.engines.keys().map(String::as_str).collect();
+        let mut codes: Vec<&str> = ENGINE_CODES.to_vec();
         codes.sort_unstable();
         codes
     }
@@ -101,88 +164,65 @@ fn engine_source(code: &str) -> Option<EngineSource> {
     }
 }
 
-fn shared_english_engine() -> Arc<LanguageEngine> {
-    static ENGINE: OnceLock<Arc<LanguageEngine>> = OnceLock::new();
-    ENGINE
-        .get_or_init(|| {
-            info!("Loading English language engine...");
-            let engine = Arc::new(LanguageEngine::english());
-            info!("English engine loaded with {} rules", engine.rule_count());
-            engine
-        })
-        .clone()
-}
-
-fn shared_german_engine() -> Arc<LanguageEngine> {
-    static ENGINE: OnceLock<Arc<LanguageEngine>> = OnceLock::new();
-    ENGINE
-        .get_or_init(|| {
-            info!("Loading German language engine...");
-            let engine = Arc::new(LanguageEngine::german());
-            info!("German engine loaded with {} rules", engine.rule_count());
-            engine
-        })
-        .clone()
+fn canonical_engine_key(code: &str) -> Option<String> {
+    match engine_source(code)? {
+        EngineSource::EnglishBase => Some("en".to_string()),
+        EngineSource::EnglishVariant(code) => Some(code.to_string()),
+        EngineSource::German => Some("de".to_string()),
+        EngineSource::GermanVariant(code) => Some(code.to_string()),
+        EngineSource::PortugueseVariant(code) => Some(code.to_string()),
+        EngineSource::Generic(short) => Some(short.to_string()),
+    }
 }
 
 fn build_engine_for(code: &str) -> Arc<LanguageEngine> {
     match engine_source(code) {
-        Some(EngineSource::EnglishBase) => shared_english_engine(),
+        Some(EngineSource::EnglishBase) => {
+            info!("Loading English language engine...");
+            let engine = Arc::new(LanguageEngine::english());
+            info!("English engine loaded with {} rules", engine.rule_count());
+            engine
+        }
         Some(EngineSource::EnglishVariant(code)) => {
             info!("Loading {code} engine...");
-            let variant = shared_english_engine().variant(code);
+            let variant = LanguageEngine::english().variant(code);
             info!("Loaded {code} engine with {} rules", variant.rule_count());
             Arc::new(variant)
         }
-        Some(EngineSource::Generic(short)) => shared_generic_engine(short),
-        Some(EngineSource::PortugueseVariant(code)) => shared_portuguese_variant_engine(code),
+        Some(EngineSource::Generic(short)) => {
+            info!("Loading {short} engine...");
+            let engine = Arc::new(LanguageEngine::for_code(short).unwrap_or_else(|| {
+                LanguageEngine::new(
+                    og_core::Language::from_code(short).unwrap_or(og_core::Language::English),
+                )
+            }));
+            info!("Loaded {short} engine with {} rules", engine.rule_count());
+            engine
+        }
+        Some(EngineSource::PortugueseVariant(code)) => {
+            info!("Loading {code} engine...");
+            let base = LanguageEngine::for_code("pt").unwrap_or_else(|| {
+                LanguageEngine::new(
+                    og_core::Language::from_code("pt").unwrap_or(og_core::Language::PortuguesePt),
+                )
+            });
+            let engine = Arc::new(base.portuguese_variant(code));
+            info!("Loaded {code} engine with {} rules", engine.rule_count());
+            engine
+        }
         Some(EngineSource::GermanVariant(code)) => {
             info!("Loading {code} engine...");
-            let variant = shared_german_engine().german_variant(code);
+            let variant = LanguageEngine::german().german_variant(code);
             info!("Loaded {code} engine with {} rules", variant.rule_count());
             Arc::new(variant)
         }
-        Some(EngineSource::German) | None => shared_german_engine(),
+        Some(EngineSource::German) | None => {
+            info!("Loading German language engine...");
+            let engine = Arc::new(LanguageEngine::german());
+            info!("German engine loaded with {} rules", engine.rule_count());
+            engine
+        }
     }
-}
-
-fn shared_generic_engine(short_code: &'static str) -> Arc<LanguageEngine> {
-    static CACHE: std::sync::OnceLock<
-        std::sync::Mutex<std::collections::HashMap<&'static str, Arc<LanguageEngine>>>,
-    > = std::sync::OnceLock::new();
-    let cache = CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
-    let mut guard = cache.lock().unwrap();
-    if let Some(hit) = guard.get(short_code) {
-        return hit.clone();
-    }
-    info!("Loading {short_code} engine...");
-    let engine = Arc::new(LanguageEngine::for_code(short_code).unwrap_or_else(|| {
-        LanguageEngine::new(
-            og_core::Language::from_code(short_code).unwrap_or(og_core::Language::English),
-        )
-    }));
-    info!(
-        "Loaded {short_code} engine with {} rules",
-        engine.rule_count()
-    );
-    guard.insert(short_code, engine.clone());
-    engine
-}
-
-fn shared_portuguese_variant_engine(code: &'static str) -> Arc<LanguageEngine> {
-    static CACHE: std::sync::OnceLock<
-        std::sync::Mutex<std::collections::HashMap<&'static str, Arc<LanguageEngine>>>,
-    > = std::sync::OnceLock::new();
-    let cache = CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
-    let mut guard = cache.lock().unwrap();
-    if let Some(hit) = guard.get(code) {
-        return hit.clone();
-    }
-    info!("Loading {code} engine...");
-    let engine = Arc::new(shared_generic_engine("pt").portuguese_variant(code));
-    info!("Loaded {code} engine with {} rules", engine.rule_count());
-    guard.insert(code, engine.clone());
-    engine
 }
 
 impl Default for AppState {
