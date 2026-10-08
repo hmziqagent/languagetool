@@ -78,8 +78,8 @@ pub fn same_rule_group_filter(matches: &mut Vec<RuleMatch>) {
 
 fn compact(matches: &mut Vec<RuleMatch>, keep: &[bool]) {
     let mut write = 0;
-    for read in 0..matches.len() {
-        if keep[read] {
+    for (read, &kept) in keep.iter().enumerate() {
+        if kept {
             matches.swap(read, write);
             write += 1;
         }
