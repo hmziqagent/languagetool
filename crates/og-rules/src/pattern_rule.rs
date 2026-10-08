@@ -3738,9 +3738,7 @@ impl PatternRuleEngine {
                         } else if has(&t1, "VER:") && has(&t2, "PRO:PER:") && has(&t3, "ADV:INR") {
                             suggestions.push(format!("{} {}, {}", parts[0], parts[1], rest2));
                         } else if (has(&t1, "VER:") && has(&t2, "PRO:POS:") && has(&t3, "ADJ:"))
-                            || (is_denke_etc(parts[0])
-                                && has(&t2, "PRO:DEM:")
-                                && has(&t3, "SUB:"))
+                            || (is_denke_etc(parts[0]) && has(&t2, "PRO:DEM:") && has(&t3, "SUB:"))
                             || (pattern_token_pos == 1
                                 && is_bei_fuer_mit(parts[1])
                                 && is_dir_etc(parts[2])
@@ -5623,7 +5621,10 @@ fn parse_weekday_esperanto(s: &str) -> u32 {
         3
     } else if n.starts_with("mer") {
         4
-    } else if n.starts_with("ĵaŭ") || n.starts_with("jau") || n.starts_with("jhau") || n.starts_with("jxau")
+    } else if n.starts_with("ĵaŭ")
+        || n.starts_with("jau")
+        || n.starts_with("jhau")
+        || n.starts_with("jxau")
     {
         5
     } else if n.starts_with("ven") {

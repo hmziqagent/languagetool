@@ -2605,8 +2605,7 @@ fn apply_disambiguation(
                 }
             });
             if let Some(postag) = spec.postag.as_deref() {
-                let source: &[AnalyzedToken] =
-                    working.as_deref().unwrap_or_else(|| atr.readings());
+                let source: &[AnalyzedToken] = working.as_deref().unwrap_or_else(|| atr.readings());
                 let Some(first) = source.first() else {
                     return;
                 };

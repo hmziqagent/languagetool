@@ -500,8 +500,7 @@ fn is_exception(variant: SpellerVariant, original: &str, candidate: &str) -> boo
     let chars: Vec<char> = original.chars().collect();
     match variant {
         SpellerVariant::German => {
-            if chars.len() > 1 && chars[..chars.len() - 1].iter().collect::<String>() == candidate
-            {
+            if chars.len() > 1 && chars[..chars.len() - 1].iter().collect::<String>() == candidate {
                 return original.ends_with('s') || original.ends_with('-');
             }
             false

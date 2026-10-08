@@ -504,14 +504,13 @@ fn eo_prepare_apostrophes(text: &str) -> (String, Vec<usize>) {
     let mut out = String::with_capacity(text.len());
     let mut map: Vec<usize> = Vec::with_capacity(text.len() + 16);
     let mut orig = 0usize;
-    let push_mapped =
-        |out: &mut String, map: &mut Vec<usize>, piece: &str, orig: &mut usize| {
-            for _ in 0..piece.len() {
-                map.push(*orig);
-            }
-            out.push_str(piece);
-            *orig += piece.len();
-        };
+    let push_mapped = |out: &mut String, map: &mut Vec<usize>, piece: &str, orig: &mut usize| {
+        for _ in 0..piece.len() {
+            map.push(*orig);
+        }
+        out.push_str(piece);
+        *orig += piece.len();
+    };
     let mut i = 0;
     while i < chars.len() {
         let c = chars[i];

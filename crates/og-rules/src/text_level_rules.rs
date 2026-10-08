@@ -270,10 +270,7 @@ impl TextLevelRule for GenericUnpairedBracketsRule {
         for (byte_idx, ch) in chars {
             let ch_str = ch.to_string();
 
-            if (ch == ')' || ch == '(')
-                && byte_idx >= 1
-                && text.is_char_boundary(byte_idx - 1)
-            {
+            if (ch == ')' || ch == '(') && byte_idx >= 1 && text.is_char_boundary(byte_idx - 1) {
                 let prev = &text[byte_idx - 1..byte_idx];
                 if prev == ":" || prev == ";" {
                     continue;
