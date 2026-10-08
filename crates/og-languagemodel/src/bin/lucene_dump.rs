@@ -470,7 +470,6 @@ fn decompress_block<R: Read + Seek>(cur: &mut Cursor<R>, dest_len: usize) -> Opt
 }
 
 #[allow(clippy::too_many_arguments)]
-#[allow(clippy::too_many_arguments)]
 fn dump_terms(
     tim_path: &PathBuf,
     doc_counts: &[u64],
@@ -794,16 +793,14 @@ fn main() {
             use std::io::Write;
             merged.flush().ok();
         }
-        if grand_total == 0 {
-            if let Ok(one) = std::fs::read_to_string(dir.join("1grams.meta")) {
-                if let Some(v) = one
-                    .lines()
-                    .find_map(|l| l.strip_prefix("total_token_count\t"))
-                    .and_then(|v| v.trim().parse::<u64>().ok())
-                {
-                    grand_total = v;
-                }
-            }
+        if grand_total == 0
+            && let Ok(one) = std::fs::read_to_string(dir.join("1grams.meta"))
+            && let Some(v) = one
+                .lines()
+                .find_map(|l| l.strip_prefix("total_token_count\t"))
+                .and_then(|v| v.trim().parse::<u64>().ok())
+        {
+            grand_total = v;
         }
         eprintln!("{n}grams merged: {grand_terms} terms, totalTokenCount {grand_total}");
         eprintln!("wrote {}", out_path.display());

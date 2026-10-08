@@ -207,7 +207,7 @@ impl DiskLanguageModel {
         let mut grams: [Option<SortedTsvLookup>; 4] = Default::default();
         let mut total_token_count: Option<u64> = None;
         let mut found_any = false;
-        for n in 1..=3usize {
+        for (n, slot) in grams.iter_mut().enumerate().skip(1) {
             let path: PathBuf = dir.join(format!("{n}grams.tsv"));
             if !path.exists() {
                 continue;
@@ -216,7 +216,7 @@ impl DiskLanguageModel {
                 continue;
             };
             found_any = true;
-            grams[n] = Some(lookup);
+            *slot = Some(lookup);
             if n == 1 {
                 let meta = fs::read_to_string(dir.join(format!("{n}grams.meta")))
                     .ok()
