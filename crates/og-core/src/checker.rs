@@ -24,6 +24,7 @@ pub struct CheckRequest {
     pub disabled_categories: Vec<String>,
     pub level: Option<String>,
     pub picky: bool,
+    pub run_all_rules: bool,
 }
 
 impl CheckRequest {
@@ -38,7 +39,12 @@ impl CheckRequest {
             disabled_categories: Vec::new(),
             level: None,
             picky: false,
+            run_all_rules: false,
         }
+    }
+
+    fn level_is_default(&self) -> bool {
+        !self.picky && matches!(self.level.as_deref(), None | Some("default"))
     }
 
     pub fn rule_enabled_by_id(&self, rule_id: &str, default_on: bool, picky_tagged: bool) -> bool {
@@ -48,12 +54,13 @@ impl CheckRequest {
         if self.disabled_rules.iter().any(|r| r == rule_id) {
             return false;
         }
-        let picky_level = self.picky || self.level.as_deref() == Some("picky");
-        let explicitly_enabled = self.enabled_rules.iter().any(|r| r == rule_id);
-        if !default_on {
-            return explicitly_enabled || (picky_tagged && picky_level);
+        if self.run_all_rules {
+            return true;
         }
-        !(picky_tagged && !picky_level && !explicitly_enabled)
+        if !default_on {
+            return self.enabled_rules.iter().any(|r| r == rule_id);
+        }
+        !(picky_tagged && self.level_is_default())
     }
 
     pub fn category_enabled(&self, category_id: &str) -> bool {
@@ -93,12 +100,13 @@ impl CheckRequest {
         if self.disabled_categories.iter().any(|c| c == category_id) {
             return false;
         }
-        let picky_level = self.picky || self.level.as_deref() == Some("picky");
-        let explicitly_enabled = self.enabled_rules.iter().any(|r| r == rule_id);
-        if !default_on {
-            return explicitly_enabled || (picky_tagged && picky_level);
+        if self.run_all_rules {
+            return true;
         }
-        !(picky_tagged && !picky_level && !explicitly_enabled)
+        if !default_on {
+            return self.enabled_rules.iter().any(|r| r == rule_id);
+        }
+        !(picky_tagged && self.level_is_default())
     }
 }
 
@@ -441,7 +449,32 @@ mod rule_enabled_tests {
         assert!(leveled.is_rule_enabled("DASH_RULE", "TYPOGRAPHY", true, true));
         let mut enabled = request();
         enabled.enabled_rules = vec!["DASH_RULE".to_string()];
-        assert!(enabled.is_rule_enabled("DASH_RULE", "TYPOGRAPHY", true, true));
+        assert!(
+            !enabled.is_rule_enabled("DASH_RULE", "TYPOGRAPHY", true, true),
+            "JLanguageTool.isRuleActiveForLevelAndToneTags suppresses picky-tagged rules at Level.DEFAULT even when enabledRules lists them"
+        );
+    }
+
+    #[test]
+    fn picky_tagged_default_on_rules_run_at_named_levels() {
+        let mut academic = request();
+        academic.level = Some("academic".to_string());
+        assert!(academic.is_rule_enabled("DASH_RULE", "TYPOGRAPHY", true, true));
+        let mut explicit_default = request();
+        explicit_default.level = Some("default".to_string());
+        assert!(!explicit_default.is_rule_enabled("DASH_RULE", "TYPOGRAPHY", true, true));
+    }
+
+    #[test]
+    fn picky_tagged_default_off_rules_need_explicit_enabling() {
+        let mut picky = request();
+        picky.level = Some("picky".to_string());
+        assert!(
+            !picky.is_rule_enabled("STYLE_RULE", "STYLE", false, true),
+            "Java core never auto-enables default-off rules, not even at picky level"
+        );
+        picky.enabled_rules = vec!["STYLE_RULE".to_string()];
+        assert!(picky.is_rule_enabled("STYLE_RULE", "STYLE", false, true));
     }
 
     #[test]

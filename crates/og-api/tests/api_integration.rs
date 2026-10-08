@@ -203,6 +203,24 @@ async fn test_v2_check_disabled_rules_suppress_matches() {
 }
 
 #[tokio::test]
+async fn test_v2_check_level_picky_does_not_activate_default_off_rules() {
+    let text = "An+actress%E2%80%99s+role";
+    let picky = check_response(&format!("/v2/check?language=en-US&text={text}&level=picky")).await;
+    assert!(
+        !has_match_with_rule(&picky, "TYPEWRITER_APOSTROPHE"),
+        "Java core never auto-enables default-off rules at picky level (JLanguageTool.ignoreRule requires enabledRules)"
+    );
+    let enabled = check_response(&format!(
+        "/v2/check?language=en-US&text={text}&level=picky&enabledRules=TYPEWRITER_APOSTROPHE"
+    ))
+    .await;
+    assert!(
+        has_match_with_rule(&enabled, "TYPEWRITER_APOSTROPHE"),
+        "enabledRules must activate the default-off picky-tagged rule"
+    );
+}
+
+#[tokio::test]
 async fn test_v2_check_enabled_categories_restrict_matches() {
     let filtered = check_response(
         "/v2/check?language=en-US&text=I+have+a+apple+here.&enabledCategories=GRAMMAR",

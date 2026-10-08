@@ -114,7 +114,14 @@ impl GoldenRunner {
     pub fn run(&self, cases: &[GoldenCase]) -> CompatReport {
         let mut results = Vec::new();
         for case in cases {
-            let request = self.request(case.text);
+            let mut request = self.request(case.text);
+            if !case.matches.is_empty() {
+                request.enabled_rules = case
+                    .matches
+                    .iter()
+                    .map(|m| m.rule_id.to_string())
+                    .collect::<Vec<_>>();
+            }
             let rust_result = self.engine.check_with_request(&request);
             let rust_matches = rust_result.matches;
             let java_matches: Vec<JavaMatch> = case
@@ -190,6 +197,7 @@ impl GoldenRunner {
     fn request(&self, text: &str) -> CheckRequest {
         let mut request = CheckRequest::new(text, self.engine.language().clone());
         request.picky = self.picky;
+        request.run_all_rules = true;
         request
     }
 }
