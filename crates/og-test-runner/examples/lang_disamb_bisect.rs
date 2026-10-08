@@ -1,4 +1,4 @@
-use og_core::checker::{Disambiguator as _, Tagger};
+use og_core::checker::Disambiguator as _;
 use og_core::{AnalyzedSentence, AnalyzedToken, AnalyzedTokenReadings};
 use og_tagger::{EnglishTagger, XmlDisambiguator};
 use og_tokenizer::WordTokenizer as _;

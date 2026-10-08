@@ -1,4 +1,3 @@
-use og_rules::pattern_rule::PatternRuleEngine;
 use og_test_runner::runner::TestRunner;
 use og_xml::compiler::{CompiledPatternElement, XmlCompiler};
 
@@ -77,7 +76,6 @@ fn main() {
         .compile_file_with_base(&xml, std::path::Path::new(grammar_path).parent())
         .expect("compile");
     let runner = TestRunner::for_language("de");
-    let engine = PatternRuleEngine::new();
     for (n, rule) in rule_set
         .rules
         .iter()

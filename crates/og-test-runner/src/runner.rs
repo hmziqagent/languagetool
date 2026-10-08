@@ -115,7 +115,6 @@ impl WordTokenizer for TestWordTokenizer {
             TestWordTokenizer::Tagalog(tz) => og_tokenizer::WordTokenizer::tokenize(tz, text),
             TestWordTokenizer::Ukrainian(tz) => og_tokenizer::WordTokenizer::tokenize(tz, text),
             TestWordTokenizer::Chinese(tz) => {
-                use og_core::checker::WordTokenizer as _;
                 return tz.tokenize(text, offset);
             }
         };
@@ -381,7 +380,7 @@ impl TestRunner {
                             Some(og_tagger::hybrid_disambiguator(
                                 code,
                                 &resource_dir,
-                                &core_resource_dir,
+                                core_resource_dir,
                                 d,
                             ))
                         }
@@ -2446,13 +2445,13 @@ fn test_real_danish_grammar_examples() {
 
 #[test]
 #[ignore]
-fn test_real_de_CH_grammar_examples() {
+fn test_real_de_ch_grammar_examples() {
     run_german_variant_example_suite("de-CH");
 }
 
 #[test]
 #[ignore]
-fn test_real_de_AT_grammar_examples() {
+fn test_real_de_at_grammar_examples() {
     run_german_variant_example_suite("de-AT");
 }
 

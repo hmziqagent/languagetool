@@ -1,5 +1,3 @@
-use og_core::checker::Tagger;
-use og_core::{AnalyzedToken, AnalyzedTokenReadings};
 use og_tagger::GermanTagger;
 
 fn main() {

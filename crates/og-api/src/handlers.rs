@@ -43,7 +43,7 @@ pub async fn handle_check(
     };
 
     let (language, detected) = if auto_requested {
-        match detect_language(&text) {
+        match detect_language(text) {
             Some((lang, confidence)) => {
                 let detected = (lang.clone(), confidence);
                 (lang, Some(detected))

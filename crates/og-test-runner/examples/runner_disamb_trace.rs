@@ -1,4 +1,4 @@
-use og_core::checker::{Disambiguator as _, Tagger as _};
+use og_core::checker::Tagger as _;
 use og_tokenizer::WordTokenizer as _;
 
 fn main() {

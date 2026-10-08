@@ -1,4 +1,3 @@
-use og_core::checker::WordTokenizer as _;
 use og_core::{AnalyzedSentence, AnalyzedToken, AnalyzedTokenReadings};
 use og_tagger::{EnglishTagger, XmlDisambiguator};
 use og_tokenizer::WordTokenizer as _;

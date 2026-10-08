@@ -234,7 +234,7 @@ fn phases_lang(code: &str) -> String {
 
     if short == "en" {
         let t = Instant::now();
-        let tagger = og_tagger::EnglishTagger::from_resource_dir(&dir);
+        drop(og_tagger::EnglishTagger::from_resource_dir(&dir));
         let tagger_ms = ms(t.elapsed());
         out.push_str(&format!(
             "  tagger_build[english] ms={tagger_ms:.0} rss_mib={:.0}\n",

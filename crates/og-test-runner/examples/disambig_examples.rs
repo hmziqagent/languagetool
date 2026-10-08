@@ -105,7 +105,7 @@ fn marked_token<'a>(
 ) -> Option<&'a AnalyzedTokenReadings> {
     s.tokens()
         .iter()
-        .filter(|t| !(t.token().token() == "<S>" && !form.contains("<S>")))
+        .filter(|t| t.token().token() != "<S>" || form.contains("<S>"))
         .find(|t| t.token().start() == marker_start)
 }
 
