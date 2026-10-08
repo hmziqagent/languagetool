@@ -8,13 +8,15 @@ enum HyphenMode {
     Delimiter,
 }
 
+type EnWordTagged = Arc<dyn Fn(&str) -> bool + Send + Sync>;
+
 pub struct DefaultWordTokenizer {
     english_contractions: bool,
     english_word_chars: bool,
     hyphens: HyphenMode,
     dutch: bool,
     esperanto: bool,
-    en_word_tagged: Option<Arc<dyn Fn(&str) -> bool + Send + Sync>>,
+    en_word_tagged: Option<EnWordTagged>,
 }
 
 impl DefaultWordTokenizer {
@@ -29,7 +31,7 @@ impl DefaultWordTokenizer {
         }
     }
 
-    pub fn new_english(en_word_tagged: Arc<dyn Fn(&str) -> bool + Send + Sync>) -> Self {
+    pub fn new_english(en_word_tagged: EnWordTagged) -> Self {
         Self {
             english_contractions: true,
             english_word_chars: true,
@@ -502,7 +504,7 @@ fn eo_prepare_apostrophes(text: &str) -> (String, Vec<usize>) {
     let mut out = String::with_capacity(text.len());
     let mut map: Vec<usize> = Vec::with_capacity(text.len() + 16);
     let mut orig = 0usize;
-    let mut push_mapped =
+    let push_mapped =
         |out: &mut String, map: &mut Vec<usize>, piece: &str, orig: &mut usize| {
             for _ in 0..piece.len() {
                 map.push(*orig);

@@ -286,12 +286,11 @@ impl FrenchWordTokenizer {
                 } else {
                     1
                 };
-            } else if c == '-' && i > start && next.is_some_and(|n| n.is_alphanumeric()) {
-                i += 2;
-            } else if (c == '.' || c == ',')
-                && i > start
-                && chars[i - 1].is_numeric()
-                && next.is_some_and(|n| n.is_numeric())
+            } else if (c == '-' && i > start && next.is_some_and(|n| n.is_alphanumeric()))
+                || ((c == '.' || c == ',')
+                    && i > start
+                    && chars[i - 1].is_numeric()
+                    && next.is_some_and(|n| n.is_numeric()))
             {
                 i += 2;
             } else if c == ' '
@@ -372,7 +371,7 @@ impl WordTokenizer for FrenchWordTokenizer {
         if text.is_empty() {
             return Vec::new();
         }
-        let normalized = text.replace('\u{2010}', "-").replace('\u{2011}', "-");
+        let normalized = text.replace(['\u{2010}', '\u{2011}'], "-");
         let chars: Vec<char> = normalized.chars().collect();
         let mut byte_at: Vec<usize> = Vec::with_capacity(chars.len() + 1);
         let mut b = 0usize;
