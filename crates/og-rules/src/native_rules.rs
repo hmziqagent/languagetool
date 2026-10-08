@@ -234,6 +234,7 @@ impl Rule for DoublePunctuationRule {
                 let to_pos = tokens[i].token().end();
                 let context_start = from_pos.saturating_sub(20);
                 let context_end = std::cmp::min(to_pos + 20, sentence.text().len());
+                let context_start = context_start.min(context_end);
                 let context_text = sentence
                     .text()
                     .get(context_start..context_end)
@@ -267,6 +268,7 @@ impl Rule for DoublePunctuationRule {
                 let to_pos = tokens[i].token().end();
                 let context_start = from_pos.saturating_sub(20);
                 let context_end = std::cmp::min(to_pos + 20, sentence.text().len());
+                let context_start = context_start.min(context_end);
                 let context_text = sentence
                     .text()
                     .get(context_start..context_end)
