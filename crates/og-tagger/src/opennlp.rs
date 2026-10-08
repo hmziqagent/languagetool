@@ -624,6 +624,8 @@ fn pos_contexts(
                     model.outcome(outcomes[index - 1]),
                 ],
             );
+        } else {
+            push_feat(arena, e, &["pp=", sb]);
         }
     } else {
         push_feat(arena, e, &["p=", sb]);
@@ -698,7 +700,7 @@ fn chunker_contexts(
         (
             vec!["w_2=", tokens[index - 2]],
             vec!["t_2=", tags[index - 2]],
-            vec!["p_2=", model.outcome(preds[index - 2])],
+            vec!["p_2", model.outcome(preds[index - 2])],
         )
     };
     let (w_1, t_1, p_1) = if index < 1 {
@@ -793,6 +795,7 @@ fn chunker_contexts(
     push3!(t0, t1, t2);
     push_feat(arena, out, &p_2);
     push_feat(arena, out, &p_1);
+    push2!(p_2, p_1);
     push2!(p_1, t_2);
     push2!(p_1, t_1);
     push2!(p_1, t0);
