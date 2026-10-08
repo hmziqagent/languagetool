@@ -15,8 +15,11 @@ const WIKIPEDIA_DATA: &str = include_str!(
 );
 
 fn is_tagged(atr: &og_core::AnalyzedTokenReadings) -> bool {
-    atr.first_reading()
-        .is_some_and(|r| !r.pos_tags().is_empty())
+    atr.readings().iter().any(|r| {
+        r.pos_tags()
+            .iter()
+            .any(|t| t != "SENT_START" && t != "SENT_END" && t != "PARAGRAPH_END")
+    })
 }
 
 fn is_all_uppercase(word: &str) -> bool {
