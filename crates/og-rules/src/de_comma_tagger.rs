@@ -1,7 +1,7 @@
 use og_tagger::GermanTagger;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 pub struct CommaTagger {
     tagger: Option<GermanTagger>,
@@ -32,16 +32,16 @@ impl CommaTagger {
 }
 
 pub fn shared() -> Arc<CommaTagger> {
-    static SHARED: OnceLock<Arc<CommaTagger>> = OnceLock::new();
-    SHARED
-        .get_or_init(|| {
-            let tagger = find_resource_dir().and_then(|dir| GermanTagger::from_resource_dir(&dir));
-            Arc::new(CommaTagger {
-                tagger,
-                cache: std::sync::Mutex::new(HashMap::new()),
-            })
-        })
-        .clone()
+    static SHARED: og_core::releasable::Releasable<CommaTagger> =
+        og_core::releasable::Releasable::new();
+    og_core::releasable::shared_get_or_build(&SHARED, || {
+        let tagger = find_resource_dir().and_then(|dir| GermanTagger::from_resource_dir(&dir));
+        Some(Arc::new(CommaTagger {
+            tagger,
+            cache: std::sync::Mutex::new(HashMap::new()),
+        }))
+    })
+    .expect("german comma tagger")
 }
 
 fn find_resource_dir() -> Option<PathBuf> {

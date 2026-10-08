@@ -1022,40 +1022,66 @@ pub mod test_support {
     pub const GRAMMAR_PATH: &str = "/home/agent/opengrammar-rs/languagetool/languagetool-language-modules/en/src/main/resources/org/languagetool/rules/en/grammar.xml";
     const DE_GRAMMAR_PATH: &str = "/home/agent/opengrammar-rs/languagetool/languagetool-language-modules/de/src/main/resources/org/languagetool/rules/de/grammar.xml";
 
-    pub fn german_runner() -> &'static TestRunner {
-        static RUNNER: OnceLock<TestRunner> = OnceLock::new();
-        RUNNER.get_or_init(|| TestRunner::for_language("de"))
+    pub fn german_runner() -> Arc<TestRunner> {
+        static RUNNER: OnceLock<std::sync::Mutex<std::sync::Weak<TestRunner>>> = OnceLock::new();
+        let cache = RUNNER.get_or_init(|| std::sync::Mutex::new(std::sync::Weak::new()));
+        if let Some(hit) = cache.lock().unwrap().upgrade() {
+            return hit;
+        }
+        let runner = Arc::new(TestRunner::for_language("de"));
+        *cache.lock().unwrap() = Arc::downgrade(&runner);
+        runner
     }
 
-    pub fn german_grammar_rules() -> &'static CompiledRuleSet {
-        static GRAMMAR: OnceLock<CompiledRuleSet> = OnceLock::new();
-        GRAMMAR.get_or_init(|| {
-            let path = std::path::Path::new(DE_GRAMMAR_PATH);
-            let xml = std::fs::read_to_string(path).expect("Failed to read de grammar.xml");
+    pub fn german_grammar_rules() -> Arc<CompiledRuleSet> {
+        static GRAMMAR: OnceLock<std::sync::Mutex<std::sync::Weak<CompiledRuleSet>>> =
+            OnceLock::new();
+        let cache = GRAMMAR.get_or_init(|| std::sync::Mutex::new(std::sync::Weak::new()));
+        if let Some(hit) = cache.lock().unwrap().upgrade() {
+            return hit;
+        }
+        let path = std::path::Path::new(DE_GRAMMAR_PATH);
+        let xml = std::fs::read_to_string(path).expect("Failed to read de grammar.xml");
+        let compiled = Arc::new(
             XmlCompiler::new()
                 .compile_file_with_base(&xml, path.parent())
-                .expect("Failed to compile de grammar.xml")
-        })
+                .expect("Failed to compile de grammar.xml"),
+        );
+        *cache.lock().unwrap() = Arc::downgrade(&compiled);
+        compiled
     }
 
     pub fn german_grammar_available() -> bool {
         Path::new(DE_GRAMMAR_PATH).exists()
     }
 
-    pub fn shared_runner() -> &'static TestRunner {
-        static RUNNER: OnceLock<TestRunner> = OnceLock::new();
-        RUNNER.get_or_init(TestRunner::new)
+    pub fn shared_runner() -> Arc<TestRunner> {
+        static RUNNER: OnceLock<std::sync::Mutex<std::sync::Weak<TestRunner>>> = OnceLock::new();
+        let cache = RUNNER.get_or_init(|| std::sync::Mutex::new(std::sync::Weak::new()));
+        if let Some(hit) = cache.lock().unwrap().upgrade() {
+            return hit;
+        }
+        let runner = Arc::new(TestRunner::new());
+        *cache.lock().unwrap() = Arc::downgrade(&runner);
+        runner
     }
 
-    pub fn shared_grammar_rules() -> &'static CompiledRuleSet {
-        static GRAMMAR: OnceLock<CompiledRuleSet> = OnceLock::new();
-        GRAMMAR.get_or_init(|| {
-            let path = std::path::Path::new(GRAMMAR_PATH);
-            let xml = std::fs::read_to_string(path).expect("Failed to read grammar.xml");
+    pub fn shared_grammar_rules() -> Arc<CompiledRuleSet> {
+        static GRAMMAR: OnceLock<std::sync::Mutex<std::sync::Weak<CompiledRuleSet>>> =
+            OnceLock::new();
+        let cache = GRAMMAR.get_or_init(|| std::sync::Mutex::new(std::sync::Weak::new()));
+        if let Some(hit) = cache.lock().unwrap().upgrade() {
+            return hit;
+        }
+        let path = std::path::Path::new(GRAMMAR_PATH);
+        let xml = std::fs::read_to_string(path).expect("Failed to read grammar.xml");
+        let compiled = Arc::new(
             XmlCompiler::new()
                 .compile_file_with_base(&xml, path.parent())
-                .expect("Failed to compile grammar.xml")
-        })
+                .expect("Failed to compile grammar.xml"),
+        );
+        *cache.lock().unwrap() = Arc::downgrade(&compiled);
+        compiled
     }
 
     pub fn grammar_available() -> bool {
@@ -1069,13 +1095,15 @@ pub mod test_support {
         .exists()
     }
 
-    pub fn generic_grammar_rules(code: &'static str) -> &'static CompiledRuleSet {
+    pub fn generic_grammar_rules(code: &'static str) -> std::sync::Arc<CompiledRuleSet> {
         static CACHE: std::sync::OnceLock<
-            std::sync::Mutex<std::collections::HashMap<&'static str, &'static CompiledRuleSet>>,
+            std::sync::Mutex<
+                std::collections::HashMap<&'static str, std::sync::Weak<CompiledRuleSet>>,
+            >,
         > = std::sync::OnceLock::new();
         let cache = CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
         let mut guard = cache.lock().unwrap();
-        if let Some(hit) = guard.get(code) {
+        if let Some(hit) = guard.get(code).and_then(std::sync::Weak::upgrade) {
             return hit;
         }
         let path = std::path::PathBuf::from(format!(
@@ -1119,12 +1147,12 @@ pub mod test_support {
             categories.extend(extra.categories);
             unifications.extend(extra.unifications);
         }
-        let compiled: &'static CompiledRuleSet = Box::leak(Box::new(CompiledRuleSet {
+        let compiled = std::sync::Arc::new(CompiledRuleSet {
             rules,
             categories,
             unifications,
-        }));
-        guard.insert(code, compiled);
+        });
+        guard.insert(code, std::sync::Arc::downgrade(&compiled));
         compiled
     }
 }
@@ -1134,20 +1162,19 @@ fn shared_german_speller_dictionary(
 ) -> Option<std::sync::Arc<og_spell::Dictionary>> {
     static CACHE: std::sync::OnceLock<
         std::sync::Mutex<
-            std::collections::HashMap<std::path::PathBuf, std::sync::Arc<og_spell::Dictionary>>,
+            std::collections::HashMap<std::path::PathBuf, std::sync::Weak<og_spell::Dictionary>>,
         >,
     > = std::sync::OnceLock::new();
     let cache = CACHE.get_or_init(Default::default);
     let key = resource_dir.to_path_buf();
     let mut guard = cache.lock().unwrap();
-    if let Some(dict) = guard.get(&key) {
-        return Some(dict.clone());
+    if let Some(dict) = guard.get(&key).and_then(std::sync::Weak::upgrade) {
+        return Some(dict);
     }
     let dictionary = og_tagger::german_tagger::shared_german_dictionary(resource_dir).map(|dict| {
-        let mut d = og_spell::Dictionary::new();
-        for word in dict.keys() {
-            d.add_word(word);
-        }
+        let mut d = og_spell::Dictionary::from_shared_words(std::sync::Arc::new(
+            og_spell::morfologik_view::MorfologikView::new(dict),
+        ));
         if let Ok(words) = std::fs::read_to_string(resource_dir.join("hunspell/spelling.txt")) {
             for line in words.lines() {
                 for word in og_rules::spelling_support::prepare_line_for_speller(
@@ -1162,7 +1189,7 @@ fn shared_german_speller_dictionary(
     });
     let dictionary = dictionary.map(std::sync::Arc::new);
     if let Some(dict) = &dictionary {
-        guard.insert(key, dict.clone());
+        guard.insert(key, std::sync::Arc::downgrade(dict));
     }
     dictionary
 }
@@ -1475,7 +1502,11 @@ mod tests {
         let rules_handle = std::thread::spawn(test_support::german_grammar_rules);
         let runner = test_support::german_runner();
         let rules = rules_handle.join().expect("grammar compile thread");
-        let summary = runner.run_rule_set_example_tests(rules);
+        let summary = runner.run_rule_set_example_tests(&rules);
+        drop(rules);
+        drop(runner);
+        og_core::releasable::release_all();
+        trim_released_pages();
 
         eprintln!("Total German examples tested: {}", summary.total);
         eprintln!("Passed: {}", summary.passed);
@@ -1549,7 +1580,7 @@ mod tests {
         let rules_handle = std::thread::spawn(test_support::shared_grammar_rules);
         let runner = test_support::shared_runner();
         let rules = rules_handle.join().expect("grammar compile thread");
-        let summary = runner.run_rule_set_example_tests(rules);
+        let summary = runner.run_rule_set_example_tests(&rules);
 
         eprintln!("Total examples tested: {}", summary.total);
         {
@@ -2148,29 +2179,29 @@ mod tests {
 
         eprintln!("\n=== VBZ (3rd person singular present) ===");
         for word in &["needs", "wants", "likes", "tries"] {
-            check(runner, word, &["VBZ"]);
+            check(&runner, word, &["VBZ"]);
         }
 
         eprintln!("\n=== VB (base form verb) ===");
         for word in &["need", "want", "like", "try"] {
-            check(runner, word, &["VB"]);
+            check(&runner, word, &["VB"]);
         }
         for word in &["go", "make", "contact", "solve", "mount"] {
-            check(runner, word, &["VB"]);
+            check(&runner, word, &["VB"]);
         }
         for word in &["compete", "bring", "send", "extend"] {
-            check(runner, word, &["VB"]);
+            check(&runner, word, &["VB"]);
         }
 
         eprintln!("\n=== VB + NN (verb and noun) ===");
         for word in &["open", "reopen", "close"] {
-            check(runner, word, &["VB", "NN"]);
+            check(&runner, word, &["VB", "NN"]);
         }
         for word in &["help", "support", "sleep", "exercise"] {
-            check(runner, word, &["NN", "VB"]);
+            check(&runner, word, &["NN", "VB"]);
         }
         for word in &["love", "fear", "care"] {
-            check(runner, word, &["VB", "NN"]);
+            check(&runner, word, &["VB", "NN"]);
         }
 
         eprintln!("\n=== JJ (adjective) ===");
@@ -2183,37 +2214,37 @@ mod tests {
             "perfect",
             "recommendable",
         ] {
-            check(runner, word, &["JJ"]);
+            check(&runner, word, &["JJ"]);
         }
         for word in &["okay", "worth"] {
-            check(runner, word, &["JJ"]);
+            check(&runner, word, &["JJ"]);
         }
 
         eprintln!("\n=== VBG (gerund / present participle) ===");
         for word in &["happening", "going", "writing"] {
-            check(runner, word, &["VBG"]);
+            check(&runner, word, &["VBG"]);
         }
 
         eprintln!("\n=== VBN (past participle) ===");
         for word in &["done", "been", "given"] {
-            check(runner, word, &["VBN"]);
+            check(&runner, word, &["VBN"]);
         }
 
         eprintln!("\n=== NNS (plural noun) ===");
         for word in &["phenomena", "criteria", "stimuli"] {
-            check(runner, word, &["NNS"]);
+            check(&runner, word, &["NNS"]);
         }
         for word in &["freshmen", "women", "gentlemen"] {
-            check(runner, word, &["NNS"]);
+            check(&runner, word, &["NNS"]);
         }
 
         eprintln!("\n=== JJR / JJ (comparative and base adjective) ===");
         for word in &["better", "easier"] {
-            check(runner, word, &["JJR"]);
+            check(&runner, word, &["JJR"]);
         }
         {
             let word = &"expensive";
-            check(runner, word, &["JJ"]);
+            check(&runner, word, &["JJ"]);
         }
     }
 }
@@ -2648,6 +2679,15 @@ fn test_real_esperanto_grammar_examples() {
 }
 
 #[cfg(test)]
+fn trim_released_pages() {
+    // glibc keeps freed arenas resident; per-language suites would otherwise staircase the RSS.
+    #[cfg(target_os = "linux")]
+    unsafe {
+        libc::malloc_trim(0);
+    }
+}
+
+#[cfg(test)]
 fn run_german_variant_example_suite(code: &'static str) {
     let variant_dir = if code == "de-CH" { "de-CH" } else { "de-DE-AT" };
     let path = std::path::PathBuf::from(format!(
@@ -2663,6 +2703,9 @@ fn run_german_variant_example_suite(code: &'static str) {
         .compile_file_with_base(&xml, path.parent())
         .expect("grammar compile");
     let summary = runner.run_rule_set_example_tests(&rules);
+    drop(rules);
+    og_core::releasable::release_all();
+    trim_released_pages();
 
     let mut no_match = 0;
     let mut fp = 0;
@@ -2704,7 +2747,11 @@ fn run_generic_example_suite(code: &'static str) {
     let rules_handle = std::thread::spawn(move || test_support::generic_grammar_rules(code));
     let runner = TestRunner::for_language(code);
     let rules = rules_handle.join().expect("grammar compile thread");
-    let summary = runner.run_rule_set_example_tests(rules);
+    let summary = runner.run_rule_set_example_tests(&rules);
+    drop(rules);
+    drop(runner);
+    og_core::releasable::release_all();
+    trim_released_pages();
 
     let mut no_match = 0;
     let mut fp = 0;

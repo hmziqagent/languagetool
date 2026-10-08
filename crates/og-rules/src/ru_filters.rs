@@ -50,15 +50,15 @@ impl RussianSynthesizer {
         })
     }
 
-    pub fn shared() -> Option<&'static RussianSynthesizer> {
-        static CACHE: OnceLock<Option<RussianSynthesizer>> = OnceLock::new();
-        CACHE
-            .get_or_init(|| {
-                ru_resource_dir()
-                    .as_deref()
-                    .and_then(RussianSynthesizer::from_resource_dir)
-            })
-            .as_ref()
+    pub fn shared() -> Option<Arc<RussianSynthesizer>> {
+        static CACHE: og_core::releasable::Releasable<RussianSynthesizer> =
+            og_core::releasable::Releasable::new();
+        og_core::releasable::shared_get_or_build(&CACHE, || {
+            ru_resource_dir()
+                .as_deref()
+                .and_then(RussianSynthesizer::from_resource_dir)
+                .map(Arc::new)
+        })
     }
 
     pub fn synthesize(&self, lemma: &str, tag: &Regex) -> Vec<String> {
@@ -74,8 +74,10 @@ impl RussianSynthesizer {
                 continue;
             }
             for (entry_tag, form) in entries {
-                if *entry_tag == possible.as_str() && !results.iter().any(|r: &String| r == form) {
-                    results.push((*form).to_string());
+                if &**entry_tag == possible.as_str()
+                    && !results.iter().any(|r: &String| r == &**form)
+                {
+                    results.push(form.to_string());
                 }
             }
         }
@@ -318,27 +320,25 @@ pub fn advanced_synthesizer_filter(
     Some(rm)
 }
 
-pub fn shared_russian_spelling_dictionary() -> Option<&'static og_spell::Dictionary> {
-    static CACHE: OnceLock<Option<og_spell::Dictionary>> = OnceLock::new();
-    CACHE
-        .get_or_init(|| {
-            let resource_dir = ru_resource_dir()?;
-            let dictionary =
-                og_tagger::generic_tagger::shared_dictionary(&resource_dir, "russian")?;
-            let mut dict = og_spell::Dictionary::from_shared_words(Arc::new(
-                og_spell::morfologik_view::MorfologikView::new(dictionary),
-            ));
-            if let Ok(text) = std::fs::read_to_string(resource_dir.join("hunspell/spelling.txt")) {
-                for line in text.lines() {
-                    let word = line.split('#').next().unwrap_or("").trim();
-                    if !word.is_empty() {
-                        dict.add_word(word);
-                    }
+pub fn shared_russian_spelling_dictionary() -> Option<Arc<og_spell::Dictionary>> {
+    static CACHE: og_core::releasable::Releasable<og_spell::Dictionary> =
+        og_core::releasable::Releasable::new();
+    og_core::releasable::shared_get_or_build(&CACHE, || {
+        let resource_dir = ru_resource_dir()?;
+        let dictionary = og_tagger::generic_tagger::shared_dictionary(&resource_dir, "russian")?;
+        let mut dict = og_spell::Dictionary::from_shared_words(Arc::new(
+            og_spell::morfologik_view::MorfologikView::new(dictionary),
+        ));
+        if let Ok(text) = std::fs::read_to_string(resource_dir.join("hunspell/spelling.txt")) {
+            for line in text.lines() {
+                let word = line.split('#').next().unwrap_or("").trim();
+                if !word.is_empty() {
+                    dict.add_word(word);
                 }
             }
-            Some(dict)
-        })
-        .as_ref()
+        }
+        Some(Arc::new(dict))
+    })
 }
 
 pub fn is_misspelled(word: &str) -> bool {
@@ -351,14 +351,13 @@ pub fn is_misspelled(word: &str) -> bool {
     }
 }
 
-fn shared_russian_tagger() -> Option<&'static Arc<og_tagger::GenericTagger>> {
-    static CACHE: OnceLock<Option<Arc<og_tagger::GenericTagger>>> = OnceLock::new();
-    CACHE
-        .get_or_init(|| {
-            let tagger = og_tagger::GenericTagger::russian(&ru_resource_dir()?);
-            Some(Arc::new(tagger))
-        })
-        .as_ref()
+fn shared_russian_tagger() -> Option<Arc<og_tagger::GenericTagger>> {
+    static CACHE: og_core::releasable::Releasable<og_tagger::GenericTagger> =
+        og_core::releasable::Releasable::new();
+    og_core::releasable::shared_get_or_build(&CACHE, || {
+        let tagger = og_tagger::GenericTagger::russian(&ru_resource_dir()?);
+        Some(Arc::new(tagger))
+    })
 }
 
 pub fn tokenize_for_misspelling(text: &str) -> Vec<String> {
@@ -445,7 +444,7 @@ pub fn accept_rule_match(
 mod tests {
     use super::*;
 
-    fn synth() -> Option<&'static RussianSynthesizer> {
+    fn synth() -> Option<Arc<RussianSynthesizer>> {
         RussianSynthesizer::shared()
     }
 
@@ -512,8 +511,15 @@ mod tests {
             og_core::RuleMatchContext::new(text.clone(), 0, text.len()),
         );
         rm.set_replacements(vec![SuggestedReplacement::new(template)]);
-        let out = advanced_synthesizer_filter(synth(), args, &matched_texts, &[0, 1], &tokens, rm)
-            .expect("match kept");
+        let out = advanced_synthesizer_filter(
+            synth().as_deref(),
+            args,
+            &matched_texts,
+            &[0, 1],
+            &tokens,
+            rm,
+        )
+        .expect("match kept");
         out.replacements()
             .iter()
             .map(|r| r.value().to_string())

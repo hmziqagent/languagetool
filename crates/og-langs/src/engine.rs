@@ -1986,12 +1986,12 @@ fn shared_german_speller(
 
 fn shared_german_speller_dictionary(resource_dir: &Path) -> Option<Arc<og_spell::Dictionary>> {
     static CACHE: std::sync::OnceLock<
-        std::sync::Mutex<std::collections::HashMap<PathBuf, Arc<og_spell::Dictionary>>>,
+        std::sync::Mutex<std::collections::HashMap<PathBuf, std::sync::Weak<og_spell::Dictionary>>>,
     > = std::sync::OnceLock::new();
     let cache = CACHE.get_or_init(Default::default);
     let mut guard = cache.lock().unwrap();
-    if let Some(dict) = guard.get(resource_dir) {
-        return Some(dict.clone());
+    if let Some(dict) = guard.get(resource_dir).and_then(std::sync::Weak::upgrade) {
+        return Some(dict);
     }
     let shared = og_tagger::german_tagger::shared_german_dictionary(resource_dir);
     let mut dict = match shared.as_ref() {
@@ -2017,7 +2017,7 @@ fn shared_german_speller_dictionary(resource_dir: &Path) -> Option<Arc<og_spell:
         return None;
     }
     let dict = Arc::new(dict);
-    guard.insert(resource_dir.to_path_buf(), dict.clone());
+    guard.insert(resource_dir.to_path_buf(), Arc::downgrade(&dict));
     Some(dict)
 }
 

@@ -64,18 +64,15 @@ fn shared_words() -> &'static HashMap<String, SynonymsData> {
     WORDS.get_or_init(|| parse_synonyms_file(SYNONYMS_DATA))
 }
 
-fn shared_synthesizer() -> Option<&'static Arc<og_rules::postponed_adjective::LangSynthesizer>> {
-    static SYNTH: OnceLock<Option<Arc<og_rules::postponed_adjective::LangSynthesizer>>> =
-        OnceLock::new();
-    SYNTH
-        .get_or_init(|| {
-            crate::es::es_resource_dir()
-                .and_then(|dir| {
-                    og_rules::postponed_adjective::LangSynthesizer::for_language(&dir, "es")
-                })
-                .map(Arc::new)
+fn shared_synthesizer() -> Option<Arc<og_rules::postponed_adjective::LangSynthesizer>> {
+    static SYNTH: og_core::releasable::Releasable<og_rules::postponed_adjective::LangSynthesizer> =
+        og_core::releasable::Releasable::new();
+    og_core::releasable::shared_get_or_build(&SYNTH, || {
+        crate::es::es_resource_dir().and_then(|dir| {
+            og_rules::postponed_adjective::LangSynthesizer::for_language(&dir, "es")
+                .map(std::sync::Arc::new)
         })
-        .as_ref()
+    })
 }
 
 fn adjust_postag(postag: &str) -> String {
@@ -325,7 +322,7 @@ impl TextLevelRule for SpanishRepeatedWordsRule {
                         .with_issue_type(self.issue_type().as_str())
                         .with_sub_id(sub_id);
                     let mut replacements: Vec<String> = Vec::new();
-                    if let Some(synth) = synth {
+                    if let Some(synth) = synth.as_ref() {
                         for reading in atrs.readings() {
                             let Some(source_tag) = reading.pos_tags().first() else {
                                 continue;

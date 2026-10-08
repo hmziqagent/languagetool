@@ -48,16 +48,15 @@ fn build_pattern_engine() -> PatternRuleEngine {
 }
 
 fn es_synth() -> Option<Arc<og_rules::postponed_adjective::LangSynthesizer>> {
-    static CACHE: std::sync::OnceLock<Option<Arc<og_rules::postponed_adjective::LangSynthesizer>>> =
-        std::sync::OnceLock::new();
-    CACHE
-        .get_or_init(|| {
-            crate::es::es_resource_dir().and_then(|dir| {
+    static CACHE: og_core::releasable::Releasable<og_rules::postponed_adjective::LangSynthesizer> =
+        og_core::releasable::Releasable::new();
+    og_core::releasable::shared_get_or_build(&CACHE, || {
+        crate::es::es_resource_dir()
+            .and_then(|dir| {
                 og_rules::postponed_adjective::LangSynthesizer::for_language(&dir, "es")
-                    .map(Arc::new)
             })
-        })
-        .clone()
+            .map(std::sync::Arc::new)
+    })
 }
 
 fn token_matches(

@@ -2,7 +2,7 @@ use og_core::checker::Tagger as CoreTagger;
 use og_core::{AnalyzedToken, AnalyzedTokenReadings};
 use og_tagger::Tagger;
 use std::path::Path;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 pub struct FrenchTagger {
     inner: Arc<og_tagger::GenericTagger>,
@@ -63,16 +63,13 @@ impl FrenchTagger {
     }
 
     pub fn shared_arc() -> Option<Arc<FrenchTagger>> {
-        static CACHE: OnceLock<Option<Arc<FrenchTagger>>> = OnceLock::new();
-        CACHE
-            .get_or_init(|| {
-                crate::engine::find_lt_resource_dir().map(|root| {
-                    Arc::new(FrenchTagger::from_resource_dir(
-                        &root.join("fr/src/main/resources/org/languagetool/resource/fr"),
-                    ))
-                })
+        crate::weak_shared(|| {
+            crate::engine::find_lt_resource_dir().map(|root| {
+                Arc::new(FrenchTagger::from_resource_dir(
+                    &root.join("fr/src/main/resources/org/languagetool/resource/fr"),
+                ))
             })
-            .clone()
+        })
     }
 
     pub fn inner_is_word_tagged(&self, word: &str) -> bool {

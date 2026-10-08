@@ -3124,8 +3124,9 @@ impl PatternRuleEngine {
                 crate::ru_filters::accept_rule_match(rm, &filter.args, matched_texts)
             }
             "org.languagetool.rules.ru.AdvancedSynthesizerFilter" => {
+                let russian_synth = crate::ru_filters::RussianSynthesizer::shared();
                 crate::ru_filters::advanced_synthesizer_filter(
-                    crate::ru_filters::RussianSynthesizer::shared(),
+                    russian_synth.as_deref(),
                     &filter.args,
                     matched_texts,
                     matched_positions,

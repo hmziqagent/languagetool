@@ -14,12 +14,10 @@ fn grammar_path() -> PathBuf {
 pub(crate) fn build_pattern_engine() -> PatternRuleEngine {
     let resource_dir = crate::fr::test_support::fr_resource_dir().expect("fr resource dir");
     let core_resource_dir = crate::engine::find_lt_core_resource_dir().expect("core resource dir");
-    let dict = match crate::fr::suppress_misspelled::shared_french_spelling_dictionary() {
-        Some(dictionary) => dictionary.clone(),
-        None => og_spell::Dictionary::new(),
-    };
+    let dict = crate::fr::suppress_misspelled::shared_french_spelling_dictionary()
+        .unwrap_or_else(|| Arc::new(og_spell::Dictionary::new()));
     let support = og_rules::spelling_support::SpellingSupport::new_for_language(
-        Arc::new(dict),
+        dict,
         &core_resource_dir,
         &resource_dir,
         "fr",

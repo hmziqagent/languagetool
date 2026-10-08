@@ -121,10 +121,8 @@ impl BretonSpellerRule {
     }
 
     pub fn shared_arc() -> Arc<BretonSpellerRule> {
-        static CACHE: OnceLock<Arc<BretonSpellerRule>> = OnceLock::new();
-        CACHE
-            .get_or_init(|| Arc::new(BretonSpellerRule::new()))
-            .clone()
+        crate::weak_shared(|| Some(Arc::new(BretonSpellerRule::new())))
+            .expect("breton speller rule")
     }
 
     pub fn dictionary_size(&self) -> usize {

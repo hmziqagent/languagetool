@@ -161,13 +161,10 @@ impl PolishTagger {
     }
 
     pub fn shared_arc() -> Option<Arc<PolishTagger>> {
-        static CACHE: OnceLock<Option<Arc<PolishTagger>>> = OnceLock::new();
-        CACHE
-            .get_or_init(|| {
-                let dir = pl_resource_dir()?;
-                Some(Arc::new(PolishTagger::from_resource_dir(&dir)))
-            })
-            .clone()
+        crate::weak_shared(|| {
+            let dir = pl_resource_dir()?;
+            Some(Arc::new(PolishTagger::from_resource_dir(&dir)))
+        })
     }
 
     pub fn has_dictionary(&self) -> bool {

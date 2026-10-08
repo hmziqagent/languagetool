@@ -3,7 +3,7 @@ use og_core::{AnalyzedToken, AnalyzedTokenReadings, RuleMatch};
 use og_spell::Dictionary;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 pub const FRENCH_SUPPRESS_MISSPELLED_FILTER_CLASS: &str =
     "org.languagetool.rules.fr.FrenchSuppressMisspelledSuggestionsFilter";
@@ -23,27 +23,26 @@ pub fn fr_resource_dir() -> Option<PathBuf> {
     .and_then(|p| p.canonicalize().ok())
 }
 
-pub fn shared_french_spelling_dictionary() -> Option<&'static Dictionary> {
-    static CACHE: OnceLock<Option<Dictionary>> = OnceLock::new();
-    CACHE
-        .get_or_init(|| {
-            let resource_dir = fr_resource_dir()?;
-            let dictionary = og_tagger::generic_tagger::shared_dictionary(&resource_dir, "french")?;
-            let mut dict = Dictionary::from_shared_words(Arc::new(
-                og_spell::morfologik_view::MorfologikView::new(dictionary),
-            ));
-            if let Ok(text) = std::fs::read_to_string(resource_dir.join("hunspell/spelling.txt")) {
-                for line in text.lines() {
-                    for word in prepare_line_for_speller(SpellerVariant::French, line) {
-                        if !word.is_empty() {
-                            dict.add_word(&word);
-                        }
+pub fn shared_french_spelling_dictionary() -> Option<Arc<Dictionary>> {
+    static CACHE: og_core::releasable::Releasable<Dictionary> =
+        og_core::releasable::Releasable::new();
+    og_core::releasable::shared_get_or_build(&CACHE, || {
+        let resource_dir = fr_resource_dir()?;
+        let dictionary = og_tagger::generic_tagger::shared_dictionary(&resource_dir, "french")?;
+        let mut dict = Dictionary::from_shared_words(Arc::new(
+            og_spell::morfologik_view::MorfologikView::new(dictionary),
+        ));
+        if let Ok(text) = std::fs::read_to_string(resource_dir.join("hunspell/spelling.txt")) {
+            for line in text.lines() {
+                for word in prepare_line_for_speller(SpellerVariant::French, line) {
+                    if !word.is_empty() {
+                        dict.add_word(&word);
                     }
                 }
             }
-            Some(dict)
-        })
-        .as_ref()
+        }
+        Some(Arc::new(dict))
+    })
 }
 
 pub fn is_misspelled(word: &str) -> bool {
@@ -56,26 +55,24 @@ pub fn is_misspelled(word: &str) -> bool {
     }
 }
 
-fn shared_french_tagger() -> Option<&'static Arc<og_tagger::GenericTagger>> {
-    static CACHE: OnceLock<Option<Arc<og_tagger::GenericTagger>>> = OnceLock::new();
-    CACHE
-        .get_or_init(|| {
-            let tagger = og_tagger::GenericTagger::french(&fr_resource_dir()?);
-            Some(Arc::new(tagger))
-        })
-        .as_ref()
+fn shared_french_tagger() -> Option<Arc<og_tagger::GenericTagger>> {
+    static CACHE: og_core::releasable::Releasable<og_tagger::GenericTagger> =
+        og_core::releasable::Releasable::new();
+    og_core::releasable::shared_get_or_build(&CACHE, || {
+        let tagger = og_tagger::GenericTagger::french(&fr_resource_dir()?);
+        Some(Arc::new(tagger))
+    })
 }
 
-fn shared_french_tokenizer() -> Option<&'static og_tokenizer::FrenchWordTokenizer> {
-    static CACHE: OnceLock<Option<og_tokenizer::FrenchWordTokenizer>> = OnceLock::new();
-    CACHE
-        .get_or_init(|| {
-            let tagger = shared_french_tagger()?.clone();
-            Some(og_tokenizer::FrenchWordTokenizer::new(Arc::new(
-                move |w: &str| tagger.is_word_tagged(w),
-            )))
-        })
-        .as_ref()
+fn shared_french_tokenizer() -> Option<Arc<og_tokenizer::FrenchWordTokenizer>> {
+    static CACHE: og_core::releasable::Releasable<og_tokenizer::FrenchWordTokenizer> =
+        og_core::releasable::Releasable::new();
+    og_core::releasable::shared_get_or_build(&CACHE, || {
+        let tagger = shared_french_tagger()?;
+        Some(Arc::new(og_tokenizer::FrenchWordTokenizer::new(Arc::new(
+            move |w: &str| tagger.is_word_tagged(w),
+        ))))
+    })
 }
 
 pub fn replacement_is_misspelled(value: &str) -> bool {

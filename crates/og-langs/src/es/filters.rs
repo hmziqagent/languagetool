@@ -1315,15 +1315,12 @@ mod tests {
         )
     }
 
-    fn es_synth() -> Option<&'static og_rules::postponed_adjective::LangSynthesizer> {
-        static S: OnceLock<Option<og_rules::postponed_adjective::LangSynthesizer>> =
-            OnceLock::new();
-        S.get_or_init(|| {
-            crate::es::es_resource_dir().and_then(|dir| {
+    fn es_synth() -> Option<std::sync::Arc<og_rules::postponed_adjective::LangSynthesizer>> {
+        crate::es::es_resource_dir()
+            .and_then(|dir| {
                 og_rules::postponed_adjective::LangSynthesizer::for_language(&dir, "es")
             })
-        })
-        .as_ref()
+            .map(std::sync::Arc::new)
     }
 
     fn base_rm(message: &str, offset: usize, length: usize, template: &str) -> RuleMatch {
@@ -1519,7 +1516,7 @@ mod tests {
             SuggestedReplacement::new("{suggestion} primera"),
         ]);
         let out = advanced_synthesizer_filter(
-            synth,
+            synth.as_deref(),
             "lemmaFrom:1 lemmaSelect:AO.* postagFrom:2 postagSelect:AO.*",
             &["vigésimo".to_string(), "primera".to_string()],
             &[1, 2],
@@ -1548,7 +1545,7 @@ mod tests {
         let mut rm = base_rm("m", 0, 7, "{suggestion}");
         rm.set_replacements(vec![SuggestedReplacement::new("{suggestion}")]);
         let out = advanced_synthesizer_filter(
-            synth,
+            synth.as_deref(),
             "lemmaFrom:1 lemmaSelect:D(..)..(.) postagFrom:2 postagSelect:_GN_(.)(.) postagReplace:D\\a1[C\\b1]\\b2\\a2",
             &["la".to_string(), "tres".to_string()],
             &[1, 2],
@@ -1574,7 +1571,7 @@ mod tests {
         let mut rm = base_rm("m", 5, 5, "{suggestion}");
         rm.set_replacements(vec![SuggestedReplacement::new("{suggestion}")]);
         let out = advanced_synthesizer_filter(
-            synth,
+            synth.as_deref(),
             "lemmaFrom:marker lemmaSelect:A.* postagFrom:1 postagSelect:A.*",
             &["alta".to_string(), "Guapa".to_string()],
             &[1, 2],
@@ -1604,7 +1601,7 @@ mod tests {
         let mut rm = base_rm("m", 0, 12, "{suggestion}");
         rm.set_replacements(vec![SuggestedReplacement::new("{suggestion}")]);
         let out = advanced_synthesizer_filter(
-            synth,
+            synth.as_deref(),
             "lemmaFrom:1 lemmaSelect:ZZ.* postagFrom:2 postagSelect:ZZ.*",
             &["xyzzy".to_string(), "plugh".to_string()],
             &[1, 2],

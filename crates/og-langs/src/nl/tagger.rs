@@ -73,13 +73,13 @@ impl WordLookup {
     }
 
     pub(crate) fn shared() -> Arc<WordLookup> {
-        static CACHE: OnceLock<Arc<WordLookup>> = OnceLock::new();
-        CACHE
-            .get_or_init(|| {
-                let dir = nl_resource_dir().expect("nl resource dir with dutch.dict");
-                Arc::new(WordLookup::from_resource_dir(&dir))
-            })
-            .clone()
+        static CACHE: og_core::releasable::Releasable<WordLookup> =
+            og_core::releasable::Releasable::new();
+        og_core::releasable::shared_get_or_build(&CACHE, || {
+            let dir = nl_resource_dir().expect("nl resource dir with dutch.dict");
+            Some(Arc::new(WordLookup::from_resource_dir(&dir)))
+        })
+        .expect("nl word lookup")
     }
 
     fn load_manual_data(&mut self, data: &str, into_removals: bool) {
@@ -257,15 +257,12 @@ impl DutchTagger {
     }
 
     pub fn shared_arc() -> Option<Arc<DutchTagger>> {
-        static CACHE: OnceLock<Option<Arc<DutchTagger>>> = OnceLock::new();
-        CACHE
-            .get_or_init(|| {
-                let dir = nl_resource_dir()?;
-                let mut tagger = DutchTagger::from_resource_dir(&dir);
-                tagger.acceptor = Some(super::compound_acceptor::shared_compound_acceptor());
-                Some(Arc::new(tagger))
-            })
-            .clone()
+        crate::weak_shared(|| {
+            let dir = nl_resource_dir()?;
+            let mut tagger = DutchTagger::from_resource_dir(&dir);
+            tagger.acceptor = Some(super::compound_acceptor::shared_compound_acceptor());
+            Some(Arc::new(tagger))
+        })
     }
 
     pub fn has_dictionary(&self) -> bool {

@@ -86,12 +86,9 @@ impl GalicianTagger {
     }
 
     pub fn shared_arc() -> Option<Arc<GalicianTagger>> {
-        static CACHE: OnceLock<Option<Arc<GalicianTagger>>> = OnceLock::new();
-        CACHE
-            .get_or_init(|| {
-                gl_resource_dir().map(|dir| Arc::new(GalicianTagger::from_resource_dir(&dir)))
-            })
-            .clone()
+        crate::weak_shared(|| {
+            gl_resource_dir().map(|dir| Arc::new(GalicianTagger::from_resource_dir(&dir)))
+        })
     }
 
     pub fn has_dictionary(&self) -> bool {

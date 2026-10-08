@@ -189,13 +189,10 @@ impl CatalanTagger {
     }
 
     pub fn shared_arc() -> Option<Arc<CatalanTagger>> {
-        static CACHE: OnceLock<Option<Arc<CatalanTagger>>> = OnceLock::new();
-        CACHE
-            .get_or_init(|| {
-                let dir = ca_resource_dir()?;
-                Some(Arc::new(CatalanTagger::from_resource_dir(&dir)))
-            })
-            .clone()
+        crate::weak_shared(|| {
+            let dir = ca_resource_dir()?;
+            Some(Arc::new(CatalanTagger::from_resource_dir(&dir)))
+        })
     }
 
     pub fn is_word_tagged(&self, word: &str) -> bool {

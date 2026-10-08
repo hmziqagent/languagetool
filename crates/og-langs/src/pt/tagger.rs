@@ -125,12 +125,9 @@ impl PortugueseTagger {
     }
 
     pub fn shared_arc() -> Option<Arc<PortugueseTagger>> {
-        static CACHE: OnceLock<Option<Arc<PortugueseTagger>>> = OnceLock::new();
-        CACHE
-            .get_or_init(|| {
-                pt_resource_dir().map(|dir| Arc::new(PortugueseTagger::from_resource_dir(&dir)))
-            })
-            .clone()
+        crate::weak_shared(|| {
+            pt_resource_dir().map(|dir| Arc::new(PortugueseTagger::from_resource_dir(&dir)))
+        })
     }
 
     pub fn has_dictionary(&self) -> bool {

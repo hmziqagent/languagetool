@@ -1,6 +1,6 @@
 use og_spell::Dictionary;
 use std::collections::HashSet;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 const MAX_WORD_SIZE: usize = 35;
 
@@ -128,10 +128,10 @@ pub struct CompoundAcceptor {
 }
 
 pub fn shared_compound_acceptor() -> Arc<CompoundAcceptor> {
-    static CACHE: OnceLock<Arc<CompoundAcceptor>> = OnceLock::new();
-    CACHE
-        .get_or_init(|| Arc::new(CompoundAcceptor::new()))
-        .clone()
+    static CACHE: og_core::releasable::Releasable<CompoundAcceptor> =
+        og_core::releasable::Releasable::new();
+    og_core::releasable::shared_get_or_build(&CACHE, || Some(Arc::new(CompoundAcceptor::new())))
+        .expect("compound acceptor")
 }
 
 impl CompoundAcceptor {
@@ -262,7 +262,7 @@ mod tests {
     use super::*;
 
     fn acceptor() -> &'static CompoundAcceptor {
-        static ACCEPTOR: OnceLock<CompoundAcceptor> = OnceLock::new();
+        static ACCEPTOR: std::sync::OnceLock<CompoundAcceptor> = std::sync::OnceLock::new();
         ACCEPTOR.get_or_init(CompoundAcceptor::new)
     }
 

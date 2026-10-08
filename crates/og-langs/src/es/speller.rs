@@ -1,50 +1,46 @@
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 struct EsSpellerOracle {
-    surfaces: Vec<&'static str>,
+    surfaces: Vec<String>,
     dictionary: og_spell::Dictionary,
 }
 
-fn es_speller_oracle() -> Option<&'static EsSpellerOracle> {
-    static CACHE: OnceLock<Option<EsSpellerOracle>> = OnceLock::new();
-    CACHE
-        .get_or_init(|| {
-            let resource_dir = crate::es::es_resource_dir()?;
-            let dictionary = Box::leak(Box::new(og_tagger::generic_tagger::shared_dictionary(
-                &resource_dir,
-                "spanish",
-            )?));
-            let mut surfaces: Vec<&'static str> = dictionary.keys().collect();
-            surfaces.sort_unstable();
-            let mut dict = og_spell::Dictionary::from_shared_words(Arc::new(
-                og_spell::morfologik_view::MorfologikView::new(Arc::clone(dictionary)),
-            ));
-            for name in ["hunspell/spelling.txt", "multiwords.txt"] {
-                if let Ok(text) = std::fs::read_to_string(resource_dir.join(name)) {
-                    for line in text.lines() {
-                        let word = line.split(['\t', ';']).next().unwrap_or("").trim();
-                        if !word.is_empty() && !word.starts_with('#') {
-                            dict.add_word(word);
-                        }
-                    }
-                }
-            }
-            if let Some(core_dir) = crate::engine::find_lt_core_resource_dir()
-                && let Ok(text) = std::fs::read_to_string(core_dir.join("spelling_global.txt"))
-            {
+fn es_speller_oracle() -> Option<Arc<EsSpellerOracle>> {
+    static CACHE: og_core::releasable::Releasable<EsSpellerOracle> =
+        og_core::releasable::Releasable::new();
+    og_core::releasable::shared_get_or_build(&CACHE, || {
+        let resource_dir = crate::es::es_resource_dir()?;
+        let dictionary = og_tagger::generic_tagger::shared_dictionary(&resource_dir, "spanish")?;
+        let mut surfaces: Vec<String> = dictionary.keys().map(str::to_string).collect();
+        surfaces.sort_unstable();
+        let mut dict = og_spell::Dictionary::from_shared_words(Arc::new(
+            og_spell::morfologik_view::MorfologikView::new(Arc::clone(&dictionary)),
+        ));
+        for name in ["hunspell/spelling.txt", "multiwords.txt"] {
+            if let Ok(text) = std::fs::read_to_string(resource_dir.join(name)) {
                 for line in text.lines() {
-                    let word = line.trim();
+                    let word = line.split(['\t', ';']).next().unwrap_or("").trim();
                     if !word.is_empty() && !word.starts_with('#') {
                         dict.add_word(word);
                     }
                 }
             }
-            Some(EsSpellerOracle {
-                surfaces,
-                dictionary: dict,
-            })
-        })
-        .as_ref()
+        }
+        if let Some(core_dir) = crate::engine::find_lt_core_resource_dir()
+            && let Ok(text) = std::fs::read_to_string(core_dir.join("spelling_global.txt"))
+        {
+            for line in text.lines() {
+                let word = line.trim();
+                if !word.is_empty() && !word.starts_with('#') {
+                    dict.add_word(word);
+                }
+            }
+        }
+        Some(Arc::new(EsSpellerOracle {
+            surfaces,
+            dictionary: dict,
+        }))
+    })
 }
 
 pub(crate) fn nfd_base(c: char) -> char {
@@ -161,7 +157,7 @@ pub fn find_similar_words(word: &str) -> Vec<String> {
         if candidate.len() + 1 < word_chars.len() {
             continue;
         }
-        if *candidate == word {
+        if candidate.as_str() == word {
             continue;
         }
         let candidate_chars: Vec<char> = candidate.chars().collect();
@@ -263,15 +259,14 @@ pub fn replacement_is_misspelled(value: &str) -> bool {
     tokens.iter().any(|t| is_misspelled(t))
 }
 
-fn shared_es_tokenizer() -> Option<&'static crate::es::word_tokenizer::SpanishWordTokenizer> {
-    static CACHE: OnceLock<Option<crate::es::word_tokenizer::SpanishWordTokenizer>> =
-        OnceLock::new();
-    CACHE
-        .get_or_init(|| {
-            crate::es::es_resource_dir()
-                .map(|_| crate::es::word_tokenizer::SpanishWordTokenizer::new())
-        })
-        .as_ref()
+fn shared_es_tokenizer() -> Option<Arc<crate::es::word_tokenizer::SpanishWordTokenizer>> {
+    static CACHE: og_core::releasable::Releasable<crate::es::word_tokenizer::SpanishWordTokenizer> =
+        og_core::releasable::Releasable::new();
+    og_core::releasable::shared_get_or_build(&CACHE, || {
+        crate::es::es_resource_dir()
+            .map(|_| crate::es::word_tokenizer::SpanishWordTokenizer::new())
+            .map(Arc::new)
+    })
 }
 
 #[cfg(test)]

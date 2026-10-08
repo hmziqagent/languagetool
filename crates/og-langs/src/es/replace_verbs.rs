@@ -46,18 +46,15 @@ fn shared_tagger() -> Option<&'static crate::es::tagger::SpanishTagger> {
     crate::es::tagger::SpanishTagger::shared()
 }
 
-fn shared_synthesizer() -> Option<&'static Arc<og_rules::postponed_adjective::LangSynthesizer>> {
-    static SYNTH: OnceLock<Option<Arc<og_rules::postponed_adjective::LangSynthesizer>>> =
-        OnceLock::new();
-    SYNTH
-        .get_or_init(|| {
-            crate::es::es_resource_dir()
-                .and_then(|dir| {
-                    og_rules::postponed_adjective::LangSynthesizer::for_language(&dir, "es")
-                })
-                .map(Arc::new)
+fn shared_synthesizer() -> Option<Arc<og_rules::postponed_adjective::LangSynthesizer>> {
+    static SYNTH: og_core::releasable::Releasable<og_rules::postponed_adjective::LangSynthesizer> =
+        og_core::releasable::Releasable::new();
+    og_core::releasable::shared_get_or_build(&SYNTH, || {
+        crate::es::es_resource_dir().and_then(|dir| {
+            og_rules::postponed_adjective::LangSynthesizer::for_language(&dir, "es")
+                .map(std::sync::Arc::new)
         })
-        .as_ref()
+    })
 }
 
 fn is_tagged(atr: &AnalyzedTokenReadings) -> bool {

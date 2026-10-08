@@ -2,7 +2,7 @@ use og_core::checker::Tagger as CoreTagger;
 use og_core::{AnalyzedToken, AnalyzedTokenReadings};
 use og_tagger::Tagger;
 use std::path::Path;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 const MAX_TOKEN_UTF16_LENGTH: usize = 50;
 
@@ -66,13 +66,10 @@ impl BretonTagger {
     }
 
     pub fn shared_arc() -> Option<Arc<BretonTagger>> {
-        static CACHE: OnceLock<Option<Arc<BretonTagger>>> = OnceLock::new();
-        CACHE
-            .get_or_init(|| {
-                let dir = br_resource_dir()?;
-                Some(Arc::new(BretonTagger::from_resource_dir(&dir)))
-            })
-            .clone()
+        crate::weak_shared(|| {
+            let dir = br_resource_dir()?;
+            Some(Arc::new(BretonTagger::from_resource_dir(&dir)))
+        })
     }
 
     pub fn has_dictionary(&self) -> bool {

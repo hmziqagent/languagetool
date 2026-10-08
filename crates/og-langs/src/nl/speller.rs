@@ -8,25 +8,24 @@ use std::sync::{Arc, OnceLock};
 pub const MORFOLOGIK_RULE_NL_NL: &str = "MORFOLOGIK_RULE_NL_NL";
 
 pub fn shared_speller_dictionary() -> Option<Arc<Dictionary>> {
-    static CACHE: OnceLock<Option<Arc<Dictionary>>> = OnceLock::new();
-    CACHE
-        .get_or_init(|| {
-            let resource_dir = super::tagger::nl_resource_dir()?;
-            let tagger_dict = og_tagger::generic_tagger::shared_dictionary(&resource_dir, "dutch")?;
-            let mut dict = Dictionary::from_shared_words(Arc::new(
-                og_spell::morfologik_view::MorfologikView::new(tagger_dict),
-            ));
-            if let Ok(words) = std::fs::read_to_string(resource_dir.join("spelling/spelling.txt")) {
-                for line in words.lines() {
-                    let word = line.split(['\t', ';']).next().unwrap_or("").trim();
-                    if !word.is_empty() && !word.starts_with('#') {
-                        dict.add_word(word);
-                    }
+    static CACHE: og_core::releasable::Releasable<Dictionary> =
+        og_core::releasable::Releasable::new();
+    og_core::releasable::shared_get_or_build(&CACHE, || {
+        let resource_dir = super::tagger::nl_resource_dir()?;
+        let tagger_dict = og_tagger::generic_tagger::shared_dictionary(&resource_dir, "dutch")?;
+        let mut dict = Dictionary::from_shared_words(Arc::new(
+            og_spell::morfologik_view::MorfologikView::new(tagger_dict),
+        ));
+        if let Ok(words) = std::fs::read_to_string(resource_dir.join("spelling/spelling.txt")) {
+            for line in words.lines() {
+                let word = line.split(['\t', ';']).next().unwrap_or("").trim();
+                if !word.is_empty() && !word.starts_with('#') {
+                    dict.add_word(word);
                 }
             }
-            Some(Arc::new(dict))
-        })
-        .clone()
+        }
+        Some(Arc::new(dict))
+    })
 }
 
 fn shared_ignore_words() -> HashSet<String> {
