@@ -1,6 +1,8 @@
 use crate::Token;
 use serde::{Deserialize, Serialize};
 
+pub const TYPOGRAPHIC_APOSTROPHE_CHUNK: &str = "containsTypographicApostrophe";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AnalyzedToken {
     token: String,
@@ -243,6 +245,26 @@ impl AnalyzedTokenReadings {
 
     pub fn set_chunks(&mut self, chunks: Vec<String>) {
         self.chunks = chunks;
+    }
+
+    // Java keeps the typographic-apostrophe marker as a dedicated ATR flag; we encode it as a chunk tag.
+    pub fn mark_typographic_apostrophe(&mut self) {
+        if !self.has_chunk(TYPOGRAPHIC_APOSTROPHE_CHUNK) {
+            self.chunks.push(TYPOGRAPHIC_APOSTROPHE_CHUNK.to_string());
+        }
+    }
+
+    pub fn has_typographic_apostrophe(&self) -> bool {
+        self.has_chunk(TYPOGRAPHIC_APOSTROPHE_CHUNK)
+    }
+
+    pub fn replace_chunk_tags_preserving_apostrophe_flag(&mut self, chunks: Vec<String>) {
+        let keep = self.has_typographic_apostrophe()
+            && !chunks.iter().any(|c| c == TYPOGRAPHIC_APOSTROPHE_CHUNK);
+        self.chunks = chunks;
+        if keep {
+            self.chunks.push(TYPOGRAPHIC_APOSTROPHE_CHUNK.to_string());
+        }
     }
 
     pub fn add_sent_end(&mut self) {

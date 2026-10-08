@@ -101,7 +101,8 @@ fn apply_heuristic_chunk_tags(sentence: &mut og_core::AnalyzedSentence) {
     let tokens = sentence.tokens_mut();
     for (chunk_idx, orig_idx) in nw_indices.iter().enumerate() {
         if let Some(Some(chunk_tag)) = chunks.get(chunk_idx + 1) {
-            tokens[*orig_idx].set_chunk(Some(chunk_tag.clone()));
+            tokens[*orig_idx]
+                .replace_chunk_tags_preserving_apostrophe_flag(vec![chunk_tag.clone()]);
         }
     }
 }

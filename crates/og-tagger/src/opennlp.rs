@@ -985,7 +985,7 @@ impl OpenNlpEnglishChunker {
     pub fn add_chunk_tags_on(&self, readings: &mut [og_core::AnalyzedTokenReadings]) {
         let spans_and_tags = self.chunk_readings(readings);
         for (idx, chunk_tags) in spans_and_tags {
-            readings[idx].set_chunks(chunk_tags);
+            readings[idx].replace_chunk_tags_preserving_apostrophe_flag(chunk_tags);
         }
     }
 
@@ -1031,7 +1031,7 @@ impl OpenNlpEnglishChunker {
         let updates = self.chunk_readings(sentence.tokens());
         let tokens = sentence.tokens_mut();
         for (idx, chunk_tags) in updates {
-            tokens[idx].set_chunks(chunk_tags);
+            tokens[idx].replace_chunk_tags_preserving_apostrophe_flag(chunk_tags);
         }
     }
 }
@@ -1231,6 +1231,35 @@ mod tests {
                 .map(|r| (r.token().token(), r.chunks()))
                 .collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn chunker_preserves_typographic_apostrophe_marker() {
+        let Some(chunker) = chunker() else { return };
+        let text = "An actress’s role";
+        let mut readings = Vec::new();
+        let mut pos = 0;
+        for part in ["An", " ", "actress", "’s", " ", "role"] {
+            let mut atr = og_core::AnalyzedTokenReadings::new(og_core::AnalyzedToken::new(
+                part,
+                pos,
+                pos + part.len(),
+            ));
+            if part == "’s" {
+                atr.mark_typographic_apostrophe();
+            }
+            readings.push(atr);
+            pos += part.len();
+        }
+        chunker.add_chunk_tags_on(&mut readings);
+        let curly = readings.iter().find(|r| r.token().token() == "'s");
+        if let Some(curly) = curly {
+            assert!(
+                curly.has_typographic_apostrophe(),
+                "chunks: {:?}",
+                curly.chunks()
+            );
+        }
     }
 
     #[test]

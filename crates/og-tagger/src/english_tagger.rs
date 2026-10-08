@@ -269,9 +269,15 @@ impl Tagger for EnglishTagger {
         for token_text in tokens {
             let start = byte_offset;
             let end = start + token_text.len();
+            let has_typographic_apostrophe =
+                token_text.chars().count() > 1 && token_text.contains('’');
             let word = normalize_english_word(token_text);
             let readings = self.tag_word(token_text, start, end);
-            results.push(build_atr(&word, start, end, readings));
+            let mut atr = build_atr(&word, start, end, readings);
+            if has_typographic_apostrophe {
+                atr.mark_typographic_apostrophe();
+            }
+            results.push(atr);
             byte_offset = end;
         }
         results
@@ -309,6 +315,7 @@ impl og_core::checker::Tagger for EnglishTagger {
             let surface = primary.token().to_string();
             let start = primary.start();
             let end = primary.end();
+            let has_typographic_apostrophe = surface.chars().count() > 1 && surface.contains('’');
             let word = normalize_english_word(&surface);
             let readings = self.tag_word(&surface, start, end);
             let all_tags: Vec<String> = readings
@@ -325,6 +332,9 @@ impl og_core::checker::Tagger for EnglishTagger {
             let mut next = AnalyzedTokenReadings::new(updated);
             if !readings.is_empty() {
                 next = next.with_readings(readings);
+            }
+            if has_typographic_apostrophe {
+                next.mark_typographic_apostrophe();
             }
             *atr = next;
         }
@@ -402,6 +412,19 @@ mod tests {
         let atr = t.tag(&["can’t"]).remove(0);
         assert!(atr.has_pos_tag("MD"));
         assert_eq!(atr.token().token(), "can't");
+    }
+
+    #[test]
+    fn typographic_apostrophe_sets_the_marker_chunk() {
+        let mut t = EnglishTagger::new();
+        t.load_fsa_data("'s\tbe\tVBZ\ncan't\tcan\tMD\n");
+        t.finish();
+        let curly = t.tag(&["can’t"]).remove(0);
+        assert!(curly.has_typographic_apostrophe());
+        let straight = t.tag(&["can't"]).remove(0);
+        assert!(!straight.has_typographic_apostrophe());
+        let lone_curly = t.tag(&["’"]).remove(0);
+        assert!(!lone_curly.has_typographic_apostrophe());
     }
 
     #[test]
