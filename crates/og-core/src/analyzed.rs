@@ -332,6 +332,7 @@ pub struct AnalyzedSentence {
     start: usize,
     end: usize,
     tokens: Vec<AnalyzedTokenReadings>,
+    pre_disambiguation_tokens: Option<Vec<AnalyzedTokenReadings>>,
 }
 
 impl AnalyzedSentence {
@@ -341,6 +342,7 @@ impl AnalyzedSentence {
             start,
             end,
             tokens: Vec::new(),
+            pre_disambiguation_tokens: None,
         }
     }
 
@@ -370,5 +372,22 @@ impl AnalyzedSentence {
 
     pub fn non_whitespace_tokens(&self) -> Vec<&AnalyzedTokenReadings> {
         self.tokens.iter().filter(|t| !t.is_whitespace()).collect()
+    }
+
+    pub fn set_pre_disambiguation_tokens(&mut self, tokens: Vec<AnalyzedTokenReadings>) {
+        self.pre_disambiguation_tokens = Some(tokens);
+    }
+
+    pub fn pre_disambiguation_tokens(&self) -> &[AnalyzedTokenReadings] {
+        self.pre_disambiguation_tokens
+            .as_ref()
+            .unwrap_or(&self.tokens)
+    }
+
+    pub fn pre_disambiguation_non_whitespace_tokens(&self) -> Vec<&AnalyzedTokenReadings> {
+        self.pre_disambiguation_tokens()
+            .iter()
+            .filter(|t| !t.is_whitespace())
+            .collect()
     }
 }

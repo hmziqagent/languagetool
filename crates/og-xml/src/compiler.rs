@@ -203,6 +203,7 @@ impl XmlCompiler {
                                 XmlPatternElement::OrGroup(_) | XmlPatternElement::AndGroup(_)
                             )
                         }),
+                        raw_pos: ap.raw_pos,
                     }
                 })
                 .collect(),
@@ -249,6 +250,7 @@ impl XmlCompiler {
                             XmlPatternElement::OrGroup(_) | XmlPatternElement::AndGroup(_)
                         )
                     }),
+                    raw_pos: rule.pattern.raw_pos,
                 }
             },
             message: rule.message.clone(),
@@ -936,6 +938,7 @@ pub struct CompiledPattern {
     pub marker_elem_end: Option<usize>,
     pub has_structured_elements: bool,
     pub unify_groups: Vec<crate::types::XmlUnifyGroup>,
+    pub raw_pos: bool,
 }
 
 #[derive(Debug, Clone)]

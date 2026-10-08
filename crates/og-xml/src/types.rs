@@ -81,6 +81,7 @@ pub struct XmlPattern {
     pub tokens: Vec<XmlPatternToken>,
     #[serde(skip)]
     pub unify_groups: Vec<XmlUnifyGroup>,
+    pub raw_pos: bool,
 }
 
 #[derive(Debug, Clone, Default)]

@@ -193,6 +193,8 @@ impl XmlRuleParser {
                                 let val = crate::decode_attr_value(&attr.value);
                                 if key.as_str() == "case_sensitive" {
                                     pattern.case_sensitive = val == "yes"
+                                } else if key.as_str() == "raw_pos" {
+                                    pattern.raw_pos = val == "yes";
                                 }
                             }
                             current_pattern = Some(pattern);

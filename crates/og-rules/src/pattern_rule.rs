@@ -239,7 +239,11 @@ impl PatternRuleEngine {
         if let Some(ref regexp) = rule.regexp {
             return self.match_regexp_rule(rule, regexp, sentence);
         }
-        let tokens = sentence.non_whitespace_tokens();
+        let tokens = if rule.pattern.raw_pos {
+            sentence.pre_disambiguation_non_whitespace_tokens()
+        } else {
+            sentence.non_whitespace_tokens()
+        };
         let matches = self.collect_rule_matches(rule, &tokens, sentence);
         self.check_for_antipatterns(rule, &tokens, sentence, matches)
     }

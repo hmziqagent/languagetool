@@ -2764,6 +2764,7 @@ fn compile_disambig_rule(compiler: &XmlCompiler, rule: DisambigRule) -> Compiled
                         | og_xml::types::XmlPatternElement::AndGroup(_)
                 )
             }),
+            raw_pos: rule.pattern.raw_pos,
         },
         antipatterns: rule
             .antipatterns
@@ -2792,6 +2793,7 @@ fn compile_disambig_rule(compiler: &XmlCompiler, rule: DisambigRule) -> Compiled
                             | og_xml::types::XmlPatternElement::AndGroup(_)
                     )
                 }),
+                raw_pos: ap.raw_pos,
             })
             .collect(),
         disambig: rule.disambig,

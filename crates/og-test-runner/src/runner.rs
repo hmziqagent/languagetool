@@ -633,6 +633,10 @@ impl TestRunner {
             self.apply_chunking(&mut sentence);
         }
 
+        if self.disambiguator.is_some() {
+            sentence.set_pre_disambiguation_tokens(sentence.tokens().to_vec());
+        }
+
         if let Some(ref disambiguator) = self.disambiguator {
             disambiguator.disambiguate(&mut sentence);
         }
