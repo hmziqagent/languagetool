@@ -4,6 +4,7 @@ pub mod chunker;
 pub mod disambiguator;
 pub mod english_tagger;
 pub mod esperanto_tagger;
+pub mod fdlibm;
 pub mod german_chunker;
 pub mod german_tagger;
 pub mod jwordsplitter;

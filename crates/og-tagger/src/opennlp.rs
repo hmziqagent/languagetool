@@ -115,7 +115,7 @@ impl GisModel {
         for (name, entry) in pred_names.into_iter().zip(entries) {
             preds.insert(name.into_boxed_str(), entry.into_boxed_slice());
         }
-        let prior = (1.0 / outcomes.len() as f64).ln();
+        let prior = crate::fdlibm::log(1.0 / outcomes.len() as f64);
         Some(Self {
             outcomes,
             preds,
@@ -150,7 +150,7 @@ impl GisModel {
         }
         let mut normal = 0.0;
         for p in probs.iter_mut() {
-            *p = p.exp();
+            *p = crate::fdlibm::exp(*p);
             normal += *p;
         }
         for p in probs.iter_mut() {
@@ -332,7 +332,7 @@ fn beam_search(
             let advance = |next: &mut JavaPriorityQueue, threshold: f64| {
                 for (p, probability) in probs.iter().enumerate() {
                     if *probability >= threshold && valid(i, &top.outcomes, p) {
-                        let score = top.score + probability.ln();
+                        let score = top.score + crate::fdlibm::log(*probability);
                         if score > ZERO_LOG {
                             let mut outcomes = top.outcomes.clone();
                             outcomes.push(p);
