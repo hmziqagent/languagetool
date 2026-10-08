@@ -31,17 +31,17 @@ pub enum AsturianSpellerSource {
     TaggerApproximation,
 }
 
-fn hunspell_word_set(dir: &Path) -> Option<Vec<String>> {
+fn hunspell_word_set(dir: &Path) -> Option<Arc<og_tagger::morfologik::FsaWordSet>> {
     let dict_path = dir.join("ast_ES.dict");
     let info_path = dir.join("ast_ES.info");
     if !dict_path.exists() || !info_path.exists() {
         return None;
     }
-    let words = og_tagger::morfologik::load_fsa_word_list(&dict_path, &info_path)?;
+    let words = og_tagger::morfologik::FsaWordSet::load(&dict_path, &info_path)?;
     if words.is_empty() {
         return None;
     }
-    Some(words)
+    Some(Arc::new(words))
 }
 
 pub fn asturian_speller_dictionary() -> Option<(Arc<Dictionary>, AsturianSpellerSource)> {
@@ -52,10 +52,7 @@ pub fn asturian_speller_dictionary() -> Option<(Arc<Dictionary>, AsturianSpeller
                 .and_then(|dir| hunspell_word_set(&dir))
                 .or_else(|| hunspell_word_set(&module_data_dir()));
             if let Some(words) = words {
-                let mut dict = Dictionary::new();
-                for word in &words {
-                    dict.add_word(word);
-                }
+                let mut dict = Dictionary::from_fsa_word_set(words);
                 if let Some(resource_dir) = ast_resource_dir()
                     && let Ok(extra) =
                         std::fs::read_to_string(resource_dir.join("hunspell/spelling.txt"))

@@ -14,6 +14,10 @@ impl MorfologikView {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
+        !self.0.has_entries()
+    }
+
+    pub fn word_list(&self) -> Vec<String> {
+        self.0.fsa_word_list().unwrap_or_else(|| self.0.word_list())
     }
 }

@@ -655,7 +655,13 @@ impl LanguageEngine {
         let country = code.rsplit('-').next().unwrap_or("DE").to_string();
         rules.retain(|r| r.id() != "OLD_SPELLING_RULE");
         rules.push(Arc::new(crate::de::OldSpellingRule::new(&country)));
-        let mut dict = og_spell::Dictionary::new();
+        let base_resource_dir = find_lt_resource_dir()
+            .map(|root| root.join("de/src/main/resources/org/languagetool/resource/de"));
+        let mut dict = base_resource_dir
+            .as_deref()
+            .and_then(shared_german_speller_dictionary)
+            .map(|dict| (*dict).clone())
+            .unwrap_or_else(og_spell::Dictionary::new);
         let mut variant_ignore_words: Vec<String> = Vec::new();
         let mut variant_hunspell: Option<Arc<og_spell::hunspell::HunspellChecker>> = None;
         if let Some(lt_root) = find_lt_resource_dir() {
@@ -690,15 +696,6 @@ impl LanguageEngine {
                 variant_hunspell =
                     og_spell::hunspell::HunspellChecker::load(&variant_aff, &variant_dic)
                         .map(std::sync::Arc::new);
-            }
-        }
-        if let Some(lt_root) = find_lt_resource_dir()
-            && let Some(words) = load_german_wordlist(
-                &lt_root.join("de/src/main/resources/org/languagetool/resource/de"),
-            )
-        {
-            for word in &words {
-                dict.add_word(word);
             }
         }
         if !dict.is_empty() {
@@ -1863,11 +1860,6 @@ impl LanguageEngine {
     }
 }
 
-fn load_german_wordlist(resource_dir: &Path) -> Option<Vec<String>> {
-    let dict = og_tagger::german_tagger::shared_german_dictionary(resource_dir)?;
-    Some(dict.word_list())
-}
-
 fn shared_german_spelling_support(
     dict: &Arc<og_spell::Dictionary>,
     core_resource_dir: &Path,
@@ -1967,12 +1959,13 @@ fn shared_german_speller_dictionary(resource_dir: &Path) -> Option<Arc<og_spell:
     if let Some(dict) = guard.get(resource_dir) {
         return Some(dict.clone());
     }
-    let mut dict = og_spell::Dictionary::new();
-    if let Some(words) = load_german_wordlist(resource_dir) {
-        for word in &words {
-            dict.add_word(word);
-        }
-    }
+    let shared = og_tagger::german_tagger::shared_german_dictionary(resource_dir);
+    let mut dict = match shared.as_ref() {
+        Some(shared) => og_spell::Dictionary::from_shared_words(Arc::new(
+            og_spell::morfologik_view::MorfologikView::new(shared.clone()),
+        )),
+        None => og_spell::Dictionary::new(),
+    };
     if let Ok(extra) = std::fs::read_to_string(resource_dir.join("hunspell/spelling.txt")) {
         for line in extra.lines() {
             for word in og_rules::spelling_support::prepare_line_for_speller(
@@ -1986,7 +1979,7 @@ fn shared_german_speller_dictionary(resource_dir: &Path) -> Option<Arc<og_spell:
     for word in og_rules::spelling_support::german_hunspell_words(resource_dir) {
         dict.add_word(&word);
     }
-    if dict.is_empty() {
+    if shared.is_none() && dict.is_empty() {
         return None;
     }
     let dict = Arc::new(dict);

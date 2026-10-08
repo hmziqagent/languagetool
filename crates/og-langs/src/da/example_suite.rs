@@ -455,15 +455,20 @@ fn ordgentagelse_residue_is_the_missing_min_dict_entry() {
         jeg.iter().any(|tags| tags.starts_with("pron:")),
         "'jeg' must carry pron readings for the Ordgentagelse pron sub-rule, got {jeg:?}"
     );
-    let raw_entries = og_tagger::morfologik::load_fsa_word_list(
+    let raw_entries = og_tagger::morfologik::FsaWordSet::load(
         &da_resource_dir().join("danish.dict"),
         &da_resource_dir().join("danish.info"),
-    )
-    .unwrap_or_default();
+    );
+    let mut min_present = false;
+    if let Some(entries) = raw_entries.as_ref() {
+        entries.for_each_word(|e: &str| {
+            if e.split('/').next() == Some("min") {
+                min_present = true;
+            }
+        });
+    }
     assert!(
-        !raw_entries
-            .iter()
-            .any(|e| e.split('/').next() == Some("min")),
+        !min_present,
         "the pin assumes 'min' is absent from danish.dict"
     );
     assert!(

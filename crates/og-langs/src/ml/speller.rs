@@ -26,31 +26,31 @@ pub(crate) fn hunspell_dir() -> Option<PathBuf> {
     super::ml_resource_dir().map(|dir| dir.join("hunspell"))
 }
 
-fn hunspell_word_set(dir: &Path) -> Option<Vec<String>> {
+fn hunspell_word_set(dir: &Path) -> Option<Arc<og_tagger::morfologik::FsaWordSet>> {
     let dict_path = dir.join("ml_IN.dict");
     let info_path = dir.join("ml_IN.info");
     if !dict_path.exists() || !info_path.exists() {
         return None;
     }
-    let words = og_tagger::morfologik::load_fsa_word_list(&dict_path, &info_path)?;
+    let words = og_tagger::morfologik::FsaWordSet::load(&dict_path, &info_path)?;
     if words.is_empty() {
         return None;
     }
-    Some(words)
+    Some(Arc::new(words))
 }
 
 pub fn malayalam_speller_dictionary() -> Option<(Arc<Dictionary>, MalayalamSpellerSource)> {
     static CACHE: OnceLock<Option<(Arc<Dictionary>, MalayalamSpellerSource)>> = OnceLock::new();
     CACHE
         .get_or_init(|| {
-            let mut dict = Dictionary::new();
             let mut have_words = false;
-            if let Some(words) = hunspell_dir().and_then(|dir| hunspell_word_set(&dir)) {
-                for word in &words {
-                    dict.add_word(word);
+            let mut dict = match hunspell_dir().and_then(|dir| hunspell_word_set(&dir)) {
+                Some(words) => {
+                    have_words = true;
+                    Dictionary::from_fsa_word_set(words)
                 }
-                have_words = true;
-            }
+                None => Dictionary::new(),
+            };
             if let Some(dir) = super::ml_resource_dir()
                 && let Ok(extra) = std::fs::read_to_string(dir.join("hunspell/spelling.txt"))
             {

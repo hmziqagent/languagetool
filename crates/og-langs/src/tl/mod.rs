@@ -38,15 +38,13 @@ fn tagalog_speller_dictionary() -> Option<Arc<og_spell::Dictionary>> {
     CACHE
         .get_or_init(|| {
             let hunspell = tl_resource_dir()?.join("hunspell");
-            let mut dict = og_spell::Dictionary::new();
-            if let Some(words) = og_tagger::morfologik::load_fsa_word_list(
+            let mut dict = og_tagger::morfologik::FsaWordSet::load(
                 &hunspell.join("tl_PH.dict"),
                 &hunspell.join("tl_PH.info"),
-            ) {
-                for word in &words {
-                    dict.add_word(word);
-                }
-            }
+            )
+            .map(std::sync::Arc::new)
+            .map(og_spell::Dictionary::from_fsa_word_set)
+            .unwrap_or_else(og_spell::Dictionary::new);
             if let Ok(extra) = std::fs::read_to_string(hunspell.join("spelling.txt")) {
                 for line in extra.lines() {
                     let word = line.trim();

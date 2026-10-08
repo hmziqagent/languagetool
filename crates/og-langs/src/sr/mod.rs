@@ -173,15 +173,13 @@ fn sr_shared_speller_dictionary(
     let slot = &CACHE[variant as usize];
     slot.get_or_init(|| {
         let dir = sr_variant_dictionary_dir(variant, resource_root);
-        let mut dict = og_spell::Dictionary::new();
-        if let Some(words) = og_tagger::morfologik::load_fsa_word_list(
+        let mut dict = og_tagger::morfologik::FsaWordSet::load(
             &dir.join("serbian.dict"),
             &dir.join("serbian.info"),
-        ) {
-            for word in &words {
-                dict.add_word(word);
-            }
-        }
+        )
+        .map(std::sync::Arc::new)
+        .map(og_spell::Dictionary::from_fsa_word_set)
+        .unwrap_or_else(og_spell::Dictionary::new);
         if let Ok(extra) = std::fs::read_to_string(dir.join("spelling.txt")) {
             for line in extra.lines() {
                 let word = line.trim();

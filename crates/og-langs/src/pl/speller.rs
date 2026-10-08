@@ -77,10 +77,11 @@ impl ExactOracle {
 }
 
 fn load_pl_pl_words(resource_dir: &std::path::Path) -> Option<Vec<String>> {
-    og_tagger::morfologik::load_fsa_word_list(
+    let fsa = og_tagger::morfologik::FsaWordSet::load(
         &resource_dir.join("hunspell/pl_PL.dict"),
         &resource_dir.join("hunspell/pl_PL.info"),
-    )
+    )?;
+    Some(fsa.word_list())
 }
 
 fn shared_speller_oracle() -> Option<Arc<ExactOracle>> {

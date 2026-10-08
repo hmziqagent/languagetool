@@ -1128,24 +1128,27 @@ mod dict_probe {
     #[test]
     fn probe_oracle_divergence_sample() {
         let dir = super::tagger::pl_resource_dir().expect("pl resource dir");
-        let hunspell = og_tagger::morfologik::load_fsa_word_list(
+        let hunspell = og_tagger::morfologik::FsaWordSet::load(
             &dir.join("hunspell/pl_PL.dict"),
             &dir.join("hunspell/pl_PL.info"),
         )
         .expect("pl_PL words");
         let tagger =
             og_tagger::generic_tagger::shared_dictionary(&dir, "polish").expect("polish dict");
-        let mut missing: Vec<&String> = Vec::new();
+        let mut missing: Vec<String> = Vec::new();
         let mut checked = 0usize;
-        for (i, w) in hunspell.iter().enumerate() {
-            if i % 2267 != 0 {
-                continue;
+        let mut i = 0usize;
+        hunspell.for_each_word(|w: &str| {
+            let sample = i % 2267 == 0;
+            i += 1;
+            if !sample {
+                return;
             }
             checked += 1;
-            if tagger.lookup(w).is_empty() && !missing.contains(&w) {
-                missing.push(w);
+            if tagger.lookup(w).is_empty() && !missing.iter().any(|m| m == w) {
+                missing.push(w.to_string());
             }
-        }
+        });
         eprintln!(
             "checked {checked} hunspell words; not in polish.dict: {}",
             missing.len()
@@ -1158,13 +1161,13 @@ mod dict_probe {
     #[test]
     fn probe_hunspell_words() {
         let dir = super::tagger::pl_resource_dir().expect("pl resource dir");
-        let words = og_tagger::morfologik::load_fsa_word_list(
+        let words = og_tagger::morfologik::FsaWordSet::load(
             &dir.join("hunspell/pl_PL.dict"),
             &dir.join("hunspell/pl_PL.info"),
         )
         .expect("pl_PL hunspell FSA");
-        eprintln!("pl_PL hunspell word count: {}", words.len());
-        let lookup = |w: &str| words.iter().any(|x| x == w);
+        eprintln!("pl_PL hunspell word count: {}", words.word_count());
+        let lookup = |w: &str| words.contains(w);
         for w in [
             "bledem",
             "b\u{142}\u{119}dem",
@@ -1175,11 +1178,12 @@ mod dict_probe {
         ] {
             eprintln!("hunspell contains {w}: {}", lookup(w));
         }
-        let with_prefix: Vec<&String> = words
-            .iter()
-            .filter(|w| w.starts_with("quasi") || w.starts_with("niby"))
-            .take(10)
-            .collect();
+        let mut with_prefix: Vec<String> = Vec::new();
+        words.for_each_word(|w: &str| {
+            if (w.starts_with("quasi") || w.starts_with("niby")) && with_prefix.len() < 10 {
+                with_prefix.push(w.to_string());
+            }
+        });
         eprintln!("quasi/niby words: {with_prefix:?}");
     }
 

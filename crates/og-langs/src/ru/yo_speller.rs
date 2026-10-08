@@ -67,15 +67,13 @@ fn shared_yo_dictionary(resource_dir: &std::path::Path) -> Option<Arc<Dictionary
     if let Some(dict) = guard.get(resource_dir) {
         return Some(dict.clone());
     }
-    let words = og_tagger::morfologik::load_fsa_word_list(
+    let dict = og_tagger::morfologik::FsaWordSet::load(
         &resource_dir.join("hunspell/ru_RU_yo.dict"),
         &resource_dir.join("hunspell/ru_RU_yo.info"),
-    )?;
-    let mut dict = Dictionary::new();
-    for word in &words {
-        dict.add_word(word);
-    }
-    let dict = Arc::new(dict);
+    )
+    .map(std::sync::Arc::new)
+    .map(Dictionary::from_fsa_word_set)
+    .map(Arc::new)?;
     guard.insert(resource_dir.to_path_buf(), dict.clone());
     Some(dict)
 }

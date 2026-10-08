@@ -1603,10 +1603,11 @@ mod tests {
 
     fn speller() -> Option<GermanSpeller> {
         let dir = resource_dir()?;
-        let mut dict = Dictionary::new();
-        for word in og_tagger::german_tagger::shared_german_dictionary(&dir)?.word_list() {
-            dict.add_word(&word);
-        }
+        let mut dict = Dictionary::from_shared_words(std::sync::Arc::new(
+            crate::morfologik_view::MorfologikView::new(
+                og_tagger::german_tagger::shared_german_dictionary(&dir)?,
+            ),
+        ));
         if let Ok(words) = std::fs::read_to_string(dir.join("hunspell/de_DE.dic")) {
             for line in words.lines() {
                 let word = line.split('/').next().unwrap_or("").trim();

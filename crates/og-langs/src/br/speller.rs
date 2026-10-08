@@ -15,14 +15,16 @@ const BR_SPELLING_MESSAGE: &str = "Fazi reizhskriva\u{f1} posupl kavet.";
 const KNOWN_BRAND_WORDS: &[&str] = &["LanguageTool", "LanguageTooler"];
 
 struct BrWordSet {
-    words: Vec<Box<str>>,
+    words: Option<og_tagger::morfologik::FsaWordSet>,
 }
 
 impl BrWordSet {
     fn contains(&self, word: &str) -> bool {
-        self.words
-            .binary_search_by(|w| w.as_ref().cmp(word))
-            .is_ok()
+        self.words.as_ref().is_some_and(|w| w.contains(word))
+    }
+
+    fn word_count(&self) -> u64 {
+        self.words.as_ref().map_or(0, |w| w.word_count())
     }
 }
 
@@ -36,11 +38,8 @@ fn breton_word_set() -> Option<Arc<BrWordSet>> {
             if !dict_path.exists() || !info_path.exists() {
                 return None;
             }
-            let mut words = og_tagger::morfologik::load_fsa_word_list(&dict_path, &info_path)?;
-            let mut boxed: Vec<Box<str>> = Vec::with_capacity(words.len());
-            boxed.extend(words.drain(..).map(|w| w.into_boxed_str()));
-            boxed.sort_unstable();
-            Some(Arc::new(BrWordSet { words: boxed }))
+            let words = og_tagger::morfologik::FsaWordSet::load(&dict_path, &info_path)?;
+            Some(Arc::new(BrWordSet { words: Some(words) }))
         })
         .clone()
 }
@@ -115,7 +114,7 @@ pub struct BretonSpellerRule {
 impl BretonSpellerRule {
     pub fn new() -> Self {
         Self {
-            words: breton_word_set().unwrap_or_else(|| Arc::new(BrWordSet { words: Vec::new() })),
+            words: breton_word_set().unwrap_or_else(|| Arc::new(BrWordSet { words: None })),
             extra_words: shared_extra_words(),
             ignore_words: shared_ignore_words(),
         }
@@ -129,7 +128,7 @@ impl BretonSpellerRule {
     }
 
     pub fn dictionary_size(&self) -> usize {
-        self.words.words.len()
+        self.words.word_count() as usize
     }
 
     pub fn is_known_word(&self, word: &str) -> bool {

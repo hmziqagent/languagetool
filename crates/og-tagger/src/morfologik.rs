@@ -195,6 +195,50 @@ impl Fsa5 {
         }
         Some(node)
     }
+
+    fn contains_word(&self, root: usize, key: &[u8], separator: u8) -> bool {
+        let mut node = root;
+        let mut last_final = false;
+        for (i, &byte) in key.iter().enumerate() {
+            let mut arc = Some(self.node_data_length + node);
+            let mut next = None;
+            while let Some(current) = arc {
+                let Some(&label) = self.arcs.get(current) else {
+                    break;
+                };
+                if label == byte {
+                    last_final = self.is_arc_final(current);
+                    next = self.destination(current);
+                    break;
+                }
+                if self.is_arc_last(current) {
+                    break;
+                }
+                arc = self.skip_arc(current);
+            }
+            node = match next {
+                Some(dest) if dest != 0 => dest,
+                _ => return last_final && i + 1 == key.len(),
+            };
+        }
+        if last_final {
+            return true;
+        }
+        let mut arc = Some(self.node_data_length + node);
+        while let Some(current) = arc {
+            let Some(&label) = self.arcs.get(current) else {
+                break;
+            };
+            if label == separator {
+                return true;
+            }
+            if self.is_arc_last(current) {
+                break;
+            }
+            arc = self.skip_arc(current);
+        }
+        false
+    }
 }
 
 struct Cfsa1 {
@@ -329,6 +373,50 @@ impl Cfsa1 {
         }
         Some(node)
     }
+
+    fn contains_word(&self, root: usize, key: &[u8], separator: u8) -> bool {
+        let mut node = root;
+        let mut last_final = false;
+        for (i, &byte) in key.iter().enumerate() {
+            let mut arc = Some(self.node_data_length + node);
+            let mut next = None;
+            while let Some(current) = arc {
+                let Some(&flag) = self.arcs.get(current) else {
+                    break;
+                };
+                if self.arc_label(current) == byte {
+                    last_final = flag & CFSA1_BIT_FINAL_ARC != 0;
+                    next = self.destination(current);
+                    break;
+                }
+                if flag & CFSA1_BIT_LAST_ARC != 0 {
+                    break;
+                }
+                arc = self.skip_arc(current);
+            }
+            node = match next {
+                Some(dest) if dest != 0 => dest,
+                _ => return last_final && i + 1 == key.len(),
+            };
+        }
+        if last_final {
+            return true;
+        }
+        let mut arc = Some(self.node_data_length + node);
+        while let Some(current) = arc {
+            let Some(&flag) = self.arcs.get(current) else {
+                break;
+            };
+            if self.arc_label(current) == separator {
+                return true;
+            }
+            if flag & CFSA1_BIT_LAST_ARC != 0 {
+                break;
+            }
+            arc = self.skip_arc(current);
+        }
+        false
+    }
 }
 
 struct Cfsa2 {
@@ -460,6 +548,38 @@ impl Cfsa2 {
         Some(node)
     }
 
+    fn contains_word(&self, root: usize, key: &[u8], separator: u8) -> bool {
+        let mut node = root;
+        let mut last_final = false;
+        for (i, &byte) in key.iter().enumerate() {
+            let mut arc = Some(self.first_arc(node));
+            let mut next = None;
+            while let Some(current) = arc {
+                if self.arc_label(current) == byte {
+                    last_final = self.is_arc_final(current);
+                    next = Some(self.destination(current));
+                    break;
+                }
+                arc = self.next_arc(current);
+            }
+            node = match next {
+                Some(dest) if dest != 0 => dest,
+                _ => return last_final && i + 1 == key.len(),
+            };
+        }
+        if last_final {
+            return true;
+        }
+        let mut arc = Some(self.first_arc(node));
+        while let Some(current) = arc {
+            if self.arc_label(current) == separator {
+                return true;
+            }
+            arc = self.next_arc(current);
+        }
+        false
+    }
+
     fn walk(&self, node: usize, sequence: &mut Vec<u8>, out: &mut dyn FnMut(&[u8])) {
         let mut arc = Some(self.first_arc(node));
         while let Some(current) = arc {
@@ -520,6 +640,18 @@ impl Fsa {
             Self::V5(f) => f.root_node().and_then(|root| f.seek(root, key)),
             Self::C1(f) => f.root_node().and_then(|root| f.seek(root, key)),
             Self::C2(f) => f.seek(f.root(), key),
+        }
+    }
+
+    fn contains_word(&self, key: &[u8], separator: u8) -> bool {
+        match self {
+            Self::V5(f) => f
+                .root_node()
+                .is_some_and(|root| f.contains_word(root, key, separator)),
+            Self::C1(f) => f
+                .root_node()
+                .is_some_and(|root| f.contains_word(root, key, separator)),
+            Self::C2(f) => f.contains_word(f.root(), key, separator),
         }
     }
 
@@ -746,6 +878,93 @@ pub fn load_fsa_word_list(dict_path: &Path, info_path: &Path) -> Option<Vec<Stri
         seen.insert(decode_bytes(&encoding, word));
     });
     Some(seen.into_iter().collect())
+}
+
+pub struct FsaWordSet {
+    fsa: Fsa,
+    separator: u8,
+    encoding: DictEncoding,
+    word_count: std::sync::OnceLock<u64>,
+}
+
+impl FsaWordSet {
+    pub fn load(dict_path: &Path, info_path: &Path) -> Option<Self> {
+        let data: &'static [u8] = Box::leak(std::fs::read(dict_path).ok()?.into_boxed_slice());
+        let info = std::fs::read_to_string(info_path).ok()?;
+        let separator = info_value(&info, "fsa.dict.separator=")?.chars().next()?;
+        let encoding = DictEncoding::parse(
+            &info_value(&info, "fsa.dict.encoding=").unwrap_or_else(|| "utf8".into()),
+        );
+        let fsa = Fsa::from_static(data)?;
+        Some(Self {
+            fsa,
+            separator: separator as u8,
+            encoding,
+            word_count: std::sync::OnceLock::new(),
+        })
+    }
+
+    pub fn contains(&self, word: &str) -> bool {
+        if word.is_empty() {
+            return false;
+        }
+        let Some(bytes) = self.encoding.encode(word) else {
+            return false;
+        };
+        if bytes.contains(&self.separator) {
+            return false;
+        }
+        self.fsa.contains_word(&bytes, self.separator)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        !self.fsa.has_sequence()
+    }
+
+    pub fn word_count(&self) -> u64 {
+        *self.word_count.get_or_init(|| {
+            let separator = self.separator;
+            let mut last: Vec<u8> = Vec::new();
+            let mut count: u64 = 0;
+            self.fsa.for_each_sequence(&mut |sequence: &[u8]| {
+                let word = sequence.split(|b| *b == separator).next().unwrap_or(&[]);
+                if word.is_empty() || word == last.as_slice() {
+                    return;
+                }
+                count += 1;
+                last.clear();
+                last.extend_from_slice(word);
+            });
+            count
+        })
+    }
+
+    pub fn for_each_word(&self, mut f: impl FnMut(&str)) {
+        let separator = self.separator;
+        self.fsa.for_each_sequence(&mut |sequence: &[u8]| {
+            let word = sequence.split(|b| *b == separator).next().unwrap_or(&[]);
+            if word.is_empty() {
+                return;
+            }
+            f(&self.encoding.decode(word));
+        });
+    }
+
+    pub fn word_list(&self) -> Vec<String> {
+        let separator = self.separator;
+        let mut words: Vec<String> = Vec::new();
+        self.fsa.for_each_sequence(&mut |sequence: &[u8]| {
+            let word = sequence.split(|b| *b == separator).next().unwrap_or(&[]);
+            if word.is_empty() {
+                return;
+            }
+            let decoded = self.encoding.decode(word);
+            if words.last().map(String::as_str) != Some(decoded.as_str()) {
+                words.push(decoded);
+            }
+        });
+        words
+    }
 }
 
 struct FsaDict {
@@ -980,6 +1199,32 @@ impl MorfologikDictionary {
             .keys()
             .map(|k| k.to_string())
             .collect()
+    }
+
+    pub fn has_entries(&self) -> bool {
+        match &self.source {
+            Source::Fsa { dict, .. } => dict.fsa.has_sequence(),
+            Source::Decoded(m) => !m.entries.is_empty(),
+        }
+    }
+
+    pub fn fsa_word_list(&self) -> Option<Vec<String>> {
+        let Source::Fsa { dict, .. } = &self.source else {
+            return None;
+        };
+        let separator = dict.separator;
+        let mut words: Vec<String> = Vec::new();
+        dict.fsa.for_each_sequence(&mut |sequence: &[u8]| {
+            let word = sequence.split(|b| *b == separator).next().unwrap_or(&[]);
+            if word.is_empty() {
+                return;
+            }
+            let decoded = dict.encoding.decode(word);
+            if words.last().map(String::as_str) != Some(decoded.as_str()) {
+                words.push(decoded);
+            }
+        });
+        Some(words)
     }
 
     pub fn keys(&self) -> impl Iterator<Item = &str> + '_ {

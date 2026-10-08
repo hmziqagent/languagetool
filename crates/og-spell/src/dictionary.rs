@@ -16,6 +16,7 @@ pub struct Dictionary {
     words: HashSet<String>,
     lowercased: HashSet<String>,
     shared: Option<std::sync::Arc<crate::morfologik_view::MorfologikView>>,
+    fsa: Option<std::sync::Arc<og_tagger::morfologik::FsaWordSet>>,
 }
 
 impl Dictionary {
@@ -24,6 +25,7 @@ impl Dictionary {
             words: HashSet::new(),
             lowercased: HashSet::new(),
             shared: None,
+            fsa: None,
         }
     }
 
@@ -34,6 +36,16 @@ impl Dictionary {
             words: HashSet::new(),
             lowercased: HashSet::new(),
             shared: Some(shared),
+            fsa: None,
+        }
+    }
+
+    pub fn from_fsa_word_set(fsa: std::sync::Arc<og_tagger::morfologik::FsaWordSet>) -> Self {
+        Self {
+            words: HashSet::new(),
+            lowercased: HashSet::new(),
+            shared: None,
+            fsa: Some(fsa),
         }
     }
 
@@ -95,25 +107,44 @@ impl Dictionary {
         if self.lowercased.contains(&lowered) {
             return true;
         }
-        self.shared
-            .as_ref()
-            .is_some_and(|view| view.contains(word) || view.contains(&lowered))
+        if let Some(view) = self.shared.as_ref()
+            && (view.contains(word) || view.contains(&lowered))
+        {
+            return true;
+        }
+        if let Some(fsa) = self.fsa.as_ref() {
+            return fsa.contains(word) || fsa.contains(&lowered);
+        }
+        false
     }
 
     pub fn contains_exact(&self, word: &str) -> bool {
-        self.words.contains(word) || self.shared.as_ref().is_some_and(|view| view.contains(word))
+        self.words.contains(word)
+            || self.shared.as_ref().is_some_and(|view| view.contains(word))
+            || self.fsa.as_ref().is_some_and(|fsa| fsa.contains(word))
     }
 
     pub fn len(&self) -> usize {
-        self.shared.as_ref().map_or(0, |view| view.len()) + self.words.len()
+        self.shared.as_ref().map_or(0, |view| view.len())
+            + self.fsa.as_ref().map_or(0, |fsa| fsa.word_count() as usize)
+            + self.words.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.words.is_empty() && self.shared.as_ref().is_none_or(|view| view.is_empty())
+        self.words.is_empty()
+            && self.shared.as_ref().is_none_or(|view| view.is_empty())
+            && self.fsa.as_ref().is_none_or(|fsa| fsa.is_empty())
     }
 
     pub fn word_list(&self) -> Vec<String> {
-        self.words.iter().cloned().collect()
+        let mut words: Vec<String> = self.words.iter().cloned().collect();
+        if let Some(view) = self.shared.as_ref() {
+            words.extend(view.word_list());
+        }
+        if let Some(fsa) = self.fsa.as_ref() {
+            words.extend(fsa.word_list());
+        }
+        words
     }
 }
 
