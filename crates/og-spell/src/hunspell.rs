@@ -6,11 +6,11 @@ const MAX_SHARPS: usize = 5;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum CapType {
-    NoCap,
-    InitCap,
-    AllCap,
-    HuhCap,
-    HuhInitCap,
+    No,
+    Init,
+    All,
+    Huh,
+    HuhInit,
 }
 
 #[derive(Clone, Debug)]
@@ -35,7 +35,6 @@ enum InCompound {
     Not,
     Begin,
     End,
-    Other,
 }
 
 enum RootHit {
@@ -66,7 +65,6 @@ pub struct HunspellChecker {
     circumfix: Option<char>,
     keepcase: Option<char>,
     compound_min: usize,
-    wordbreak: Vec<String>,
     check_sharps: bool,
 }
 
@@ -155,15 +153,15 @@ fn cap_type(chars: &[char]) -> CapType {
     }
     let firstcap = !chars.is_empty() && chars[0] != lower_char(chars[0]);
     if ncap == 0 {
-        CapType::NoCap
+        CapType::No
     } else if ncap == 1 && firstcap {
-        CapType::InitCap
+        CapType::Init
     } else if ncap == chars.len() || ncap + nneutral == chars.len() {
-        CapType::AllCap
+        CapType::All
     } else if ncap > 1 && firstcap {
-        CapType::HuhInitCap
+        CapType::HuhInit
     } else {
-        CapType::HuhCap
+        CapType::Huh
     }
 }
 
@@ -204,12 +202,11 @@ impl HunspellChecker {
             circumfix: None,
             keepcase: None,
             compound_min: 3,
-            wordbreak: Vec::new(),
             check_sharps: false,
         };
         let mut headers: HashMap<char, bool> = HashMap::new();
-        let mut lines = aff.lines().peekable();
-        while let Some(line) = lines.next() {
+        let lines = aff.lines().peekable();
+        for line in lines {
             let line = match line.find('#') {
                 Some(0) => continue,
                 Some(pos) => &line[..pos],
@@ -290,20 +287,6 @@ impl HunspellChecker {
                 "COMPOUNDMIN" => {
                     checker.compound_min = fields.get(1).and_then(|f| f.parse().ok()).unwrap_or(3)
                 }
-                "BREAK" => {
-                    let count = fields
-                        .get(1)
-                        .and_then(|f| f.parse::<usize>().ok())
-                        .unwrap_or(0);
-                    for _ in 0..count {
-                        if let Some(br) = lines.next() {
-                            let br = br.split('#').next().unwrap_or("").trim();
-                            if !br.is_empty() {
-                                checker.wordbreak.push(br.to_string());
-                            }
-                        }
-                    }
-                }
                 "CHECKSHARPS" => checker.check_sharps = true,
                 _ => {}
             }
@@ -358,7 +341,7 @@ impl HunspellChecker {
         }
         let captype = cap_type(&scw);
         match captype {
-            CapType::NoCap | CapType::HuhCap | CapType::HuhInitCap => {
+            CapType::No | CapType::Huh | CapType::HuhInit => {
                 let mut r = self.check_result(&scw);
                 if matches!(r, CheckResult::NotFound) && abbv {
                     let mut with_dot = scw.clone();
@@ -367,8 +350,8 @@ impl HunspellChecker {
                 }
                 !matches!(r, CheckResult::NotFound | CheckResult::Forbidden)
             }
-            CapType::InitCap => self.spell_init_cap(&scw, abbv, false),
-            CapType::AllCap => {
+            CapType::Init => self.spell_init_cap(&scw, abbv, false),
+            CapType::All => {
                 let mut r = self.check_result(&scw);
                 if matches!(r, CheckResult::NotFound) && abbv {
                     let mut with_dot = scw.clone();
@@ -426,10 +409,10 @@ impl HunspellChecker {
                 let mut init_dot = mk_init_cap(scw);
                 init_dot.push('.');
                 let r4 = self.check_result(&init_dot);
-                if let CheckResult::Found { keepcase } = r4 {
-                    if !keepcase || !all_cap_fallthrough {
-                        return true;
-                    }
+                if let CheckResult::Found { keepcase } = r4
+                    && (!keepcase || !all_cap_fallthrough)
+                {
+                    return true;
                 }
                 return false;
             }
@@ -438,12 +421,7 @@ impl HunspellChecker {
             CheckResult::Forbidden => false,
             CheckResult::NotFound => false,
             CheckResult::Found { keepcase } => {
-                if keepcase && (all_cap_fallthrough || !(self.check_sharps && probe.contains(&'ß')))
-                {
-                    false
-                } else {
-                    true
-                }
+                !(keepcase && (all_cap_fallthrough || !(self.check_sharps && probe.contains(&'ß'))))
             }
         }
     }
@@ -475,70 +453,6 @@ impl HunspellChecker {
         }
     }
 
-    fn wordbreak_check(&self, scw: &[char]) -> bool {
-        let word: String = scw.iter().collect();
-        let mut nbr = 0;
-        for j in &self.wordbreak {
-            let mut pos = 0;
-            while let Some(found) = word[pos..].find(j.as_str()) {
-                nbr += 1;
-                pos += found + j.len();
-                if pos >= word.len() {
-                    break;
-                }
-            }
-        }
-        if nbr >= 10 {
-            return false;
-        }
-        for j in &self.wordbreak {
-            let jchars: Vec<char> = j.chars().collect();
-            if jchars.len() == 1 || jchars.len() > scw.len() {
-                continue;
-            }
-            if jchars[0] == '^' {
-                let prefix: String = jchars[1..].iter().collect();
-                if word.starts_with(&prefix) && self.spell(&word[prefix.len()..]) {
-                    return true;
-                }
-            }
-            if jchars[jchars.len() - 1] == '$' {
-                let suffix_pat: String = jchars[..jchars.len() - 1].iter().collect();
-                if word.ends_with(&suffix_pat) && self.spell(&word[..word.len() - suffix_pat.len()])
-                {
-                    return true;
-                }
-            }
-        }
-        for pass in 0..2 {
-            for j in &self.wordbreak {
-                let plen = j.len();
-                let Some(first) = word.find(j.as_str()) else {
-                    continue;
-                };
-                let mut found = first;
-                if found == 0 || found + plen >= word.len() {
-                    continue;
-                }
-                if pass == 0 {
-                    if let Some(found2) = word[found + plen..].find(j.as_str()) {
-                        let f2 = found + plen + found2;
-                        if f2 > 0 && f2 + plen < word.len() {
-                            found = f2;
-                        }
-                    }
-                }
-                if !self.spell(&word[found + plen..]) {
-                    continue;
-                }
-                if self.spell(&word[..found]) {
-                    return true;
-                }
-            }
-        }
-        false
-    }
-
     fn is_number_like(&self, chars: &[char]) -> bool {
         #[derive(PartialEq)]
         enum State {
@@ -559,7 +473,7 @@ impl HunspellChecker {
                 break;
             }
         }
-        chars.len() > 0
+        !chars.is_empty()
             && state == State::Num
             && chars
                 .iter()
@@ -571,10 +485,10 @@ impl HunspellChecker {
             return CheckResult::NotFound;
         }
         if let Some(homonyms) = self.lookup_flags(word) {
-            if let Some(first) = homonyms.first() {
-                if has_flag(first, self.forbiddenword) {
-                    return CheckResult::Forbidden;
-                }
+            if let Some(first) = homonyms.first()
+                && has_flag(first, self.forbiddenword)
+            {
+                return CheckResult::Forbidden;
             }
             for entry in homonyms {
                 if has_flag(entry, self.need_affix) || has_flag(entry, self.only_in_compound) {
@@ -599,10 +513,10 @@ impl HunspellChecker {
                 }
             };
         }
-        if self.compound_begin.is_some() || self.compound_middle.is_some() {
-            if self.compound_check(word, 0, true) || self.compound_check(word, 0, false) {
-                return CheckResult::Found { keepcase: false };
-            }
+        if (self.compound_begin.is_some() || self.compound_middle.is_some())
+            && (self.compound_check(word, 0, true) || self.compound_check(word, 0, false))
+        {
+            return CheckResult::Found { keepcase: false };
         }
         CheckResult::NotFound
     }
@@ -669,11 +583,11 @@ impl HunspellChecker {
                 }
             }
         }
-        if self.need_affix.is_some() {
-            let h = self.need_affix.unwrap();
-            if line.cont.contains(&h) && !matches!(pfx, Some(p) if !p.cont.contains(&h)) {
-                return false;
-            }
+        if let Some(h) = self.need_affix
+            && line.cont.contains(&h)
+            && !matches!(pfx, Some(p) if !p.cont.contains(&h))
+        {
+            return false;
         }
         true
     }
@@ -730,27 +644,26 @@ impl HunspellChecker {
         };
         let entries = self.lookup_flags(&root)?;
         for entry in entries {
-            if let Some(bad) = badflag {
-                if entry.contains(bad) {
-                    continue;
-                }
+            if let Some(bad) = badflag
+                && entry.contains(bad)
+            {
+                continue;
             }
             if !entry.contains(line.name) && !matches!(pfx, Some(p) if p.cont.contains(&line.name))
             {
                 continue;
             }
             if cross {
-                let Some(p) = pfx else {
-                    return None;
-                };
+                let p = pfx?;
                 if !entry.contains(p.name) && !line.cont.contains(&p.name) {
                     continue;
                 }
             }
-            if let Some(f) = needflag {
-                if !entry.contains(f) && !line.cont.contains(&f) {
-                    continue;
-                }
+            if let Some(f) = needflag
+                && !entry.contains(f)
+                && !line.cont.contains(&f)
+            {
+                continue;
             }
             return Some(if has_flag(entry, self.forbiddenword) {
                 RootHit::Forbidden
@@ -796,10 +709,11 @@ impl HunspellChecker {
                 if self.need_affix.is_some() && line.cont.contains(&self.need_affix.unwrap()) {
                     continue;
                 }
-                if let Some(f) = needflag {
-                    if !entry.contains(f) && !line.cont.contains(&f) {
-                        continue;
-                    }
+                if let Some(f) = needflag
+                    && !entry.contains(f)
+                    && !line.cont.contains(&f)
+                {
+                    continue;
                 }
                 return Some(if has_flag(entry, self.forbiddenword) {
                     RootHit::Forbidden
@@ -808,10 +722,10 @@ impl HunspellChecker {
                 });
             }
         }
-        if line.cross {
-            if let Some(hit) = self.suffix_check(&root, needflag, in_compound, Some(line), true) {
-                return Some(hit);
-            }
+        if line.cross
+            && let Some(hit) = self.suffix_check(&root, needflag, in_compound, Some(line), true)
+        {
+            return Some(hit);
         }
         None
     }

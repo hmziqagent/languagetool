@@ -969,23 +969,19 @@ impl GermanSpeller {
         let ignore_hyphenated_compound =
             !ignore_by_hyphen && self.ignore_compound_with_ignored_word(word);
         if PATTERNS.missing_adj.is_match(word) {
-            let first_part =
-                uppercase_first_char(&PATTERNS.adj_suffix.replace(word, "").to_string());
-            if self.base_is_misspelled(word) {
-                if !self.base_is_misspelled(&first_part)
+            let first_part = uppercase_first_char(&PATTERNS.adj_suffix.replace(word, ""));
+            if self.base_is_misspelled(word)
+                && ((!self.base_is_misspelled(&first_part)
                     && !PATTERNS.special_case.is_match(&first_part)
                     && self.is_only_noun(&first_part)
-                    && !self.base_is_misspelled(&format!("{first_part}test"))
-                {
-                    return true;
-                } else if first_part.ends_with('s')
-                    && !self.base_is_misspelled(remove_trailing_s(&first_part))
-                    && PATTERNS.special_case_with_s.is_match(&first_part)
-                    && self.is_only_noun(remove_trailing_s(&first_part))
-                    && !self.base_is_misspelled(&format!("{first_part}test"))
-                {
-                    return true;
-                }
+                    && !self.base_is_misspelled(&format!("{first_part}test")))
+                    || (first_part.ends_with('s')
+                        && !self.base_is_misspelled(remove_trailing_s(&first_part))
+                        && PATTERNS.special_case_with_s.is_match(&first_part)
+                        && self.is_only_noun(remove_trailing_s(&first_part))
+                        && !self.base_is_misspelled(&format!("{first_part}test"))))
+            {
+                return true;
             }
         }
         if word.ends_with("mitarbeitende") || word.ends_with("mitarbeitenden") {
@@ -1076,12 +1072,11 @@ impl GermanSpeller {
             if to_check.starts_with('I') && start > 0 {
                 return false;
             }
-            if gender_star_find(to_check).is_some() {
-                if self.base_is_misspelled(&replace_first_binnen_i(to_check))
-                    || (!to_check.ends_with("In") && !to_check.ends_with("Innen"))
-                {
-                    return false;
-                }
+            if gender_star_find(to_check).is_some()
+                && (self.base_is_misspelled(&replace_first_binnen_i(to_check))
+                    || (!to_check.ends_with("In") && !to_check.ends_with("Innen")))
+            {
+                return false;
             }
             if PATTERNS.gender_neutral_sin.is_match(to_check) {
                 let replaced = PATTERNS
