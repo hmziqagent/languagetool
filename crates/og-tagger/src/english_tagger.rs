@@ -167,6 +167,12 @@ impl EnglishTagger {
         let removals = std::mem::take(&mut self.removals);
         let mut merged: HashMap<Box<str>, Vec<TaggedWord>> = manual;
         for (form, mut readings) in fsa {
+            readings.sort_by_cached_key(|tw| {
+                (
+                    fsa_order_key(&form, &tw.lemma),
+                    self.tags[tw.tag as usize].clone(),
+                )
+            });
             merged.entry(form).or_default().append(&mut readings);
         }
         self.dict = merged
@@ -254,6 +260,20 @@ fn normalize_english_word(surface: &str) -> std::borrow::Cow<'_, str> {
     } else {
         std::borrow::Cow::Borrowed(surface)
     }
+}
+
+fn fsa_order_key(word: &str, lemma: &str) -> Vec<u8> {
+    // morfologik SUFFIX encoder: the FSA orders a word's readings by the
+    // encoded lemma (b'A' + trimmed-suffix-count, then the lemma tail) and tag
+    let w = word.as_bytes();
+    let l = lemma.as_bytes();
+    let mut i = 0;
+    while i < w.len() && i < l.len() && w[i] == l[i] {
+        i += 1;
+    }
+    let mut key = vec![b'A'.wrapping_add((w.len() - i) as u8)];
+    key.extend_from_slice(&l[i..]);
+    key
 }
 
 impl Default for EnglishTagger {
