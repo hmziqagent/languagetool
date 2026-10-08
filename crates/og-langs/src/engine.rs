@@ -149,6 +149,7 @@ impl LanguageEngine {
         {
             return Some(engine);
         }
+        trim_released_engine_pages();
         let slot = {
             let in_flight = IN_FLIGHT.get_or_init(Default::default);
             let mut guard = in_flight.lock().unwrap();
@@ -159,6 +160,8 @@ impl LanguageEngine {
         };
         let built = slot
             .get_or_init(|| {
+                let _guard = engine_build_guard();
+                trim_released_engine_pages();
                 let engine = match code {
                     "en" => Some(Self::english()),
                     "de" => Some(Self::german()),
@@ -2264,6 +2267,21 @@ impl WordTokenizer for WordTokenizerBridge {
     }
 }
 
+#[cfg(target_os = "linux")]
+fn trim_released_engine_pages() {
+    // glibc keeps freed engine arenas resident; return them before the next
+    // engine build so long test runs stay under the box's memory ceiling.
+    unsafe { libc::malloc_trim(0) };
+}
+
+#[cfg(not(target_os = "linux"))]
+fn trim_released_engine_pages() {}
+
+fn engine_build_guard() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 pub fn find_lt_core_resource_dir() -> Option<PathBuf> {
     let candidates = [
         PathBuf::from(
@@ -2320,6 +2338,12 @@ mod tests {
 
     fn shared_german() -> Arc<LanguageEngine> {
         LanguageEngine::shared_for_code("de").expect("german engine")
+    }
+
+    fn build_engine(code: &str) -> Option<LanguageEngine> {
+        let _guard = engine_build_guard();
+        trim_released_engine_pages();
+        LanguageEngine::for_code(code)
     }
 
     #[test]
@@ -2385,8 +2409,7 @@ mod tests {
 
     #[test]
     fn danish_engine_registers_with_tagger_and_rules() {
-        let engine =
-            LanguageEngine::for_code("da").expect("Danish engine must be registered via for_code");
+        let engine = build_engine("da").expect("Danish engine must be registered via for_code");
         assert!(
             engine.rule_count() > 10,
             "expected Danish rules to load, got {}",
@@ -2406,8 +2429,7 @@ mod tests {
 
     #[test]
     fn greek_engine_registers_java_relevant_natives() {
-        let engine =
-            LanguageEngine::for_code("el").expect("Greek engine must be registered via for_code");
+        let engine = build_engine("el").expect("Greek engine must be registered via for_code");
         let ids = engine.rule_ids();
         for expected in [
             "UPPERCASE_SENTENCE_START",
@@ -2453,8 +2475,7 @@ mod tests {
 
     #[test]
     fn esperanto_engine_registers_java_relevant_natives() {
-        let engine = LanguageEngine::for_code("eo")
-            .expect("Esperanto engine must be registered via for_code");
+        let engine = build_engine("eo").expect("Esperanto engine must be registered via for_code");
         let ids = engine.rule_ids();
         for expected in [
             "HUNSPELL_RULE",
@@ -2518,8 +2539,7 @@ mod tests {
 
     #[test]
     fn persian_engine_registers_java_relevant_natives() {
-        let engine =
-            LanguageEngine::for_code("fa").expect("Persian engine must be registered via for_code");
+        let engine = build_engine("fa").expect("Persian engine must be registered via for_code");
         let ids = engine.rule_ids();
         for expected in [
             "COMMA_PARENTHESIS_WHITESPACE",
@@ -2582,8 +2602,7 @@ mod tests {
 
     #[test]
     fn irish_engine_registers_java_relevant_natives() {
-        let engine =
-            LanguageEngine::for_code("ga").expect("Irish engine must be registered via for_code");
+        let engine = build_engine("ga").expect("Irish engine must be registered via for_code");
         let ids = engine.rule_ids();
         for expected in [
             "COMMA_PARENTHESIS_WHITESPACE",
@@ -2644,8 +2663,7 @@ mod tests {
 
     #[test]
     fn galician_engine_registers_java_relevant_natives() {
-        let engine = LanguageEngine::for_code("gl")
-            .expect("Galician engine must be registered via for_code");
+        let engine = build_engine("gl").expect("Galician engine must be registered via for_code");
         let ids = engine.rule_ids();
         for expected in [
             "COMMA_PARENTHESIS_WHITESPACE",
@@ -2715,8 +2733,7 @@ mod tests {
 
     #[test]
     fn icelandic_engine_registers_java_relevant_natives() {
-        let engine = LanguageEngine::for_code("is")
-            .expect("Icelandic engine must be registered via for_code");
+        let engine = build_engine("is").expect("Icelandic engine must be registered via for_code");
         let ids = engine.rule_ids();
         for expected in [
             "COMMA_PARENTHESIS_WHITESPACE",
@@ -2786,8 +2803,7 @@ mod tests {
 
     #[test]
     fn japanese_engine_registers_java_relevant_natives() {
-        let engine = LanguageEngine::for_code("ja")
-            .expect("Japanese engine must be registered via for_code");
+        let engine = build_engine("ja").expect("Japanese engine must be registered via for_code");
         let ids = engine.rule_ids();
         for expected in ["COMMA_PARENTHESIS_WHITESPACE", "DOUBLE_PUNCTUATION"] {
             assert!(
@@ -2853,8 +2869,7 @@ mod tests {
 
     #[test]
     fn khmer_engine_registers_java_relevant_natives() {
-        let engine =
-            LanguageEngine::for_code("km").expect("Khmer engine must be registered via for_code");
+        let engine = build_engine("km").expect("Khmer engine must be registered via for_code");
         let ids = engine.rule_ids();
         for expected in [
             "COMMA_PARENTHESIS_WHITESPACE",
@@ -2907,8 +2922,7 @@ mod tests {
 
     #[test]
     fn lithuanian_engine_registers_java_relevant_natives() {
-        let engine = LanguageEngine::for_code("lt")
-            .expect("Lithuanian engine must be registered via for_code");
+        let engine = build_engine("lt").expect("Lithuanian engine must be registered via for_code");
         let ids = engine.rule_ids();
         for expected in [
             "COMMA_PARENTHESIS_WHITESPACE",
@@ -2977,8 +2991,7 @@ mod tests {
 
     #[test]
     fn malayalam_engine_registers_java_relevant_natives() {
-        let engine = LanguageEngine::for_code("ml")
-            .expect("Malayalam engine must be registered via for_code");
+        let engine = build_engine("ml").expect("Malayalam engine must be registered via for_code");
         let ids = engine.rule_ids();
         for expected in [
             "COMMA_PARENTHESIS_WHITESPACE",
@@ -3043,8 +3056,7 @@ mod tests {
 
     #[test]
     fn slovak_engine_registers_java_relevant_natives() {
-        let engine =
-            LanguageEngine::for_code("sk").expect("Slovak engine must be registered via for_code");
+        let engine = build_engine("sk").expect("Slovak engine must be registered via for_code");
         let ids = engine.rule_ids();
         for expected in [
             "COMMA_PARENTHESIS_WHITESPACE",
@@ -3128,8 +3140,7 @@ mod tests {
 
     #[test]
     fn slovenian_engine_registers_java_relevant_natives() {
-        let engine = LanguageEngine::for_code("sl")
-            .expect("Slovenian engine must be registered via for_code");
+        let engine = build_engine("sl").expect("Slovenian engine must be registered via for_code");
         let ids = engine.rule_ids();
         for expected in [
             "COMMA_PARENTHESIS_WHITESPACE",
@@ -3188,8 +3199,7 @@ mod tests {
 
     #[test]
     fn serbian_engine_registers_java_relevant_natives() {
-        let engine =
-            LanguageEngine::for_code("sr").expect("Serbian engine must be registered via for_code");
+        let engine = build_engine("sr").expect("Serbian engine must be registered via for_code");
         let ids = engine.rule_ids();
         for expected in [
             "COMMA_PARENTHESIS_WHITESPACE",
@@ -3273,8 +3283,7 @@ mod tests {
 
     #[test]
     fn tamil_engine_registers_java_relevant_natives() {
-        let engine =
-            LanguageEngine::for_code("ta").expect("Tamil engine must be registered via for_code");
+        let engine = build_engine("ta").expect("Tamil engine must be registered via for_code");
         let ids = engine.rule_ids();
         for expected in ["COMMA_PARENTHESIS_WHITESPACE", "DOUBLE_PUNCTUATION"] {
             assert!(
@@ -3325,8 +3334,7 @@ mod tests {
 
     #[test]
     fn tagalog_engine_registers_java_relevant_natives() {
-        let engine =
-            LanguageEngine::for_code("tl").expect("Tagalog engine must be registered via for_code");
+        let engine = build_engine("tl").expect("Tagalog engine must be registered via for_code");
         let ids = engine.rule_ids();
         for expected in [
             "COMMA_PARENTHESIS_WHITESPACE",
@@ -3383,8 +3391,7 @@ mod tests {
 
     #[test]
     fn ukrainian_engine_registers_java_relevant_natives() {
-        let engine = LanguageEngine::for_code("uk")
-            .expect("Ukrainian engine must be registered via for_code");
+        let engine = build_engine("uk").expect("Ukrainian engine must be registered via for_code");
         let ids = engine.rule_ids();
         for expected in [
             "COMMA_PARENTHESIS_WHITESPACE",
@@ -3466,8 +3473,7 @@ mod tests {
 
     #[test]
     fn chinese_engine_registers_java_relevant_natives() {
-        let engine =
-            LanguageEngine::for_code("zh").expect("Chinese engine must be registered via for_code");
+        let engine = build_engine("zh").expect("Chinese engine must be registered via for_code");
         let ids = engine.rule_ids();
         for expected in ["DOUBLE_PUNCTUATION", "COMMA_PARENTHESIS_WHITESPACE"] {
             assert!(
@@ -3527,8 +3533,7 @@ mod tests {
 
     #[test]
     fn romanian_engine_registers_with_tagger_and_natives() {
-        let engine = LanguageEngine::for_code("ro")
-            .expect("Romanian engine must be registered via for_code");
+        let engine = build_engine("ro").expect("Romanian engine must be registered via for_code");
         assert!(
             engine.rule_count() > 10,
             "expected Romanian rules to load, got {}",
@@ -3569,8 +3574,7 @@ mod tests {
 
     #[test]
     fn swedish_engine_registers_with_tagger_and_natives() {
-        let engine =
-            LanguageEngine::for_code("sv").expect("Swedish engine must be registered via for_code");
+        let engine = build_engine("sv").expect("Swedish engine must be registered via for_code");
         assert!(
             engine.rule_count() > 10,
             "expected Swedish rules to load, got {}",
@@ -3590,8 +3594,7 @@ mod tests {
 
     #[test]
     fn russian_engine_registers_tagger_normalization_and_chunker() {
-        let engine =
-            LanguageEngine::for_code("ru").expect("Russian engine must be registered via for_code");
+        let engine = build_engine("ru").expect("Russian engine must be registered via for_code");
         assert!(
             engine.rule_count() > 10,
             "expected Russian rules to load, got {}",
@@ -3615,8 +3618,7 @@ mod tests {
 
     #[test]
     fn french_engine_registers_native_rules() {
-        let engine =
-            LanguageEngine::for_code("fr").expect("French engine must be registered via for_code");
+        let engine = build_engine("fr").expect("French engine must be registered via for_code");
         assert!(
             engine.rule_count() > 10,
             "expected French rules to load, got {}",
@@ -3636,8 +3638,7 @@ mod tests {
 
     #[test]
     fn spanish_engine_registers_native_rules_and_tagger() {
-        let engine =
-            LanguageEngine::for_code("es").expect("Spanish engine must be registered via for_code");
+        let engine = build_engine("es").expect("Spanish engine must be registered via for_code");
         assert!(
             engine.rule_count() > 10,
             "expected Spanish rules to load, got {}",
@@ -3670,8 +3671,7 @@ mod tests {
 
     #[test]
     fn portuguese_engine_registers_native_rules() {
-        let engine =
-            LanguageEngine::for_code("pt").expect("pt engine must be registered via for_code");
+        let engine = build_engine("pt").expect("pt engine must be registered via for_code");
         let ids: Vec<String> = engine.rules.iter().map(|r| r.id().to_string()).collect();
         for expected in ["PT_COMPOUNDS_POST_REFORM", "PT_BARBARISMS_REPLACE"] {
             assert!(
@@ -3689,7 +3689,7 @@ mod tests {
 
     #[test]
     fn portuguese_variant_engines_add_variant_rules() {
-        let base = LanguageEngine::for_code("pt").expect("pt base engine");
+        let base = build_engine("pt").expect("pt base engine");
         let pt_pt = base.portuguese_variant("pt-PT");
         let pt_br = base.portuguese_variant("pt-BR");
         assert!(pt_pt.rule_count() > base.rule_count());
@@ -3710,8 +3710,7 @@ mod tests {
 
     #[test]
     fn portuguese_engine_disambiguates_through_the_global_xml() {
-        let engine =
-            LanguageEngine::for_code("pt").expect("pt engine must be registered via for_code");
+        let engine = build_engine("pt").expect("pt engine must be registered via for_code");
         assert!(
             engine.disambiguator.is_some(),
             "the pt arm must install the entity-expanded disambiguation.xml chain plus \
@@ -3739,7 +3738,7 @@ mod tests {
 
     #[test]
     fn portuguese_pre_reform_variants_register_native_rules() {
-        let base = LanguageEngine::for_code("pt").expect("pt base engine");
+        let base = build_engine("pt").expect("pt base engine");
         for (code, expected_language) in [
             ("pt-AO", og_core::Language::PortugueseAo),
             ("pt-MZ", og_core::Language::PortugueseMz),
@@ -3760,8 +3759,7 @@ mod tests {
 
     #[test]
     fn dutch_engine_registers_native_rules_and_tagger() {
-        let engine =
-            LanguageEngine::for_code("nl").expect("Dutch engine must be registered via for_code");
+        let engine = build_engine("nl").expect("Dutch engine must be registered via for_code");
         assert!(
             engine.rule_count() > 10,
             "expected Dutch rules to load, got {}",
@@ -3813,8 +3811,7 @@ mod tests {
 
     #[test]
     fn polish_engine_registers_native_rules_and_tagger() {
-        let engine =
-            LanguageEngine::for_code("pl").expect("Polish engine must be registered via for_code");
+        let engine = build_engine("pl").expect("Polish engine must be registered via for_code");
         assert!(
             engine.rule_count() > 10,
             "expected Polish rules to load, got {}",
@@ -3897,8 +3894,7 @@ mod tests {
 
     #[test]
     fn italian_engine_wires_java_relevant_natives() {
-        let engine =
-            LanguageEngine::for_code("it").expect("Italian engine must be registered via for_code");
+        let engine = build_engine("it").expect("Italian engine must be registered via for_code");
         let ids = engine.rule_ids();
         for expected in [
             "WHITESPACE_PUNCTUATION",
@@ -3944,8 +3940,7 @@ mod tests {
 
     #[test]
     fn asturian_engine_wires_java_relevant_natives() {
-        let engine = LanguageEngine::for_code("ast")
-            .expect("Asturian engine must be registered via for_code");
+        let engine = build_engine("ast").expect("Asturian engine must be registered via for_code");
         let ids = engine.rule_ids();
         for expected in [
             "UPPERCASE_SENTENCE_START",
@@ -3989,8 +3984,7 @@ mod tests {
 
     #[test]
     fn catalan_engine_wires_java_relevant_natives() {
-        let engine =
-            LanguageEngine::for_code("ca").expect("Catalan engine must be registered via for_code");
+        let engine = build_engine("ca").expect("Catalan engine must be registered via for_code");
         let ids = engine.rule_ids();
         for expected in [
             "UPPERCASE_SENTENCE_START",
@@ -4118,8 +4112,7 @@ mod tests {
 
     #[test]
     fn belarusian_engine_wires_java_relevant_natives() {
-        let engine = LanguageEngine::for_code("be")
-            .expect("Belarusian engine must be registered via for_code");
+        let engine = build_engine("be").expect("Belarusian engine must be registered via for_code");
         let ids = engine.rule_ids();
         for expected in [
             "UPPERCASE_SENTENCE_START",
@@ -4151,8 +4144,7 @@ mod tests {
 
     #[test]
     fn breton_engine_wires_java_relevant_natives() {
-        let engine =
-            LanguageEngine::for_code("br").expect("Breton engine must be registered via for_code");
+        let engine = build_engine("br").expect("Breton engine must be registered via for_code");
         let ids = engine.rule_ids();
         for expected in [
             "MORFOLOGIK_RULE_BR_FR",
@@ -4197,8 +4189,7 @@ mod tests {
 
     #[test]
     fn arabic_engine_wires_java_relevant_natives() {
-        let engine =
-            LanguageEngine::for_code("ar").expect("Arabic engine must be registered via for_code");
+        let engine = build_engine("ar").expect("Arabic engine must be registered via for_code");
         let ids = engine.rule_ids();
         for expected in [
             "ARABIC_DOUBLE_PUNCTUATION",
