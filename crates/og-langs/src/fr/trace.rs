@@ -3,45 +3,53 @@ use og_core::AnalyzedSentence;
 use og_tokenizer::WordTokenizer as _;
 use og_xml::compiler::{CompiledRule, CompiledRuleSet, XmlCompiler};
 use std::path::PathBuf;
-use std::sync::OnceLock;
 
 fn rules_dir() -> PathBuf {
     crate::fr::test_support::fr_rules_dir().expect("fr rules dir")
 }
 
-fn compiled_grammar() -> &'static CompiledRuleSet {
-    static GRAMMAR: OnceLock<CompiledRuleSet> = OnceLock::new();
-    GRAMMAR.get_or_init(|| {
+fn compiled_grammar() -> std::sync::Arc<CompiledRuleSet> {
+    static GRAMMAR: og_core::releasable::Releasable<CompiledRuleSet> =
+        og_core::releasable::Releasable::new();
+    og_core::releasable::shared_get_or_build(&GRAMMAR, || {
         let path = rules_dir().join("grammar.xml");
         let xml = crate::fr::normalize_fr_rules_xml(
             &std::fs::read_to_string(&path).expect("grammar.xml"),
         )
         .into_owned();
-        XmlCompiler::new()
-            .compile_file_with_base(&xml, path.parent())
-            .expect("compile grammar.xml")
+        Some(std::sync::Arc::new(
+            XmlCompiler::new()
+                .compile_file_with_base(&xml, path.parent())
+                .expect("compile grammar.xml"),
+        ))
     })
+    .expect("fr grammar")
 }
 
-fn compiled_style() -> &'static CompiledRuleSet {
-    static STYLE: OnceLock<CompiledRuleSet> = OnceLock::new();
-    STYLE.get_or_init(|| {
+fn compiled_style() -> std::sync::Arc<CompiledRuleSet> {
+    static STYLE: og_core::releasable::Releasable<CompiledRuleSet> =
+        og_core::releasable::Releasable::new();
+    og_core::releasable::shared_get_or_build(&STYLE, || {
         let path = rules_dir().join("style.xml");
         let xml =
             crate::fr::normalize_fr_rules_xml(&std::fs::read_to_string(&path).expect("style.xml"))
                 .into_owned();
-        XmlCompiler::new()
-            .compile_file_with_base(&xml, path.parent())
-            .expect("compile style.xml")
+        Some(std::sync::Arc::new(
+            XmlCompiler::new()
+                .compile_file_with_base(&xml, path.parent())
+                .expect("compile style.xml"),
+        ))
     })
+    .expect("fr style")
 }
 
-fn rules_owning_example(text: &str) -> Vec<(&'static CompiledRule, &'static str)> {
+fn rules_owning_example<'a>(
+    grammar: &'a CompiledRuleSet,
+    style: &'a CompiledRuleSet,
+    text: &str,
+) -> Vec<(&'a CompiledRule, &'static str)> {
     let mut out = Vec::new();
-    for (set, label) in [
-        (compiled_grammar(), "grammar.xml"),
-        (compiled_style(), "style.xml"),
-    ] {
+    for (set, label) in [(grammar, "grammar.xml"), (style, "style.xml")] {
         for rule in &set.rules {
             if rule.examples.iter().any(|e| {
                 let clean = e.text.replace("<marker>", "").replace("</marker>", "");
@@ -103,7 +111,9 @@ pub fn probe(example_fragment: &str) {
     let pipeline = FrenchPipeline::shared();
     og_rules::pattern_rule::set_test_date_hack(true);
     let raw_pos = example_uses_raw_pos(example_fragment);
-    for (rule, file) in rules_owning_example(example_fragment) {
+    let grammar = compiled_grammar();
+    let style = compiled_style();
+    for (rule, file) in rules_owning_example(&grammar, &style, example_fragment) {
         let example = rule
             .examples
             .iter()
@@ -229,6 +239,7 @@ mod tests {
     #[test]
     #[ignore]
     fn trace_pre_disambiguation_residue_failures() {
+        let _release_guard = crate::release_guard();
         for fragment in [
             "Il faut tout",
             "cache sous la table",
@@ -245,6 +256,7 @@ mod tests {
     #[test]
     #[ignore]
     fn trace_tokenizer_shape_residue_failures() {
+        let _release_guard = crate::release_guard();
         for fragment in [
             "32.1.1985",
             "300.1.1985",
@@ -280,6 +292,7 @@ mod tests {
     #[test]
     #[ignore]
     fn trace_matcher_residue_failures() {
+        let _release_guard = crate::release_guard();
         for fragment in [
             "la fois :",
             "203 de Schmutz",
@@ -312,6 +325,7 @@ mod tests {
     #[test]
     #[ignore]
     fn trace_marker_offset_residue_failures() {
+        let _release_guard = crate::release_guard();
         for fragment in ["il faut partir", "il est certain"] {
             super::probe(fragment);
         }
@@ -320,6 +334,7 @@ mod tests {
     #[test]
     #[ignore]
     fn trace_unclassified_residue_failures() {
+        let _release_guard = crate::release_guard();
         for fragment in [
             "Antidote, le remède",
             "Docteur délivrez",
@@ -341,12 +356,14 @@ mod tests {
     #[test]
     #[ignore]
     fn trace_style_residue_failure() {
+        let _release_guard = crate::release_guard();
         super::probe("étudiant ou étudiante");
     }
 
     #[test]
     #[ignore]
     fn trace_il_devient_quoi_variants() {
+        let _release_guard = crate::release_guard();
         for text in [
             "Il devient grand.",
             "Il devient vraiment grand.",
@@ -363,6 +380,7 @@ mod tests {
     #[test]
     #[ignore]
     fn trace_inline_residue_rules() {
+        let _release_guard = crate::release_guard();
         super::probe_inline_rule("APOS_INCORRECT", "D‘enfants.");
         super::probe_inline_rule("APOS_INCORRECT", "D´enfants.");
         super::probe_inline_rule("APOS_INCORRECT", "D′enfants.");
@@ -371,6 +389,7 @@ mod tests {
     #[test]
     #[ignore]
     fn trace_poursoi_variants() {
+        let _release_guard = crate::release_guard();
         for text in [
             "Il le fait poursoi.",
             "Il le fait poursoi le chemin.",
@@ -384,6 +403,7 @@ mod tests {
     #[test]
     #[ignore]
     fn trace_dict_readings_of_suspect_words() {
+        let _release_guard = crate::release_guard();
         super::probe_dict(&[
             "néo-impressionnisme",
             "néo-post-castristes",
@@ -407,6 +427,7 @@ mod tests {
     #[test]
     #[ignore]
     fn trace_nuance_lilas_dict_readings() {
+        let _release_guard = crate::release_guard();
         super::probe_dict(&[
             "Ses",
             "grandes",

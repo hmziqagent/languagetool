@@ -839,22 +839,26 @@ fn strip_xml_comments(xml: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::OnceLock;
 
-    fn compiled_rules_from(path: PathBuf) -> &'static CompiledRuleSet {
-        static GRAMMAR: OnceLock<CompiledRuleSet> = OnceLock::new();
-        static STYLE: OnceLock<CompiledRuleSet> = OnceLock::new();
-        let slot = if path.ends_with("style.xml") {
+    fn compiled_rules_from(path: PathBuf) -> std::sync::Arc<CompiledRuleSet> {
+        static GRAMMAR: og_core::releasable::Releasable<CompiledRuleSet> =
+            og_core::releasable::Releasable::new();
+        static STYLE: og_core::releasable::Releasable<CompiledRuleSet> =
+            og_core::releasable::Releasable::new();
+        let cell = if path.ends_with("style.xml") {
             &STYLE
         } else {
             &GRAMMAR
         };
-        slot.get_or_init(|| {
+        og_core::releasable::shared_get_or_build(cell, || {
             let xml = std::fs::read_to_string(&path).unwrap();
-            XmlCompiler::new()
-                .compile_file_with_base(&xml, path.parent())
-                .expect("compile rules xml")
+            Some(std::sync::Arc::new(
+                XmlCompiler::new()
+                    .compile_file_with_base(&xml, path.parent())
+                    .expect("compile rules xml"),
+            ))
         })
+        .expect("pt rule set")
     }
 
     fn filtered_rule_matches(
@@ -862,7 +866,8 @@ mod tests {
         rule_id: &str,
         text: &str,
     ) -> Vec<(usize, usize, Vec<String>)> {
-        let rule = compiled_rules_from(rules_path)
+        let rules = compiled_rules_from(rules_path);
+        let rule = rules
             .rules
             .iter()
             .find(|r| r.id == rule_id)

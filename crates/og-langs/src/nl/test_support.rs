@@ -11,9 +11,10 @@ pub(crate) struct DutchPipeline {
 }
 
 impl DutchPipeline {
-    pub fn shared() -> &'static DutchPipeline {
-        static PIPE: std::sync::OnceLock<DutchPipeline> = std::sync::OnceLock::new();
-        PIPE.get_or_init(|| {
+    pub fn shared() -> std::sync::Arc<DutchPipeline> {
+        static PIPE: og_core::releasable::Releasable<DutchPipeline> =
+            og_core::releasable::Releasable::new();
+        og_core::releasable::shared_get_or_build(&PIPE, || {
             let resource_dir =
                 super::tagger::nl_resource_dir().expect("nl resource dir with dutch.dict");
             let tagger = super::tagger::DutchTagger::shared_arc().unwrap_or_else(|| {
@@ -26,13 +27,14 @@ impl DutchPipeline {
                     crate::engine::find_lt_core_resource_dir()
                         .map(|core| og_tagger::hybrid_disambiguator("nl", &resource_dir, &core, d))
                 });
-            DutchPipeline {
+            Some(std::sync::Arc::new(DutchPipeline {
                 tokenizer: og_tokenizer::DefaultWordTokenizer::new_dutch(),
                 tagger,
                 disambiguator,
                 splitter: og_tokenizer::srx::srx_splitter("nl"),
-            }
+            }))
         })
+        .expect("nl pipeline")
     }
 
     pub fn sentence_ranges(&self, text: &str) -> Vec<(usize, usize)> {

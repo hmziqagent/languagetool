@@ -11,20 +11,22 @@ pub(crate) struct PolishPipeline {
 }
 
 impl PolishPipeline {
-    pub fn shared() -> &'static PolishPipeline {
-        static PIPE: std::sync::OnceLock<PolishPipeline> = std::sync::OnceLock::new();
-        PIPE.get_or_init(|| {
+    pub fn shared() -> std::sync::Arc<PolishPipeline> {
+        static PIPE: og_core::releasable::Releasable<PolishPipeline> =
+            og_core::releasable::Releasable::new();
+        og_core::releasable::shared_get_or_build(&PIPE, || {
             let resource_dir =
                 super::tagger::pl_resource_dir().expect("pl resource dir with polish.dict");
             let tagger =
                 super::tagger::PolishTagger::shared_arc().expect("pl tagger with polish.dict");
-            PolishPipeline {
+            Some(std::sync::Arc::new(PolishPipeline {
                 tokenizer: super::word_tokenizer::PolishWordTokenizer::shared(),
                 tagger,
                 disambiguator: super::build_pl_disambiguator(&resource_dir),
                 splitter: og_tokenizer::srx::srx_splitter("pl"),
-            }
+            }))
         })
+        .expect("pl pipeline")
     }
 
     pub fn sentence_ranges(&self, text: &str) -> Vec<(usize, usize)> {

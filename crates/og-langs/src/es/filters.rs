@@ -1271,19 +1271,22 @@ mod tests {
     use og_rules::pattern_rule::PatternRuleEngine;
     use og_xml::compiler::XmlCompiler;
     use std::path::PathBuf;
-    use std::sync::OnceLock;
 
-    fn compiled_rules() -> &'static og_xml::compiler::CompiledRuleSet {
-        static RULES: OnceLock<og_xml::compiler::CompiledRuleSet> = OnceLock::new();
-        RULES.get_or_init(|| {
+    fn compiled_rules() -> std::sync::Arc<og_xml::compiler::CompiledRuleSet> {
+        static RULES: og_core::releasable::Releasable<og_xml::compiler::CompiledRuleSet> =
+            og_core::releasable::Releasable::new();
+        og_core::releasable::shared_get_or_build(&RULES, || {
             let path = PathBuf::from(
                 "/home/agent/opengrammar-rs/languagetool/languagetool-language-modules/es/src/main/resources/org/languagetool/rules/es/grammar.xml",
             );
             let xml = std::fs::read_to_string(&path).unwrap();
-            XmlCompiler::new()
-                .compile_file_with_base(&xml, path.parent())
-                .expect("compile grammar.xml")
+            Some(std::sync::Arc::new(
+                XmlCompiler::new()
+                    .compile_file_with_base(&xml, path.parent())
+                    .expect("compile grammar.xml"),
+            ))
         })
+        .expect("es grammar")
     }
 
     fn atr(word: &str, tags: &[(&str, &str)]) -> AnalyzedTokenReadings {
@@ -1833,8 +1836,10 @@ mod tests {
             .position(|t| offset < t.token().end() && t.token().start() < offset + length)
     }
 
-    fn postponed_rule(sub_id: &str) -> &'static og_xml::compiler::CompiledRule {
-        let rule_set = compiled_rules();
+    fn postponed_rule<'a>(
+        rule_set: &'a og_xml::compiler::CompiledRuleSet,
+        sub_id: &str,
+    ) -> &'a og_xml::compiler::CompiledRule {
         rule_set
             .rules
             .iter()
@@ -1850,7 +1855,8 @@ mod tests {
 
     fn run_postponed(text: &str, sub_id: &str) -> Vec<(usize, usize, Vec<String>)> {
         let pipeline = SpanishPipeline::shared();
-        let rule = postponed_rule(sub_id);
+        let rule_set = compiled_rules();
+        let rule = postponed_rule(&rule_set, sub_id);
         let synth = crate::es::es_resource_dir().and_then(|dir| {
             og_rules::postponed_adjective::LangSynthesizer::for_language(&dir, "es")
                 .map(std::sync::Arc::new)

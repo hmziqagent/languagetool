@@ -15,9 +15,10 @@ pub(crate) struct PortuguesePipeline {
 }
 
 impl PortuguesePipeline {
-    pub fn shared() -> &'static PortuguesePipeline {
-        static PIPE: std::sync::OnceLock<PortuguesePipeline> = std::sync::OnceLock::new();
-        PIPE.get_or_init(|| {
+    pub fn shared() -> std::sync::Arc<PortuguesePipeline> {
+        static PIPE: og_core::releasable::Releasable<PortuguesePipeline> =
+            og_core::releasable::Releasable::new();
+        og_core::releasable::shared_get_or_build(&PIPE, || {
             let resource_dir =
                 super::tagger::pt_resource_dir().expect("pt resource dir with portuguese.dict");
             let tagger = super::tagger::PortugueseTagger::shared_arc().unwrap_or_else(|| {
@@ -30,13 +31,14 @@ impl PortuguesePipeline {
                 None => PtTokenizer::Generic(og_tokenizer::DefaultWordTokenizer::new_generic()),
             };
             let disambiguator = super::build_pt_disambiguator(&resource_dir);
-            PortuguesePipeline {
+            Some(std::sync::Arc::new(PortuguesePipeline {
                 tokenizer,
                 tagger,
                 disambiguator,
                 splitter: og_tokenizer::srx::srx_splitter("pt"),
-            }
+            }))
         })
+        .expect("pt pipeline")
     }
 
     pub fn tagger_ref(&self) -> &super::tagger::PortugueseTagger {

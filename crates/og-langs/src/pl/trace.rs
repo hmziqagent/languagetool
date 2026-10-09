@@ -6,33 +6,34 @@ pub(crate) fn trace_engine() -> PatternRuleEngine {
     crate::pl::example_suite::suite_engine()
 }
 
-pub(crate) fn compiled_rules() -> &'static CompiledRuleSet {
-    static GRAMMAR: std::sync::OnceLock<CompiledRuleSet> = std::sync::OnceLock::new();
-    GRAMMAR.get_or_init(|| {
+pub(crate) fn compiled_rules() -> std::sync::Arc<CompiledRuleSet> {
+    static GRAMMAR: og_core::releasable::Releasable<CompiledRuleSet> =
+        og_core::releasable::Releasable::new();
+    og_core::releasable::shared_get_or_build(&GRAMMAR, || {
         let path = crate::pl::pl_rules_dir()
             .expect("pl rules dir")
             .join("grammar.xml");
         let xml = std::fs::read_to_string(&path).expect("grammar.xml");
         let xml = crate::pl::normalize_pl_rules_xml(&xml);
-        XmlCompiler::new()
-            .compile_file_with_base(xml.as_ref(), path.parent())
-            .expect("compile pl grammar.xml")
+        Some(std::sync::Arc::new(
+            XmlCompiler::new()
+                .compile_file_with_base(xml.as_ref(), path.parent())
+                .expect("compile pl grammar.xml"),
+        ))
     })
+    .expect("pl grammar")
 }
 
-fn group_of(rule_id: &str) -> Vec<&'static CompiledRule> {
-    compiled_rules()
-        .rules
-        .iter()
-        .filter(|r| r.id == rule_id)
-        .collect()
+fn group_of<'a>(rules: &'a CompiledRuleSet, rule_id: &str) -> Vec<&'a CompiledRule> {
+    rules.rules.iter().filter(|r| r.id == rule_id).collect()
 }
 
 pub(crate) fn probe_with_engine_trace(rule_id: &str, text: &str) {
     let pipeline = PolishPipeline::shared();
     let engine = trace_engine();
+    let rules = compiled_rules();
     eprintln!("=== engine trace [{rule_id}] '{text}' ===");
-    for rule in group_of(rule_id) {
+    for rule in group_of(&rules, rule_id) {
         for (sentence, sentence_start) in pipeline.analyze_offset_text(text) {
             og_rules::pattern_trace::set_enabled(true);
             og_rules::pattern_trace::clear();
@@ -52,6 +53,7 @@ pub(crate) fn probe_with_engine_trace(rule_id: &str, text: &str) {
 pub(crate) fn probe(rule_id: &str, text: &str) {
     let pipeline = PolishPipeline::shared();
     let engine = trace_engine();
+    let rules = compiled_rules();
     eprintln!("=== probe [{rule_id}] '{text}' ===");
     for (sentence, sentence_start) in pipeline.analyze_offset_text(text) {
         eprintln!(
@@ -74,7 +76,7 @@ pub(crate) fn probe(rule_id: &str, text: &str) {
                 readings.join(", ")
             );
         }
-        for rule in group_of(rule_id) {
+        for rule in group_of(&rules, rule_id) {
             let matches = engine.match_rule(rule, &sentence);
             eprintln!(
                 "   raw matches for {} (sub {:?}): {}",
@@ -1541,11 +1543,8 @@ mod tests {
 
     #[test]
     fn rymy_residue_compiles_the_match_reference_element_with_no_matchable_source() {
-        let rymy: Vec<&CompiledRule> = compiled_rules()
-            .rules
-            .iter()
-            .filter(|r| r.id == "RYMY")
-            .collect();
+        let rules = compiled_rules();
+        let rymy: Vec<&CompiledRule> = rules.rules.iter().filter(|r| r.id == "RYMY").collect();
         assert!(!rymy.is_empty(), "RYMY must compile");
         let sub1 = rymy
             .iter()

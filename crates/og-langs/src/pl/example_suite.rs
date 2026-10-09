@@ -3,7 +3,6 @@ use og_rules::pattern_rule::PatternRuleEngine;
 use og_xml::compiler::{CompiledRule, CompiledRuleSet, XmlCompiler};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
 
 fn rules_dir() -> PathBuf {
     crate::pl::pl_rules_dir().expect("pl rules dir")
@@ -292,16 +291,19 @@ fn strip_xml_comments(xml: &str) -> String {
 mod tests {
     use super::*;
 
-    fn compiled_rules_from(path: PathBuf) -> &'static CompiledRuleSet {
-        static GRAMMAR: OnceLock<CompiledRuleSet> = OnceLock::new();
-        let slot = &GRAMMAR;
-        slot.get_or_init(|| {
+    fn compiled_rules_from(path: PathBuf) -> std::sync::Arc<CompiledRuleSet> {
+        static GRAMMAR: og_core::releasable::Releasable<CompiledRuleSet> =
+            og_core::releasable::Releasable::new();
+        og_core::releasable::shared_get_or_build(&GRAMMAR, || {
             let xml = std::fs::read_to_string(&path).unwrap();
             let xml = crate::pl::normalize_pl_rules_xml(&xml);
-            XmlCompiler::new()
-                .compile_file_with_base(xml.as_ref(), path.parent())
-                .expect("compile rules xml")
+            Some(std::sync::Arc::new(
+                XmlCompiler::new()
+                    .compile_file_with_base(xml.as_ref(), path.parent())
+                    .expect("compile rules xml"),
+            ))
         })
+        .expect("pl rule set")
     }
 
     fn rule_matches(rules_path: PathBuf, rule_id: &str, text: &str) -> Vec<(usize, usize)> {

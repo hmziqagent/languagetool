@@ -9,7 +9,7 @@ mod tests {
     use og_rules::postponed_adjective::LangSynthesizer;
     use og_xml::compiler::{CompiledRule, CompiledRuleSet, XmlCompiler};
     use std::path::PathBuf;
-    use std::sync::{Arc, OnceLock};
+    use std::sync::Arc;
 
     fn grammar_path() -> PathBuf {
         crate::engine::find_lt_resource_dir()
@@ -17,15 +17,19 @@ mod tests {
             .join("pt/src/main/resources/org/languagetool/rules/pt/grammar.xml")
     }
 
-    fn compiled_rules() -> &'static CompiledRuleSet {
-        static RULES: OnceLock<CompiledRuleSet> = OnceLock::new();
-        RULES.get_or_init(|| {
+    fn compiled_rules() -> std::sync::Arc<CompiledRuleSet> {
+        static RULES: og_core::releasable::Releasable<CompiledRuleSet> =
+            og_core::releasable::Releasable::new();
+        og_core::releasable::shared_get_or_build(&RULES, || {
             let path = grammar_path();
             let xml = std::fs::read_to_string(&path).unwrap();
-            XmlCompiler::new()
-                .compile_file_with_base(&xml, path.parent())
-                .expect("compile grammar.xml")
+            Some(std::sync::Arc::new(
+                XmlCompiler::new()
+                    .compile_file_with_base(&xml, path.parent())
+                    .expect("compile grammar.xml"),
+            ))
         })
+        .expect("pt grammar")
     }
 
     fn synthesizer() -> Option<LangSynthesizer> {
@@ -58,8 +62,8 @@ mod tests {
         .with_replacements(vec![SuggestedReplacement::new(template)])
     }
 
-    fn first_rule(id: &str) -> &'static CompiledRule {
-        compiled_rules()
+    fn first_rule<'a>(rules: &'a CompiledRuleSet, id: &str) -> &'a CompiledRule {
+        rules
             .rules
             .iter()
             .find(|r| r.id == id)
@@ -300,8 +304,9 @@ mod tests {
                 Some("\u{2013}RJ"),
             ),
         ];
+        let rules = compiled_rules();
         for (id, text, expected) in cases {
-            let rule = first_rule(id);
+            let rule = first_rule(&rules, id);
             let sentence = &pipeline.analyze_text(text)[0];
             let raw = engine.match_rule(&bare(rule), sentence);
             let regexp = rule.regexp.as_ref().expect("regexp rule");
@@ -395,7 +400,8 @@ mod tests {
         let pipeline = PortuguesePipeline::shared();
         let engine = PatternRuleEngine::new();
         let synth = Arc::new(synthesizer().expect("pt synthesizer"));
-        let rule = compiled_rules()
+        let rules = compiled_rules();
+        let rule = rules
             .rules
             .iter()
             .find(|r| {
@@ -451,7 +457,8 @@ mod tests {
     fn roman_numeral_rule_examples_pass_end_to_end() {
         let pipeline = PortuguesePipeline::shared();
         let engine = PatternRuleEngine::new();
-        let rule = first_rule("SECULO_EM_NUMERAIS_ROMANOS");
+        let rules = compiled_rules();
+        let rule = first_rule(&rules, "SECULO_EM_NUMERAIS_ROMANOS");
         for (text, source, expected) in [
             ("No começo do século 20.", "20", "XX"),
             ("Nasceu no século 1.", "1", "I"),
@@ -760,7 +767,8 @@ mod tests {
     fn dispatch_drives_the_compiled_confusion_rule_end_to_end() {
         let pipeline = PortuguesePipeline::shared();
         let engine = PatternRuleEngine::new();
-        let rule = compiled_rules()
+        let rules = compiled_rules();
+        let rule = rules
             .rules
             .iter()
             .find(|r| {

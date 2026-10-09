@@ -2,21 +2,24 @@ use crate::pt::test_support::PortuguesePipeline;
 use og_core::AnalyzedSentence;
 use og_xml::compiler::{CompiledRule, CompiledRuleSet, XmlCompiler};
 use std::path::PathBuf;
-use std::sync::OnceLock;
 
 fn rules_dir() -> PathBuf {
     crate::pt::filters::pt_rules_dir().expect("pt rules dir")
 }
 
-fn compiled_grammar() -> &'static CompiledRuleSet {
-    static GRAMMAR: OnceLock<CompiledRuleSet> = OnceLock::new();
-    GRAMMAR.get_or_init(|| {
+fn compiled_grammar() -> std::sync::Arc<CompiledRuleSet> {
+    static GRAMMAR: og_core::releasable::Releasable<CompiledRuleSet> =
+        og_core::releasable::Releasable::new();
+    og_core::releasable::shared_get_or_build(&GRAMMAR, || {
         let path = rules_dir().join("grammar.xml");
         let xml = std::fs::read_to_string(&path).expect("grammar.xml");
-        XmlCompiler::new()
-            .compile_file_with_base(&xml, path.parent())
-            .expect("compile rules xml")
+        Some(std::sync::Arc::new(
+            XmlCompiler::new()
+                .compile_file_with_base(&xml, path.parent())
+                .expect("compile rules xml"),
+        ))
     })
+    .expect("pt grammar")
 }
 
 fn dump_readings(sentence: &AnalyzedSentence) {
@@ -35,8 +38,8 @@ fn dump_readings(sentence: &AnalyzedSentence) {
     }
 }
 
-fn rules_owning_example(text: &str) -> Vec<&'static CompiledRule> {
-    compiled_grammar()
+fn rules_owning_example<'a>(grammar: &'a CompiledRuleSet, text: &str) -> Vec<&'a CompiledRule> {
+    grammar
         .rules
         .iter()
         .filter(|r| r.examples.iter().any(|e| e.text.contains(text)))
@@ -48,7 +51,8 @@ pub fn probe(example_fragment: &str) {
     let synthesizer = crate::pt::example_suite::suite_synthesizer();
     let pipeline = PortuguesePipeline::shared();
     og_rules::pattern_rule::set_test_date_hack(true);
-    for rule in rules_owning_example(example_fragment) {
+    let grammar = compiled_grammar();
+    for rule in rules_owning_example(&grammar, example_fragment) {
         let example = rule
             .examples
             .iter()
@@ -113,7 +117,8 @@ pub fn probe(example_fragment: &str) {
 }
 
 pub(crate) fn probe_dict(words: &[&str]) {
-    let tagger = PortuguesePipeline::shared().tagger_ref();
+    let pipeline = PortuguesePipeline::shared();
+    let tagger = pipeline.tagger_ref();
     let tagged = og_tagger::Tagger::tag(tagger, words);
     for (word, atr) in words.iter().zip(tagged.iter()) {
         let readings: Vec<String> = atr
@@ -130,6 +135,7 @@ mod tests {
     #[test]
     #[ignore]
     fn trace_six_dispatch_residue_failures() {
+        let _release_guard = crate::release_guard();
         super::probe("das mares");
         super::probe("milênios atras");
         super::probe("traslado ao aeroporto");
@@ -142,6 +148,7 @@ mod tests {
     #[test]
     #[ignore]
     fn trace_dict_readings_of_suspect_words() {
+        let _release_guard = crate::release_guard();
         super::probe_dict(&[
             "das",
             "mares",
@@ -190,15 +197,19 @@ mod tests {
     }
 }
 
-fn compiled_style() -> &'static CompiledRuleSet {
-    static STYLE: OnceLock<CompiledRuleSet> = OnceLock::new();
-    STYLE.get_or_init(|| {
+fn compiled_style() -> std::sync::Arc<CompiledRuleSet> {
+    static STYLE: og_core::releasable::Releasable<CompiledRuleSet> =
+        og_core::releasable::Releasable::new();
+    og_core::releasable::shared_get_or_build(&STYLE, || {
         let path = rules_dir().join("style.xml");
         let xml = std::fs::read_to_string(&path).expect("style.xml");
-        XmlCompiler::new()
-            .compile_file_with_base(&xml, path.parent())
-            .expect("compile style.xml")
+        Some(std::sync::Arc::new(
+            XmlCompiler::new()
+                .compile_file_with_base(&xml, path.parent())
+                .expect("compile style.xml"),
+        ))
     })
+    .expect("pt style")
 }
 
 fn describe_token(t: &og_xml::compiler::CompiledPatternToken) -> String {
@@ -262,6 +273,7 @@ mod round1_tests {
     #[test]
     #[ignore]
     fn trace_round1_global_disambiguation_and_style_residue() {
+        let _release_guard = crate::release_guard();
         super::probe("google.com.br");
         let engine = crate::pt::example_suite::suite_engine();
         let style = crate::pt::filters::pt_rules_dir()
@@ -358,6 +370,7 @@ mod round2_tests {
     #[test]
     #[ignore]
     fn trace_round2_style_residue_families() {
+        let _release_guard = crate::release_guard();
         let failures = parse_artifact("/tmp/test_failures_pt_style.txt");
         assert!(
             !failures.is_empty(),
@@ -376,11 +389,16 @@ mod round2_tests {
         for rule_id in &order {
             let mine: Vec<&FailureLine> =
                 failures.iter().filter(|f| &f.rule_id == rule_id).collect();
-            let sub_rules: Vec<&CompiledRule> = compiled_style()
+            let style = compiled_style();
+            let sub_rules: Vec<&CompiledRule> = style
                 .rules
                 .iter()
                 .filter(|r| &r.id == rule_id)
                 .collect();
+            if sub_rules.is_empty() {
+                eprintln!("### {rule_id} x{} has no style.xml sub-rule", mine.len());
+                continue;
+            }
             let outcomes: Vec<&str> = mine.iter().map(|f| f.outcome).collect();
             eprintln!(
                 "### {rule_id} x{} [{}] subs={} filter={:?}",
@@ -455,7 +473,8 @@ mod round2_puzzles {
     fn dump_all_events(rule_id: &str, text: &str) {
         let engine = crate::pt::example_suite::suite_engine();
         let pipeline = PortuguesePipeline::shared();
-        let sub_rules: Vec<_> = compiled_style()
+        let style = compiled_style();
+        let sub_rules: Vec<_> = style
             .rules
             .iter()
             .filter(|r| r.id == rule_id)
@@ -491,6 +510,7 @@ mod round2_puzzles {
     #[test]
     #[ignore]
     fn trace_round2_stall_puzzles() {
+        let _release_guard = crate::release_guard();
         dump_all_events(
             "SIMPLIFICAR_POIS_VERBO_AO_VERBOINF",
             "O stress é importante, pois, afeta o comportamento humano.",
@@ -631,6 +651,7 @@ mod round2_fix_impact {
     #[test]
     #[ignore]
     fn trace_round2_no_attr_fix_impact_on_style_suite() {
+        let _release_guard = crate::release_guard();
         let broken_tokens: usize = compiled_style().rules.iter().map(count_broken).sum();
         eprintln!("style.xml: tokens carrying the dead ^(?:no)$ regex: {broken_tokens}");
         let engine = crate::pt::example_suite::suite_engine();
@@ -806,6 +827,7 @@ mod round2_dict {
     #[test]
     #[ignore]
     fn trace_round2_style_suspect_words() {
+        let _release_guard = crate::release_guard();
         super::probe_dict(&[
             "resolver",
             "resolvem",
@@ -851,7 +873,8 @@ mod round2_pins {
     use super::PortuguesePipeline;
 
     fn tagger_tags(word: &str) -> Vec<String> {
-        let tagger = PortuguesePipeline::shared().tagger_ref();
+        let pipeline = PortuguesePipeline::shared();
+        let tagger = pipeline.tagger_ref();
         let tagged = og_tagger::Tagger::tag(tagger, &[word]);
         tagged[0]
             .readings()
