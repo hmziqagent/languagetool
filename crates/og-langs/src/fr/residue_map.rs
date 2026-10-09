@@ -417,6 +417,7 @@ mod tests {
     #[test]
     #[ignore]
     fn dump_residue_map() {
+        let _release_guard = crate::release_guard();
         super::dump();
     }
 
@@ -609,7 +610,7 @@ mod tests {
     }
 
     #[test]
-    fn adj_adj_matchno0_suppressor_shape_stays_dead_in_rust() {
+    fn adj_adj_matchno0_suppressor_shape_now_fires_like_java() {
         let pattern = r#"<pattern>
                 <token postag="J m s"/>
                 <token regexp="yes">et|ni|ou</token>
@@ -628,12 +629,11 @@ mod tests {
             }
         }
         assert_eq!(
-            matches, 0,
+            matches, 1,
             "this is the grammar.xml:13897-13901 ADJ_ADJ_SENT_END rulegroup antipattern: in \
              Java <match no=\"0\"/> interpolates the referenced token text so 'ami' + 'ni' + \
-             'amie' (= <match no=\"0\"/>e) suppresses the sub-rule that false-positives in \
-             Rust - same engine gap as the ECRITURE_INCLUSIVE style residue, flips when the \
-             token-level match-no-0 interpolation lands"
+             'amie' (= <match no=\"0\"/>e) suppresses the sub-rule - the in-token <match> \
+             references port (191a205) closed the gap this pin used to document"
         );
     }
 
@@ -868,6 +868,7 @@ mod tests {
     #[test]
     #[ignore]
     fn trace_faire_plus_exception_compile_paths() {
+        let _release_guard = crate::release_guard();
         let dir = fr_rules_dir().expect("fr rules dir");
         let xml = std::fs::read_to_string(dir.join("grammar.xml")).expect("grammar.xml");
         let start = xml.find("abstraction").expect("word list");

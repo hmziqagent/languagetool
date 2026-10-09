@@ -119,8 +119,10 @@ impl Rule for SpellingCheckRule {
 
     fn match_sentence(&self, sentence: &AnalyzedSentence) -> Vec<RuleMatch> {
         let mut matches = Vec::new();
+        let tokens = sentence.tokens();
+        let mut is_first_word = true;
 
-        for token_readings in sentence.tokens() {
+        for (idx, token_readings) in tokens.iter().enumerate() {
             if token_readings.is_whitespace() {
                 continue;
             }
@@ -190,6 +192,36 @@ impl Rule for SpellingCheckRule {
                     .with_replacements(replacements)
                     .with_match_type(RuleMatchKind::UnknownWord),
                 );
+
+                if is_first_word && !matches.is_empty() && idx < tokens.len() - 1 {
+                    let capitalized: Vec<SuggestedReplacement> = matches[0]
+                        .replacements()
+                        .iter()
+                        .map(|r| {
+                            let value = r.value();
+                            if value == value.to_lowercase() {
+                                let mut chars = value.chars();
+                                chars
+                                    .next()
+                                    .map(|first| {
+                                        let upper: String =
+                                            first.to_uppercase().collect::<String>()
+                                                + chars.as_str();
+                                        upper
+                                    })
+                                    .unwrap_or_else(|| value.to_string())
+                            } else {
+                                value.to_string()
+                            }
+                        })
+                        .map(SuggestedReplacement::new)
+                        .collect();
+                    matches[0].set_replacements(capitalized);
+                }
+            }
+
+            if idx > 0 && is_first_word && text.chars().any(|c| c.is_alphanumeric()) {
+                is_first_word = false;
             }
         }
 

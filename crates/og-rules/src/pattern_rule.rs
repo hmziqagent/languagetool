@@ -503,9 +503,6 @@ impl PatternRuleEngine {
                                     let idx = m.no.unsigned_abs() as usize;
                                     let mut value =
                                         group_texts.get(idx).copied().unwrap_or("").to_string();
-                                    if let Some(ref cc) = m.case_conversion {
-                                        value = apply_case_conversion(&value, cc);
-                                    }
                                     if let Some(ref rm) = m.regexp_match
                                         && let Ok(re) = regex::Regex::new(rm)
                                     {
@@ -513,6 +510,9 @@ impl PatternRuleEngine {
                                         value = re
                                             .replace_all(&value, java_replacement(replace).as_ref())
                                             .into_owned();
+                                    }
+                                    if let Some(ref cc) = m.case_conversion {
+                                        value = apply_case_conversion(&value, cc);
                                     }
                                     resolved.push_str(&value);
                                 }

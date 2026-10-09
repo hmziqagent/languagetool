@@ -1,7 +1,6 @@
 use og_core::{AnalyzedToken, AnalyzedTokenReadings, RuleMatch, SuggestedReplacement};
 use og_tagger::morfologik::MorfologikDictionary;
 use regex::Regex;
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 

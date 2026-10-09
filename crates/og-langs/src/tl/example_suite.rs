@@ -7,7 +7,7 @@ use og_core::{AnalyzedSentence, AnalyzedToken, AnalyzedTokenReadings, CheckReque
 use og_rules::pattern_rule::PatternRuleEngine;
 use og_xml::compiler::{CompiledRule, CompiledRuleSet, XmlCompiler};
 use std::collections::HashMap;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 pub(crate) struct TlPipeline {
     tokenizer: super::TagalogWordTokenizer,
@@ -15,13 +15,17 @@ pub(crate) struct TlPipeline {
     splitter: Option<og_tokenizer::srx::SrxSentenceSplitter>,
 }
 
-pub(crate) fn tl_pipeline() -> &'static TlPipeline {
-    static PIPE: OnceLock<TlPipeline> = OnceLock::new();
-    PIPE.get_or_init(|| TlPipeline {
-        tokenizer: super::TagalogWordTokenizer::new(),
-        tagger: super::tagalog_tagger().expect("tagalog.dict tagger"),
-        splitter: og_tokenizer::srx::srx_splitter("tl"),
+pub(crate) fn tl_pipeline() -> std::sync::Arc<TlPipeline> {
+    static PIPE: og_core::releasable::Releasable<TlPipeline> =
+        og_core::releasable::Releasable::new();
+    og_core::releasable::shared_get_or_build(&PIPE, || {
+        Some(std::sync::Arc::new(TlPipeline {
+            tokenizer: super::TagalogWordTokenizer::new(),
+            tagger: super::tagalog_tagger().expect("tagalog.dict tagger"),
+            splitter: og_tokenizer::srx::srx_splitter("tl"),
+        }))
     })
+    .expect("tl pipeline")
 }
 
 impl TlPipeline {
@@ -113,9 +117,10 @@ impl og_core::checker::WordTokenizer for TlWordTokenizerBridge {
     }
 }
 
-pub(crate) fn module_checker() -> &'static og_core::checker::Checker {
-    static CHECKER: OnceLock<og_core::checker::Checker> = OnceLock::new();
-    CHECKER.get_or_init(|| {
+pub(crate) fn module_checker() -> std::sync::Arc<og_core::checker::Checker> {
+    static CHECKER: og_core::releasable::Releasable<og_core::checker::Checker> =
+        og_core::releasable::Releasable::new();
+    og_core::releasable::shared_get_or_build(&CHECKER, || {
         let tagger = super::tagalog_tagger().expect("tagalog.dict tagger");
         let natives = super::tagalog_native_rules();
         let mut rules: Vec<Arc<dyn og_core::rule::Rule>> = natives.rules.clone();
@@ -124,13 +129,16 @@ pub(crate) fn module_checker() -> &'static og_core::checker::Checker {
                 rules.push(Arc::new(crate::engine::XmlPatternRule::new(compiled)));
             }
         }
-        og_core::checker::Checker::new()
-            .with_sentence_tokenizer(Arc::new(TlSentenceTokenizer))
-            .with_word_tokenizer(Arc::new(TlWordTokenizerBridge))
-            .with_tagger(tagger)
-            .set_rules(rules)
-            .set_text_level_rules(natives.text_level_rules.clone())
+        Some(std::sync::Arc::new(
+            og_core::checker::Checker::new()
+                .with_sentence_tokenizer(Arc::new(TlSentenceTokenizer))
+                .with_word_tokenizer(Arc::new(TlWordTokenizerBridge))
+                .with_tagger(tagger)
+                .set_rules(rules)
+                .set_text_level_rules(natives.text_level_rules.clone()),
+        ))
     })
+    .expect("tl checker")
 }
 
 fn grammar_path() -> std::path::PathBuf {
@@ -139,15 +147,19 @@ fn grammar_path() -> std::path::PathBuf {
         .join("grammar.xml")
 }
 
-fn compiled_rules() -> &'static CompiledRuleSet {
-    static GRAMMAR: OnceLock<CompiledRuleSet> = OnceLock::new();
-    GRAMMAR.get_or_init(|| {
+fn compiled_rules() -> std::sync::Arc<CompiledRuleSet> {
+    static GRAMMAR: og_core::releasable::Releasable<CompiledRuleSet> =
+        og_core::releasable::Releasable::new();
+    og_core::releasable::shared_get_or_build(&GRAMMAR, || {
         let path = grammar_path();
         let xml = std::fs::read_to_string(&path).expect("tl grammar.xml");
-        XmlCompiler::new()
-            .compile_file_with_base(&xml, path.parent())
-            .expect("compile tl grammar.xml")
+        Some(std::sync::Arc::new(
+            XmlCompiler::new()
+                .compile_file_with_base(&xml, path.parent())
+                .expect("compile tl grammar.xml"),
+        ))
     })
+    .expect("tl grammar")
 }
 
 fn module_check(text: &str) -> Vec<og_core::RuleMatch> {
@@ -207,7 +219,7 @@ fn rule_groups(rule_set: &CompiledRuleSet) -> Vec<Vec<&CompiledRule>> {
 fn tagalog_grammar_examples_with_tl_pipeline() {
     let _release_guard = crate::release_guard();
     let rule_set = compiled_rules();
-    let groups = rule_groups(rule_set);
+    let groups = rule_groups(&rule_set);
     let engine = PatternRuleEngine::new();
     let pipeline = tl_pipeline();
 
@@ -284,16 +296,11 @@ fn tagalog_grammar_examples_with_tl_pipeline() {
     );
     assert_eq!(
         all_failures,
-        vec![
-            "CORRECTION: [NAG-_SS]: 'Nagbunot ng ngipin ang dentista.' expected 'Bumunot' got [\"bumunot\"]".to_string(),
-        ],
-        "the single pinned residue: grammar.xml:125 asks for \
-         <match no=\"1\" case_conversion=\"startupper\" regexp_match=\"Nag(.)(.*)\" \
-         regexp_replace=\"$1um$2\"/>, but og-rules pattern_rule.rs:866-877 applies the case \
-         conversion BEFORE the regexp replace (Java's MatchState.java:113-118 replaces first and \
-         converts the case last), so 'Nagbunot' -> 'bumunot' stays lowercase; every startlower \
-         rule (D_WORDS/R_WORDS/DAAN/RAAN) coincides under both orders because the source token \
-         is already lowercase, which is why only this startupper rule is affected"
+        Vec::<String>::new(),
+        "grammar.xml:125 asks for <match no=\"1\" case_conversion=\"startupper\" \
+         regexp_match=\"Nag(.)(.*)\" regexp_replace=\"$1um$2\"/>; the shared engine applies the \
+         replace first and the case conversion last exactly like Java's MatchState.java:113-118 \
+         and :287, so 'Nagbunot' offers 'Bumunot' and the module suite has no residue"
     );
 }
 
@@ -306,7 +313,7 @@ fn grammar_rules_compile_the_java_inventory() {
         "tl grammar.xml compiles 44 pattern rules (one <rule> each, no <rulegroup>, no \
          commented-out drafts)"
     );
-    let example_count: usize = rule_groups(rule_set)
+    let example_count: usize = rule_groups(&rule_set)
         .iter()
         .filter_map(|g| g.first())
         .flat_map(|r| r.examples.iter())
@@ -333,7 +340,8 @@ fn grammar_rules_compile_the_java_inventory() {
 #[test]
 fn srx_resolves_the_java_generic_ruleset() {
     use og_tokenizer::SentenceTokenizer as _;
-    let splitter = tl_pipeline()
+    let pipeline = tl_pipeline();
+    let splitter = pipeline
         .splitter
         .as_ref()
         .expect("the (TL|tl).* -> Generic languagemap must resolve for tl");
@@ -441,13 +449,11 @@ fn nag_ss_pins_the_shared_engine_case_conversion_order() {
         .collect();
     assert_eq!(
         offered,
-        vec!["bumunot"],
+        vec!["Bumunot"],
         "Java offers 'Bumunot' here: MatchState.java:113-118 applies \
-         regexp_match/regexp_replace FIRST and case_conversion='startupper' LAST, while \
-         og-rules/src/pattern_rule.rs:866-877 converts the case of the raw token before the \
-         regexp replace, and 'Nagbunot' is already startupper so the conversion is a no-op; the \
-         swap is a one-line shared-engine fix (pattern_rule.rs), kept out of this module's \
-         boundary on purpose"
+         regexp_match/regexp_replace FIRST and case_conversion='startupper' LAST - the shared \
+         engine now follows that order in og-rules/src/pattern_rule.rs, so 'Nagbunot' -> \
+         'bumunot' via regexp_replace=\"$1um$2\" then startupper lifts the first char"
     );
 }
 
