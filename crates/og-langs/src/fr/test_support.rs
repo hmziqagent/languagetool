@@ -2,7 +2,7 @@ use og_core::checker::Disambiguator;
 use og_core::{AnalyzedSentence, AnalyzedToken, AnalyzedTokenReadings};
 use og_tokenizer::WordTokenizer as _;
 use std::path::PathBuf;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 pub(crate) fn fr_resource_dir() -> Option<PathBuf> {
     crate::engine::find_lt_resource_dir()

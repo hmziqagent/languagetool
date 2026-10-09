@@ -5,7 +5,7 @@ use og_core::{AnalyzedSentence, AnalyzedToken, AnalyzedTokenReadings};
 use og_rules::pattern_rule::PatternRuleEngine;
 use og_xml::compiler::{CompiledRule, CompiledRuleSet, XmlCompiler};
 use std::collections::HashMap;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 pub(crate) struct RoPipeline {
     tokenizer: super::RomanianWordTokenizer,
@@ -18,17 +18,19 @@ pub(crate) fn ro_resource_dir() -> std::path::PathBuf {
     super::ro_resource_dir().expect("ro resource dir")
 }
 
-pub(crate) fn ro_pipeline() -> &'static RoPipeline {
-    static PIPE: OnceLock<RoPipeline> = OnceLock::new();
-    PIPE.get_or_init(|| {
+pub(crate) fn ro_pipeline() -> std::sync::Arc<RoPipeline> {
+    static PIPE: og_core::releasable::Releasable<RoPipeline> =
+        og_core::releasable::Releasable::new();
+    og_core::releasable::shared_get_or_build(&PIPE, || {
         let resource_dir = ro_resource_dir();
-        RoPipeline {
+        Some(std::sync::Arc::new(RoPipeline {
             tokenizer: super::RomanianWordTokenizer::new(),
             tagger: super::romanian_tagger().expect("romanian.dict tagger"),
             disambiguator: super::build_ro_disambiguator(&resource_dir),
             splitter: og_tokenizer::srx::srx_splitter("ro"),
-        }
+        }))
     })
+    .expect("ro pipeline")
 }
 
 impl RoPipeline {
@@ -97,15 +99,19 @@ fn grammar_path() -> std::path::PathBuf {
         .join("ro/src/main/resources/org/languagetool/rules/ro/grammar.xml")
 }
 
-fn compiled_rules() -> &'static CompiledRuleSet {
-    static GRAMMAR: OnceLock<CompiledRuleSet> = OnceLock::new();
-    GRAMMAR.get_or_init(|| {
+fn compiled_rules() -> std::sync::Arc<CompiledRuleSet> {
+    static GRAMMAR: og_core::releasable::Releasable<CompiledRuleSet> =
+        og_core::releasable::Releasable::new();
+    og_core::releasable::shared_get_or_build(&GRAMMAR, || {
         let path = grammar_path();
         let xml = std::fs::read_to_string(&path).expect("ro grammar.xml");
-        XmlCompiler::new()
-            .compile_file_with_base(&xml, path.parent())
-            .expect("compile ro grammar.xml")
+        Some(std::sync::Arc::new(
+            XmlCompiler::new()
+                .compile_file_with_base(&xml, path.parent())
+                .expect("compile ro grammar.xml"),
+        ))
     })
+    .expect("ro grammar")
 }
 
 fn extract_marker(text: &str) -> (String, Option<(usize, usize)>) {
@@ -134,9 +140,10 @@ fn rule_groups(rule_set: &CompiledRuleSet) -> Vec<Vec<&CompiledRule>> {
     groups
 }
 
-fn shared_pattern_engine() -> &'static PatternRuleEngine {
-    static ENGINE: OnceLock<PatternRuleEngine> = OnceLock::new();
-    ENGINE.get_or_init(|| {
+fn shared_pattern_engine() -> std::sync::Arc<PatternRuleEngine> {
+    static ENGINE: og_core::releasable::Releasable<PatternRuleEngine> =
+        og_core::releasable::Releasable::new();
+    og_core::releasable::shared_get_or_build(&ENGINE, || {
         let resource_dir = ro_resource_dir();
         let synth =
             og_rules::postponed_adjective::LangSynthesizer::for_language(&resource_dir, "ro")
@@ -146,8 +153,9 @@ fn shared_pattern_engine() -> &'static PatternRuleEngine {
             engine = engine.with_synthesizer(synth.clone());
             engine = engine.with_suggestion_synthesizer(synth);
         }
-        engine
+        Some(std::sync::Arc::new(engine))
     })
+    .expect("ro pattern engine")
 }
 
 #[test]
@@ -155,7 +163,7 @@ fn shared_pattern_engine() -> &'static PatternRuleEngine {
 fn romanian_grammar_examples_with_ro_pipeline() {
     let _release_guard = crate::release_guard();
     let rule_set = compiled_rules();
-    let groups = rule_groups(rule_set);
+    let groups = rule_groups(&rule_set);
     let engine = shared_pattern_engine();
     let pipeline = ro_pipeline();
     og_rules::pattern_rule::set_test_date_hack(true);
@@ -337,7 +345,7 @@ pub(crate) const RO_CORRECTION_RESIDUE: usize = 56;
 #[test]
 fn grammar_rules_compile_the_java_inventory() {
     let rule_set = compiled_rules();
-    let example_count: usize = rule_groups(rule_set)
+    let example_count: usize = rule_groups(&rule_set)
         .iter()
         .filter_map(|g| g.first())
         .flat_map(|r| r.examples.iter())

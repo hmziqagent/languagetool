@@ -21,12 +21,12 @@ pub struct SpanishWordTokenizer {
 }
 
 struct SpanishTaggerHandle {
-    inner: Option<&'static crate::es::tagger::SpanishTagger>,
+    inner: Option<std::sync::Arc<crate::es::tagger::SpanishTagger>>,
 }
 
 impl SpanishTaggerHandle {
     fn is_word_tagged(&self, word: &str) -> bool {
-        self.inner.is_some_and(|t| t.is_word_tagged(word))
+        self.inner.as_ref().is_some_and(|t| t.is_word_tagged(word))
     }
 }
 

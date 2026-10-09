@@ -135,56 +135,30 @@ impl LanguageEngine {
     }
 
     pub fn shared_for_code(code: &str) -> Option<Arc<Self>> {
-        static CACHE: std::sync::OnceLock<
-            std::sync::Mutex<HashMap<String, std::sync::Weak<LanguageEngine>>>,
-        > = std::sync::OnceLock::new();
-        static IN_FLIGHT: std::sync::OnceLock<
+        static CELLS: std::sync::OnceLock<
             std::sync::Mutex<
-                HashMap<String, Arc<std::sync::OnceLock<Option<Arc<LanguageEngine>>>>>,
+                HashMap<String, &'static og_core::releasable::Releasable<LanguageEngine>>,
             >,
         > = std::sync::OnceLock::new();
-        if let Some(cache) = CACHE.get()
-            && let Ok(guard) = cache.lock()
-            && let Some(engine) = guard.get(code).and_then(std::sync::Weak::upgrade)
-        {
-            return Some(engine);
-        }
         trim_released_engine_pages();
-        let slot = {
-            let in_flight = IN_FLIGHT.get_or_init(Default::default);
-            let mut guard = in_flight.lock().unwrap();
-            guard
+        let cell = {
+            let cells = CELLS.get_or_init(Default::default);
+            let mut guard = cells.lock().unwrap();
+            *guard
                 .entry(code.to_string())
-                .or_insert_with(|| Arc::new(std::sync::OnceLock::new()))
-                .clone()
+                .or_insert_with(|| Box::leak(Box::new(og_core::releasable::Releasable::new())))
         };
-        let built = slot
-            .get_or_init(|| {
-                let _guard = engine_build_guard();
-                trim_released_engine_pages();
-                let engine = match code {
-                    "en" => Some(Self::english()),
-                    "de" => Some(Self::german()),
-                    other => Self::for_code(other),
-                };
-                let engine = engine.map(Arc::new);
-                if let Some(engine) = engine.as_ref()
-                    && let Some(cache) = CACHE.get()
-                    && let Ok(mut guard) = cache.lock()
-                {
-                    guard.insert(code.to_string(), Arc::downgrade(engine));
-                }
-                engine
-            })
-            .clone();
-        if let Some(in_flight) = IN_FLIGHT.get()
-            && let Ok(mut guard) = in_flight.lock()
-            && let Some(existing) = guard.get(code)
-            && Arc::ptr_eq(existing, &slot)
-        {
-            guard.remove(code);
-        }
-        built
+        let _heavy = og_core::releasable::heavy_guard();
+        og_core::releasable::shared_get_or_build(cell, || {
+            let _guard = engine_build_guard();
+            trim_released_engine_pages();
+            match code {
+                "en" => Some(Self::english()),
+                "de" => Some(Self::german()),
+                other => Self::for_code_inner(other),
+            }
+            .map(Arc::new)
+        })
     }
 
     pub fn english() -> Self {
@@ -816,6 +790,12 @@ impl LanguageEngine {
     }
 
     pub fn for_code(code: &str) -> Option<Self> {
+        let _heavy = og_core::releasable::heavy_guard();
+        let _guard = engine_build_guard();
+        Self::for_code_inner(code)
+    }
+
+    fn for_code_inner(code: &str) -> Option<Self> {
         let language = Language::from_code(code)?;
         let short = language.short_code().to_string();
         let config = match short.as_str() {
@@ -1902,13 +1882,16 @@ fn shared_german_spelling_support(
 ) -> Option<Arc<og_rules::spelling_support::SpellingSupport>> {
     static CACHE: std::sync::OnceLock<
         std::sync::Mutex<
-            std::collections::HashMap<PathBuf, Arc<og_rules::spelling_support::SpellingSupport>>,
+            std::collections::HashMap<
+                PathBuf,
+                std::sync::Weak<og_rules::spelling_support::SpellingSupport>,
+            >,
         >,
     > = std::sync::OnceLock::new();
     let cache = CACHE.get_or_init(Default::default);
     let mut guard = cache.lock().unwrap();
-    if let Some(hit) = guard.get(resource_dir) {
-        return Some(hit.clone());
+    if let Some(hit) = guard.get(resource_dir).and_then(std::sync::Weak::upgrade) {
+        return Some(hit);
     }
     let mut support = og_rules::spelling_support::SpellingSupport::new_for_language(
         dict.clone(),
@@ -1922,7 +1905,7 @@ fn shared_german_spelling_support(
         support = support.with_german_rule_speller(filter_speller);
     }
     let support = std::sync::Arc::new(support);
-    guard.insert(resource_dir.to_path_buf(), support.clone());
+    guard.insert(resource_dir.to_path_buf(), Arc::downgrade(&support));
     Some(support)
 }
 
@@ -1932,12 +1915,14 @@ fn shared_german_rule_speller(
     resource_dir: &Path,
 ) -> Option<Arc<og_spell::GermanSpeller>> {
     static CACHE: std::sync::OnceLock<
-        std::sync::Mutex<std::collections::HashMap<PathBuf, Arc<og_spell::GermanSpeller>>>,
+        std::sync::Mutex<
+            std::collections::HashMap<PathBuf, std::sync::Weak<og_spell::GermanSpeller>>,
+        >,
     > = std::sync::OnceLock::new();
     let cache = CACHE.get_or_init(Default::default);
     let mut guard = cache.lock().unwrap();
-    if let Some(hit) = guard.get(resource_dir) {
-        return Some(hit.clone());
+    if let Some(hit) = guard.get(resource_dir).and_then(std::sync::Weak::upgrade) {
+        return Some(hit);
     }
     let country = if resource_dir.join("hunspell/de_DE.aff").exists() {
         "de-DE"
@@ -1955,7 +1940,7 @@ fn shared_german_rule_speller(
         base.with_shared_data(dict.clone(), country)
             .with_hunspell_core(std::sync::Arc::new(checker)),
     );
-    guard.insert(resource_dir.to_path_buf(), speller.clone());
+    guard.insert(resource_dir.to_path_buf(), Arc::downgrade(&speller));
     Some(speller)
 }
 
@@ -1966,21 +1951,23 @@ fn shared_german_speller(
     tagger: Option<Arc<dyn og_core::checker::Tagger>>,
 ) -> Option<Arc<og_spell::GermanSpeller>> {
     static CACHE: std::sync::OnceLock<
-        std::sync::Mutex<std::collections::HashMap<PathBuf, Arc<og_spell::GermanSpeller>>>,
+        std::sync::Mutex<
+            std::collections::HashMap<PathBuf, std::sync::Weak<og_spell::GermanSpeller>>,
+        >,
     > = std::sync::OnceLock::new();
     let cache = CACHE.get_or_init(Default::default);
     let mut guard = cache.lock().unwrap();
-    if let Some(hit) = guard.get(resource_dir) {
-        return Some(hit.clone());
+    if let Some(hit) = guard.get(resource_dir).and_then(std::sync::Weak::upgrade) {
+        return Some(hit);
     }
-    let speller = std::sync::Arc::new(og_spell::GermanSpeller::new(
+    let speller = Arc::new(og_spell::GermanSpeller::new(
         dict.clone(),
         resource_dir,
         core_resource_dir,
         tagger,
         "de-DE",
     ));
-    guard.insert(resource_dir.to_path_buf(), speller.clone());
+    guard.insert(resource_dir.to_path_buf(), Arc::downgrade(&speller));
     Some(speller)
 }
 
@@ -2277,7 +2264,7 @@ fn trim_released_engine_pages() {
 #[cfg(not(target_os = "linux"))]
 fn trim_released_engine_pages() {}
 
-fn engine_build_guard() -> std::sync::MutexGuard<'static, ()> {
+pub(crate) fn engine_build_guard() -> std::sync::MutexGuard<'static, ()> {
     static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
     LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
@@ -2341,8 +2328,6 @@ mod tests {
     }
 
     fn build_engine(code: &str) -> Option<LanguageEngine> {
-        let _guard = engine_build_guard();
-        trim_released_engine_pages();
         LanguageEngine::for_code(code)
     }
 

@@ -78,8 +78,13 @@ fn global_intern(owned: String) -> &'static str {
     leaked
 }
 
+pub fn intern_string(owned: String) -> &'static str {
+    global_intern(owned)
+}
+
 struct Fsa5 {
-    arcs: &'static [u8],
+    data: std::sync::Arc<[u8]>,
+    arc_start: usize,
     node_data_length: usize,
     gtl: usize,
 }
@@ -90,7 +95,11 @@ const FSA5_BIT_TARGET_NEXT: u8 = 1 << 2;
 const FSA5_ADDRESS_OFFSET: usize = 1;
 
 impl Fsa5 {
-    fn from_bytes(data: &'static [u8]) -> Option<Self> {
+    fn arcs(&self) -> &[u8] {
+        &self.data[self.arc_start..]
+    }
+
+    fn from_bytes(data: std::sync::Arc<[u8]>) -> Option<Self> {
         if data.len() < 8 || &data[0..4] != b"\\fsa" || data[4] != 0x05 {
             return None;
         }
@@ -101,14 +110,15 @@ impl Fsa5 {
             return None;
         }
         Some(Self {
-            arcs: data.get(8..)?,
+            arc_start: 8,
             node_data_length,
             gtl,
+            data,
         })
     }
 
     fn is_next_set(&self, arc: usize) -> bool {
-        self.arcs
+        self.arcs()
             .get(arc + FSA5_ADDRESS_OFFSET)
             .is_some_and(|f| f & FSA5_BIT_TARGET_NEXT != 0)
     }
@@ -122,13 +132,13 @@ impl Fsa5 {
     }
 
     fn is_arc_last(&self, arc: usize) -> bool {
-        self.arcs
+        self.arcs()
             .get(arc + FSA5_ADDRESS_OFFSET)
             .is_some_and(|f| f & FSA5_BIT_LAST_ARC != 0)
     }
 
     fn is_arc_final(&self, arc: usize) -> bool {
-        self.arcs
+        self.arcs()
             .get(arc + FSA5_ADDRESS_OFFSET)
             .is_some_and(|f| f & FSA5_BIT_FINAL_ARC != 0)
     }
@@ -139,7 +149,7 @@ impl Fsa5 {
         } else {
             let mut value = 0usize;
             for i in (0..self.gtl).rev() {
-                let b = *self.arcs.get(arc + FSA5_ADDRESS_OFFSET + i)?;
+                let b = *self.arcs().get(arc + FSA5_ADDRESS_OFFSET + i)?;
                 value = (value << 8) | b as usize;
             }
             Some(value >> 3)
@@ -156,7 +166,7 @@ impl Fsa5 {
     fn walk(&self, node: usize, sequence: &mut Vec<u8>, out: &mut dyn FnMut(&[u8])) {
         let mut arc = Some(self.node_data_length + node);
         while let Some(current) = arc {
-            let Some(&label) = self.arcs.get(current) else {
+            let Some(&label) = self.arcs().get(current) else {
                 break;
             };
             sequence.push(label);
@@ -182,7 +192,7 @@ impl Fsa5 {
             let mut arc = Some(self.node_data_length + node);
             let mut next = None;
             while let Some(current) = arc {
-                let Some(&label) = self.arcs.get(current) else {
+                let Some(&label) = self.arcs().get(current) else {
                     break;
                 };
                 if label == byte {
@@ -209,7 +219,7 @@ impl Fsa5 {
             let mut arc = Some(self.node_data_length + node);
             let mut next = None;
             while let Some(current) = arc {
-                let Some(&label) = self.arcs.get(current) else {
+                let Some(&label) = self.arcs().get(current) else {
                     break;
                 };
                 if label == byte {
@@ -232,7 +242,7 @@ impl Fsa5 {
         }
         let mut arc = Some(self.node_data_length + node);
         while let Some(current) = arc {
-            let Some(&label) = self.arcs.get(current) else {
+            let Some(&label) = self.arcs().get(current) else {
                 break;
             };
             if label == separator {
@@ -248,10 +258,12 @@ impl Fsa5 {
 }
 
 struct Cfsa1 {
-    arcs: &'static [u8],
+    data: std::sync::Arc<[u8]>,
+    arc_start: usize,
+    label_start: usize,
+    label_end: usize,
     node_data_length: usize,
     gtl: usize,
-    label_mapping: &'static [u8],
 }
 
 const CFSA1_BIT_FINAL_ARC: u8 = 1 << 0;
@@ -259,7 +271,15 @@ const CFSA1_BIT_LAST_ARC: u8 = 1 << 1;
 const CFSA1_BIT_TARGET_NEXT: u8 = 1 << 2;
 
 impl Cfsa1 {
-    fn from_bytes(data: &'static [u8]) -> Option<Self> {
+    fn arcs(&self) -> &[u8] {
+        &self.data[self.arc_start..]
+    }
+
+    fn label_mapping(&self) -> &[u8] {
+        &self.data[self.label_start..self.label_end]
+    }
+
+    fn from_bytes(data: std::sync::Arc<[u8]>) -> Option<Self> {
         if data.len() < 44 || &data[0..4] != b"\\fsa" || data[4] != 0xc5 {
             return None;
         }
@@ -274,28 +294,30 @@ impl Cfsa1 {
             return None;
         }
         Some(Self {
-            arcs: data.get(40..)?,
+            arc_start: 40,
+            label_start: 8,
+            label_end: 40,
             node_data_length,
             gtl,
-            label_mapping: data.get(8..40)?,
+            data,
         })
     }
 
     fn is_next_set(&self, arc: usize) -> bool {
-        self.arcs
+        self.arcs()
             .get(arc)
             .is_some_and(|f| f & CFSA1_BIT_TARGET_NEXT != 0)
     }
 
     fn is_label_compressed(&self, arc: usize) -> bool {
-        self.is_next_set(arc) && (self.arcs[arc] >> 3) & 0x1f != 0
+        self.is_next_set(arc) && (self.arcs()[arc] >> 3) & 0x1f != 0
     }
 
     fn arc_label(&self, arc: usize) -> u8 {
         if self.is_label_compressed(arc) {
-            self.label_mapping[(self.arcs[arc] >> 3) as usize & 0x1f]
+            self.label_mapping()[(self.arcs()[arc] >> 3) as usize & 0x1f]
         } else {
-            self.arcs[arc + 1]
+            self.arcs()[arc + 1]
         }
     }
 
@@ -317,10 +339,10 @@ impl Cfsa1 {
         } else {
             let mut value = 0usize;
             for i in (1..self.gtl).rev() {
-                let b = *self.arcs.get(arc + 1 + i)?;
+                let b = *self.arcs().get(arc + 1 + i)?;
                 value = (value << 8) | b as usize;
             }
-            let flag = *self.arcs.get(arc)? as usize;
+            let flag = *self.arcs().get(arc)? as usize;
             Some(((value << 8) | flag) >> 3)
         }
     }
@@ -333,7 +355,7 @@ impl Cfsa1 {
     fn walk(&self, node: usize, sequence: &mut Vec<u8>, out: &mut dyn FnMut(&[u8])) {
         let mut arc = Some(self.node_data_length + node);
         while let Some(current) = arc {
-            let Some(&flag) = self.arcs.get(current) else {
+            let Some(&flag) = self.arcs().get(current) else {
                 break;
             };
             let label = self.arc_label(current);
@@ -360,7 +382,7 @@ impl Cfsa1 {
             let mut arc = Some(self.node_data_length + node);
             let mut next = None;
             while let Some(current) = arc {
-                let Some(&flag) = self.arcs.get(current) else {
+                let Some(&flag) = self.arcs().get(current) else {
                     break;
                 };
                 if self.arc_label(current) == byte {
@@ -387,7 +409,7 @@ impl Cfsa1 {
             let mut arc = Some(self.node_data_length + node);
             let mut next = None;
             while let Some(current) = arc {
-                let Some(&flag) = self.arcs.get(current) else {
+                let Some(&flag) = self.arcs().get(current) else {
                     break;
                 };
                 if self.arc_label(current) == byte {
@@ -410,7 +432,7 @@ impl Cfsa1 {
         }
         let mut arc = Some(self.node_data_length + node);
         while let Some(current) = arc {
-            let Some(&flag) = self.arcs.get(current) else {
+            let Some(&flag) = self.arcs().get(current) else {
                 break;
             };
             if self.arc_label(current) == separator {
@@ -426,8 +448,10 @@ impl Cfsa1 {
 }
 
 struct Cfsa2 {
-    arcs: &'static [u8],
-    label_mapping: &'static [u8],
+    data: std::sync::Arc<[u8]>,
+    arc_start: usize,
+    label_start: usize,
+    label_end: usize,
     has_numbers: bool,
 }
 
@@ -447,7 +471,15 @@ fn read_vint(data: &[u8], offset: usize) -> Option<(usize, usize)> {
 }
 
 impl Cfsa2 {
-    fn from_bytes(data: &'static [u8]) -> Option<Self> {
+    fn arcs(&self) -> &[u8] {
+        &self.data[self.arc_start..]
+    }
+
+    fn label_mapping(&self) -> &[u8] {
+        &self.data[self.label_start..self.label_end]
+    }
+
+    fn from_bytes(data: std::sync::Arc<[u8]>) -> Option<Self> {
         if data.len() < 8 || &data[0..4] != b"\\fsa" || data[4] != 0xc6 {
             return None;
         }
@@ -457,47 +489,49 @@ impl Cfsa2 {
         let has_numbers = flag_bits & (1 << 8) != 0;
         let label_mapping_size = *data.get(pos)? as usize;
         pos += 1;
-        let label_mapping = data.get(pos..pos + label_mapping_size)?;
+        let label_start = pos;
         pos += label_mapping_size;
         Some(Self {
-            arcs: data.get(pos..)?,
-            label_mapping,
+            arc_start: pos,
+            label_start,
+            label_end: pos,
             has_numbers,
+            data,
         })
     }
 
     fn first_arc(&self, node: usize) -> usize {
         if self.has_numbers {
-            read_vint(self.arcs, node).map_or(node, |(_, next)| next)
+            read_vint(self.arcs(), node).map_or(node, |(_, next)| next)
         } else {
             node
         }
     }
 
     fn arc_label(&self, arc: usize) -> u8 {
-        let index = self.arcs[arc] & 0x1f;
+        let index = self.arcs()[arc] & 0x1f;
         if index > 0 {
-            self.label_mapping[index as usize]
+            self.label_mapping()[index as usize]
         } else {
-            self.arcs[arc + 1]
+            self.arcs()[arc + 1]
         }
     }
 
     fn is_arc_last(&self, arc: usize) -> bool {
-        self.arcs[arc] & 0x40 != 0
+        self.arcs()[arc] & 0x40 != 0
     }
 
     fn is_next_set(&self, arc: usize) -> bool {
-        self.arcs[arc] & 0x80 != 0
+        self.arcs()[arc] & 0x80 != 0
     }
 
     fn skip_arc(&self, arc: usize) -> usize {
         let mut offset = arc + 1;
-        if self.arcs[arc] & 0x1f == 0 {
+        if self.arcs()[arc] & 0x1f == 0 {
             offset += 1;
         }
         if !self.is_next_set(arc) {
-            while self.arcs.get(offset).is_some_and(|b| b & 0x80 != 0) {
+            while self.arcs().get(offset).is_some_and(|b| b & 0x80 != 0) {
                 offset += 1;
             }
             offset += 1;
@@ -521,8 +555,8 @@ impl Cfsa2 {
             }
             self.skip_arc(current)
         } else {
-            let start = arc + if self.arcs[arc] & 0x1f == 0 { 2 } else { 1 };
-            read_vint(self.arcs, start).map_or(0, |(value, _)| value)
+            let start = arc + if self.arcs()[arc] & 0x1f == 0 { 2 } else { 1 };
+            read_vint(self.arcs(), start).map_or(0, |(value, _)| value)
         }
     }
 
@@ -531,7 +565,7 @@ impl Cfsa2 {
     }
 
     fn is_arc_final(&self, arc: usize) -> bool {
-        self.arcs[arc] & 0x20 != 0
+        self.arcs()[arc] & 0x20 != 0
     }
 
     fn seek(&self, node: usize, key: &[u8]) -> Option<usize> {
@@ -611,11 +645,11 @@ enum Fsa {
 }
 
 impl Fsa {
-    fn from_static(data: &'static [u8]) -> Option<Self> {
-        if let Some(f) = Cfsa2::from_bytes(data) {
+    fn from_bytes(data: std::sync::Arc<[u8]>) -> Option<Self> {
+        if let Some(f) = Cfsa2::from_bytes(data.clone()) {
             return Some(Self::C2(f));
         }
-        if let Some(f) = Fsa5::from_bytes(data) {
+        if let Some(f) = Fsa5::from_bytes(data.clone()) {
             return Some(Self::V5(f));
         }
         if let Some(f) = Cfsa1::from_bytes(data) {
@@ -665,11 +699,11 @@ impl Fsa {
         match self {
             Self::V5(f) => f
                 .root_node()
-                .is_some_and(|root| root != 0 && f.arcs.get(f.node_data_length + root).is_some()),
+                .is_some_and(|root| root != 0 && f.arcs().get(f.node_data_length + root).is_some()),
             Self::C1(f) => f
                 .root_node()
-                .is_some_and(|root| root != 0 && f.arcs.get(f.node_data_length + root).is_some()),
-            Self::C2(f) => f.root() != 0 && f.arcs.get(f.root()).is_some(),
+                .is_some_and(|root| root != 0 && f.arcs().get(f.node_data_length + root).is_some()),
+            Self::C2(f) => f.root() != 0 && f.arcs().get(f.root()).is_some(),
         }
     }
 
@@ -678,7 +712,7 @@ impl Fsa {
             Self::V5(f) => {
                 let mut arc = Some(f.node_data_length + node);
                 while let Some(current) = arc {
-                    let Some(&label) = f.arcs.get(current) else {
+                    let Some(&label) = f.arcs().get(current) else {
                         break;
                     };
                     if label == separator
@@ -697,7 +731,7 @@ impl Fsa {
             Self::C1(f) => {
                 let mut arc = Some(f.node_data_length + node);
                 while let Some(current) = arc {
-                    let Some(&flag) = f.arcs.get(current) else {
+                    let Some(&flag) = f.arcs().get(current) else {
                         break;
                     };
                     if f.arc_label(current) == separator
@@ -869,12 +903,13 @@ fn info_value(info: &str, key: &str) -> Option<String> {
 }
 
 pub fn load_fsa_word_list(dict_path: &Path, info_path: &Path) -> Option<Vec<String>> {
-    let data: &'static [u8] = Box::leak(std::fs::read(dict_path).ok()?.into_boxed_slice());
+    let data: std::sync::Arc<[u8]> =
+        std::sync::Arc::from(std::fs::read(dict_path).ok()?.into_boxed_slice());
     let info = std::fs::read_to_string(info_path).ok()?;
     let separator = info_value(&info, "fsa.dict.separator=")?.chars().next()?;
     let encoding = info_value(&info, "fsa.dict.encoding=").unwrap_or_else(|| "utf8".into());
     let sep = separator as u8;
-    let fsa = Fsa::from_static(data)?;
+    let fsa = Fsa::from_bytes(data)?;
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     fsa.for_each_sequence(&mut |sequence: &[u8]| {
         let word = sequence.split(|b| *b == sep).next().unwrap_or(&[]);
@@ -895,13 +930,14 @@ pub struct FsaWordSet {
 
 impl FsaWordSet {
     pub fn load(dict_path: &Path, info_path: &Path) -> Option<Self> {
-        let data: &'static [u8] = Box::leak(std::fs::read(dict_path).ok()?.into_boxed_slice());
+        let data: std::sync::Arc<[u8]> =
+            std::sync::Arc::from(std::fs::read(dict_path).ok()?.into_boxed_slice());
         let info = std::fs::read_to_string(info_path).ok()?;
         let separator = info_value(&info, "fsa.dict.separator=")?.chars().next()?;
         let encoding = DictEncoding::parse(
             &info_value(&info, "fsa.dict.encoding=").unwrap_or_else(|| "utf8".into()),
         );
-        let fsa = Fsa::from_static(data)?;
+        let fsa = Fsa::from_bytes(data)?;
         Some(Self {
             fsa,
             separator: separator as u8,
@@ -1159,7 +1195,8 @@ impl FsaDict {
 
 impl MorfologikDictionary {
     pub fn load(dict_path: &Path, info_path: &Path) -> Option<Self> {
-        let data: &'static [u8] = Box::leak(std::fs::read(dict_path).ok()?.into_boxed_slice());
+        let data: std::sync::Arc<[u8]> =
+            std::sync::Arc::from(std::fs::read(dict_path).ok()?.into_boxed_slice());
         let info = std::fs::read_to_string(info_path).ok()?;
         let separator = info_value(&info, "fsa.dict.separator=")?.chars().next()?;
         let encoder = info
@@ -1176,7 +1213,7 @@ impl MorfologikDictionary {
         );
         let frequency_included = info_value(&info, "fsa.dict.frequency-included=")
             .is_some_and(|v| v.eq_ignore_ascii_case("true"));
-        let fsa = Fsa::from_static(data)?;
+        let fsa = Fsa::from_bytes(data)?;
         Some(Self {
             source: Source::Fsa {
                 dict: FsaDict {
@@ -1388,8 +1425,9 @@ pub struct SynthDictionary {
 
 impl SynthDictionary {
     pub fn load(dict_path: &Path, info_path: &Path) -> Option<Self> {
-        let data: &'static [u8] = Box::leak(std::fs::read(dict_path).ok()?.into_boxed_slice());
-        let fsa = Fsa::from_static(data)?;
+        let data: std::sync::Arc<[u8]> =
+            std::sync::Arc::from(std::fs::read(dict_path).ok()?.into_boxed_slice());
+        let fsa = Fsa::from_bytes(data)?;
         let info = std::fs::read_to_string(info_path).ok()?;
         let separator = info
             .lines()
@@ -1471,12 +1509,12 @@ mod tests {
     #[test]
     fn dump_obdachloser_sequences() {
         let dir = dict_path().expect("dict");
-        let data: &'static [u8] = Box::leak(
+        let data: std::sync::Arc<[u8]> = std::sync::Arc::from(
             std::fs::read(dir.join("german.dict"))
                 .unwrap()
                 .into_boxed_slice(),
         );
-        let fsa = Fsa::from_static(data).expect("fsa");
+        let fsa = Fsa::from_bytes(data).expect("fsa");
         fsa.for_each_sequence(&mut |seq: &[u8]| {
             if seq.starts_with(b"Obdachlos") {
                 eprintln!("RAW: {}", String::from_utf8_lossy(seq));

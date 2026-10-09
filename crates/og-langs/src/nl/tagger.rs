@@ -93,9 +93,11 @@ impl WordLookup {
             else {
                 continue;
             };
-            let form_leaked: &'static str = Box::leak(form.to_string().into_boxed_str());
-            let lemma_leaked: &'static str = Box::leak(lemma.to_string().into_boxed_str());
-            let tag_leaked: &'static str = Box::leak(tag.trim().to_string().into_boxed_str());
+            let form_leaked: &'static str = og_tagger::morfologik::intern_string(form.to_string());
+            let lemma_leaked: &'static str =
+                og_tagger::morfologik::intern_string(lemma.to_string());
+            let tag_leaked: &'static str =
+                og_tagger::morfologik::intern_string(tag.trim().to_string());
             let target = if into_removals {
                 &mut self.removals
             } else {
@@ -156,11 +158,11 @@ fn pattern1_replacements() -> &'static [(Regex, &'static str)] {
             [('á', 'a'), ('é', 'e'), ('í', 'i'), ('ó', 'o'), ('ú', 'u')]
                 .into_iter()
                 .map(|(accented, base)| {
-                    let pattern = Box::leak(
-                        format!(r"([^aeiouáéíóú])({accented})([^aeiouáéíóú])").into_boxed_str(),
-                    );
+                    let pattern = og_tagger::morfologik::intern_string(format!(
+                        r"([^aeiouáéíóú])({accented})([^aeiouáéíóú])"
+                    ));
                     let replacement: &'static str =
-                        Box::leak(format!("${{1}}{base}${{3}}").into_boxed_str());
+                        og_tagger::morfologik::intern_string(format!("${{1}}{base}${{3}}"));
                     (Regex::new(pattern).unwrap(), replacement)
                 })
                 .collect()
@@ -191,7 +193,8 @@ fn char_pattern_replacements() -> &'static [(Regex, &'static str)] {
             ]
             .into_iter()
             .map(|(from, to)| {
-                let replacement: &'static str = Box::leak(to.to_string().into_boxed_str());
+                let replacement: &'static str =
+                    og_tagger::morfologik::intern_string(to.to_string());
                 (Regex::new(from).unwrap(), replacement)
             })
             .collect()
@@ -206,10 +209,11 @@ fn pattern2_replacements() -> &'static [(Regex, &'static str)] {
             [('á', 'a'), ('é', 'e'), ('í', 'i'), ('ó', 'o'), ('ú', 'u')]
                 .into_iter()
                 .map(|(accented, base)| {
-                    let pattern =
-                        Box::leak(format!(r"(^|[^aeiou]){accented}([^aeiou]|$)").into_boxed_str());
+                    let pattern = og_tagger::morfologik::intern_string(format!(
+                        r"(^|[^aeiou]){accented}([^aeiou]|$)"
+                    ));
                     let replacement: &'static str =
-                        Box::leak(format!("${{1}}{base}${{2}}").into_boxed_str());
+                        og_tagger::morfologik::intern_string(format!("${{1}}{base}${{2}}"));
                     (Regex::new(pattern).unwrap(), replacement)
                 })
                 .collect()

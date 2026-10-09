@@ -125,6 +125,7 @@ mod tests {
     #[ignore]
     #[test]
     fn probe_nested_quotes_both_examples() {
+        let _release_guard = crate::release_guard();
         probe(
             "ZAGNIEZDZONE_CUDZYSLOWY",
             "To jest jak wiadomo \u{201e}cytat \u{201e}w cytacie\u{201d}, kt\u{f3}ry jest d\u{142}ugi\u{201d}.",
@@ -138,6 +139,7 @@ mod tests {
     #[ignore]
     #[test]
     fn probe_interp_entity_compilation() {
+        let _release_guard = crate::release_guard();
         let interp = "[\\p{Punct}\\-\\u{2013}\\u{2212}\\u{2014}\\u{2015}\\u{201e}\\u{00ab}\\u{00bb}\\u{2026}\\u{2019}&&[^\\)]]+";
         eprintln!("interp entity: {interp}");
         match regex::Regex::new(interp) {
@@ -171,6 +173,7 @@ mod tests {
     #[ignore]
     #[test]
     fn probe_interp_comma_rule_firing() {
+        let _release_guard = crate::release_guard();
         use og_core::checker::Disambiguator as _;
         let resource_dir = crate::pl::tagger::pl_resource_dir().expect("pl resource dir");
         let text = "To jest co\u{15b}, co wiedzia\u{142}em od dawna.";
@@ -197,6 +200,7 @@ mod tests {
     #[ignore]
     #[test]
     fn probe_punct_rule_parsing() {
+        let _release_guard = crate::release_guard();
         let xml = std::fs::read_to_string(
             crate::pl::tagger::pl_resource_dir()
                 .expect("pl resource dir")
@@ -243,6 +247,7 @@ mod tests {
     #[ignore]
     #[test]
     fn probe_parser_exception_text_shapes() {
+        let _release_guard = crate::release_guard();
         let mk = |token_body: &str| {
             format!(
                 "<rules lang=\"pl\"><unification feature=\"number\"><equivalence type=\"sg\"><token postag=\".*\\bsg\\b.*\" postag_regexp=\"yes\"/></equivalence><equivalence type=\"pl\"><token postag=\".*\\bpl(?:tant)?\\b.*\" postag_regexp=\"yes\"/></equivalence></unification><unification feature=\"gender\"><equivalence type=\"f\"><token postag=\".*\\bf\\b.*\" postag_regexp=\"yes\"/></equivalence></unification><unification feature=\"case\"><equivalence type=\"nom\"><token postag=\".*\\bnom\\b.*\" postag_regexp=\"yes\"/></equivalence></unification><rule name=\"t\" id=\"T1\"><pattern>{token_body}</pattern><disambig action=\"add\"><wd pos=\"TEST\"/></disambig></rule></rules>"
@@ -305,6 +310,7 @@ mod tests {
     #[ignore]
     #[test]
     fn probe_double_hyphen_rule() {
+        let _release_guard = crate::release_guard();
         pattern_of("LACZNIK_MYSLNIK");
         probe("LACZNIK_MYSLNIK", "Rozumiesz -- przegrywasz.");
     }
@@ -312,6 +318,7 @@ mod tests {
     #[ignore]
     #[test]
     fn probe_nietypowa_antipattern_trace() {
+        let _release_guard = crate::release_guard();
         probe_with_engine_trace(
             "NIETYPOWA_KOMBINACJA_DUZYCH_I_MALYCH_LITER",
             "To jest dziwnie napisane s\u{141}oWo.",
@@ -321,6 +328,7 @@ mod tests {
     #[ignore]
     #[test]
     fn probe_zdania_zlozone_family() {
+        let _release_guard = crate::release_guard();
         pattern_of("ZDANIA_ZLOZONE");
         probe(
             "ZDANIA_ZLOZONE",
@@ -331,6 +339,7 @@ mod tests {
     #[ignore]
     #[test]
     fn probe_adj_subst_adj_unify_residue() {
+        let _release_guard = crate::release_guard();
         pattern_of("ADJ_SUBST_ADJ_UNIFY");
         probe(
             "ADJ_SUBST_ADJ_UNIFY",
@@ -349,6 +358,7 @@ mod tests {
     #[ignore]
     #[test]
     fn probe_weekday_and_name_rules() {
+        let _release_guard = crate::release_guard();
         pattern_of("DNI_TYGODNIA");
         probe(
             "DNI_TYGODNIA",
@@ -369,6 +379,7 @@ mod tests {
     #[ignore]
     #[test]
     fn probe_round10_single_residues() {
+        let _release_guard = crate::release_guard();
         probe(
             "JEDNAK_PRZECINEK",
             "Jednak\u{17c}e, warto spr\u{f3}bowa\u{107}.",
@@ -417,6 +428,7 @@ mod tests {
     #[ignore]
     #[test]
     fn probe_disambig_lemma_remove_actions() {
+        let _release_guard = crate::release_guard();
         let resource_dir = crate::pl::tagger::pl_resource_dir().expect("pl resource dir");
         let xml = std::fs::read_to_string(resource_dir.join("disambiguation.xml")).unwrap();
         let normalized = crate::pl::normalize_disambiguation_xml(&xml);
@@ -450,6 +462,7 @@ mod tests {
     #[ignore]
     #[test]
     fn probe_round15_zdania_zlozone_residues() {
+        let _release_guard = crate::release_guard();
         for text in [
             "Romuald odpowiedzia\u{142} z wa\u{17c}n\u{105} i tajemnicz\u{105} min\u{105} zwielokrotniaj\u{105}c g\u{142}osk\u{119}.",
             "Je\u{15b}li w w\u{119}glowodorze wyst\u{119}puje wi\u{105}zanie podw\u{f3}jne i potr\u{f3}jne to wa\u{17c}niejsze przy nazewnictwie jest podw\u{f3}jne.",
@@ -463,6 +476,7 @@ mod tests {
     #[ignore]
     #[test]
     fn probe_round15_zdania_zlozone_engine_trace() {
+        let _release_guard = crate::release_guard();
         probe_with_engine_trace(
             "ZDANIA_ZLOZONE",
             "Romuald odpowiedzia\u{142} z wa\u{17c}n\u{105} i tajemnicz\u{105} min\u{105} zwielokrotniaj\u{105}c g\u{142}osk\u{119}.",
@@ -472,6 +486,7 @@ mod tests {
     #[ignore]
     #[test]
     fn probe_round15_remaining_singles() {
+        let _release_guard = crate::release_guard();
         probe(
             "ZAGNIEZDZONE_CUDZYSLOWY",
             "\u{201e}Ka\u{17c}dy noemat ma \u{2018}tre\u{15b}\u{107}\u{2019}\u{201d}.",
@@ -516,6 +531,7 @@ mod tests {
     #[ignore]
     #[test]
     fn probe_round15_disambig_rule_effects() {
+        let _release_guard = crate::release_guard();
         let resource_dir = crate::pl::tagger::pl_resource_dir().expect("pl resource dir");
         let xml = std::fs::read_to_string(resource_dir.join("disambiguation.xml")).unwrap();
         let normalized = crate::pl::normalize_disambiguation_xml(&xml);
@@ -573,6 +589,7 @@ mod tests {
     #[ignore]
     #[test]
     fn probe_round15_o_wym_disambig_rule() {
+        let _release_guard = crate::release_guard();
         let resource_dir = crate::pl::tagger::pl_resource_dir().expect("pl resource dir");
         let xml = std::fs::read_to_string(resource_dir.join("disambiguation.xml")).unwrap();
         let normalized = crate::pl::normalize_disambiguation_xml(&xml);
@@ -617,6 +634,7 @@ mod tests {
     #[ignore]
     #[test]
     fn probe_round15_zagniezdzone_wladce_traces() {
+        let _release_guard = crate::release_guard();
         pattern_of("ZAGNIEZDZONE_CUDZYSLOWY");
         probe_with_engine_trace(
             "ZAGNIEZDZONE_CUDZYSLOWY",
@@ -727,12 +745,14 @@ mod tests {
     #[ignore]
     #[test]
     fn probe_round15_prep_casus_trace() {
+        let _release_guard = crate::release_guard();
         probe_with_engine_trace("PREP_CASUS", "By\u{142}em przy grobie Mickiewicza.");
     }
 
     #[ignore]
     #[test]
     fn probe_round15_rymy_trace() {
+        let _release_guard = crate::release_guard();
         pattern_of("RYMY");
         probe_with_engine_trace("RYMY", "Tu wyl\u{105}dowa\u{142}y oddzia\u{142}y.");
     }
@@ -749,6 +769,7 @@ mod tests {
     #[ignore]
     #[test]
     fn probe_round16_badz_koordynacja_2_isolation() {
+        let _release_guard = crate::release_guard();
         let resource_dir = crate::pl::tagger::pl_resource_dir().expect("pl resource dir");
         let xml = std::fs::read_to_string(resource_dir.join("disambiguation.xml")).unwrap();
         let normalized = crate::pl::normalize_disambiguation_xml(&xml);
@@ -899,6 +920,7 @@ mod tests {
     #[ignore]
     #[test]
     fn probe_round16_badz_koordynacja_2_variant_bisect() {
+        let _release_guard = crate::release_guard();
         let text = "Dojad\u{119} tam b\u{105}d\u{17a} rowerem b\u{105}d\u{17a} hulajnog\u{105}.";
         let original = r#"<rule name="Bądź i lub jako spójnik w konstrukcji „bądź x, bądź y”" id="badz_koordynacja_2">
         <pattern>
@@ -1000,6 +1022,7 @@ mod tests {
     #[ignore]
     #[test]
     fn probe_round16_wladce_rules_matching_surowce() {
+        let _release_guard = crate::release_guard();
         let resource_dir = crate::pl::tagger::pl_resource_dir().expect("pl resource dir");
         let xml = std::fs::read_to_string(resource_dir.join("disambiguation.xml")).unwrap();
         let normalized = crate::pl::normalize_disambiguation_xml(&xml);
@@ -1053,6 +1076,7 @@ mod tests {
     #[ignore]
     #[test]
     fn probe_round16_zdania_fp_expansion_bisect() {
+        let _release_guard = crate::release_guard();
         let resource_dir = crate::pl::tagger::pl_resource_dir().expect("pl resource dir");
         let raw = std::fs::read_to_string(resource_dir.join("disambiguation.xml")).unwrap();
         let with_expansion = crate::pl::normalize_disambiguation_xml(&raw);
@@ -1132,6 +1156,7 @@ mod tests {
     #[ignore]
     #[test]
     fn probe_round16_wladce_surowce_disambig_trace() {
+        let _release_guard = crate::release_guard();
         let resource_dir = crate::pl::tagger::pl_resource_dir().expect("pl resource dir");
         let xml = std::fs::read_to_string(resource_dir.join("disambiguation.xml")).unwrap();
         let normalized = crate::pl::normalize_disambiguation_xml(&xml);
@@ -1197,6 +1222,7 @@ mod tests {
     #[ignore]
     #[test]
     fn probe_round17_wladce_sequential_disambig_scan() {
+        let _release_guard = crate::release_guard();
         let resource_dir = crate::pl::tagger::pl_resource_dir().expect("pl resource dir");
         let xml = std::fs::read_to_string(resource_dir.join("disambiguation.xml")).unwrap();
         let normalized = crate::pl::normalize_disambiguation_xml(&xml);
@@ -1245,6 +1271,7 @@ mod tests {
     #[ignore]
     #[test]
     fn probe_round18_unify_adj_subst_subrules() {
+        let _release_guard = crate::release_guard();
         let resource_dir = crate::pl::tagger::pl_resource_dir().expect("pl resource dir");
         let xml = std::fs::read_to_string(resource_dir.join("disambiguation.xml")).unwrap();
         let normalized = crate::pl::normalize_disambiguation_xml(&xml);
@@ -1261,6 +1288,7 @@ mod tests {
     #[ignore]
     #[test]
     fn probe_round18_wladce_control_examples() {
+        let _release_guard = crate::release_guard();
         for text in [
             "Tylko rodzice potrafi\u{105} ich odr\u{f3}\u{17c}ni\u{107}.",
             "Wo\u{17a}nice odebrali ma\u{142}ym konikom worki z obrokiem.",
@@ -1273,6 +1301,7 @@ mod tests {
     #[ignore]
     #[test]
     fn probe_round18_wladce_individual_rule_effects() {
+        let _release_guard = crate::release_guard();
         let resource_dir = crate::pl::tagger::pl_resource_dir().expect("pl resource dir");
         let xml = std::fs::read_to_string(resource_dir.join("disambiguation.xml")).unwrap();
         let normalized = crate::pl::normalize_disambiguation_xml(&xml);
@@ -1318,6 +1347,7 @@ mod tests {
     #[ignore]
     #[test]
     fn probe_round20_wladce_initial_readings() {
+        let _release_guard = crate::release_guard();
         for text in [
             "Surowce zawieraj\u{105}ce te alkaloidy",
             "Wo\u{17a}nice odebrali ma\u{142}ym konikom worki z obrokiem.",
@@ -1406,6 +1436,7 @@ mod tests {
     #[ignore]
     #[test]
     fn probe_round16_adj_subst_adj_unify_antipattern_bisect() {
+        let _release_guard = crate::release_guard();
         let rule_id = "ADJ_SUBST_ADJ_UNIFY";
         let text =
             "Beztlenowe bakterie magnetotaktyczna maj\u{105} funkcj\u{119} wykrywania tlenu.";
@@ -1536,18 +1567,20 @@ mod tests {
             sub1.pattern.tokens.len()
         );
         assert!(
-            and_members.iter().all(|m| {
-                m.text.is_none() && m.compiled_regexp.is_none() && m.compiled_regexp_fancy.is_none()
-            }),
-            "the shared compiler drops the token-level <match no=\"0\" regexp_match=...> \\
-             transform, so RYMY's <and> branch can never match: og-xml parser.rs:420-450 has \\
-             arms for no/postag/postag_regexp/postag_replace/setpos but none for \\
-             regexp_match/regexp_replace, and the runtime fallback in og-rules \\
-             pattern_rule.rs:1123-1134 (backreference_matches tail) degenerates to plain \\
-             text equality against the referenced token ('oddziały' != 'wylądowały') - this \\
-             pin flips when the engine gains the Java runtime rewrite \\
-             (PatternTokenMatcher.java:55-63 resolveReference -> PatternToken.java:502-515 \\
-             doCompile -> MatchState.java:221-227 toFinalString replaceAll)"
+            and_members.iter().all(|m| m.match_no == Some(0)),
+            "both <and> members reference token 0 via <match no=\"0\">"
+        );
+        assert!(
+            and_members.iter().any(|m| m
+                .match_no_regexp_replace
+                .as_deref()
+                .is_some_and(|r| r == ".*$1")
+                && m.compiled_match_no_regex.is_some()),
+            "the token-level <match no=\"0\" regexp_match=\"...([aeuóiyęą]...)\" \
+             regexp_replace=\".*$1\"> transform now compiles into the shared engine \
+             (compiled_match_no_regex + match_no_regexp_replace), closing the gap this \
+             pin used to document (the in-token <match> references port, 191a205, \
+             mirrors PatternTokenMatcher resolveReference -> MatchState toFinalString)"
         );
     }
 }

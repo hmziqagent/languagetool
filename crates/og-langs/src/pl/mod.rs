@@ -1127,6 +1127,7 @@ mod dict_probe {
     #[ignore]
     #[test]
     fn probe_oracle_divergence_sample() {
+        let _release_guard = crate::release_guard();
         let dir = super::tagger::pl_resource_dir().expect("pl resource dir");
         let hunspell = og_tagger::morfologik::FsaWordSet::load(
             &dir.join("hunspell/pl_PL.dict"),
@@ -1190,6 +1191,7 @@ mod dict_probe {
     #[ignore]
     #[test]
     fn probe_speller_words() {
+        let _release_guard = crate::release_guard();
         let rule = crate::pl::speller::PolishSpellerRule::shared();
         for text in [
             "To jest zdanie z b\u{142}\u{119}dem.",
@@ -1220,6 +1222,7 @@ mod dict_probe {
     #[ignore]
     #[test]
     fn probe_word_repeat_tokens() {
+        let _release_guard = crate::release_guard();
         let text =
             "M\u{f3}wi\u{142}a d\u{142}ugo, bo lubi\u{142}a robi\u{107} wszystko d\u{142}ugo.";
         let sentence =
@@ -1239,6 +1242,7 @@ mod dict_probe {
     #[ignore]
     #[test]
     fn probe_coherency_matches() {
+        let _release_guard = crate::release_guard();
         let rule = crate::pl::polish_word_coherency_rule();
         let text = "Kupi\u{142}em grapefruity, a grejpfrut\u{f3}w nie lubi\u{119}.";
         let sentences = crate::pl::test_support::PolishPipeline::shared().analyze_text(text);
@@ -1274,6 +1278,7 @@ mod dict_probe {
     #[ignore]
     #[test]
     fn probe_coherency_tokens() {
+        let _release_guard = crate::release_guard();
         let text = "Kupi\u{142}em grapefruity, a grejpfrut\u{f3}w nie lubi\u{119}.";
         for (si, sentence) in crate::pl::test_support::PolishPipeline::shared()
             .analyze_text(text)

@@ -278,7 +278,7 @@ pub(crate) mod test_support {
     use og_core::checker::Disambiguator;
     use og_core::{AnalyzedSentence, AnalyzedToken, AnalyzedTokenReadings};
     use og_tokenizer::WordTokenizer as _;
-    use std::sync::{Arc, OnceLock};
+    use std::sync::Arc;
 
     pub struct SpanishPipeline {
         tokenizer: word_tokenizer::SpanishWordTokenizer,

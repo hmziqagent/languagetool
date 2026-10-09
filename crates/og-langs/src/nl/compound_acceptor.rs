@@ -58,7 +58,7 @@ fn load_words(data: &str) -> HashSet<&'static str> {
     data.lines()
         .filter(|line| !line.is_empty() && !line.starts_with('#'))
         .map(|line| {
-            let leaked: &'static str = Box::leak(line.to_string().into_boxed_str());
+            let leaked: &'static str = og_tagger::morfologik::intern_string(line.to_string());
             leaked
         })
         .collect()
@@ -171,7 +171,7 @@ impl CompoundAcceptor {
             .map(|(i, _)| i)
             .chain(std::iter::once(word.len()))
             .collect();
-        for &split in &boundaries[3..char_count.saturating_sub(3)] {
+        for &split in boundaries.iter().take(char_count.saturating_sub(3)).skip(3) {
             let (part1, part2) = (&word[..split], &word[split..]);
             if part1 != part2 && self.accept_compound_parts(part1, part2) {
                 return Some((part1.to_string(), part2.to_string()));

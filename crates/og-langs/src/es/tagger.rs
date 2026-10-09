@@ -103,7 +103,7 @@ fn intern_tag(tag: &str) -> &'static str {
     if let Some(existing) = guard.get(tag) {
         return existing;
     }
-    let leaked: &'static str = Box::leak(tag.to_string().into_boxed_str());
+    let leaked: &'static str = og_tagger::morfologik::intern_string(tag.to_string());
     guard.insert(leaked);
     leaked
 }
@@ -146,14 +146,8 @@ impl SpanishTagger {
         tagger
     }
 
-    pub fn shared() -> Option<&'static SpanishTagger> {
-        static CACHE: OnceLock<Option<Arc<SpanishTagger>>> = OnceLock::new();
-        CACHE
-            .get_or_init(|| {
-                crate::es::es_resource_dir()
-                    .map(|dir| Arc::new(SpanishTagger::from_resource_dir(&dir)))
-            })
-            .as_deref()
+    pub fn shared() -> Option<Arc<SpanishTagger>> {
+        Self::shared_arc()
     }
 
     pub fn shared_arc() -> Option<Arc<SpanishTagger>> {
@@ -173,9 +167,11 @@ impl SpanishTagger {
             else {
                 continue;
             };
-            let form_leaked: &'static str = Box::leak(form.to_string().into_boxed_str());
-            let lemma_leaked: &'static str = Box::leak(lemma.to_string().into_boxed_str());
-            let tag_leaked: &'static str = Box::leak(tag.trim().to_string().into_boxed_str());
+            let form_leaked: &'static str = og_tagger::morfologik::intern_string(form.to_string());
+            let lemma_leaked: &'static str =
+                og_tagger::morfologik::intern_string(lemma.to_string());
+            let tag_leaked: &'static str =
+                og_tagger::morfologik::intern_string(tag.trim().to_string());
             let target = if into_removals {
                 &mut self.removals
             } else {

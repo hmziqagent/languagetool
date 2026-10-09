@@ -6,19 +6,22 @@ use og_core::{AnalyzedSentence, AnalyzedToken, AnalyzedTokenReadings, RuleMatch}
 use og_rules::pattern_rule::PatternRuleEngine;
 use og_xml::compiler::{CompiledRule, CompiledRuleSet, XmlCompiler};
 use std::collections::HashMap;
-use std::sync::OnceLock;
 
 pub(crate) struct ZhPipeline {
     tokenizer: ChineseWordTokenizer,
     splitter: Option<og_tokenizer::srx::SrxSentenceSplitter>,
 }
 
-pub(crate) fn zh_pipeline() -> &'static ZhPipeline {
-    static PIPE: OnceLock<ZhPipeline> = OnceLock::new();
-    PIPE.get_or_init(|| ZhPipeline {
-        tokenizer: ChineseWordTokenizer::new(),
-        splitter: og_tokenizer::srx::srx_splitter("zh"),
+pub(crate) fn zh_pipeline() -> std::sync::Arc<ZhPipeline> {
+    static PIPE: og_core::releasable::Releasable<ZhPipeline> =
+        og_core::releasable::Releasable::new();
+    og_core::releasable::shared_get_or_build(&PIPE, || {
+        Some(std::sync::Arc::new(ZhPipeline {
+            tokenizer: ChineseWordTokenizer::new(),
+            splitter: og_tokenizer::srx::srx_splitter("zh"),
+        }))
     })
+    .expect("zh pipeline")
 }
 
 impl ZhPipeline {
@@ -68,16 +71,20 @@ fn grammar_path() -> std::path::PathBuf {
         .join("grammar.xml")
 }
 
-fn compiled_rules() -> &'static CompiledRuleSet {
-    static GRAMMAR: OnceLock<CompiledRuleSet> = OnceLock::new();
-    GRAMMAR.get_or_init(|| {
+fn compiled_rules() -> std::sync::Arc<CompiledRuleSet> {
+    static GRAMMAR: og_core::releasable::Releasable<CompiledRuleSet> =
+        og_core::releasable::Releasable::new();
+    og_core::releasable::shared_get_or_build(&GRAMMAR, || {
         let path = grammar_path();
         let raw = std::fs::read_to_string(&path).expect("zh grammar.xml");
         let xml = super::normalize_zh_rules_xml(&raw);
-        XmlCompiler::new()
-            .compile_file_with_base(&xml, path.parent())
-            .expect("compile zh grammar.xml")
+        Some(std::sync::Arc::new(
+            XmlCompiler::new()
+                .compile_file_with_base(&xml, path.parent())
+                .expect("compile zh grammar.xml"),
+        ))
     })
+    .expect("zh grammar")
 }
 
 pub(crate) fn module_check(text: &str) -> Vec<RuleMatch> {
@@ -136,7 +143,7 @@ fn rule_groups(rule_set: &CompiledRuleSet) -> Vec<Vec<&CompiledRule>> {
 fn chinese_grammar_examples_with_zh_pipeline() {
     let _release_guard = crate::release_guard();
     let rule_set = compiled_rules();
-    let groups = rule_groups(rule_set);
+    let groups = rule_groups(&rule_set);
     let engine = PatternRuleEngine::new();
     let pipeline = zh_pipeline();
 
@@ -255,7 +262,7 @@ const PINNED_RESIDUE: &[&str] = &[
 #[test]
 fn grammar_rules_compile_the_java_inventory() {
     let rule_set = compiled_rules();
-    let example_count: usize = rule_groups(rule_set)
+    let example_count: usize = rule_groups(&rule_set)
         .iter()
         .filter_map(|g| g.first())
         .flat_map(|r| r.examples.iter())

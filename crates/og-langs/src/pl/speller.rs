@@ -1,7 +1,7 @@
 use og_core::rule::Rule;
 use og_core::{AnalyzedSentence, RuleMatch, SuggestedReplacement};
 use std::collections::HashSet;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 
 pub const MORFOLOGIK_RULE_PL_PL: &str = "MORFOLOGIK_RULE_PL_PL";
 
@@ -85,22 +85,21 @@ fn load_pl_pl_words(resource_dir: &std::path::Path) -> Option<Vec<String>> {
 }
 
 fn shared_speller_oracle() -> Option<Arc<ExactOracle>> {
-    static CACHE: OnceLock<Option<Arc<ExactOracle>>> = OnceLock::new();
-    CACHE
-        .get_or_init(|| {
-            let resource_dir = super::tagger::pl_resource_dir()?;
-            let mut words = load_pl_pl_words(&resource_dir)?;
-            if let Ok(extra) = std::fs::read_to_string(resource_dir.join("hunspell/spelling.txt")) {
-                for line in extra.lines() {
-                    let word = line.split(['\t', ';']).next().unwrap_or("").trim();
-                    if !word.is_empty() && !word.starts_with('#') {
-                        words.push(word.to_string());
-                    }
+    static CACHE: og_core::releasable::Releasable<ExactOracle> =
+        og_core::releasable::Releasable::new();
+    og_core::releasable::shared_get_or_build(&CACHE, || {
+        let resource_dir = super::tagger::pl_resource_dir()?;
+        let mut words = load_pl_pl_words(&resource_dir)?;
+        if let Ok(extra) = std::fs::read_to_string(resource_dir.join("hunspell/spelling.txt")) {
+            for line in extra.lines() {
+                let word = line.split(['\t', ';']).next().unwrap_or("").trim();
+                if !word.is_empty() && !word.starts_with('#') {
+                    words.push(word.to_string());
                 }
             }
-            Some(Arc::new(ExactOracle::from_words(words)))
-        })
-        .clone()
+        }
+        Some(Arc::new(ExactOracle::from_words(words)))
+    })
 }
 
 fn shared_ignore_words() -> HashSet<String> {
@@ -157,10 +156,12 @@ impl PolishSpellerRule {
     }
 
     pub fn shared() -> Arc<PolishSpellerRule> {
-        static CACHE: OnceLock<Arc<PolishSpellerRule>> = OnceLock::new();
-        CACHE
-            .get_or_init(|| Arc::new(PolishSpellerRule::new()))
-            .clone()
+        static CACHE: og_core::releasable::Releasable<PolishSpellerRule> =
+            og_core::releasable::Releasable::new();
+        og_core::releasable::shared_get_or_build(&CACHE, || {
+            Some(Arc::new(PolishSpellerRule::new()))
+        })
+        .expect("polish speller rule")
     }
 
     pub fn is_known_word(&self, word: &str) -> bool {

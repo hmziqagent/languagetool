@@ -145,9 +145,11 @@ impl PortugueseTagger {
             else {
                 continue;
             };
-            let form_leaked: &'static str = Box::leak(form.to_string().into_boxed_str());
-            let lemma_leaked: &'static str = Box::leak(lemma.to_string().into_boxed_str());
-            let tag_leaked: &'static str = Box::leak(tag.trim().to_string().into_boxed_str());
+            let form_leaked: &'static str = og_tagger::morfologik::intern_string(form.to_string());
+            let lemma_leaked: &'static str =
+                og_tagger::morfologik::intern_string(lemma.to_string());
+            let tag_leaked: &'static str =
+                og_tagger::morfologik::intern_string(tag.trim().to_string());
             let target = if into_removals {
                 &mut self.removals
             } else {

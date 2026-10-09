@@ -1,7 +1,7 @@
 use og_core::rule::{Rule, TextLevelRule};
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 #[cfg(test)]
 mod example_suite;
@@ -24,38 +24,36 @@ pub fn tl_rules_dir() -> Option<PathBuf> {
 }
 
 pub fn tagalog_tagger() -> Option<Arc<og_tagger::GenericTagger>> {
-    static CACHE: OnceLock<Option<Arc<og_tagger::GenericTagger>>> = OnceLock::new();
-    CACHE
-        .get_or_init(|| {
-            tl_resource_dir()
-                .map(|dir| Arc::new(og_tagger::GenericTagger::from_resource_dir(&dir, "tagalog")))
-        })
-        .clone()
+    static CACHE: og_core::releasable::Releasable<og_tagger::GenericTagger> =
+        og_core::releasable::Releasable::new();
+    og_core::releasable::shared_get_or_build(&CACHE, || {
+        tl_resource_dir()
+            .map(|dir| Arc::new(og_tagger::GenericTagger::from_resource_dir(&dir, "tagalog")))
+    })
 }
 
 fn tagalog_speller_dictionary() -> Option<Arc<og_spell::Dictionary>> {
-    static CACHE: OnceLock<Option<Arc<og_spell::Dictionary>>> = OnceLock::new();
-    CACHE
-        .get_or_init(|| {
-            let hunspell = tl_resource_dir()?.join("hunspell");
-            let mut dict = og_tagger::morfologik::FsaWordSet::load(
-                &hunspell.join("tl_PH.dict"),
-                &hunspell.join("tl_PH.info"),
-            )
-            .map(std::sync::Arc::new)
-            .map(og_spell::Dictionary::from_fsa_word_set)
-            .unwrap_or_else(og_spell::Dictionary::new);
-            if let Ok(extra) = std::fs::read_to_string(hunspell.join("spelling.txt")) {
-                for line in extra.lines() {
-                    let word = line.trim();
-                    if !word.is_empty() && !word.starts_with('#') {
-                        dict.add_word(word);
-                    }
+    static CACHE: og_core::releasable::Releasable<og_spell::Dictionary> =
+        og_core::releasable::Releasable::new();
+    og_core::releasable::shared_get_or_build(&CACHE, || {
+        let hunspell = tl_resource_dir()?.join("hunspell");
+        let mut dict = og_tagger::morfologik::FsaWordSet::load(
+            &hunspell.join("tl_PH.dict"),
+            &hunspell.join("tl_PH.info"),
+        )
+        .map(std::sync::Arc::new)
+        .map(og_spell::Dictionary::from_fsa_word_set)
+        .unwrap_or_else(og_spell::Dictionary::new);
+        if let Ok(extra) = std::fs::read_to_string(hunspell.join("spelling.txt")) {
+            for line in extra.lines() {
+                let word = line.trim();
+                if !word.is_empty() && !word.starts_with('#') {
+                    dict.add_word(word);
                 }
             }
-            (!dict.is_empty()).then_some(Arc::new(dict))
-        })
-        .clone()
+        }
+        (!dict.is_empty()).then_some(Arc::new(dict))
+    })
 }
 
 fn tagalog_ignore_words() -> HashSet<String> {

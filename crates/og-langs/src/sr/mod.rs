@@ -1,7 +1,7 @@
 use og_core::rule::{Rule, TextLevelRule};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 #[cfg(test)]
 mod example_suite;
@@ -127,16 +127,17 @@ pub fn sr_variant_dictionary_dir(variant: SerbianVariant, resource_root: &Path) 
 }
 
 pub fn serbian_tagger(variant: SerbianVariant) -> Option<Arc<og_tagger::GenericTagger>> {
-    static CACHE: [OnceLock<Option<Arc<og_tagger::GenericTagger>>>; 2] =
-        [OnceLock::new(), OnceLock::new()];
-    let slot = &CACHE[variant as usize];
-    slot.get_or_init(|| {
+    static CELLS: [og_core::releasable::Releasable<og_tagger::GenericTagger>; 2] = [
+        og_core::releasable::Releasable::new(),
+        og_core::releasable::Releasable::new(),
+    ];
+    let cell = &CELLS[variant as usize];
+    og_core::releasable::shared_get_or_build(cell, || {
         sr_resource_dir().map(|root| {
             let dir = sr_variant_dictionary_dir(variant, &root);
             Arc::new(og_tagger::GenericTagger::from_resource_dir(&dir, "serbian"))
         })
     })
-    .clone()
 }
 
 pub fn build_sr_disambiguator(resource_dir: &Path) -> Option<og_tagger::XmlDisambiguator> {
@@ -168,10 +169,12 @@ fn sr_shared_speller_dictionary(
     variant: SerbianVariant,
     resource_root: &Path,
 ) -> Arc<og_spell::Dictionary> {
-    static CACHE: [OnceLock<Option<Arc<og_spell::Dictionary>>>; 2] =
-        [OnceLock::new(), OnceLock::new()];
-    let slot = &CACHE[variant as usize];
-    slot.get_or_init(|| {
+    static CELLS: [og_core::releasable::Releasable<og_spell::Dictionary>; 2] = [
+        og_core::releasable::Releasable::new(),
+        og_core::releasable::Releasable::new(),
+    ];
+    let cell = &CELLS[variant as usize];
+    og_core::releasable::shared_get_or_build(cell, || {
         let dir = sr_variant_dictionary_dir(variant, resource_root);
         let mut dict = og_tagger::morfologik::FsaWordSet::load(
             &dir.join("serbian.dict"),
@@ -190,7 +193,6 @@ fn sr_shared_speller_dictionary(
         }
         (!dict.is_empty()).then_some(Arc::new(dict))
     })
-    .clone()
     .unwrap_or_else(|| Arc::new(og_spell::Dictionary::new()))
 }
 

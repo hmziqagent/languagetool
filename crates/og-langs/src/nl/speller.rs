@@ -3,7 +3,7 @@ use og_core::{AnalyzedSentence, RuleMatch};
 use og_spell::Dictionary;
 use og_tokenizer::WordTokenizer as _;
 use std::collections::HashSet;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 pub const MORFOLOGIK_RULE_NL_NL: &str = "MORFOLOGIK_RULE_NL_NL";
 
@@ -91,11 +91,6 @@ impl DutchSpellerRule {
             .as_deref()
             .is_some_and(|acceptor| acceptor.accept_compound(word))
     }
-}
-
-pub fn shared_speller_rule() -> &'static DutchSpellerRule {
-    static RULE: OnceLock<DutchSpellerRule> = OnceLock::new();
-    RULE.get_or_init(DutchSpellerRule::new)
 }
 
 impl Default for DutchSpellerRule {

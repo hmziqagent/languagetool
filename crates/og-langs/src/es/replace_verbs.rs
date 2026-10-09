@@ -42,7 +42,7 @@ fn load_wrong_verbs() -> HashMap<String, Vec<String>> {
     map
 }
 
-fn shared_tagger() -> Option<&'static crate::es::tagger::SpanishTagger> {
+fn shared_tagger() -> Option<std::sync::Arc<crate::es::tagger::SpanishTagger>> {
     crate::es::tagger::SpanishTagger::shared()
 }
 
@@ -104,7 +104,7 @@ impl SimpleReplaceVerbsRule {
 
     fn reading_tags_for_desinence(
         &self,
-        tagger: &'static crate::es::tagger::SpanishTagger,
+        tagger: &crate::es::tagger::SpanishTagger,
         desinence: &str,
     ) -> Vec<String> {
         let probe = format!("am{desinence}");
@@ -172,7 +172,7 @@ impl Rule for SimpleReplaceVerbsRule {
                 let lexeme = apply_orthographic_changes(lexeme, desinence);
                 let candidate_infinitive = format!("{lexeme}ar");
                 if self.wrong_verbs.contains_key(&candidate_infinitive) {
-                    let tags = self.reading_tags_for_desinence(tagger, desinence);
+                    let tags = self.reading_tags_for_desinence(tagger.as_ref(), desinence);
                     if !tags.is_empty() {
                         reading_tags = tags;
                         infinitive = Some(candidate_infinitive);

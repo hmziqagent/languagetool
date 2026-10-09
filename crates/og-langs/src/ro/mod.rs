@@ -1,7 +1,7 @@
 use og_core::rule::{Rule, TextLevelRule};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 pub mod compound;
 pub mod word_repeat_beginning;
@@ -22,16 +22,12 @@ pub fn ro_resource_dir() -> Option<PathBuf> {
 }
 
 pub fn romanian_tagger() -> Option<Arc<og_tagger::GenericTagger>> {
-    static CACHE: OnceLock<Option<Arc<og_tagger::GenericTagger>>> = OnceLock::new();
-    CACHE
-        .get_or_init(|| {
-            ro_resource_dir().map(|dir| {
-                Arc::new(og_tagger::GenericTagger::from_resource_dir(
-                    &dir, "romanian",
-                ))
-            })
-        })
-        .clone()
+    static CACHE: og_core::releasable::Releasable<og_tagger::GenericTagger> =
+        og_core::releasable::Releasable::new();
+    og_core::releasable::shared_get_or_build(&CACHE, || {
+        ro_resource_dir()
+            .map(|dir| Arc::new(og_tagger::GenericTagger::from_resource_dir(&dir, "romanian")))
+    })
 }
 
 pub fn build_ro_disambiguator(resource_dir: &Path) -> Option<og_tagger::XmlDisambiguator> {

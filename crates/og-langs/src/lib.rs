@@ -6,10 +6,13 @@ pub use en::*;
 pub use engine::*;
 pub use registry::*;
 
+#[cfg(test)]
 pub(crate) fn release_guard() -> impl Drop {
-    struct ReleaseOnDrop(og_core::releasable::HeavyGuard);
-    impl Drop for ReleaseOnDrop {
-        fn drop(&mut self) {
+    struct ReleaseOnDrop {
+        _heavy: og_core::releasable::HeavyGuard,
+    }
+    impl ReleaseOnDrop {
+        fn release_shared_statics() {
             og_core::releasable::release_all();
             #[cfg(target_os = "linux")]
             unsafe {
@@ -17,7 +20,16 @@ pub(crate) fn release_guard() -> impl Drop {
             }
         }
     }
-    ReleaseOnDrop(og_core::releasable::heavy_guard())
+    impl Drop for ReleaseOnDrop {
+        fn drop(&mut self) {
+            Self::release_shared_statics();
+        }
+    }
+    let guard = ReleaseOnDrop {
+        _heavy: og_core::releasable::heavy_guard(),
+    };
+    ReleaseOnDrop::release_shared_statics();
+    guard
 }
 
 pub(crate) fn weak_shared<T>(

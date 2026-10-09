@@ -222,6 +222,7 @@ mod tests {
     #[ignore]
     #[test]
     fn probe_round22_divendres_agost_pipeline_state() {
+        let _release_guard = crate::release_guard();
         let pipeline = CatalanPipeline::shared();
         let engine = suite_engine();
         for text in [
@@ -432,6 +433,7 @@ mod tests {
     #[ignore]
     #[test]
     fn probe_round21_engine_side_breakdown() {
+        let _release_guard = crate::release_guard();
         let Ok(lines) = std::fs::read_to_string("/tmp/test_failures_ca_module.txt") else {
             eprintln!("no /tmp/test_failures_ca_module.txt - run the module suite first");
             return;
@@ -827,6 +829,7 @@ mod tests {
     #[ignore]
     #[test]
     fn probe_round21_family_counts() {
+        let _release_guard = crate::release_guard();
         for (id, text) in [
             ("CA_DATE_WEEKDAY", "Dilluns, 7 d'octubre de 2014"),
             ("CA_DATE_WEEKDAY", "Dimarts, 7 d'octubre de 2014"),
@@ -896,6 +899,7 @@ mod tests {
     #[ignore]
     #[test]
     fn probe_round20_mes1_antipattern_trace() {
+        let _release_guard = crate::release_guard();
         pattern_of("MES1");
         probe("MES1", "Destaca juliol com a mes sec.");
         probe_with_engine_trace("MES1", "Destaca juliol com a mes sec.");
@@ -909,6 +913,7 @@ mod tests {
     #[ignore]
     #[test]
     fn probe_round20_enrecordar_readings() {
+        let _release_guard = crate::release_guard();
         pattern_of("ENRECORDAR");
         pattern_of("LHI_SEL");
         probe("ENRECORDAR", "No t'enrecordes?");
@@ -918,6 +923,7 @@ mod tests {
     #[ignore]
     #[test]
     fn probe_round20_inline_case_flag_regex() {
+        let _release_guard = crate::release_guard();
         let month_re = "^(?:(?-i)Gener|Febrer|Mar\u{e7}|Abril|Maig|Juny|Juliol|Agost|Setembre|Octubre|Novembre|Desembre)$";
         match regex::RegexBuilder::new(month_re)
             .case_insensitive(true)
@@ -963,6 +969,7 @@ mod tests {
     #[ignore]
     #[test]
     fn probe_round20_mesos_minuscula_suppression_bisect() {
+        let _release_guard = crate::release_guard();
         let pipeline = CatalanPipeline::shared();
         let engine = suite_engine();
         for text in [
@@ -992,6 +999,7 @@ mod tests {
     #[ignore]
     #[test]
     fn probe_round25_example_coverage_gap() {
+        let _release_guard = crate::release_guard();
         let rule_set = compiled_rules();
         let compiled_examples: usize = rule_set.rules.iter().map(|r| r.examples.len()).sum();
         eprintln!(
@@ -1060,6 +1068,7 @@ mod tests {
     #[ignore]
     #[test]
     fn probe_round25_sub_rule_inventory() {
+        let _release_guard = crate::release_guard();
         for id in [
             "DARRERA",
             "QUANT_QUAN",

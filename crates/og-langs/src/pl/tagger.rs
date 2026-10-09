@@ -78,8 +78,8 @@ fn load_manual_map(resource_dir: &Path, files: [&str; 2]) -> ManualMap {
             map.entry(form.to_string().into_boxed_str())
                 .or_default()
                 .push((
-                    Box::leak(lemma.to_string().into_boxed_str()),
-                    Box::leak(tag.trim().to_string().into_boxed_str()),
+                    og_tagger::morfologik::intern_string(lemma.to_string()),
+                    og_tagger::morfologik::intern_string(tag.trim().to_string()),
                 ));
         }
     }
@@ -193,7 +193,7 @@ impl PolishTagger {
         for (lemma, tag) in self.raw_readings(base) {
             if compar_superl_re().is_match(tag) {
                 result.push((
-                    Box::leak(format!("{NEGATION_PREFIX}{lemma}").into_boxed_str()),
+                    og_tagger::morfologik::intern_string(format!("{NEGATION_PREFIX}{lemma}")),
                     tag,
                 ));
             }

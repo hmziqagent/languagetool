@@ -6,7 +6,7 @@ use og_core::{AnalyzedSentence, AnalyzedToken, AnalyzedTokenReadings, CheckReque
 use og_rules::pattern_rule::PatternRuleEngine;
 use og_xml::compiler::{CompiledRule, CompiledRuleSet, XmlCompiler};
 use std::collections::HashMap;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 pub(crate) fn sv_resource_dir() -> std::path::PathBuf {
     super::sv_resource_dir().expect("sv resource dir")
@@ -19,14 +19,18 @@ pub(crate) struct SvPipeline {
     splitter: Option<og_tokenizer::srx::SrxSentenceSplitter>,
 }
 
-pub(crate) fn sv_pipeline() -> &'static SvPipeline {
-    static PIPE: OnceLock<SvPipeline> = OnceLock::new();
-    PIPE.get_or_init(|| SvPipeline {
-        tokenizer: og_tokenizer::DefaultWordTokenizer::new_generic(),
-        tagger: super::swedish_tagger().expect("swedish.dict tagger"),
-        disambiguator: super::build_sv_disambiguator(&sv_resource_dir()),
-        splitter: og_tokenizer::srx::srx_splitter("sv"),
+pub(crate) fn sv_pipeline() -> std::sync::Arc<SvPipeline> {
+    static PIPE: og_core::releasable::Releasable<SvPipeline> =
+        og_core::releasable::Releasable::new();
+    og_core::releasable::shared_get_or_build(&PIPE, || {
+        Some(std::sync::Arc::new(SvPipeline {
+            tokenizer: og_tokenizer::DefaultWordTokenizer::new_generic(),
+            tagger: super::swedish_tagger().expect("swedish.dict tagger"),
+            disambiguator: super::build_sv_disambiguator(&sv_resource_dir()),
+            splitter: og_tokenizer::srx::srx_splitter("sv"),
+        }))
     })
+    .expect("sv pipeline")
 }
 
 impl SvPipeline {
@@ -119,27 +123,32 @@ impl og_core::checker::WordTokenizer for SvWordTokenizerBridge {
     }
 }
 
-fn compiled_rules() -> &'static CompiledRuleSet {
-    static GRAMMAR: OnceLock<CompiledRuleSet> = OnceLock::new();
-    GRAMMAR.get_or_init(|| {
+fn compiled_rules() -> std::sync::Arc<CompiledRuleSet> {
+    static GRAMMAR: og_core::releasable::Releasable<CompiledRuleSet> =
+        og_core::releasable::Releasable::new();
+    og_core::releasable::shared_get_or_build(&GRAMMAR, || {
         let path = crate::engine::find_lt_resource_dir()
             .expect("lt resource dir")
             .join("sv/src/main/resources/org/languagetool/rules/sv/grammar.xml");
         let xml = std::fs::read_to_string(&path).expect("sv grammar.xml");
         let xml = super::normalize_sv_rules_xml(&xml);
-        XmlCompiler::new()
-            .compile_file_with_base(xml.as_ref(), path.parent())
-            .expect("compile sv grammar.xml")
+        Some(std::sync::Arc::new(
+            XmlCompiler::new()
+                .compile_file_with_base(xml.as_ref(), path.parent())
+                .expect("compile sv grammar.xml"),
+        ))
     })
+    .expect("sv grammar")
 }
 
 pub(crate) fn suite_engine() -> PatternRuleEngine {
     PatternRuleEngine::new()
 }
 
-pub(crate) fn module_checker() -> &'static og_core::checker::Checker {
-    static CHECKER: OnceLock<og_core::checker::Checker> = OnceLock::new();
-    CHECKER.get_or_init(|| {
+pub(crate) fn module_checker() -> std::sync::Arc<og_core::checker::Checker> {
+    static CHECKER: og_core::releasable::Releasable<og_core::checker::Checker> =
+        og_core::releasable::Releasable::new();
+    og_core::releasable::shared_get_or_build(&CHECKER, || {
         let natives = super::swedish_native_rules();
         let mut rules = natives.rules;
         for compiled in compiled_rules().rules.clone() {
@@ -149,16 +158,20 @@ pub(crate) fn module_checker() -> &'static og_core::checker::Checker {
                 )));
             }
         }
-        og_core::checker::Checker::new()
-            .with_sentence_tokenizer(Arc::new(SvSentenceTokenizer))
-            .with_word_tokenizer(Arc::new(SvWordTokenizerBridge))
-            .with_tagger(super::swedish_tagger().expect("swedish.dict tagger"))
-            .with_disambiguator(
-                super::build_sv_disambiguator(&sv_resource_dir()).expect("sv hybrid disambiguator"),
-            )
-            .set_rules(rules)
-            .set_text_level_rules(natives.text_level_rules)
+        Some(std::sync::Arc::new(
+            og_core::checker::Checker::new()
+                .with_sentence_tokenizer(Arc::new(SvSentenceTokenizer))
+                .with_word_tokenizer(Arc::new(SvWordTokenizerBridge))
+                .with_tagger(super::swedish_tagger().expect("swedish.dict tagger"))
+                .with_disambiguator(
+                    super::build_sv_disambiguator(&sv_resource_dir())
+                        .expect("sv hybrid disambiguator"),
+                )
+                .set_rules(rules)
+                .set_text_level_rules(natives.text_level_rules),
+        ))
     })
+    .expect("sv checker")
 }
 
 fn module_check(text: &str) -> Vec<og_core::RuleMatch> {
@@ -229,7 +242,7 @@ fn swedish_grammar_examples_with_sv_pipeline() {
     let mut marker = 0usize;
     let mut correction_failures = Vec::new();
     let mut fail_lines: Vec<String> = Vec::new();
-    for group in &rule_groups(compiled_rules()) {
+    for group in &rule_groups(&compiled_rules()) {
         let Some(rule) = group.first() else {
             continue;
         };
@@ -330,7 +343,7 @@ fn grammar_file_compiles_the_java_rule_inventory() {
         "sv grammar.xml compiles a real rule set, got {}",
         set.rules.len()
     );
-    let example_count = rule_groups(set)
+    let example_count = rule_groups(&set)
         .iter()
         .filter_map(|g| g.first())
         .flat_map(|r| r.examples.iter())

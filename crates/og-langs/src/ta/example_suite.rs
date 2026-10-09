@@ -6,7 +6,7 @@ use og_core::{AnalyzedSentence, AnalyzedToken, AnalyzedTokenReadings, CheckReque
 use og_rules::pattern_rule::PatternRuleEngine;
 use og_xml::compiler::{CompiledRule, CompiledRuleSet, XmlCompiler};
 use std::collections::HashMap;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 pub(crate) struct TaPipeline {
     tokenizer: super::TamilWordTokenizer,
@@ -14,13 +14,17 @@ pub(crate) struct TaPipeline {
     splitter: Option<og_tokenizer::srx::SrxSentenceSplitter>,
 }
 
-pub(crate) fn ta_pipeline() -> &'static TaPipeline {
-    static PIPE: OnceLock<TaPipeline> = OnceLock::new();
-    PIPE.get_or_init(|| TaPipeline {
-        tokenizer: super::TamilWordTokenizer::new(),
-        tagger: super::tamil_tagger().expect("tamil.dict tagger"),
-        splitter: og_tokenizer::srx::srx_splitter("ta"),
+pub(crate) fn ta_pipeline() -> std::sync::Arc<TaPipeline> {
+    static PIPE: og_core::releasable::Releasable<TaPipeline> =
+        og_core::releasable::Releasable::new();
+    og_core::releasable::shared_get_or_build(&PIPE, || {
+        Some(std::sync::Arc::new(TaPipeline {
+            tokenizer: super::TamilWordTokenizer::new(),
+            tagger: super::tamil_tagger().expect("tamil.dict tagger"),
+            splitter: og_tokenizer::srx::srx_splitter("ta"),
+        }))
     })
+    .expect("ta pipeline")
 }
 
 impl TaPipeline {
@@ -112,9 +116,10 @@ impl og_core::checker::WordTokenizer for TaWordTokenizerBridge {
     }
 }
 
-pub(crate) fn module_checker() -> &'static og_core::checker::Checker {
-    static CHECKER: OnceLock<og_core::checker::Checker> = OnceLock::new();
-    CHECKER.get_or_init(|| {
+pub(crate) fn module_checker() -> std::sync::Arc<og_core::checker::Checker> {
+    static CHECKER: og_core::releasable::Releasable<og_core::checker::Checker> =
+        og_core::releasable::Releasable::new();
+    og_core::releasable::shared_get_or_build(&CHECKER, || {
         let tagger = super::tamil_tagger().expect("tamil.dict tagger");
         let natives = super::tamil_native_rules();
         let mut rules: Vec<Arc<dyn og_core::rule::Rule>> = natives.rules.clone();
@@ -123,13 +128,16 @@ pub(crate) fn module_checker() -> &'static og_core::checker::Checker {
                 rules.push(Arc::new(crate::engine::XmlPatternRule::new(compiled)));
             }
         }
-        og_core::checker::Checker::new()
-            .with_sentence_tokenizer(Arc::new(TaSentenceTokenizer))
-            .with_word_tokenizer(Arc::new(TaWordTokenizerBridge))
-            .with_tagger(tagger)
-            .set_rules(rules)
-            .set_text_level_rules(natives.text_level_rules.clone())
+        Some(std::sync::Arc::new(
+            og_core::checker::Checker::new()
+                .with_sentence_tokenizer(Arc::new(TaSentenceTokenizer))
+                .with_word_tokenizer(Arc::new(TaWordTokenizerBridge))
+                .with_tagger(tagger)
+                .set_rules(rules)
+                .set_text_level_rules(natives.text_level_rules.clone()),
+        ))
     })
+    .expect("ta checker")
 }
 
 fn grammar_path() -> std::path::PathBuf {
@@ -138,15 +146,19 @@ fn grammar_path() -> std::path::PathBuf {
         .join("grammar.xml")
 }
 
-fn compiled_rules() -> &'static CompiledRuleSet {
-    static GRAMMAR: OnceLock<CompiledRuleSet> = OnceLock::new();
-    GRAMMAR.get_or_init(|| {
+fn compiled_rules() -> std::sync::Arc<CompiledRuleSet> {
+    static GRAMMAR: og_core::releasable::Releasable<CompiledRuleSet> =
+        og_core::releasable::Releasable::new();
+    og_core::releasable::shared_get_or_build(&GRAMMAR, || {
         let path = grammar_path();
         let xml = std::fs::read_to_string(&path).expect("ta grammar.xml");
-        XmlCompiler::new()
-            .compile_file_with_base(&xml, path.parent())
-            .expect("compile ta grammar.xml")
+        Some(std::sync::Arc::new(
+            XmlCompiler::new()
+                .compile_file_with_base(&xml, path.parent())
+                .expect("compile ta grammar.xml"),
+        ))
     })
+    .expect("ta grammar")
 }
 
 fn module_check(text: &str) -> Vec<og_core::RuleMatch> {
@@ -206,7 +218,7 @@ fn rule_groups(rule_set: &CompiledRuleSet) -> Vec<Vec<&CompiledRule>> {
 fn tamil_grammar_examples_with_ta_pipeline() {
     let _release_guard = crate::release_guard();
     let rule_set = compiled_rules();
-    let groups = rule_groups(rule_set);
+    let groups = rule_groups(&rule_set);
     let engine = PatternRuleEngine::new();
     let pipeline = ta_pipeline();
 
@@ -299,7 +311,7 @@ fn grammar_rules_compile_the_java_inventory() {
          sub-rules; the commented-out drafts (2 rules of ena, Ends_in_A_6, 2 rules of oru and \
          the rest) stay comments"
     );
-    let example_count: usize = rule_groups(rule_set)
+    let example_count: usize = rule_groups(&rule_set)
         .iter()
         .filter_map(|g| g.first())
         .flat_map(|r| r.examples.iter())
@@ -326,7 +338,8 @@ fn grammar_rules_compile_the_java_inventory() {
 #[test]
 fn srx_resolves_the_java_tamil_ruleset() {
     use og_tokenizer::SentenceTokenizer as _;
-    let splitter = ta_pipeline()
+    let pipeline = ta_pipeline();
+    let splitter = pipeline
         .splitter
         .as_ref()
         .expect("the (TA|ta).* -> Tamil languagemap must resolve for ta");

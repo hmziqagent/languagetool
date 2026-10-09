@@ -18,13 +18,17 @@ pub(crate) struct SkPipeline {
     splitter: Option<og_tokenizer::srx::SrxSentenceSplitter>,
 }
 
-pub(crate) fn sk_pipeline() -> &'static SkPipeline {
-    static PIPE: OnceLock<SkPipeline> = OnceLock::new();
-    PIPE.get_or_init(|| SkPipeline {
-        tokenizer: og_tokenizer::DefaultWordTokenizer::new_generic(),
-        tagger: super::slovak_tagger().expect("slovak.dict tagger"),
-        splitter: og_tokenizer::srx::srx_splitter("sk"),
+pub(crate) fn sk_pipeline() -> std::sync::Arc<SkPipeline> {
+    static PIPE: og_core::releasable::Releasable<SkPipeline> =
+        og_core::releasable::Releasable::new();
+    og_core::releasable::shared_get_or_build(&PIPE, || {
+        Some(std::sync::Arc::new(SkPipeline {
+            tokenizer: og_tokenizer::DefaultWordTokenizer::new_generic(),
+            tagger: super::slovak_tagger().expect("slovak.dict tagger"),
+            splitter: og_tokenizer::srx::srx_splitter("sk"),
+        }))
     })
+    .expect("sk pipeline")
 }
 
 impl SkPipeline {
@@ -131,14 +135,18 @@ fn compile_rule_file(file: &str) -> CompiledRuleSet {
         .unwrap_or_else(|e| panic!("compile sk {file}: {e}"))
 }
 
-fn compiled_rule_sets() -> &'static Vec<&'static CompiledRuleSet> {
-    static SETS: OnceLock<Vec<&'static CompiledRuleSet>> = OnceLock::new();
-    SETS.get_or_init(|| {
-        vec![
-            Box::leak(Box::new(compile_rule_file("grammar.xml"))),
-            Box::leak(Box::new(compile_rule_file("grammar-typography.xml"))),
-        ]
+fn compiled_rule_sets() -> Vec<std::sync::Arc<CompiledRuleSet>> {
+    static SETS: og_core::releasable::Releasable<Vec<std::sync::Arc<CompiledRuleSet>>> =
+        og_core::releasable::Releasable::new();
+    og_core::releasable::shared_get_or_build(&SETS, || {
+        Some(std::sync::Arc::new(vec![
+            std::sync::Arc::new(compile_rule_file("grammar.xml")),
+            std::sync::Arc::new(compile_rule_file("grammar-typography.xml")),
+        ]))
     })
+    .expect("sk rule sets")
+    .as_ref()
+    .clone()
 }
 
 pub(crate) fn suite_engine() -> PatternRuleEngine {
@@ -288,13 +296,13 @@ fn slovak_grammar_examples_with_sk_pipeline() {
     let mut correction_failures = Vec::new();
     let mut fail_lines: Vec<String> = Vec::new();
     for set in compiled_rule_sets() {
-        for group in &rule_groups(set) {
+        for group in &rule_groups(&set) {
             let Some(rule) = group.first() else {
                 continue;
             };
             for example in &rule.examples {
                 let (clean_text, marker_range) = extract_marker(&example.text);
-                let matches = matches_for_example(pipeline, &engine, group, &clean_text);
+                let matches = matches_for_example(&pipeline, &engine, group, &clean_text);
                 match example.example_type {
                     og_xml::types::XmlExampleType::Incorrect => {
                         if matches.is_empty() {
@@ -404,9 +412,9 @@ fn grammar_files_compile_the_java_rule_inventory() {
             .flat_map(|r| r.examples.iter())
             .count()
     };
-    assert_eq!(example_count(sets[0]), 315, "grammar.xml example inventory");
+    assert_eq!(example_count(&sets[0]), 315, "grammar.xml example inventory");
     assert_eq!(
-        example_count(sets[1]),
+        example_count(&sets[1]),
         37,
         "grammar-typography.xml example inventory"
     );

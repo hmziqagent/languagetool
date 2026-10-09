@@ -1,7 +1,7 @@
 use og_spell::Dictionary;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 pub const MORFOLOGIK_RULE_SL_SI: &str = "MORFOLOGIK_RULE_SL_SI";
 
@@ -201,27 +201,26 @@ pub(crate) fn load_latin2_hunspell_words(dir: &Path, dict: &mut Dictionary) -> b
 }
 
 pub fn slovenian_speller_dictionary() -> Option<Arc<Dictionary>> {
-    static CACHE: OnceLock<Option<Arc<Dictionary>>> = OnceLock::new();
-    CACHE
-        .get_or_init(|| {
-            let mut dict = Dictionary::new();
-            let hunspell = hunspell_dir()?;
-            let mut have_words = load_latin2_hunspell_words(&hunspell, &mut dict);
-            if let Ok(extra) = std::fs::read_to_string(hunspell.join("spelling.txt")) {
-                for line in extra.lines() {
-                    let word = line.trim();
-                    if !word.is_empty() && !word.starts_with('#') {
-                        dict.add_word(word);
-                        have_words = true;
-                    }
+    static CACHE: og_core::releasable::Releasable<Dictionary> =
+        og_core::releasable::Releasable::new();
+    og_core::releasable::shared_get_or_build(&CACHE, || {
+        let mut dict = Dictionary::new();
+        let hunspell = hunspell_dir()?;
+        let mut have_words = load_latin2_hunspell_words(&hunspell, &mut dict);
+        if let Ok(extra) = std::fs::read_to_string(hunspell.join("spelling.txt")) {
+            for line in extra.lines() {
+                let word = line.trim();
+                if !word.is_empty() && !word.starts_with('#') {
+                    dict.add_word(word);
+                    have_words = true;
                 }
             }
-            if !have_words {
-                return None;
-            }
-            Some(Arc::new(dict))
-        })
-        .clone()
+        }
+        if !have_words {
+            return None;
+        }
+        Some(Arc::new(dict))
+    })
 }
 
 fn shared_ignore_words() -> HashSet<String> {

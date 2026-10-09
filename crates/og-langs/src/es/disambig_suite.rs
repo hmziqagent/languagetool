@@ -51,6 +51,7 @@ fn clean_xml(s: &str) -> String {
 #[test]
 #[ignore]
 fn spanish_disambiguation_examples_match_java_forms() {
+    let _release_guard = crate::release_guard();
     let resource_dir = crate::es::es_resource_dir().expect("es dir");
     let raw = std::fs::read_to_string(resource_dir.join("disambiguation.xml")).unwrap();
     let xml = og_xml::parser::XmlRuleParser::expand_entities_with_base(&raw, Some(&resource_dir));

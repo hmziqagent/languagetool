@@ -1,6 +1,6 @@
 use og_core::rule::Rule;
 use std::path::PathBuf;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 #[cfg(test)]
 mod example_suite;
@@ -14,13 +14,12 @@ pub fn sk_resource_dir() -> Option<PathBuf> {
 }
 
 pub fn slovak_tagger() -> Option<Arc<og_tagger::GenericTagger>> {
-    static CACHE: OnceLock<Option<Arc<og_tagger::GenericTagger>>> = OnceLock::new();
-    CACHE
-        .get_or_init(|| {
-            sk_resource_dir()
-                .map(|dir| Arc::new(og_tagger::GenericTagger::from_resource_dir(&dir, "slovak")))
-        })
-        .clone()
+    static CACHE: og_core::releasable::Releasable<og_tagger::GenericTagger> =
+        og_core::releasable::Releasable::new();
+    og_core::releasable::shared_get_or_build(&CACHE, || {
+        sk_resource_dir()
+            .map(|dir| Arc::new(og_tagger::GenericTagger::from_resource_dir(&dir, "slovak")))
+    })
 }
 
 pub fn slovak_compound_rule() -> crate::en::CompoundRule {

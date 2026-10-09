@@ -533,7 +533,7 @@ pub fn find_suggestions_filter(
 
     let is_word_capitalized = is_capitalized_word(&word);
     let is_word_all_upper = is_all_uppercase(&word);
-    let original_tagged = og_tagger::Tagger::tag(tagger, &[word.as_str()]);
+    let original_tagged = og_tagger::Tagger::tag(tagger.as_ref(), &[word.as_str()]);
     if diacritics_mode
         && original_tagged
             .iter()
@@ -549,7 +549,7 @@ pub fn find_suggestions_filter(
             break;
         }
         let suggestion = suggestion.as_str();
-        let analyzed = og_tagger::Tagger::tag(tagger, &[suggestion]);
+        let analyzed = og_tagger::Tagger::tag(tagger.as_ref(), &[suggestion]);
         for atr in &analyzed {
             if suggestion != word && readings_match_pos_tag_regex(atr, desired_postag) {
                 let not_present = replacements
@@ -663,7 +663,7 @@ pub fn spanish_suppress_misspelled_filter(
     let tagged = if suppress_postag.is_some() || filter_postag.is_some() {
         crate::es::tagger::SpanishTagger::shared().map(|tagger| {
             let refs: Vec<&str> = rm.replacements().iter().map(|r| r.value()).collect();
-            og_tagger::Tagger::tag(tagger, &refs)
+            og_tagger::Tagger::tag(tagger.as_ref(), &refs)
         })
     } else {
         None
@@ -1935,6 +1935,7 @@ mod tests {
     #[test]
     #[ignore]
     fn postponed_adj_probe_remaining_fps() {
+        let _release_guard = crate::release_guard();
         for text in [
             "Se dan los ciervos, gamos, corzos, muflones y la cabra montés.",
             "Los alumnos de 4º de la ESO de Carmelitas premiados en el concurso europeo.",

@@ -132,7 +132,7 @@ fn shared_data() -> &'static SpaceInCompoundData {
             variants_by_first_word
                 .entry(first_word)
                 .or_default()
-                .push(Box::leak(variant.into_boxed_str()));
+                .push(og_tagger::morfologik::intern_string(variant));
         }
         SpaceInCompoundData {
             variants_by_first_word,

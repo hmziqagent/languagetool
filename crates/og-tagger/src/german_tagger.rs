@@ -879,19 +879,21 @@ pub struct GermanTagger {
 
 pub fn shared_german_dictionary(dir: &Path) -> Option<Arc<MorfologikDictionary>> {
     static CACHE: std::sync::OnceLock<
-        std::sync::Mutex<std::collections::HashMap<std::path::PathBuf, Arc<MorfologikDictionary>>>,
+        std::sync::Mutex<
+            std::collections::HashMap<std::path::PathBuf, std::sync::Weak<MorfologikDictionary>>,
+        >,
     > = std::sync::OnceLock::new();
     let cache = CACHE.get_or_init(Default::default);
     let key = dir.join("german.dict");
     let mut guard = cache.lock().unwrap();
-    if let Some(dict) = guard.get(&key) {
-        return Some(dict.clone());
+    if let Some(dict) = guard.get(&key).and_then(std::sync::Weak::upgrade) {
+        return Some(dict);
     }
     let dictionary = Arc::new(MorfologikDictionary::load(
         &dir.join("german.dict"),
         &dir.join("german.info"),
     )?);
-    guard.insert(key, dictionary.clone());
+    guard.insert(key, std::sync::Arc::downgrade(&dictionary));
     Some(dictionary)
 }
 

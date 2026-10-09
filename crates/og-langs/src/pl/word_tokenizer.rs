@@ -1,5 +1,5 @@
 use og_core::Token;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use super::tagger::PolishTagger;
 
@@ -23,13 +23,13 @@ impl PolishWordTokenizer {
     }
 
     pub fn shared() -> Arc<PolishWordTokenizer> {
-        static CACHE: OnceLock<Arc<PolishWordTokenizer>> = OnceLock::new();
-        CACHE
-            .get_or_init(|| {
-                let tagger = PolishTagger::shared_arc().expect("pl resource dir with polish.dict");
-                Arc::new(PolishWordTokenizer::new(tagger))
-            })
-            .clone()
+        static CACHE: og_core::releasable::Releasable<PolishWordTokenizer> =
+            og_core::releasable::Releasable::new();
+        og_core::releasable::shared_get_or_build(&CACHE, || {
+            let tagger = PolishTagger::shared_arc().expect("pl resource dir with polish.dict");
+            Some(Arc::new(PolishWordTokenizer::new(tagger)))
+        })
+        .expect("polish word tokenizer")
     }
 
     fn is_compound_parts(&self, parts: &[&str]) -> bool {

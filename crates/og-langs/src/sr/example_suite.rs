@@ -28,14 +28,26 @@ fn build_pipeline(variant: super::SerbianVariant) -> SrPipeline {
     }
 }
 
-pub(crate) fn sr_pipeline() -> &'static SrPipeline {
-    static PIPE: OnceLock<SrPipeline> = OnceLock::new();
-    PIPE.get_or_init(|| build_pipeline(super::SerbianVariant::Ekavian))
+pub(crate) fn sr_pipeline() -> std::sync::Arc<SrPipeline> {
+    static PIPE: og_core::releasable::Releasable<SrPipeline> =
+        og_core::releasable::Releasable::new();
+    og_core::releasable::shared_get_or_build(&PIPE, || {
+        Some(std::sync::Arc::new(build_pipeline(
+            super::SerbianVariant::Ekavian,
+        )))
+    })
+    .expect("sr pipeline")
 }
 
-fn jekavian_pipeline() -> &'static SrPipeline {
-    static PIPE: OnceLock<SrPipeline> = OnceLock::new();
-    PIPE.get_or_init(|| build_pipeline(super::SerbianVariant::Jekavian))
+fn jekavian_pipeline() -> std::sync::Arc<SrPipeline> {
+    static PIPE: og_core::releasable::Releasable<SrPipeline> =
+        og_core::releasable::Releasable::new();
+    og_core::releasable::shared_get_or_build(&PIPE, || {
+        Some(std::sync::Arc::new(build_pipeline(
+            super::SerbianVariant::Jekavian,
+        )))
+    })
+    .expect("sr jekavian pipeline")
 }
 
 impl SrPipeline {
@@ -110,22 +122,28 @@ fn compile_rule_file(file: &str) -> CompiledRuleSet {
         .unwrap_or_else(|e| panic!("compile sr {file}: {e}"))
 }
 
-fn compiled_rule_sets() -> &'static Vec<&'static CompiledRuleSet> {
-    static SETS: OnceLock<Vec<&'static CompiledRuleSet>> = OnceLock::new();
-    SETS.get_or_init(|| {
+fn compiled_rule_sets() -> Vec<std::sync::Arc<CompiledRuleSet>> {
+    static SETS: og_core::releasable::Releasable<Vec<std::sync::Arc<CompiledRuleSet>>> =
+        og_core::releasable::Releasable::new();
+    og_core::releasable::shared_get_or_build(&SETS, || {
         let mut files = vec!["grammar.xml"];
         files.extend(super::SR_RULE_FILES);
-        files
-            .into_iter()
-            .map(|file| &*Box::leak(Box::new(compile_rule_file(file))))
-            .collect()
+        Some(std::sync::Arc::new(
+            files
+                .into_iter()
+                .map(|file| std::sync::Arc::new(compile_rule_file(file)))
+                .collect::<Vec<_>>(),
+        ))
     })
+    .expect("sr rule sets")
+    .as_ref()
+    .clone()
 }
 
-fn rule_groups() -> Vec<Vec<&'static CompiledRule>> {
+fn rule_groups(sets: &[std::sync::Arc<CompiledRuleSet>]) -> Vec<Vec<&CompiledRule>> {
     let mut group_index: HashMap<(String, Option<String>, String), usize> = HashMap::new();
     let mut groups: Vec<Vec<&CompiledRule>> = Vec::new();
-    for rule_set in compiled_rule_sets() {
+    for rule_set in sets {
         let source = rule_set
             .rules
             .first()
@@ -165,7 +183,8 @@ fn shared_pattern_engine() -> &'static PatternRuleEngine {
 #[ignore]
 fn serbian_grammar_examples_with_sr_pipeline() {
     let _release_guard = crate::release_guard();
-    let groups = rule_groups();
+    let sets = compiled_rule_sets();
+    let groups = rule_groups(&sets);
     let engine = shared_pattern_engine();
     let pipeline = sr_pipeline();
 
@@ -295,7 +314,8 @@ pub(crate) const SR_NO_MATCH_RESIDUE: &[&str] = &[
 
 #[test]
 fn grammar_rules_compile_the_java_inventory() {
-    let groups = rule_groups();
+    let sets = compiled_rule_sets();
+    let groups = rule_groups(&sets);
     let example_count: usize = groups
         .iter()
         .filter_map(|g| g.first())
@@ -450,7 +470,8 @@ pub(crate) fn module_check(text: &str) -> Vec<og_core::RuleMatch> {
             all_matches.extend(rule.match_sentence(sentence));
         }
     }
-    for rule_set in compiled_rule_sets() {
+    let rule_sets = compiled_rule_sets();
+    for rule_set in &rule_sets {
         for compiled in rule_set
             .rules
             .iter()

@@ -24,6 +24,7 @@ fn check_words(engine: &LanguageEngine, text: &str) -> Vec<String> {
 #[test]
 #[ignore]
 fn probe_demo_text_languagetool_speller_fp() {
+    let _release_guard = crate::release_guard();
     let engine = LanguageEngine::for_code("it").expect("it engine");
     let text = "Inserite qui il vostro testo... Oppure controlate direttamente questo ed avrete un assaggio di quali errori possono essere identificati con LanguageTool.";
     println!("demo text matches: {:?}", check_words(&engine, text));
@@ -49,6 +50,7 @@ fn probe_demo_text_languagetool_speller_fp() {
 #[test]
 #[ignore]
 fn probe_speller_suggestions_lack_morfologik_candidates() {
+    let _release_guard = crate::release_guard();
     let engine = LanguageEngine::for_code("it").expect("it engine");
     println!(
         "'esmpio': {:?}",

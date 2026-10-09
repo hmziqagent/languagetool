@@ -362,24 +362,30 @@ impl og_core::checker::Tagger for EnglishTagger {
 }
 
 pub fn shared_english_tagger() -> Option<std::sync::Arc<EnglishTagger>> {
-    static SHARED: std::sync::OnceLock<Option<std::sync::Arc<EnglishTagger>>> =
+    static SHARED: std::sync::OnceLock<std::sync::Mutex<std::sync::Weak<EnglishTagger>>> =
         std::sync::OnceLock::new();
-    SHARED
-        .get_or_init(|| {
-            let candidates = [
-                "/home/agent/opengrammar-rs/languagetool/languagetool-language-modules/en/src/main/resources/org/languagetool/resource/en",
-                "languagetool/languagetool-language-modules/en/src/main/resources/org/languagetool/resource/en",
-            ];
-            candidates.iter().find_map(|p| {
-                let path = Path::new(p);
-                if path.join("dict_decoded.txt").is_file() {
-                    Some(std::sync::Arc::new(EnglishTagger::from_resource_dir(path)))
-                } else {
-                    None
-                }
-            })
-        })
-        .clone()
+    let shared = SHARED.get_or_init(Default::default);
+    if let Some(hit) = shared.lock().ok().and_then(|guard| guard.upgrade()) {
+        return Some(hit);
+    }
+    let candidates = [
+        "/home/agent/opengrammar-rs/languagetool/languagetool-language-modules/en/src/main/resources/org/languagetool/resource/en",
+        "languagetool/languagetool-language-modules/en/src/main/resources/org/languagetool/resource/en",
+    ];
+    let built = candidates.iter().find_map(|p| {
+        let path = Path::new(p);
+        if path.join("dict_decoded.txt").is_file() {
+            Some(std::sync::Arc::new(EnglishTagger::from_resource_dir(path)))
+        } else {
+            None
+        }
+    });
+    if let Some(built) = built.as_ref()
+        && let Ok(mut guard) = shared.lock()
+    {
+        *guard = std::sync::Arc::downgrade(built);
+    }
+    built
 }
 
 #[cfg(test)]
