@@ -17,18 +17,22 @@ fn da_resource_dir() -> std::path::PathBuf {
         .join("da/src/main/resources/org/languagetool/resource/da")
 }
 
-pub(crate) fn danish_pipeline() -> &'static DanishPipeline {
-    static PIPE: OnceLock<DanishPipeline> = OnceLock::new();
-    PIPE.get_or_init(|| DanishPipeline {
-        tagger: Arc::new(og_tagger::GenericTagger::from_resource_dir(
-            &da_resource_dir(),
-            "danish",
-        )),
-        splitter: og_tokenizer::srx::srx_splitter("da"),
-        disambiguator: std::fs::read_to_string(da_resource_dir().join("disambiguation.xml"))
-            .ok()
-            .and_then(|xml| og_tagger::XmlDisambiguator::from_xml(&xml).ok()),
+pub(crate) fn danish_pipeline() -> std::sync::Arc<DanishPipeline> {
+    static PIPE: og_core::releasable::Releasable<DanishPipeline> =
+        og_core::releasable::Releasable::new();
+    og_core::releasable::shared_get_or_build(&PIPE, || {
+        Some(std::sync::Arc::new(DanishPipeline {
+            tagger: Arc::new(og_tagger::GenericTagger::from_resource_dir(
+                &da_resource_dir(),
+                "danish",
+            )),
+            splitter: og_tokenizer::srx::srx_splitter("da"),
+            disambiguator: std::fs::read_to_string(da_resource_dir().join("disambiguation.xml"))
+                .ok()
+                .and_then(|xml| og_tagger::XmlDisambiguator::from_xml(&xml).ok()),
+        }))
     })
+    .expect("da pipeline")
 }
 
 impl DanishPipeline {

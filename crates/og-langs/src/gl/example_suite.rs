@@ -5,7 +5,7 @@ use og_core::{AnalyzedSentence, AnalyzedToken, AnalyzedTokenReadings, CheckReque
 use og_rules::pattern_rule::PatternRuleEngine;
 use og_xml::compiler::{CompiledRule, CompiledRuleSet, XmlCompiler};
 use std::collections::HashMap;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 pub(crate) struct GlPipeline {
     tokenizer: super::GalicianWordTokenizer,
@@ -18,17 +18,19 @@ pub(crate) fn gl_resource_dir() -> std::path::PathBuf {
     super::tagger::gl_resource_dir().expect("gl resource dir")
 }
 
-pub(crate) fn gl_pipeline() -> &'static GlPipeline {
-    static PIPE: OnceLock<GlPipeline> = OnceLock::new();
-    PIPE.get_or_init(|| {
+pub(crate) fn gl_pipeline() -> std::sync::Arc<GlPipeline> {
+    static PIPE: og_core::releasable::Releasable<GlPipeline> =
+        og_core::releasable::Releasable::new();
+    og_core::releasable::shared_get_or_build(&PIPE, || {
         let resource_dir = gl_resource_dir();
-        GlPipeline {
+        Some(std::sync::Arc::new(GlPipeline {
             tokenizer: super::GalicianWordTokenizer::new(),
             tagger: super::GalicianTagger::shared_arc().expect("galician.dict tagger"),
             disambiguator: super::build_gl_disambiguator(&resource_dir),
             splitter: og_tokenizer::srx::srx_splitter("gl"),
-        }
+        }))
     })
+    .expect("gl")
 }
 
 impl GlPipeline {
@@ -127,9 +129,10 @@ impl og_core::checker::WordTokenizer for GlWordTokenizerBridge {
     }
 }
 
-pub(crate) fn module_checker() -> &'static og_core::checker::Checker {
-    static CHECKER: OnceLock<og_core::checker::Checker> = OnceLock::new();
-    CHECKER.get_or_init(|| {
+pub(crate) fn module_checker() -> std::sync::Arc<og_core::checker::Checker> {
+    static CHECKER: og_core::releasable::Releasable<og_core::checker::Checker> =
+        og_core::releasable::Releasable::new();
+    og_core::releasable::shared_get_or_build(&CHECKER, || {
         let resource_dir = gl_resource_dir();
         let tagger = super::GalicianTagger::shared_arc().expect("galician.dict tagger");
         let mut dict = og_tagger::generic_tagger::shared_dictionary(&resource_dir, "galician")
@@ -189,8 +192,9 @@ pub(crate) fn module_checker() -> &'static og_core::checker::Checker {
         if let Some(disambiguator) = super::build_gl_disambiguator(&resource_dir) {
             checker = checker.with_disambiguator(Arc::new(disambiguator));
         }
-        checker
+        Some(std::sync::Arc::new(checker))
     })
+    .expect("gl")
 }
 
 fn grammar_path() -> std::path::PathBuf {
@@ -199,15 +203,19 @@ fn grammar_path() -> std::path::PathBuf {
         .join("gl/src/main/resources/org/languagetool/rules/gl/grammar.xml")
 }
 
-fn compiled_rules() -> &'static CompiledRuleSet {
-    static GRAMMAR: OnceLock<CompiledRuleSet> = OnceLock::new();
-    GRAMMAR.get_or_init(|| {
+fn compiled_rules() -> std::sync::Arc<CompiledRuleSet> {
+    static GRAMMAR: og_core::releasable::Releasable<CompiledRuleSet> =
+        og_core::releasable::Releasable::new();
+    og_core::releasable::shared_get_or_build(&GRAMMAR, || {
         let path = grammar_path();
         let xml = std::fs::read_to_string(&path).expect("gl grammar.xml");
-        XmlCompiler::new()
-            .compile_file_with_base(&xml, path.parent())
-            .expect("compile gl grammar.xml")
+        Some(std::sync::Arc::new(
+            XmlCompiler::new()
+                .compile_file_with_base(&xml, path.parent())
+                .expect("compile gl grammar.xml"),
+        ))
     })
+    .expect("gl")
 }
 
 fn extract_marker(text: &str) -> (String, Option<(usize, usize)>) {
@@ -283,7 +291,7 @@ const PINNED_NO_MATCH: [&str; 11] = [
 fn galician_grammar_examples_with_gl_pipeline() {
     let _release_guard = crate::release_guard();
     let rule_set = compiled_rules();
-    let groups = rule_groups(rule_set);
+    let groups = rule_groups(&rule_set);
     let engine = suite_engine();
     let pipeline = gl_pipeline();
     og_rules::pattern_rule::set_test_date_hack(true);
@@ -297,7 +305,7 @@ fn galician_grammar_examples_with_gl_pipeline() {
         };
         for example in &rule.examples {
             let (clean_text, marker_range) = extract_marker(&example.text);
-            let matches = matches_for_example(pipeline, &engine, group, &clean_text);
+            let matches = matches_for_example(&pipeline, &engine, group, &clean_text);
             let failed = match example.example_type {
                 og_xml::types::XmlExampleType::Incorrect => {
                     matches.is_empty()
@@ -378,7 +386,7 @@ fn grammar_rules_compile_the_java_inventory() {
         308,
         "gl grammar.xml compiles 308 <rule> elements outside XML comments"
     );
-    let example_count: usize = rule_groups(rule_set)
+    let example_count: usize = rule_groups(&rule_set)
         .iter()
         .filter_map(|g| g.first())
         .flat_map(|r| r.examples.iter())
@@ -600,7 +608,7 @@ fn exception_scope_previous_residue_stems_from_whitespace_tokens() {
     let engine = suite_engine();
     let group: Vec<&CompiledRule> = rule_set.rules.iter().filter(|r| r.id == "DEMAIS").collect();
     let text = "Xaquín e mailos demais rapaces.";
-    let matches = matches_for_example(pipeline, &engine, &group, text);
+    let matches = matches_for_example(&pipeline, &engine, &group, text);
     assert_eq!(
         matches.len(),
         1,

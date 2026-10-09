@@ -8,7 +8,7 @@ use og_spell::hunspell::HunspellChecker;
 use og_spell::suggestion::SuggestionEngine;
 use std::collections::HashSet;
 use std::path::Path;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 pub const HUNSPELL_RULE_DA: &str = "HUNSPELL_RULE";
 
@@ -26,17 +26,16 @@ pub fn da_resource_dir() -> Option<std::path::PathBuf> {
 }
 
 fn shared_hunspell() -> Option<Arc<HunspellChecker>> {
-    static CACHE: OnceLock<Option<Arc<HunspellChecker>>> = OnceLock::new();
-    CACHE
-        .get_or_init(|| {
-            let dir = da_resource_dir()?;
-            HunspellChecker::load(
-                &dir.join("hunspell/da_DK.aff"),
-                &dir.join("hunspell/da_DK.dic"),
-            )
-            .map(Arc::new)
-        })
-        .clone()
+    static CACHE: og_core::releasable::Releasable<HunspellChecker> =
+        og_core::releasable::Releasable::new();
+    og_core::releasable::shared_get_or_build(&CACHE, || {
+        let dir = da_resource_dir()?;
+        HunspellChecker::load(
+            &dir.join("hunspell/da_DK.aff"),
+            &dir.join("hunspell/da_DK.dic"),
+        )
+        .map(Arc::new)
+    })
 }
 
 fn speller_dictionary(resource_dir: &Path) -> Dictionary {

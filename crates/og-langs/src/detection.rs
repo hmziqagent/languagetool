@@ -72,14 +72,11 @@ impl LanguageDetector {
     }
 
     pub fn shared() -> Option<Arc<Self>> {
-        static DETECTOR: std::sync::OnceLock<Option<Arc<LanguageDetector>>> =
-            std::sync::OnceLock::new();
-        DETECTOR
-            .get_or_init(|| {
-                crate::engine::find_lt_resource_dir()
-                    .map(|root| Arc::new(Self::from_lt_modules(&root)))
-            })
-            .clone()
+        static DETECTOR: og_core::releasable::Releasable<LanguageDetector> =
+            og_core::releasable::Releasable::new();
+        og_core::releasable::shared_get_or_build(&DETECTOR, || {
+            crate::engine::find_lt_resource_dir().map(|root| Arc::new(Self::from_lt_modules(&root)))
+        })
     }
 
     pub fn detect(&self, text: &str, preferred: &[&str]) -> Option<(String, f64)> {

@@ -412,7 +412,11 @@ fn grammar_files_compile_the_java_rule_inventory() {
             .flat_map(|r| r.examples.iter())
             .count()
     };
-    assert_eq!(example_count(&sets[0]), 315, "grammar.xml example inventory");
+    assert_eq!(
+        example_count(&sets[0]),
+        315,
+        "grammar.xml example inventory"
+    );
     assert_eq!(
         example_count(&sets[1]),
         37,

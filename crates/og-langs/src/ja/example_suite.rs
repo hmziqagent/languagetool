@@ -13,12 +13,16 @@ pub(crate) struct JaPipeline {
     splitter: Option<og_tokenizer::srx::SrxSentenceSplitter>,
 }
 
-pub(crate) fn ja_pipeline() -> &'static JaPipeline {
-    static PIPE: OnceLock<JaPipeline> = OnceLock::new();
-    PIPE.get_or_init(|| JaPipeline {
-        tokenizer: JapaneseWordTokenizer::new(),
-        splitter: og_tokenizer::srx::srx_splitter("ja"),
+pub(crate) fn ja_pipeline() -> std::sync::Arc<JaPipeline> {
+    static PIPE: og_core::releasable::Releasable<JaPipeline> =
+        og_core::releasable::Releasable::new();
+    og_core::releasable::shared_get_or_build(&PIPE, || {
+        Some(std::sync::Arc::new(JaPipeline {
+            tokenizer: JapaneseWordTokenizer::new(),
+            splitter: og_tokenizer::srx::srx_splitter("ja"),
+        }))
     })
+    .expect("ja pipeline")
 }
 
 impl JaPipeline {

@@ -6,7 +6,7 @@ use og_core::{
 use og_spell::Dictionary;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 pub const MORFOLOGIK_RULE_AST: &str = "MORFOLOGIK_RULE_AST";
 
@@ -45,48 +45,54 @@ fn hunspell_word_set(dir: &Path) -> Option<Arc<og_tagger::morfologik::FsaWordSet
 }
 
 pub fn asturian_speller_dictionary() -> Option<(Arc<Dictionary>, AsturianSpellerSource)> {
-    static CACHE: OnceLock<Option<(Arc<Dictionary>, AsturianSpellerSource)>> = OnceLock::new();
-    CACHE
-        .get_or_init(|| {
-            let words = ast_resource_dir()
-                .and_then(|dir| hunspell_word_set(&dir))
-                .or_else(|| hunspell_word_set(&module_data_dir()));
-            if let Some(words) = words {
-                let mut dict = Dictionary::from_fsa_word_set(words);
-                if let Some(resource_dir) = ast_resource_dir()
-                    && let Ok(extra) =
-                        std::fs::read_to_string(resource_dir.join("hunspell/spelling.txt"))
-                {
-                    for line in extra.lines() {
-                        let word = line.trim();
-                        if !word.is_empty() && !word.starts_with('#') {
-                            dict.add_word(word);
-                        }
-                    }
-                }
-                return Some((Arc::new(dict), AsturianSpellerSource::HunspellDictionary));
-            }
+    static CACHE: og_core::releasable::Releasable<Dictionary> =
+        og_core::releasable::Releasable::new();
+    let dict = og_core::releasable::shared_get_or_build(&CACHE, || {
+        let words = ast_resource_dir()
+            .and_then(|dir| hunspell_word_set(&dir))
+            .or_else(|| hunspell_word_set(&module_data_dir()));
+        let (mut dict, from_hunspell) = if let Some(words) = words {
+            (Dictionary::from_fsa_word_set(words), true)
+        } else {
             let resource_dir = ast_resource_dir()?;
             let tagger_dict =
                 og_tagger::generic_tagger::shared_dictionary(&resource_dir, "asturian")?;
-            let mut dict = Dictionary::from_shared_words(Arc::new(
-                og_spell::morfologik_view::MorfologikView::new(tagger_dict),
-            ));
-            if let Ok(extra) = std::fs::read_to_string(resource_dir.join("hunspell/spelling.txt"))
-            {
-                for line in extra.lines() {
-                    let word = line.trim();
-                    if !word.is_empty() && !word.starts_with('#') {
-                        dict.add_word(word);
-                    }
+            (
+                Dictionary::from_shared_words(Arc::new(
+                    og_spell::morfologik_view::MorfologikView::new(tagger_dict),
+                )),
+                false,
+            )
+        };
+        if let Some(resource_dir) = ast_resource_dir()
+            && let Ok(extra) = std::fs::read_to_string(resource_dir.join("hunspell/spelling.txt"))
+        {
+            for line in extra.lines() {
+                let word = line.trim();
+                if !word.is_empty() && !word.starts_with('#') {
+                    dict.add_word(word);
                 }
             }
+        }
+        if !from_hunspell {
             eprintln!(
                 "Warning: ast hunspell/ast_ES.dict not found; MORFOLOGIK_RULE_AST falls back to the asturian.dict tagger dictionary"
             );
-            Some((Arc::new(dict), AsturianSpellerSource::TaggerApproximation))
-        })
-        .clone()
+        }
+        Some(std::sync::Arc::new(dict))
+    })?;
+    let hunspell_on_disk = ast_resource_dir()
+        .is_some_and(|dir| dir.join("ast_ES.dict").is_file() && dir.join("ast_ES.info").is_file())
+        || {
+            let dir = module_data_dir();
+            dir.join("ast_ES.dict").is_file() && dir.join("ast_ES.info").is_file()
+        };
+    let source = if hunspell_on_disk {
+        AsturianSpellerSource::HunspellDictionary
+    } else {
+        AsturianSpellerSource::TaggerApproximation
+    };
+    Some((dict, source))
 }
 
 fn shared_ignore_words() -> HashSet<String> {

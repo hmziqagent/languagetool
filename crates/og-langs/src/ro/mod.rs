@@ -25,8 +25,11 @@ pub fn romanian_tagger() -> Option<Arc<og_tagger::GenericTagger>> {
     static CACHE: og_core::releasable::Releasable<og_tagger::GenericTagger> =
         og_core::releasable::Releasable::new();
     og_core::releasable::shared_get_or_build(&CACHE, || {
-        ro_resource_dir()
-            .map(|dir| Arc::new(og_tagger::GenericTagger::from_resource_dir(&dir, "romanian")))
+        ro_resource_dir().map(|dir| {
+            Arc::new(og_tagger::GenericTagger::from_resource_dir(
+                &dir, "romanian",
+            ))
+        })
     })
 }
 

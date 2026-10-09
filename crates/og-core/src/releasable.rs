@@ -105,10 +105,7 @@ pub fn heavy_guard() -> HeavyGuard {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     let locked = if HEAVY_DEPTH.with(|depth| depth.get()) == 0 {
         let lock = LOCK.get_or_init(|| Mutex::new(()));
-        Some(
-            lock.lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner()),
-        )
+        Some(lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner()))
     } else {
         None
     };

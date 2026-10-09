@@ -20,11 +20,12 @@ fn eo_resource_dir() -> std::path::PathBuf {
         .join("eo/src/main/resources/org/languagetool/resource/eo")
 }
 
-pub(crate) fn eo_pipeline() -> &'static EoPipeline {
-    static PIPE: OnceLock<EoPipeline> = OnceLock::new();
-    PIPE.get_or_init(|| {
+pub(crate) fn eo_pipeline() -> std::sync::Arc<EoPipeline> {
+    static PIPE: og_core::releasable::Releasable<EoPipeline> =
+        og_core::releasable::Releasable::new();
+    og_core::releasable::shared_get_or_build(&PIPE, || {
         let dir = eo_resource_dir();
-        EoPipeline {
+        Some(std::sync::Arc::new(EoPipeline {
             tagger: Arc::new(
                 og_tagger::EsperantoTagger::from_resource_dir(&dir).expect("eo resources"),
             ),
@@ -32,8 +33,9 @@ pub(crate) fn eo_pipeline() -> &'static EoPipeline {
             disambiguator: std::fs::read_to_string(dir.join("disambiguation.xml"))
                 .ok()
                 .and_then(|xml| og_tagger::XmlDisambiguator::from_xml(&xml).ok()),
-        }
+        }))
     })
+    .expect("eo pipeline")
 }
 
 impl EoPipeline {

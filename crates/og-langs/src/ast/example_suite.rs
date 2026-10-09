@@ -15,19 +15,21 @@ pub(crate) struct AsturianPipeline {
 }
 
 impl AsturianPipeline {
-    pub(crate) fn shared() -> &'static AsturianPipeline {
-        static PIPE: OnceLock<AsturianPipeline> = OnceLock::new();
-        PIPE.get_or_init(|| {
+    pub(crate) fn shared() -> std::sync::Arc<AsturianPipeline> {
+        static PIPE: og_core::releasable::Releasable<AsturianPipeline> =
+            og_core::releasable::Releasable::new();
+        og_core::releasable::shared_get_or_build(&PIPE, || {
             let resource_dir =
                 super::speller::ast_resource_dir().expect("ast resource dir with asturian.dict");
-            AsturianPipeline {
+            Some(std::sync::Arc::new(AsturianPipeline {
                 tagger: Arc::new(og_tagger::GenericTagger::from_resource_dir(
                     &resource_dir,
                     "asturian",
                 )),
                 splitter: og_tokenizer::srx::srx_splitter("ast"),
-            }
+            }))
         })
+        .expect("ast pipeline")
     }
 
     pub(crate) fn analyze(&self, text: &str) -> Vec<AnalyzedSentence> {
@@ -129,10 +131,8 @@ mod tests {
     #[test]
     fn srx_splits_match_asturian_srx_sentence_tokenizer_test() {
         use og_tokenizer::SentenceTokenizer as _;
-        let splitter = AsturianPipeline::shared()
-            .splitter
-            .as_ref()
-            .expect("ast srx splitter");
+        let pipeline = AsturianPipeline::shared();
+        let splitter = pipeline.splitter.as_ref().expect("ast srx splitter");
         let texts: Vec<String> = splitter
             .split("De secute, los hackers de Minix aportaron idegues y c\u{f3}digu al n\u{fa}cleu Linux, y g\u{fc}ey recibiera contribuciones de miles de programadores. Torvalds sigue lliberando nueves versiones del n\u{fa}cleu, consolidando aportes d'otros programadores y faciendo cambios el mesmu.")
             .into_iter()

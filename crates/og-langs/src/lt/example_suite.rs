@@ -12,12 +12,16 @@ pub(crate) struct LtPipeline {
     splitter: Option<og_tokenizer::srx::SrxSentenceSplitter>,
 }
 
-pub(crate) fn lt_pipeline() -> &'static LtPipeline {
-    static PIPE: OnceLock<LtPipeline> = OnceLock::new();
-    PIPE.get_or_init(|| LtPipeline {
-        tokenizer: og_tokenizer::DefaultWordTokenizer::new_generic(),
-        splitter: og_tokenizer::srx::srx_splitter("lt"),
+pub(crate) fn lt_pipeline() -> std::sync::Arc<LtPipeline> {
+    static PIPE: og_core::releasable::Releasable<LtPipeline> =
+        og_core::releasable::Releasable::new();
+    og_core::releasable::shared_get_or_build(&PIPE, || {
+        Some(std::sync::Arc::new(LtPipeline {
+            tokenizer: og_tokenizer::DefaultWordTokenizer::new_generic(),
+            splitter: og_tokenizer::srx::srx_splitter("lt"),
+        }))
     })
+    .expect("lt pipeline")
 }
 
 impl LtPipeline {

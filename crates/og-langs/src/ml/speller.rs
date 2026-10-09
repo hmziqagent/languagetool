@@ -6,7 +6,7 @@ use og_core::{
 use og_spell::Dictionary;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 pub const MORFOLOGIK_RULE_ML_IN: &str = "MORFOLOGIK_RULE_ML_IN";
 
@@ -40,45 +40,48 @@ fn hunspell_word_set(dir: &Path) -> Option<Arc<og_tagger::morfologik::FsaWordSet
 }
 
 pub fn malayalam_speller_dictionary() -> Option<(Arc<Dictionary>, MalayalamSpellerSource)> {
-    static CACHE: OnceLock<Option<(Arc<Dictionary>, MalayalamSpellerSource)>> = OnceLock::new();
-    CACHE
-        .get_or_init(|| {
-            let mut have_words = false;
-            let mut dict = match hunspell_dir().and_then(|dir| hunspell_word_set(&dir)) {
-                Some(words) => {
+    static CACHE: og_core::releasable::Releasable<Dictionary> =
+        og_core::releasable::Releasable::new();
+    let dict = og_core::releasable::shared_get_or_build(&CACHE, || {
+        let mut have_words = false;
+        let mut dict = match hunspell_dir().and_then(|dir| hunspell_word_set(&dir)) {
+            Some(words) => {
+                have_words = true;
+                Dictionary::from_fsa_word_set(words)
+            }
+            None => Dictionary::new(),
+        };
+        if let Some(dir) = super::ml_resource_dir()
+            && let Ok(extra) = std::fs::read_to_string(dir.join("hunspell/spelling.txt"))
+        {
+            for line in extra.lines() {
+                let word = line.trim();
+                if !word.is_empty() && !word.starts_with('#') {
+                    dict.add_word(word);
                     have_words = true;
-                    Dictionary::from_fsa_word_set(words)
-                }
-                None => Dictionary::new(),
-            };
-            if let Some(dir) = super::ml_resource_dir()
-                && let Ok(extra) = std::fs::read_to_string(dir.join("hunspell/spelling.txt"))
-            {
-                for line in extra.lines() {
-                    let word = line.trim();
-                    if !word.is_empty() && !word.starts_with('#') {
-                        dict.add_word(word);
-                        have_words = true;
-                    }
                 }
             }
-            if have_words {
-                return Some((Arc::new(dict), MalayalamSpellerSource::HunspellDictionary));
-            }
-            let resource_dir = super::ml_resource_dir()?;
-            let tagger_dict =
-                og_tagger::generic_tagger::shared_dictionary(&resource_dir, "malayalam")?;
-            eprintln!(
-                "Warning: ml hunspell/ml_IN.dict not usable; MORFOLOGIK_RULE_ML_IN falls back to the malayalam.dict tagger dictionary"
-            );
-            Some((
-                Arc::new(Dictionary::from_shared_words(Arc::new(
-                    og_spell::morfologik_view::MorfologikView::new(tagger_dict),
-                ))),
-                MalayalamSpellerSource::TaggerApproximation,
-            ))
-        })
-        .clone()
+        }
+        if have_words {
+            return Some(std::sync::Arc::new(dict));
+        }
+        let resource_dir = super::ml_resource_dir()?;
+        let tagger_dict = og_tagger::generic_tagger::shared_dictionary(&resource_dir, "malayalam")?;
+        eprintln!(
+            "Warning: ml hunspell/ml_IN.dict not usable; MORFOLOGIK_RULE_ML_IN falls back to the malayalam.dict tagger dictionary"
+        );
+        Some(std::sync::Arc::new(Dictionary::from_shared_words(
+            Arc::new(og_spell::morfologik_view::MorfologikView::new(tagger_dict)),
+        )))
+    })?;
+    let source = if hunspell_dir()
+        .is_some_and(|dir| dir.join("ml_IN.dict").is_file() && dir.join("ml_IN.info").is_file())
+    {
+        MalayalamSpellerSource::HunspellDictionary
+    } else {
+        MalayalamSpellerSource::TaggerApproximation
+    };
+    Some((dict, source))
 }
 
 fn shared_ignore_words() -> HashSet<String> {

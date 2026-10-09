@@ -19,15 +19,16 @@ fn br_resource_dir() -> std::path::PathBuf {
 }
 
 impl BretonPipeline {
-    fn shared() -> &'static BretonPipeline {
-        static PIPE: OnceLock<BretonPipeline> = OnceLock::new();
-        PIPE.get_or_init(|| {
+    fn shared() -> std::sync::Arc<BretonPipeline> {
+        static PIPE: og_core::releasable::Releasable<BretonPipeline> =
+            og_core::releasable::Releasable::new();
+        og_core::releasable::shared_get_or_build(&PIPE, || {
             let disambiguator =
                 std::fs::read_to_string(br_resource_dir().join("disambiguation.xml"))
                     .map(|xml| super::normalize::normalize_br_disambiguation_xml(&xml).into_owned())
                     .ok()
                     .and_then(|xml| og_tagger::XmlDisambiguator::from_xml(&xml).ok());
-            BretonPipeline {
+            Some(std::sync::Arc::new(BretonPipeline {
                 tokenizer: super::word_tokenizer::BretonWordTokenizer::new(),
                 tagger: super::tagger::BretonTagger::shared_arc().unwrap_or_else(|| {
                     Arc::new(super::tagger::BretonTagger::from_resource_dir(
@@ -36,8 +37,9 @@ impl BretonPipeline {
                 }),
                 disambiguator,
                 splitter: og_tokenizer::srx::srx_splitter("br"),
-            }
+            }))
         })
+        .expect("br pipeline")
     }
 
     fn sentence_ranges(&self, text: &str) -> Vec<(usize, usize)> {

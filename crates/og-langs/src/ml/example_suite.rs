@@ -6,7 +6,7 @@ use og_core::{AnalyzedSentence, AnalyzedToken, AnalyzedTokenReadings, CheckReque
 use og_rules::pattern_rule::PatternRuleEngine;
 use og_xml::compiler::{CompiledRule, CompiledRuleSet, XmlCompiler};
 use std::collections::HashMap;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 pub(crate) struct MlPipeline {
     tokenizer: super::MalayalamWordTokenizer,
@@ -14,13 +14,17 @@ pub(crate) struct MlPipeline {
     splitter: Option<og_tokenizer::srx::SrxSentenceSplitter>,
 }
 
-pub(crate) fn ml_pipeline() -> &'static MlPipeline {
-    static PIPE: OnceLock<MlPipeline> = OnceLock::new();
-    PIPE.get_or_init(|| MlPipeline {
-        tokenizer: super::MalayalamWordTokenizer::new(),
-        tagger: super::malayalam_tagger().expect("malayalam.dict tagger"),
-        splitter: og_tokenizer::srx::srx_splitter("ml"),
+pub(crate) fn ml_pipeline() -> std::sync::Arc<MlPipeline> {
+    static PIPE: og_core::releasable::Releasable<MlPipeline> =
+        og_core::releasable::Releasable::new();
+    og_core::releasable::shared_get_or_build(&PIPE, || {
+        Some(std::sync::Arc::new(MlPipeline {
+            tokenizer: super::MalayalamWordTokenizer::new(),
+            tagger: super::malayalam_tagger().expect("malayalam.dict tagger"),
+            splitter: og_tokenizer::srx::srx_splitter("ml"),
+        }))
     })
+    .expect("ml")
 }
 
 impl MlPipeline {
@@ -112,9 +116,10 @@ impl og_core::checker::WordTokenizer for MlWordTokenizerBridge {
     }
 }
 
-pub(crate) fn module_checker() -> &'static og_core::checker::Checker {
-    static CHECKER: OnceLock<og_core::checker::Checker> = OnceLock::new();
-    CHECKER.get_or_init(|| {
+pub(crate) fn module_checker() -> std::sync::Arc<og_core::checker::Checker> {
+    static CHECKER: og_core::releasable::Releasable<og_core::checker::Checker> =
+        og_core::releasable::Releasable::new();
+    og_core::releasable::shared_get_or_build(&CHECKER, || {
         let tagger = super::malayalam_tagger().expect("malayalam.dict tagger");
         let natives = super::malayalam_native_rules();
         let mut rules: Vec<Arc<dyn og_core::rule::Rule>> = natives.rules.clone();
@@ -123,13 +128,16 @@ pub(crate) fn module_checker() -> &'static og_core::checker::Checker {
                 rules.push(Arc::new(crate::engine::XmlPatternRule::new(compiled)));
             }
         }
-        og_core::checker::Checker::new()
-            .with_sentence_tokenizer(Arc::new(MlSentenceTokenizer))
-            .with_word_tokenizer(Arc::new(MlWordTokenizerBridge))
-            .with_tagger(tagger)
-            .set_rules(rules)
-            .set_text_level_rules(natives.text_level_rules.clone())
+        Some(std::sync::Arc::new(
+            og_core::checker::Checker::new()
+                .with_sentence_tokenizer(Arc::new(MlSentenceTokenizer))
+                .with_word_tokenizer(Arc::new(MlWordTokenizerBridge))
+                .with_tagger(tagger)
+                .set_rules(rules)
+                .set_text_level_rules(natives.text_level_rules.clone()),
+        ))
     })
+    .expect("ml")
 }
 
 fn grammar_path() -> std::path::PathBuf {
@@ -138,15 +146,19 @@ fn grammar_path() -> std::path::PathBuf {
         .join("ml/src/main/resources/org/languagetool/rules/ml/grammar.xml")
 }
 
-fn compiled_rules() -> &'static CompiledRuleSet {
-    static GRAMMAR: OnceLock<CompiledRuleSet> = OnceLock::new();
-    GRAMMAR.get_or_init(|| {
+fn compiled_rules() -> std::sync::Arc<CompiledRuleSet> {
+    static GRAMMAR: og_core::releasable::Releasable<CompiledRuleSet> =
+        og_core::releasable::Releasable::new();
+    og_core::releasable::shared_get_or_build(&GRAMMAR, || {
         let path = grammar_path();
         let xml = std::fs::read_to_string(&path).expect("ml grammar.xml");
-        XmlCompiler::new()
-            .compile_file_with_base(&xml, path.parent())
-            .expect("compile ml grammar.xml")
+        Some(std::sync::Arc::new(
+            XmlCompiler::new()
+                .compile_file_with_base(&xml, path.parent())
+                .expect("compile ml grammar.xml"),
+        ))
     })
+    .expect("ml")
 }
 
 fn module_check(text: &str) -> Vec<og_core::RuleMatch> {
@@ -221,7 +233,7 @@ fn matches_for_example(
 fn malayalam_grammar_examples_with_ml_pipeline() {
     let _release_guard = crate::release_guard();
     let rule_set = compiled_rules();
-    let groups = rule_groups(rule_set);
+    let groups = rule_groups(&rule_set);
     let engine = PatternRuleEngine::new();
     let pipeline = ml_pipeline();
 
@@ -234,7 +246,7 @@ fn malayalam_grammar_examples_with_ml_pipeline() {
         };
         for example in &rule.examples {
             let (clean_text, marker_range) = extract_marker(&example.text);
-            let matches = matches_for_example(pipeline, &engine, group, &clean_text);
+            let matches = matches_for_example(&pipeline, &engine, group, &clean_text);
             let failed = match example.example_type {
                 og_xml::types::XmlExampleType::Incorrect => {
                     matches.is_empty()
@@ -309,7 +321,7 @@ fn grammar_rules_compile_the_java_inventory() {
          രാജന്, rule4, rule5, rule7, rule8, rule10, rule_11, rule12, rule14, rule15, rule17, \
          rule19, rule20, rule21, rule22, ഭയങ്കര (rules 6/9/13/16/18 are commented out)"
     );
-    let example_count: usize = rule_groups(rule_set)
+    let example_count: usize = rule_groups(&rule_set)
         .iter()
         .filter_map(|g| g.first())
         .flat_map(|r| r.examples.iter())
@@ -323,7 +335,8 @@ fn grammar_rules_compile_the_java_inventory() {
 #[test]
 fn srx_matches_malayalam_srx_sentence_tokenizer_test() {
     use og_tokenizer::SentenceTokenizer as _;
-    let splitter = ml_pipeline()
+    let pipeline = ml_pipeline();
+    let splitter = pipeline
         .splitter
         .as_ref()
         .expect("the (ML|ml).* -> Generic languagemap must resolve for ml");

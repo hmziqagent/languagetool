@@ -5,7 +5,7 @@ use og_core::{AnalyzedSentence, AnalyzedToken, AnalyzedTokenReadings, CheckReque
 use og_rules::pattern_rule::PatternRuleEngine;
 use og_xml::compiler::{CompiledRule, CompiledRuleSet, XmlCompiler};
 use std::collections::HashMap;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 pub(crate) struct GreekPipeline {
     tokenizer: super::GreekWordTokenizer,
@@ -20,19 +20,23 @@ fn el_resource_dir() -> std::path::PathBuf {
         .join("el/src/main/resources/org/languagetool/resource/el")
 }
 
-pub(crate) fn greek_pipeline() -> &'static GreekPipeline {
-    static PIPE: OnceLock<GreekPipeline> = OnceLock::new();
-    PIPE.get_or_init(|| GreekPipeline {
-        tokenizer: super::GreekWordTokenizer::new(),
-        tagger: Arc::new(og_tagger::GenericTagger::from_resource_dir(
-            &el_resource_dir(),
-            "greek",
-        )),
-        disambiguator: std::fs::read_to_string(el_resource_dir().join("disambiguation.xml"))
-            .ok()
-            .and_then(|xml| og_tagger::XmlDisambiguator::from_xml(&xml).ok()),
-        splitter: og_tokenizer::srx::srx_splitter("el"),
+pub(crate) fn greek_pipeline() -> std::sync::Arc<GreekPipeline> {
+    static PIPE: og_core::releasable::Releasable<GreekPipeline> =
+        og_core::releasable::Releasable::new();
+    og_core::releasable::shared_get_or_build(&PIPE, || {
+        Some(std::sync::Arc::new(GreekPipeline {
+            tokenizer: super::GreekWordTokenizer::new(),
+            tagger: Arc::new(og_tagger::GenericTagger::from_resource_dir(
+                &el_resource_dir(),
+                "greek",
+            )),
+            disambiguator: std::fs::read_to_string(el_resource_dir().join("disambiguation.xml"))
+                .ok()
+                .and_then(|xml| og_tagger::XmlDisambiguator::from_xml(&xml).ok()),
+            splitter: og_tokenizer::srx::srx_splitter("el"),
+        }))
     })
+    .expect("el")
 }
 
 impl GreekPipeline {
@@ -131,9 +135,10 @@ impl og_core::checker::WordTokenizer for ElWordTokenizerBridge {
     }
 }
 
-pub(crate) fn module_checker() -> &'static og_core::checker::Checker {
-    static CHECKER: OnceLock<og_core::checker::Checker> = OnceLock::new();
-    CHECKER.get_or_init(|| {
+pub(crate) fn module_checker() -> std::sync::Arc<og_core::checker::Checker> {
+    static CHECKER: og_core::releasable::Releasable<og_core::checker::Checker> =
+        og_core::releasable::Releasable::new();
+    og_core::releasable::shared_get_or_build(&CHECKER, || {
         let resource_dir = el_resource_dir();
         let tagger = Arc::new(og_tagger::GenericTagger::from_resource_dir(
             &resource_dir,
@@ -208,8 +213,9 @@ pub(crate) fn module_checker() -> &'static og_core::checker::Checker {
         if let Some(disambiguator) = disambiguator {
             checker = checker.with_disambiguator(Arc::new(disambiguator));
         }
-        checker
+        Some(std::sync::Arc::new(checker))
     })
+    .expect("el")
 }
 
 fn grammar_path() -> std::path::PathBuf {
@@ -218,15 +224,19 @@ fn grammar_path() -> std::path::PathBuf {
         .join("el/src/main/resources/org/languagetool/rules/el/grammar.xml")
 }
 
-fn compiled_rules() -> &'static CompiledRuleSet {
-    static GRAMMAR: OnceLock<CompiledRuleSet> = OnceLock::new();
-    GRAMMAR.get_or_init(|| {
+fn compiled_rules() -> std::sync::Arc<CompiledRuleSet> {
+    static GRAMMAR: og_core::releasable::Releasable<CompiledRuleSet> =
+        og_core::releasable::Releasable::new();
+    og_core::releasable::shared_get_or_build(&GRAMMAR, || {
         let path = grammar_path();
         let xml = std::fs::read_to_string(&path).expect("el grammar.xml");
-        XmlCompiler::new()
-            .compile_file_with_base(&xml, path.parent())
-            .expect("compile el grammar.xml")
+        Some(std::sync::Arc::new(
+            XmlCompiler::new()
+                .compile_file_with_base(&xml, path.parent())
+                .expect("compile el grammar.xml"),
+        ))
     })
+    .expect("el")
 }
 
 fn extract_marker(text: &str) -> (String, Option<(usize, usize)>) {
@@ -275,7 +285,7 @@ fn matches_for_example(
 fn greek_grammar_examples_with_greek_pipeline() {
     let _release_guard = crate::release_guard();
     let rule_set = compiled_rules();
-    let groups = rule_groups(rule_set);
+    let groups = rule_groups(&rule_set);
     let engine = PatternRuleEngine::new();
     let pipeline = greek_pipeline();
     og_rules::pattern_rule::set_test_date_hack(true);
@@ -289,7 +299,7 @@ fn greek_grammar_examples_with_greek_pipeline() {
         };
         for example in &rule.examples {
             let (clean_text, marker_range) = extract_marker(&example.text);
-            let matches = matches_for_example(pipeline, &engine, group, &clean_text);
+            let matches = matches_for_example(&pipeline, &engine, group, &clean_text);
             let failed = match example.example_type {
                 og_xml::types::XmlExampleType::Incorrect => {
                     matches.is_empty()
@@ -349,7 +359,7 @@ fn grammar_rules_compile_the_java_inventory() {
         55,
         "el grammar.xml compiles 50 <rule> elements plus 5 rulegroup sub-rules"
     );
-    let example_count: usize = rule_groups(rule_set)
+    let example_count: usize = rule_groups(&rule_set)
         .iter()
         .filter_map(|g| g.first())
         .flat_map(|r| r.examples.iter())
@@ -392,7 +402,7 @@ fn postag_residue_is_exactly_the_missing_ioperm_analyzer_family() {
     }
     let engine = PatternRuleEngine::new();
     let mut failures = Vec::new();
-    for group in rule_groups(rule_set) {
+    for group in rule_groups(&rule_set) {
         let Some(rule) = group.first() else {
             continue;
         };
@@ -404,7 +414,7 @@ fn postag_residue_is_exactly_the_missing_ioperm_analyzer_family() {
                 continue;
             }
             let (clean_text, _) = extract_marker(&example.text);
-            if matches_for_example(pipeline, &engine, &group, &clean_text).is_empty() {
+            if matches_for_example(&pipeline, &engine, &group, &clean_text).is_empty() {
                 failures.push(format!("[{}]: '{}'", rule.id, clean_text));
             }
         }
@@ -427,7 +437,7 @@ fn sentence_start_corrections_wait_for_the_shared_capitalization_step() {
             .filter(|r| r.id == rule_id)
             .flat_map(|rule| {
                 let group = vec![rule];
-                matches_for_example(pipeline, &engine, &group, text)
+                matches_for_example(&pipeline, &engine, &group, text)
                     .into_iter()
                     .map(|m| {
                         m.replacements()
@@ -462,7 +472,7 @@ fn have_inf_correction_waits_for_the_shared_greek_synthesizer() {
         .filter(|r| r.id == "HAVE_INF")
         .flat_map(|rule| {
             let group = vec![rule];
-            matches_for_example(pipeline, &engine, &group, "Είχα πάω.")
+            matches_for_example(&pipeline, &engine, &group, "Είχα πάω.")
                 .into_iter()
                 .flat_map(|m| {
                     m.replacements()

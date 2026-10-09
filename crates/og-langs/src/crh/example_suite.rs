@@ -17,16 +17,20 @@ fn crh_resource_dir() -> std::path::PathBuf {
 }
 
 impl CrimeanTatarPipeline {
-    fn shared() -> &'static CrimeanTatarPipeline {
-        static PIPE: OnceLock<CrimeanTatarPipeline> = OnceLock::new();
-        PIPE.get_or_init(|| CrimeanTatarPipeline {
-            tokenizer: super::word_tokenizer::CrimeanTatarWordTokenizer::new(),
-            tagger: Arc::new(og_tagger::GenericTagger::from_resource_dir(
-                &crh_resource_dir(),
-                "crimean_tatar",
-            )),
-            splitter: og_tokenizer::srx::srx_splitter("crh"),
+    fn shared() -> std::sync::Arc<CrimeanTatarPipeline> {
+        static PIPE: og_core::releasable::Releasable<CrimeanTatarPipeline> =
+            og_core::releasable::Releasable::new();
+        og_core::releasable::shared_get_or_build(&PIPE, || {
+            Some(std::sync::Arc::new(CrimeanTatarPipeline {
+                tokenizer: super::word_tokenizer::CrimeanTatarWordTokenizer::new(),
+                tagger: Arc::new(og_tagger::GenericTagger::from_resource_dir(
+                    &crh_resource_dir(),
+                    "crimean_tatar",
+                )),
+                splitter: og_tokenizer::srx::srx_splitter("crh"),
+            }))
         })
+        .expect("crh pipeline")
     }
 
     fn sentence_ranges(&self, text: &str) -> Vec<(usize, usize)> {
@@ -166,7 +170,7 @@ fn matches_for_example(
 fn crimean_tatar_grammar_examples_with_crh_pipeline() {
     let _release_guard = crate::release_guard();
     let rule_set = compiled_rules();
-    let groups = rule_groups(rule_set);
+    let groups = rule_groups(&rule_set);
     let engine = PatternRuleEngine::new();
     let pipeline = CrimeanTatarPipeline::shared();
     og_rules::pattern_rule::set_test_date_hack(true);
@@ -180,7 +184,7 @@ fn crimean_tatar_grammar_examples_with_crh_pipeline() {
         };
         for example in &rule.examples {
             let (clean_text, marker_range) = extract_marker(&example.text);
-            let matches = matches_for_example(pipeline, &engine, group, &clean_text);
+            let matches = matches_for_example(&pipeline, &engine, group, &clean_text);
             let failed = match example.example_type {
                 og_xml::types::XmlExampleType::Incorrect => {
                     matches.is_empty()
@@ -240,7 +244,7 @@ fn grammar_rules_compile_the_java_inventory() {
         "crh grammar.xml must compile a real rule set, got {}",
         rule_set.rules.len()
     );
-    let example_count: usize = rule_groups(rule_set)
+    let example_count: usize = rule_groups(&rule_set)
         .iter()
         .filter_map(|g| g.first())
         .flat_map(|r| r.examples.iter())
@@ -439,7 +443,7 @@ fn number_defis_rules_pin_the_java_correction_pairs() {
             .filter(|r| r.id == rule_id)
             .flat_map(|rule| {
                 let group = vec![rule];
-                matches_for_example(pipeline, &engine, &group, text)
+                matches_for_example(&pipeline, &engine, &group, text)
                     .into_iter()
                     .flat_map(|m| {
                         m.replacements()
@@ -531,7 +535,7 @@ fn postag_rule_residue_is_exactly_the_missing_dict_family() {
 
     let engine = PatternRuleEngine::new();
     let mut postag_free_failures = Vec::new();
-    for group in rule_groups(rule_set) {
+    for group in rule_groups(&rule_set) {
         let Some(rule) = group.first() else {
             continue;
         };
@@ -540,7 +544,7 @@ fn postag_rule_residue_is_exactly_the_missing_dict_family() {
         }
         for example in &rule.examples {
             let (clean_text, _) = extract_marker(&example.text);
-            if matches_for_example(pipeline, &engine, &group, &clean_text).is_empty() {
+            if matches_for_example(&pipeline, &engine, &group, &clean_text).is_empty() {
                 postag_free_failures.push(format!("[{}]: '{}'", rule.id, clean_text));
             }
         }

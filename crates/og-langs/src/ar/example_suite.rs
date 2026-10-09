@@ -2,7 +2,7 @@ use og_core::checker::Disambiguator;
 use og_core::rule::{Rule, TextLevelRule};
 use og_core::{AnalyzedSentence, AnalyzedToken, AnalyzedTokenReadings};
 use std::path::PathBuf;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 pub(crate) fn ar_resource_dir() -> Option<PathBuf> {
     crate::engine::find_lt_resource_dir()
@@ -16,9 +16,10 @@ pub(crate) struct ArabicPipeline {
 }
 
 impl ArabicPipeline {
-    pub(crate) fn shared() -> &'static ArabicPipeline {
-        static PIPE: OnceLock<ArabicPipeline> = OnceLock::new();
-        PIPE.get_or_init(|| {
+    pub(crate) fn shared() -> std::sync::Arc<ArabicPipeline> {
+        static PIPE: og_core::releasable::Releasable<ArabicPipeline> =
+            og_core::releasable::Releasable::new();
+        og_core::releasable::shared_get_or_build(&PIPE, || {
             let resource_dir =
                 ar_resource_dir().expect("ar resource dir with arabic.dict + disambiguation.xml");
             let tagger = Arc::new(og_tagger::arabic_tagger::ArabicTagger::from_resource_dir(
@@ -31,12 +32,13 @@ impl ArabicPipeline {
                     crate::engine::find_lt_core_resource_dir()
                         .map(|core| og_tagger::hybrid_disambiguator("ar", &resource_dir, &core, d))
                 });
-            ArabicPipeline {
+            Some(std::sync::Arc::new(ArabicPipeline {
                 tagger,
                 disambiguator,
                 splitter: og_tokenizer::srx::srx_splitter("ar"),
-            }
+            }))
         })
+        .expect("ar pipeline")
     }
 
     pub(crate) fn tagger(&self) -> &og_tagger::arabic_tagger::ArabicTagger {

@@ -4,7 +4,7 @@ use og_core::{AnalyzedSentence, AnalyzedToken, AnalyzedTokenReadings, Language};
 use og_rules::pattern_rule::PatternRuleEngine;
 use og_xml::compiler::{CompiledRule, CompiledRuleSet, XmlCompiler};
 use std::collections::HashMap;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 pub(crate) struct GaPipeline {
     tagger: Arc<og_tagger::GenericTagger>,
@@ -18,16 +18,20 @@ pub(crate) fn ga_resource_dir() -> std::path::PathBuf {
         .join("ga/src/main/resources/org/languagetool/resource/ga")
 }
 
-pub(crate) fn ga_pipeline() -> &'static GaPipeline {
-    static PIPE: OnceLock<GaPipeline> = OnceLock::new();
-    PIPE.get_or_init(|| GaPipeline {
-        tagger: Arc::new(og_tagger::GenericTagger::from_resource_dir(
-            &ga_resource_dir(),
-            "irish",
-        )),
-        disambiguator: super::build_ga_disambiguator(&ga_resource_dir()),
-        splitter: og_tokenizer::srx::srx_splitter("ga"),
+pub(crate) fn ga_pipeline() -> std::sync::Arc<GaPipeline> {
+    static PIPE: og_core::releasable::Releasable<GaPipeline> =
+        og_core::releasable::Releasable::new();
+    og_core::releasable::shared_get_or_build(&PIPE, || {
+        Some(std::sync::Arc::new(GaPipeline {
+            tagger: Arc::new(og_tagger::GenericTagger::from_resource_dir(
+                &ga_resource_dir(),
+                "irish",
+            )),
+            disambiguator: super::build_ga_disambiguator(&ga_resource_dir()),
+            splitter: og_tokenizer::srx::srx_splitter("ga"),
+        }))
     })
+    .expect("ga")
 }
 
 impl GaPipeline {
@@ -131,9 +135,10 @@ impl og_core::checker::WordTokenizer for GaWordTokenizerBridge {
     }
 }
 
-pub(crate) fn module_checker() -> &'static og_core::checker::Checker {
-    static CHECKER: OnceLock<og_core::checker::Checker> = OnceLock::new();
-    CHECKER.get_or_init(|| {
+pub(crate) fn module_checker() -> std::sync::Arc<og_core::checker::Checker> {
+    static CHECKER: og_core::releasable::Releasable<og_core::checker::Checker> =
+        og_core::releasable::Releasable::new();
+    og_core::releasable::shared_get_or_build(&CHECKER, || {
         let resource_dir = ga_resource_dir();
         let tagger = Arc::new(og_tagger::GenericTagger::from_resource_dir(
             &resource_dir,
@@ -172,8 +177,9 @@ pub(crate) fn module_checker() -> &'static og_core::checker::Checker {
         if let Some(disambiguator) = super::build_ga_disambiguator(&resource_dir) {
             checker = checker.with_disambiguator(Arc::new(disambiguator));
         }
-        checker
+        Some(std::sync::Arc::new(checker))
     })
+    .expect("ga")
 }
 
 fn grammar_path() -> std::path::PathBuf {
@@ -182,15 +188,19 @@ fn grammar_path() -> std::path::PathBuf {
         .join("ga/src/main/resources/org/languagetool/rules/ga/grammar.xml")
 }
 
-fn compiled_rules() -> &'static CompiledRuleSet {
-    static GRAMMAR: OnceLock<CompiledRuleSet> = OnceLock::new();
-    GRAMMAR.get_or_init(|| {
+fn compiled_rules() -> std::sync::Arc<CompiledRuleSet> {
+    static GRAMMAR: og_core::releasable::Releasable<CompiledRuleSet> =
+        og_core::releasable::Releasable::new();
+    og_core::releasable::shared_get_or_build(&GRAMMAR, || {
         let path = grammar_path();
         let xml = std::fs::read_to_string(&path).expect("ga grammar.xml");
-        XmlCompiler::new()
-            .compile_file_with_base(&xml, path.parent())
-            .expect("compile ga grammar.xml")
+        Some(std::sync::Arc::new(
+            XmlCompiler::new()
+                .compile_file_with_base(&xml, path.parent())
+                .expect("compile ga grammar.xml"),
+        ))
     })
+    .expect("ga")
 }
 
 fn extract_marker(text: &str) -> (String, Option<(usize, usize)>) {
@@ -242,7 +252,7 @@ struct SuiteOutcome {
 
 fn evaluate_all_examples() -> SuiteOutcome {
     let rule_set = compiled_rules();
-    let groups = rule_groups(rule_set);
+    let groups = rule_groups(&rule_set);
     let engine = PatternRuleEngine::new();
     let pipeline = ga_pipeline();
     og_rules::pattern_rule::set_test_date_hack(true);
@@ -257,7 +267,7 @@ fn evaluate_all_examples() -> SuiteOutcome {
         };
         for example in &rule.examples {
             let (clean_text, marker_range) = extract_marker(&example.text);
-            let matches = matches_for_example(pipeline, &engine, group, &clean_text);
+            let matches = matches_for_example(&pipeline, &engine, group, &clean_text);
             let failed = match example.example_type {
                 og_xml::types::XmlExampleType::Incorrect => {
                     matches.is_empty()
@@ -331,7 +341,7 @@ fn grammar_rules_compile_the_java_inventory() {
         1663,
         "ga grammar.xml compiles 1663 rule elements"
     );
-    let groups = rule_groups(rule_set);
+    let groups = rule_groups(&rule_set);
     assert_eq!(groups.len(), 1663, "every ga rule carries a unique id key");
     let mut incorrect = 0usize;
     let mut correct = 0usize;
@@ -809,10 +819,11 @@ fn rule_gates_on_readings(rule: &og_xml::compiler::CompiledRule) -> bool {
 
 #[test]
 fn no_match_residue_is_exactly_the_missing_irish_dict_family() {
+    let _release_guard = crate::release_guard();
     let outcome = evaluate_all_examples();
-    assert_eq!(outcome.passed, 1550);
+    assert_eq!(outcome.passed, 1552);
     assert_eq!(outcome.fail_lines.len(), 271);
-    assert_eq!(outcome.correction_failures.len(), 22);
+    assert_eq!(outcome.correction_failures.len(), 20);
     let rule_set = compiled_rules();
     let failing_ids: std::collections::HashSet<&str> = outcome
         .fail_lines
@@ -863,7 +874,7 @@ fn correction_residue_pins_its_shared_engine_families() {
             .filter(|r| r.id == rule_id)
             .flat_map(|rule| {
                 let group = vec![rule];
-                matches_for_example(pipeline, &engine, &group, text)
+                matches_for_example(&pipeline, &engine, &group, text)
                     .into_iter()
                     .map(|m| {
                         m.replacements()
@@ -877,11 +888,13 @@ fn correction_residue_pins_its_shared_engine_families() {
     };
     assert_eq!(
         offered_for("AN_SIONAINN", "an Sionainn"),
-        vec![vec!["tsionainn".to_string()]],
+        vec![vec!["tSionainn".to_string()]],
         "the <match regexp_match=\"^(.*)$\" regexp_replace=\"t$1\" \
-         case_conversion=\"startlower\"/> transform would yield 'tSionainn'; the shared \
-         og-xml compiler drops token-level regexp_match/regexp_replace (the br round's \
-         KLANV_PE_GLANVOCH finding), so the rule matches but offers the untransformed token"
+         case_conversion=\"startlower\"/> transform yields 'tSionainn' exactly like Java's \
+         own example pin (grammar.xml:18752 correction='tSionainn'): startlower only \
+         lowercases the first char, which the t$1 replace already made lowercase - the \
+         in-token <match> references port (191a205) closed the gap this pin used to \
+         document"
     );
     assert_eq!(
         offered_for("AR_UNECLIPSED", "ár teach"),

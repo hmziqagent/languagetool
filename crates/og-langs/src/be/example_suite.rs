@@ -17,16 +17,20 @@ fn be_resource_dir() -> std::path::PathBuf {
 }
 
 impl BelarusianPipeline {
-    fn shared() -> &'static BelarusianPipeline {
-        static PIPE: OnceLock<BelarusianPipeline> = OnceLock::new();
-        PIPE.get_or_init(|| BelarusianPipeline {
-            tokenizer: super::word_tokenizer::BelarusianWordTokenizer::new(),
-            tagger: Arc::new(og_tagger::GenericTagger::from_resource_dir(
-                &be_resource_dir(),
-                "",
-            )),
-            splitter: og_tokenizer::srx::srx_splitter("be"),
+    fn shared() -> std::sync::Arc<BelarusianPipeline> {
+        static PIPE: og_core::releasable::Releasable<BelarusianPipeline> =
+            og_core::releasable::Releasable::new();
+        og_core::releasable::shared_get_or_build(&PIPE, || {
+            Some(std::sync::Arc::new(BelarusianPipeline {
+                tokenizer: super::word_tokenizer::BelarusianWordTokenizer::new(),
+                tagger: Arc::new(og_tagger::GenericTagger::from_resource_dir(
+                    &be_resource_dir(),
+                    "",
+                )),
+                splitter: og_tokenizer::srx::srx_splitter("be"),
+            }))
         })
+        .expect("be pipeline")
     }
 
     fn sentence_ranges(&self, text: &str) -> Vec<(usize, usize)> {

@@ -12,12 +12,16 @@ pub(crate) struct FaPipeline {
     splitter: Option<og_tokenizer::srx::SrxSentenceSplitter>,
 }
 
-pub(crate) fn fa_pipeline() -> &'static FaPipeline {
-    static PIPE: OnceLock<FaPipeline> = OnceLock::new();
-    PIPE.get_or_init(|| FaPipeline {
-        tokenizer: super::PersianWordTokenizer::new(),
-        splitter: og_tokenizer::srx::srx_splitter("fa"),
+pub(crate) fn fa_pipeline() -> std::sync::Arc<FaPipeline> {
+    static PIPE: og_core::releasable::Releasable<FaPipeline> =
+        og_core::releasable::Releasable::new();
+    og_core::releasable::shared_get_or_build(&PIPE, || {
+        Some(std::sync::Arc::new(FaPipeline {
+            tokenizer: super::PersianWordTokenizer::new(),
+            splitter: og_tokenizer::srx::srx_splitter("fa"),
+        }))
     })
+    .expect("fa pipeline")
 }
 
 impl FaPipeline {
@@ -179,7 +183,7 @@ fn matches_for_example(
 fn persian_grammar_examples_with_fa_pipeline() {
     let _release_guard = crate::release_guard();
     let rule_set = compiled_rules();
-    let groups = rule_groups(rule_set);
+    let groups = rule_groups(&rule_set);
     let engine = PatternRuleEngine::new();
     let pipeline = fa_pipeline();
     og_rules::pattern_rule::set_test_date_hack(true);
@@ -193,7 +197,7 @@ fn persian_grammar_examples_with_fa_pipeline() {
         };
         for example in &rule.examples {
             let (clean_text, marker_range) = extract_marker(&example.text);
-            let matches = matches_for_example(pipeline, &engine, group, &clean_text);
+            let matches = matches_for_example(&pipeline, &engine, group, &clean_text);
             let failed = match example.example_type {
                 og_xml::types::XmlExampleType::Incorrect => {
                     matches.is_empty()
@@ -266,7 +270,7 @@ fn grammar_rules_compile_the_java_inventory() {
         "fa grammar.xml compiles each of its 283 <rule> elements (12 standalone id rules plus \
          the sub-rules of the 4 rulegroups) into one compiled rule"
     );
-    let example_count: usize = rule_groups(rule_set)
+    let example_count: usize = rule_groups(&rule_set)
         .iter()
         .filter_map(|g| g.first())
         .flat_map(|r| r.examples.iter())

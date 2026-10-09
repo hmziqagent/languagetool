@@ -390,11 +390,8 @@ mod round2_tests {
             let mine: Vec<&FailureLine> =
                 failures.iter().filter(|f| &f.rule_id == rule_id).collect();
             let style = compiled_style();
-            let sub_rules: Vec<&CompiledRule> = style
-                .rules
-                .iter()
-                .filter(|r| &r.id == rule_id)
-                .collect();
+            let sub_rules: Vec<&CompiledRule> =
+                style.rules.iter().filter(|r| &r.id == rule_id).collect();
             if sub_rules.is_empty() {
                 eprintln!("### {rule_id} x{} has no style.xml sub-rule", mine.len());
                 continue;
@@ -474,11 +471,7 @@ mod round2_puzzles {
         let engine = crate::pt::example_suite::suite_engine();
         let pipeline = PortuguesePipeline::shared();
         let style = compiled_style();
-        let sub_rules: Vec<_> = style
-            .rules
-            .iter()
-            .filter(|r| r.id == rule_id)
-            .collect();
+        let sub_rules: Vec<_> = style.rules.iter().filter(|r| r.id == rule_id).collect();
         eprintln!("== {rule_id} '{text}'");
         for rule in &sub_rules {
             for (sentence, sentence_start) in pipeline.analyze_offset_text(text) {

@@ -6,7 +6,7 @@ use og_core::{
 use og_spell::hunspell::HunspellChecker;
 use std::collections::HashSet;
 use std::path::Path;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 pub const HUNSPELL_NO_SUGGEST_RULE: &str = "HUNSPELL_NO_SUGGEST_RULE";
 
@@ -22,17 +22,16 @@ pub fn is_resource_dir() -> Option<std::path::PathBuf> {
 }
 
 fn shared_hunspell() -> Option<Arc<HunspellChecker>> {
-    static CACHE: OnceLock<Option<Arc<HunspellChecker>>> = OnceLock::new();
-    CACHE
-        .get_or_init(|| {
-            let dir = is_resource_dir()?;
-            HunspellChecker::load(
-                &dir.join("hunspell/is_IS.aff"),
-                &dir.join("hunspell/is_IS.dic"),
-            )
-            .map(Arc::new)
-        })
-        .clone()
+    static CACHE: og_core::releasable::Releasable<HunspellChecker> =
+        og_core::releasable::Releasable::new();
+    og_core::releasable::shared_get_or_build(&CACHE, || {
+        let dir = is_resource_dir()?;
+        HunspellChecker::load(
+            &dir.join("hunspell/is_IS.aff"),
+            &dir.join("hunspell/is_IS.dic"),
+        )
+        .map(Arc::new)
+    })
 }
 
 fn is_ignore_words(resource_dir: &Path) -> HashSet<String> {

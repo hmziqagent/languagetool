@@ -3,7 +3,7 @@ use og_core::{AnalyzedSentence, AnalyzedToken, AnalyzedTokenReadings};
 use og_rules::pattern_rule::PatternRuleEngine;
 use og_xml::compiler::{CompiledRule, CompiledRuleSet, XmlCompiler};
 use std::path::PathBuf;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 pub(crate) fn it_resource_dir() -> Option<PathBuf> {
     crate::engine::find_lt_resource_dir()
@@ -22,9 +22,10 @@ pub(crate) struct ItalianPipeline {
 }
 
 impl ItalianPipeline {
-    pub(crate) fn shared() -> &'static ItalianPipeline {
-        static PIPE: OnceLock<ItalianPipeline> = OnceLock::new();
-        PIPE.get_or_init(|| {
+    pub(crate) fn shared() -> std::sync::Arc<ItalianPipeline> {
+        static PIPE: og_core::releasable::Releasable<ItalianPipeline> =
+            og_core::releasable::Releasable::new();
+        og_core::releasable::shared_get_or_build(&PIPE, || {
             let resource_dir = it_resource_dir().expect("it resource dir with italian.dict");
             let tagger = Arc::new(og_tagger::GenericTagger::from_resource_dir(
                 &resource_dir,
@@ -37,12 +38,13 @@ impl ItalianPipeline {
                     crate::engine::find_lt_core_resource_dir()
                         .map(|core| og_tagger::hybrid_disambiguator("it", &resource_dir, &core, d))
                 });
-            ItalianPipeline {
+            Some(std::sync::Arc::new(ItalianPipeline {
                 tagger,
                 disambiguator,
                 splitter: og_tokenizer::srx::srx_splitter("it"),
-            }
+            }))
         })
+        .expect("it pipeline")
     }
 
     pub(crate) fn analyze(&self, text: &str) -> Vec<AnalyzedSentence> {
@@ -117,19 +119,27 @@ impl ItalianPipeline {
     }
 }
 
-fn grammar_rules() -> &'static CompiledRuleSet {
-    static RULES: OnceLock<CompiledRuleSet> = OnceLock::new();
-    RULES.get_or_init(|| {
+fn grammar_rules() -> std::sync::Arc<CompiledRuleSet> {
+    static RULES: og_core::releasable::Releasable<CompiledRuleSet> =
+        og_core::releasable::Releasable::new();
+    og_core::releasable::shared_get_or_build(&RULES, || {
         let path = it_rules_dir().expect("it rules dir").join("grammar.xml");
         let xml = std::fs::read_to_string(&path).expect("it grammar.xml read");
-        XmlCompiler::new()
-            .compile_file_with_base(&xml, path.parent())
-            .expect("it grammar compile")
+        Some(std::sync::Arc::new(
+            XmlCompiler::new()
+                .compile_file_with_base(&xml, path.parent())
+                .expect("it grammar compile"),
+        ))
     })
+    .expect("it grammar")
 }
 
-fn rules_by_sub_id(id: &str, sub_id: &str) -> Vec<&'static CompiledRule> {
-    grammar_rules()
+fn rules_by_sub_id<'a>(
+    rules: &'a CompiledRuleSet,
+    id: &str,
+    sub_id: &str,
+) -> Vec<&'a CompiledRule> {
+    rules
         .rules
         .iter()
         .filter(|r| r.id == id && r.sub_id.as_deref() == Some(sub_id))
@@ -138,9 +148,11 @@ fn rules_by_sub_id(id: &str, sub_id: &str) -> Vec<&'static CompiledRule> {
 
 fn matches_for_sub(id: &str, sub_id: &str, text: &str) -> Vec<og_core::RuleMatch> {
     let engine = PatternRuleEngine::new();
-    let rules = rules_by_sub_id(id, sub_id);
+    let grammar = grammar_rules();
+    let rules = rules_by_sub_id(&grammar, id, sub_id);
     let mut matches = Vec::new();
-    for sentence in ItalianPipeline::shared().analyze(text) {
+    let pipeline = ItalianPipeline::shared();
+    for sentence in pipeline.analyze(text) {
         for rule in &rules {
             matches.extend(engine.match_rule(rule, &sentence));
         }

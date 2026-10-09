@@ -12,12 +12,16 @@ pub(crate) struct IsPipeline {
     splitter: Option<og_tokenizer::srx::SrxSentenceSplitter>,
 }
 
-pub(crate) fn is_pipeline() -> &'static IsPipeline {
-    static PIPE: OnceLock<IsPipeline> = OnceLock::new();
-    PIPE.get_or_init(|| IsPipeline {
-        tokenizer: og_tokenizer::DefaultWordTokenizer::new_generic(),
-        splitter: og_tokenizer::srx::srx_splitter("is"),
+pub(crate) fn is_pipeline() -> std::sync::Arc<IsPipeline> {
+    static PIPE: og_core::releasable::Releasable<IsPipeline> =
+        og_core::releasable::Releasable::new();
+    og_core::releasable::shared_get_or_build(&PIPE, || {
+        Some(std::sync::Arc::new(IsPipeline {
+            tokenizer: og_tokenizer::DefaultWordTokenizer::new_generic(),
+            splitter: og_tokenizer::srx::srx_splitter("is"),
+        }))
     })
+    .expect("is pipeline")
 }
 
 impl IsPipeline {

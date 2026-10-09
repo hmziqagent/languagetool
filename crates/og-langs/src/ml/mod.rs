@@ -6,7 +6,7 @@ mod example_suite;
 
 use og_core::rule::{Rule, TextLevelRule};
 use std::path::PathBuf;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 pub use speller::{
     MORFOLOGIK_RULE_ML_IN, MalayalamSpellerRule, MalayalamSpellerSource,
@@ -20,17 +20,16 @@ pub fn ml_resource_dir() -> Option<PathBuf> {
 }
 
 pub fn malayalam_tagger() -> Option<Arc<og_tagger::GenericTagger>> {
-    static CACHE: OnceLock<Option<Arc<og_tagger::GenericTagger>>> = OnceLock::new();
-    CACHE
-        .get_or_init(|| {
-            ml_resource_dir().map(|dir| {
-                Arc::new(og_tagger::GenericTagger::from_resource_dir(
-                    &dir,
-                    "malayalam",
-                ))
-            })
+    static CACHE: og_core::releasable::Releasable<og_tagger::GenericTagger> =
+        og_core::releasable::Releasable::new();
+    og_core::releasable::shared_get_or_build(&CACHE, || {
+        ml_resource_dir().map(|dir| {
+            Arc::new(og_tagger::GenericTagger::from_resource_dir(
+                &dir,
+                "malayalam",
+            ))
         })
-        .clone()
+    })
 }
 
 pub fn malayalam_unpaired_brackets_rule() -> og_rules::text_level_rules::GenericUnpairedBracketsRule

@@ -4,7 +4,7 @@ use og_core::{
     RuleMatchRule,
 };
 use std::collections::HashSet;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 pub const MORFOLOGIK_RULE_BR_FR: &str = "MORFOLOGIK_RULE_BR_FR";
 
@@ -29,19 +29,18 @@ impl BrWordSet {
 }
 
 fn breton_word_set() -> Option<Arc<BrWordSet>> {
-    static CACHE: OnceLock<Option<Arc<BrWordSet>>> = OnceLock::new();
-    CACHE
-        .get_or_init(|| {
-            let resource_dir = super::tagger::br_resource_dir()?;
-            let dict_path = resource_dir.join("hunspell/br_FR.dict");
-            let info_path = resource_dir.join("hunspell/br_FR.info");
-            if !dict_path.exists() || !info_path.exists() {
-                return None;
-            }
-            let words = og_tagger::morfologik::FsaWordSet::load(&dict_path, &info_path)?;
-            Some(Arc::new(BrWordSet { words: Some(words) }))
-        })
-        .clone()
+    static CACHE: og_core::releasable::Releasable<BrWordSet> =
+        og_core::releasable::Releasable::new();
+    og_core::releasable::shared_get_or_build(&CACHE, || {
+        let resource_dir = super::tagger::br_resource_dir()?;
+        let dict_path = resource_dir.join("hunspell/br_FR.dict");
+        let info_path = resource_dir.join("hunspell/br_FR.info");
+        if !dict_path.exists() || !info_path.exists() {
+            return None;
+        }
+        let words = og_tagger::morfologik::FsaWordSet::load(&dict_path, &info_path)?;
+        Some(Arc::new(BrWordSet { words: Some(words) }))
+    })
 }
 
 fn shared_ignore_words() -> HashSet<String> {

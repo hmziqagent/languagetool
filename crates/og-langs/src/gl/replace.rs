@@ -3,7 +3,7 @@ use og_core::{
     RuleMatchRule, SuggestedReplacement, rule::Rule,
 };
 use std::collections::HashMap;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 pub struct GalicianSimpleReplaceRule {
     id: &'static str,
@@ -17,14 +17,12 @@ pub struct GalicianSimpleReplaceRule {
 }
 
 fn shared_gl_synth() -> Option<Arc<og_tagger::morfologik::SynthDictionary>> {
-    static SYNTH: OnceLock<Option<Arc<og_tagger::morfologik::SynthDictionary>>> = OnceLock::new();
-    SYNTH
-        .get_or_init(|| {
-            super::tagger::gl_resource_dir().and_then(|dir| {
-                og_tagger::morfologik::shared_synth_dictionary(&dir, "galician_synth")
-            })
-        })
-        .clone()
+    static SYNTH: og_core::releasable::Releasable<og_tagger::morfologik::SynthDictionary> =
+        og_core::releasable::Releasable::new();
+    og_core::releasable::shared_get_or_build(&SYNTH, || {
+        super::tagger::gl_resource_dir()
+            .and_then(|dir| og_tagger::morfologik::shared_synth_dictionary(&dir, "galician_synth"))
+    })
 }
 
 impl GalicianSimpleReplaceRule {

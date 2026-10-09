@@ -7,7 +7,7 @@ use og_core::{AnalyzedSentence, AnalyzedToken, AnalyzedTokenReadings, CheckReque
 use og_rules::pattern_rule::PatternRuleEngine;
 use og_xml::compiler::{CompiledRule, CompiledRuleSet, XmlCompiler};
 use std::collections::HashMap;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 pub(crate) struct KmPipeline {
     tokenizer: super::KhmerWordTokenizer,
@@ -20,17 +20,19 @@ pub(crate) fn km_resource_dir() -> std::path::PathBuf {
     super::km_resource_dir().expect("km resource dir")
 }
 
-pub(crate) fn km_pipeline() -> &'static KmPipeline {
-    static PIPE: OnceLock<KmPipeline> = OnceLock::new();
-    PIPE.get_or_init(|| {
+pub(crate) fn km_pipeline() -> std::sync::Arc<KmPipeline> {
+    static PIPE: og_core::releasable::Releasable<KmPipeline> =
+        og_core::releasable::Releasable::new();
+    og_core::releasable::shared_get_or_build(&PIPE, || {
         let resource_dir = km_resource_dir();
-        KmPipeline {
+        Some(std::sync::Arc::new(KmPipeline {
             tokenizer: super::KhmerWordTokenizer::new(),
             tagger: super::khmer_tagger().expect("khmer.dict tagger"),
             disambiguator: super::build_km_disambiguator(&resource_dir),
             splitter: og_tokenizer::srx::srx_splitter("km"),
-        }
+        }))
     })
+    .expect("km")
 }
 
 impl KmPipeline {
@@ -125,9 +127,10 @@ impl og_core::checker::WordTokenizer for KmWordTokenizerBridge {
     }
 }
 
-pub(crate) fn module_checker() -> &'static og_core::checker::Checker {
-    static CHECKER: OnceLock<og_core::checker::Checker> = OnceLock::new();
-    CHECKER.get_or_init(|| {
+pub(crate) fn module_checker() -> std::sync::Arc<og_core::checker::Checker> {
+    static CHECKER: og_core::releasable::Releasable<og_core::checker::Checker> =
+        og_core::releasable::Releasable::new();
+    og_core::releasable::shared_get_or_build(&CHECKER, || {
         let tagger = super::khmer_tagger().expect("khmer.dict tagger");
         let natives = super::khmer_native_rules();
         let mut rules: Vec<Arc<dyn og_core::rule::Rule>> = natives.rules.clone();
@@ -147,8 +150,9 @@ pub(crate) fn module_checker() -> &'static og_core::checker::Checker {
         {
             checker = checker.with_disambiguator(Arc::new(disambiguator));
         }
-        checker
+        Some(std::sync::Arc::new(checker))
     })
+    .expect("km")
 }
 
 fn grammar_path() -> std::path::PathBuf {
@@ -157,15 +161,19 @@ fn grammar_path() -> std::path::PathBuf {
         .join("km/src/main/resources/org/languagetool/rules/km/grammar.xml")
 }
 
-fn compiled_rules() -> &'static CompiledRuleSet {
-    static GRAMMAR: OnceLock<CompiledRuleSet> = OnceLock::new();
-    GRAMMAR.get_or_init(|| {
+fn compiled_rules() -> std::sync::Arc<CompiledRuleSet> {
+    static GRAMMAR: og_core::releasable::Releasable<CompiledRuleSet> =
+        og_core::releasable::Releasable::new();
+    og_core::releasable::shared_get_or_build(&GRAMMAR, || {
         let path = grammar_path();
         let xml = std::fs::read_to_string(&path).expect("km grammar.xml");
-        XmlCompiler::new()
-            .compile_file_with_base(&xml, path.parent())
-            .expect("compile km grammar.xml")
+        Some(std::sync::Arc::new(
+            XmlCompiler::new()
+                .compile_file_with_base(&xml, path.parent())
+                .expect("compile km grammar.xml"),
+        ))
     })
+    .expect("km")
 }
 
 fn module_check(text: &str) -> Vec<og_core::RuleMatch> {
@@ -240,7 +248,7 @@ fn matches_for_example(
 fn khmer_grammar_examples_with_km_pipeline() {
     let _release_guard = crate::release_guard();
     let rule_set = compiled_rules();
-    let groups = rule_groups(rule_set);
+    let groups = rule_groups(&rule_set);
     let engine = PatternRuleEngine::new();
     let pipeline = km_pipeline();
     og_rules::pattern_rule::set_test_date_hack(true);
@@ -254,7 +262,7 @@ fn khmer_grammar_examples_with_km_pipeline() {
         };
         for example in &rule.examples {
             let (clean_text, marker_range) = extract_marker(&example.text);
-            let matches = matches_for_example(pipeline, &engine, group, &clean_text);
+            let matches = matches_for_example(&pipeline, &engine, group, &clean_text);
             let failed = match example.example_type {
                 og_xml::types::XmlExampleType::Incorrect => {
                     matches.is_empty()
@@ -327,7 +335,7 @@ fn grammar_rules_compile_the_java_inventory() {
         "km grammar.xml compiles 33 pattern rules: 31 standalone <rule id=...> elements plus the \
          two Classifier_PEOPLE rulegroup sub-rules"
     );
-    let example_count: usize = rule_groups(rule_set)
+    let example_count: usize = rule_groups(&rule_set)
         .iter()
         .filter_map(|g| g.first())
         .flat_map(|r| r.examples.iter())
