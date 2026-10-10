@@ -139,3 +139,126 @@ impl Rule for SpecificCaseRule {
         matches
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_util::sentence;
+
+    const DATA: &str = "\
+# comment line that must be ignored
+
+Vitamin C
+New York
+iPhone
+";
+
+    fn rule() -> SpecificCaseRule {
+        SpecificCaseRule::from_data(
+            "TEST_SPECIFIC_CASE",
+            "Checks upper/lower case expressions.",
+            "Casing",
+            "initial capital message",
+            "other capitalization message",
+            DATA,
+        )
+    }
+
+    #[test]
+    fn flags_wrong_cased_phrase_with_proper_replacement() {
+        let rule = rule();
+        let text = "I live in new york now.";
+        let matches = rule.match_sentence(&sentence(text));
+        assert_eq!(matches.len(), 1);
+        let m = &matches[0];
+        assert_eq!(&text[m.offset()..m.offset() + m.length()], "new york");
+        assert_eq!(m.replacements()[0].value(), "New York");
+        assert_eq!(m.message(), "initial capital message");
+    }
+
+    #[test]
+    fn proper_spelling_and_all_uppercase_pass_like_java() {
+        let rule = rule();
+        assert!(
+            rule.match_sentence(&sentence("New York is big."))
+                .is_empty()
+        );
+        assert!(
+            rule.match_sentence(&sentence("I live in NEW YORK now."))
+                .is_empty()
+        );
+        assert!(
+            rule.match_sentence(&sentence("Vitamin C helps."))
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn second_word_only_is_still_flagged() {
+        let rule = rule();
+        let text = "I like New york.";
+        let matches = rule.match_sentence(&sentence(text));
+        assert_eq!(matches.len(), 1);
+        let m = &matches[0];
+        assert_eq!(&text[m.offset()..m.offset() + m.length()], "New york");
+        assert_eq!(m.replacements()[0].value(), "New York");
+    }
+
+    #[test]
+    fn all_caps_initial_word_selects_the_initial_capital_message() {
+        let rule = rule();
+        let matches = rule.match_sentence(&sentence("She takes vitamin c daily."));
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].message(), "initial capital message");
+    }
+
+    #[test]
+    fn lowercase_proper_spelling_uses_other_capitalization_message() {
+        let rule = rule();
+        let matches = rule.match_sentence(&sentence("He bought an Iphone today."));
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].message(), "other capitalization message");
+        assert_eq!(matches[0].replacements()[0].value(), "iPhone");
+    }
+
+    #[test]
+    fn lowercase_initial_proper_spelling_is_skipped_at_sentence_start() {
+        let rule = rule();
+        assert!(
+            rule.match_sentence(&sentence("Iphone is a phone."))
+                .is_empty()
+        );
+        let matches = rule.match_sentence(&sentence("I bought an Iphone."));
+        assert_eq!(matches.len(), 1);
+    }
+
+    #[test]
+    fn context_window_snaps_to_char_boundaries_around_multibyte_text() {
+        let rule = rule();
+        let prefix = "Δ".repeat(30);
+        let text = format!("{prefix} και new york");
+        let matches = rule.match_sentence(&sentence(&text));
+        assert_eq!(matches.len(), 1);
+        let m = &matches[0];
+        let ctx = m.context();
+        assert!(ctx.offset() <= m.offset());
+        assert_eq!(
+            &text[ctx.offset()..ctx.offset() + ctx.length()],
+            ctx.text(),
+            "context span must land on char boundaries inside multibyte text"
+        );
+    }
+
+    #[test]
+    fn from_data_skips_comments_and_blank_lines_and_picks_max_len() {
+        let rule = rule();
+        assert_eq!(rule.lc_to_proper_spelling.len(), 3);
+        assert_eq!(rule.max_len, 2);
+        assert_eq!(
+            rule.lc_to_proper_spelling
+                .get("new york")
+                .map(String::as_str),
+            Some("New York")
+        );
+    }
+}
