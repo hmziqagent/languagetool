@@ -10,26 +10,21 @@ pub use registry::*;
 pub(crate) fn release_guard() -> impl Drop {
     struct ReleaseOnDrop {
         _heavy: og_core::releasable::HeavyGuard,
+        acquired: std::time::Instant,
     }
-    impl ReleaseOnDrop {
-        fn release_shared_statics() {
-            og_core::releasable::release_all();
+    impl Drop for ReleaseOnDrop {
+        fn drop(&mut self) {
+            og_core::releasable::release_unused_since(self.acquired);
             #[cfg(target_os = "linux")]
             unsafe {
                 libc::malloc_trim(0);
             }
         }
     }
-    impl Drop for ReleaseOnDrop {
-        fn drop(&mut self) {
-            Self::release_shared_statics();
-        }
-    }
-    let guard = ReleaseOnDrop {
+    ReleaseOnDrop {
         _heavy: og_core::releasable::heavy_guard(),
-    };
-    ReleaseOnDrop::release_shared_statics();
-    guard
+        acquired: std::time::Instant::now(),
+    }
 }
 
 pub(crate) fn weak_shared<T>(

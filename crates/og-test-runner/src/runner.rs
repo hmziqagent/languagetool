@@ -1499,13 +1499,14 @@ mod tests {
             return;
         }
 
+        let started = std::time::Instant::now();
         let rules_handle = std::thread::spawn(test_support::german_grammar_rules);
         let runner = test_support::german_runner();
         let rules = rules_handle.join().expect("grammar compile thread");
         let summary = runner.run_rule_set_example_tests(&rules);
         drop(rules);
         drop(runner);
-        og_core::releasable::release_all();
+        og_core::releasable::release_unused_since(started);
         trim_released_pages();
 
         eprintln!("Total German examples tested: {}", summary.total);
@@ -2689,6 +2690,7 @@ fn trim_released_pages() {
 
 #[cfg(test)]
 fn run_german_variant_example_suite(code: &'static str) {
+    let started = std::time::Instant::now();
     let variant_dir = if code == "de-CH" { "de-CH" } else { "de-DE-AT" };
     let path = std::path::PathBuf::from(format!(
         "/home/agent/opengrammar-rs/languagetool/languagetool-language-modules/de/src/main/resources/org/languagetool/rules/de/{variant_dir}/grammar.xml"
@@ -2704,7 +2706,7 @@ fn run_german_variant_example_suite(code: &'static str) {
         .expect("grammar compile");
     let summary = runner.run_rule_set_example_tests(&rules);
     drop(rules);
-    og_core::releasable::release_all();
+    og_core::releasable::release_unused_since(started);
     trim_released_pages();
 
     let mut no_match = 0;
@@ -2744,13 +2746,14 @@ fn run_generic_example_suite(code: &'static str) {
         eprintln!("Skipping: {code} grammar.xml not found");
         return;
     }
+    let started = std::time::Instant::now();
     let rules_handle = std::thread::spawn(move || test_support::generic_grammar_rules(code));
     let runner = TestRunner::for_language(code);
     let rules = rules_handle.join().expect("grammar compile thread");
     let summary = runner.run_rule_set_example_tests(&rules);
     drop(rules);
     drop(runner);
-    og_core::releasable::release_all();
+    og_core::releasable::release_unused_since(started);
     trim_released_pages();
 
     let mut no_match = 0;

@@ -1,15 +1,24 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Instant;
+
+struct CellState<T> {
+    value: Option<Arc<T>>,
+    last_use: Option<Instant>,
+}
 
 pub struct Releasable<T> {
-    cell: Mutex<Option<Arc<T>>>,
+    state: Mutex<CellState<T>>,
     building: Mutex<()>,
 }
 
 impl<T> Releasable<T> {
     pub const fn new() -> Self {
         Self {
-            cell: Mutex::new(None),
+            state: Mutex::new(CellState {
+                value: None,
+                last_use: None,
+            }),
             building: Mutex::new(()),
         }
     }
@@ -21,9 +30,10 @@ impl<T> Default for Releasable<T> {
     }
 }
 
-fn registry() -> &'static Mutex<HashMap<usize, std::sync::Arc<dyn Fn() + Send + Sync>>> {
-    static REGISTRY: OnceLock<Mutex<HashMap<usize, std::sync::Arc<dyn Fn() + Send + Sync>>>> =
-        OnceLock::new();
+type ReleaseFn = std::sync::Arc<dyn Fn(Option<Instant>) + Send + Sync>;
+
+fn registry() -> &'static Mutex<HashMap<usize, ReleaseFn>> {
+    static REGISTRY: OnceLock<Mutex<HashMap<usize, ReleaseFn>>> = OnceLock::new();
     REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
@@ -34,54 +44,76 @@ pub fn shared_get_or_build<T>(
 where
     T: Send + Sync + 'static,
 {
-    if let Ok(guard) = cell.cell.lock()
-        && let Some(hit) = guard.as_ref()
+    let now = Instant::now();
+    if let Ok(mut guard) = cell.state.lock()
+        && guard.value.is_some()
     {
-        return Some(hit.clone());
+        let hit = guard.value.clone();
+        guard.last_use = Some(now);
+        return hit;
     }
     let _build_guard = cell
         .building
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    if let Ok(guard) = cell.cell.lock()
-        && let Some(hit) = guard.as_ref()
+    if let Ok(mut guard) = cell.state.lock()
+        && guard.value.is_some()
     {
-        return Some(hit.clone());
+        let hit = guard.value.clone();
+        guard.last_use = Some(now);
+        return hit;
     }
     let built = build();
     let mut stored = false;
     let outcome = {
-        let Ok(mut guard) = cell.cell.lock() else {
+        let Ok(mut guard) = cell.state.lock() else {
             return built;
         };
-        if guard.is_none() {
-            *guard = built.clone();
+        if guard.value.is_none() {
+            guard.value = built.clone();
+            guard.last_use = Some(now);
             stored = true;
         }
-        guard.clone()
+        guard.value.clone()
     };
     if stored {
         let key = cell as *const Releasable<T> as usize;
         if let Ok(mut registry) = registry().lock() {
             registry.entry(key).or_insert_with(|| {
-                std::sync::Arc::new(move || {
-                    if let Ok(mut guard) = cell.cell.lock() {
-                        *guard = None;
-                    }
-                })
+                std::sync::Arc::new(move |keep_used_since| release_cell(cell, keep_used_since))
             });
         }
     }
     outcome
 }
 
+fn release_cell<T>(cell: &Releasable<T>, keep_used_since: Option<Instant>) {
+    let Ok(mut guard) = cell.state.lock() else {
+        return;
+    };
+    if let Some(since) = keep_used_since
+        && guard.last_use.is_some_and(|used| used > since)
+    {
+        return;
+    }
+    guard.value = None;
+}
+
 pub fn release_all() {
-    let releases: Vec<std::sync::Arc<dyn Fn() + Send + Sync>> = match registry().lock() {
+    release_with_filter(None);
+}
+
+pub fn release_unused_since(since: Instant) {
+    release_with_filter(Some(since));
+}
+
+fn release_with_filter(keep_used_since: Option<Instant>) {
+    let releases: Vec<ReleaseFn> = match registry().lock() {
         Ok(registry) => registry.values().cloned().collect(),
         Err(_) => return,
     };
     for release in releases {
-        release();
+        release(keep_used_since);
     }
 }
 
@@ -165,7 +197,7 @@ mod tests {
         })
         .unwrap();
         release_all();
-        assert!(CELL.cell.lock().unwrap().is_none());
+        assert!(CELL.state.lock().unwrap().value.is_none());
         let rebuilt = shared_get_or_build(&CELL, || {
             BUILDS.fetch_add(1, Ordering::SeqCst);
             Some(Arc::new("second".to_string()))
@@ -175,6 +207,44 @@ mod tests {
         assert!(!Arc::ptr_eq(&held, &rebuilt));
         assert_eq!(*held, "first");
         assert_eq!(*rebuilt, "second");
+    }
+
+    #[test]
+    fn release_unused_since_keeps_cells_used_after_the_instant() {
+        let _serialized = SERIALIZE.lock().unwrap();
+        static USED: Releasable<String> = Releasable::new();
+        static IDLE: Releasable<String> = Releasable::new();
+        static USED_BUILDS: AtomicUsize = AtomicUsize::new(0);
+        static IDLE_BUILDS: AtomicUsize = AtomicUsize::new(0);
+        let _idle = shared_get_or_build(&IDLE, || {
+            IDLE_BUILDS.fetch_add(1, Ordering::SeqCst);
+            Some(Arc::new("idle".to_string()))
+        })
+        .unwrap();
+        let since = Instant::now();
+        std::thread::sleep(Duration::from_millis(2));
+        let used = shared_get_or_build(&USED, || {
+            USED_BUILDS.fetch_add(1, Ordering::SeqCst);
+            Some(Arc::new("used".to_string()))
+        })
+        .unwrap();
+        release_unused_since(since);
+        assert!(
+            USED.state.lock().unwrap().value.is_some(),
+            "a cell used after the instant must survive"
+        );
+        assert!(
+            IDLE.state.lock().unwrap().value.is_none(),
+            "a cell idle since before the instant must be released"
+        );
+        let again = shared_get_or_build(&USED, || {
+            USED_BUILDS.fetch_add(1, Ordering::SeqCst);
+            Some(Arc::new("rebuilt".to_string()))
+        })
+        .unwrap();
+        assert!(Arc::ptr_eq(&used, &again));
+        assert_eq!(USED_BUILDS.load(Ordering::SeqCst), 1);
+        assert_eq!(IDLE_BUILDS.load(Ordering::SeqCst), 1);
     }
 
     #[test]
@@ -236,7 +306,7 @@ mod tests {
         static CELL: Releasable<String> = Releasable::new();
         static BUILDS: AtomicUsize = AtomicUsize::new(0);
         let poisoned = std::thread::spawn(move || {
-            let _guard = CELL.cell.lock().unwrap();
+            let _guard = CELL.state.lock().unwrap();
             panic!("poison the cell lock");
         })
         .join();
