@@ -168,6 +168,13 @@ fn rule_needs_tags(rule: &CompiledRule) -> bool {
     super::trace::rule_needs_readings(rule)
 }
 
+type ExampleOutcome = (String, String, Option<(Outcome, String)>, bool);
+
+type GroupExamplePair<'a> = (
+    &'a Vec<&'a og_xml::compiler::CompiledRule>,
+    &'a og_xml::types::XmlExample,
+);
+
 #[test]
 #[ignore]
 fn catalan_grammar_examples_with_ca_pipeline() {
@@ -180,16 +187,13 @@ fn catalan_grammar_examples_with_ca_pipeline() {
     og_rules::pattern_rule::set_test_date_hack(true);
     let started = std::time::Instant::now();
 
-    let pairs: Vec<(
-        &Vec<&og_xml::compiler::CompiledRule>,
-        &og_xml::types::XmlExample,
-    )> = groups
+    let pairs: Vec<GroupExamplePair> = groups
         .iter()
         .filter_map(|group| group.first().map(|rule| (group, rule)))
         .flat_map(|(group, rule)| rule.examples.iter().map(move |e| (group, e)))
         .collect();
 
-    let per_example: Vec<(String, String, Option<(Outcome, String)>, bool)> = pairs
+    let per_example: Vec<ExampleOutcome> = pairs
         .par_iter()
         .map(|(group, example)| {
             let rule = group[0];

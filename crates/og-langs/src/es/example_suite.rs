@@ -263,6 +263,11 @@ enum Outcome {
     Marker,
 }
 
+type GroupExamplePair<'a> = (
+    &'a Vec<&'a og_xml::compiler::CompiledRule>,
+    &'a og_xml::types::XmlExample,
+);
+
 #[test]
 #[ignore]
 fn spanish_grammar_examples_with_es_pipeline() {
@@ -353,10 +358,7 @@ fn evaluate_examples_file(path: &std::path::Path, label: &str, artifact: &str) {
     og_rules::pattern_rule::set_test_date_hack(true);
     let started = std::time::Instant::now();
 
-    let pairs: Vec<(
-        &Vec<&og_xml::compiler::CompiledRule>,
-        &og_xml::types::XmlExample,
-    )> = groups
+    let pairs: Vec<GroupExamplePair> = groups
         .iter()
         .filter_map(|group| group.first().map(|rule| (group, rule)))
         .flat_map(|(group, rule)| rule.examples.iter().map(move |e| (group, e)))

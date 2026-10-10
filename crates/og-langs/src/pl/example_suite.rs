@@ -112,6 +112,10 @@ enum Outcome {
     Marker,
 }
 
+type ExampleOutcome = (String, String, Option<(Outcome, String)>);
+
+type GroupExamplePair<'a> = (&'a Vec<&'a CompiledRule>, &'a og_xml::types::XmlExample);
+
 #[test]
 #[ignore]
 fn polish_grammar_examples_with_pl_pipeline() {
@@ -158,13 +162,13 @@ fn evaluate_examples_file(rules_path: &Path, file_label: &str, artifact: &str) {
     og_rules::pattern_rule::set_test_date_hack(true);
     let started = std::time::Instant::now();
 
-    let pairs: Vec<(&Vec<&CompiledRule>, &og_xml::types::XmlExample)> = groups
+    let pairs: Vec<GroupExamplePair> = groups
         .iter()
         .filter_map(|group| group.first().map(|rule| (group, rule)))
         .flat_map(|(group, rule)| rule.examples.iter().map(move |e| (group, e)))
         .collect();
 
-    let per_example: Vec<(String, String, Option<(Outcome, String)>)> = {
+    let per_example: Vec<ExampleOutcome> = {
         use rayon::prelude::*;
         pairs
             .par_iter()
