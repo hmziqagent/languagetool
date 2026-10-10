@@ -583,3 +583,122 @@ mod json_shape_tests {
         assert_eq!(back.length(), 1);
     }
 }
+
+#[cfg(test)]
+mod mutation_tests {
+    use super::*;
+
+    fn base() -> RuleMatch {
+        RuleMatch::new(
+            "msg",
+            0,
+            3,
+            RuleMatchRule::new("R", "d"),
+            RuleMatchContext::new("ctx", 0, 3),
+        )
+    }
+
+    #[test]
+    fn builders_adjust_offsets_lengths_and_message() {
+        let m = base().with_offset(7).with_length(11);
+        assert_eq!(m.offset(), 7);
+        assert_eq!(m.length(), 11);
+        let mut m = m;
+        m.set_message("new message");
+        assert_eq!(m.message(), "new message");
+        m.set_offset_length(2, 5);
+        assert_eq!((m.offset(), m.length()), (2, 5));
+    }
+
+    #[test]
+    fn replacements_can_be_set_and_mutated() {
+        let mut m = base();
+        assert!(m.replacements().is_empty());
+        m.set_replacements(vec![SuggestedReplacement::new("a")]);
+        assert_eq!(m.replacements()[0].value(), "a");
+        m.replacements_mut()
+            .push(SuggestedReplacement::new("b").with_short_description("alt"));
+        assert_eq!(m.replacements().len(), 2);
+        assert_eq!(m.replacements()[1].short_description(), Some("alt"));
+
+        let mut replacement = SuggestedReplacement::new("x");
+        replacement.set_value("y");
+        assert_eq!(replacement.value(), "y");
+        assert_eq!(replacement.short_description(), None);
+    }
+
+    #[test]
+    fn sentence_and_flag_builders_serialize() {
+        let m = base()
+            .with_sentence("the sentence")
+            .with_ignore_for_incomplete_sentence(true)
+            .with_context_for_sure_match(3);
+        assert_eq!(m.sentence(), Some("the sentence"));
+        let json = serde_json::to_value(&m).unwrap();
+        assert_eq!(json["contextForSureMatch"], 3);
+        assert_eq!(json["ignoreForIncompleteSentence"], true);
+        let bare = serde_json::to_value(&base()).unwrap();
+        assert_eq!(bare["contextForSureMatch"], -1);
+        assert_eq!(bare["ignoreForIncompleteSentence"], false);
+    }
+
+    #[test]
+    fn picky_flag_is_delegated_to_the_rule_and_stays_unserialized() {
+        let mut m = base();
+        assert!(!m.rule().is_picky());
+        m.set_picky(true);
+        assert!(m.rule().is_picky());
+        let json = serde_json::to_value(&m).unwrap();
+        assert!(json.get("picky").is_none());
+        assert!(json["rule"].get("picky").is_none());
+    }
+
+    #[test]
+    fn rule_metadata_accessors_expose_builders() {
+        let rule = RuleMatchRule::new("ID", "desc")
+            .with_sub_id("2")
+            .with_source_file("grammar.xml")
+            .with_issue_type("typographical")
+            .with_urls(vec!["https://example.org".to_string()])
+            .with_category(Category::new("CAT", "Cat"))
+            .with_picky(true);
+        assert_eq!(rule.id(), "ID");
+        assert_eq!(rule.description(), "desc");
+        assert_eq!(rule.source_file(), Some("grammar.xml"));
+        assert_eq!(rule.category().id().as_str(), "CAT");
+        assert!(rule.is_picky());
+
+        let mut m = base();
+        *m.rule_mut() = rule;
+        let json = serde_json::to_value(&m).unwrap();
+        assert_eq!(json["rule"]["subId"], "2");
+        assert_eq!(json["rule"]["sourceFile"], "grammar.xml");
+        assert_eq!(json["rule"]["issueType"], "typographical");
+        assert_eq!(json["rule"]["urls"][0]["value"], "https://example.org");
+        assert_eq!(json["rule"]["category"]["id"], "CAT");
+    }
+
+    #[test]
+    fn set_issue_type_updates_through_rule_mut() {
+        let mut rule = RuleMatchRule::new("ID", "desc");
+        rule.set_issue_type("misspelling");
+        assert_eq!(rule.pattern_match_kind(), RuleMatchKind::Other);
+    }
+
+    #[test]
+    fn context_accessors_expose_text_offset_length() {
+        let context = RuleMatchContext::new("abc def", 3, 3);
+        assert_eq!(context.text(), "abc def");
+        assert_eq!(context.offset(), 3);
+        assert_eq!(context.length(), 3);
+    }
+
+    #[test]
+    fn match_type_builder_round_trips_through_json() {
+        let m = base().with_match_type(RuleMatchKind::UnknownWord);
+        let json = serde_json::to_value(&m).unwrap();
+        assert_eq!(json["type"]["typeName"], "UnknownWord");
+        let back: RuleMatch = serde_json::from_value(json).unwrap();
+        assert_eq!(back.message(), "msg");
+    }
+}

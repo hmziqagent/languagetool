@@ -221,6 +221,7 @@ fn is_punctuation_only_change(m: &RuleMatch, text: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Category;
     use crate::rule_match::{RuleMatchContext, RuleMatchRule};
 
     struct PriorityFilter;
@@ -415,5 +416,60 @@ mod tests {
         assert_eq!(base_priority_for_id("REPETITIONS_STYLE"), -55);
         assert_eq!(base_priority_for_id("TYPOGRAPHY_STYLE"), -50);
         assert_eq!(base_priority_for_id("SOME_RULE"), 0);
+    }
+
+    #[test]
+    fn rule_priority_prefers_rule_id_over_category() {
+        let filter = BaseLanguageMatchFilter;
+        let by_id = RuleMatch::new(
+            "m",
+            0,
+            1,
+            RuleMatchRule::new("REPETITIONS_STYLE", "d")
+                .with_category(Category::new("TOO_LONG_SENTENCE", "Long")),
+            RuleMatchContext::new("c", 0, 1),
+        );
+        assert_eq!(filter.rule_priority(&by_id), -55);
+        let by_category = RuleMatch::new(
+            "m",
+            0,
+            1,
+            RuleMatchRule::new("PLAIN_RULE", "d").with_category(Category::new("MY_STYLE", "Style")),
+            RuleMatchContext::new("c", 0, 1),
+        );
+        assert_eq!(filter.rule_priority(&by_category), -50);
+        let plain = m("PLAIN_RULE", 0, 1, None);
+        assert_eq!(filter.rule_priority(&plain), 0);
+    }
+
+    #[test]
+    fn base_filter_rule_matches_is_a_no_op() {
+        let mut matches = vec![m("A", 0, 5, None), m("B", 6, 9, None)];
+        BaseLanguageMatchFilter.filter_rule_matches(&mut matches, "text");
+        assert_eq!(matches.len(), 2);
+        assert_eq!(matches[0].offset(), 0);
+    }
+
+    #[test]
+    fn original_error_str_slices_the_matched_span() {
+        let text = "0123456789 123456789 123456789";
+        assert_eq!(original_error_str(&m("R", 2, 5, None), text), "234");
+        assert_eq!(original_error_str(&m("R", 0, 30, None), text), text);
+    }
+
+    #[test]
+    fn original_error_str_guards_degenerate_spans() {
+        let text = "0123456789";
+        assert_eq!(original_error_str(&m("R", 3, 3, None), text), "");
+        assert_eq!(original_error_str(&m("R", 8, 15, None), text), "");
+    }
+
+    #[test]
+    fn original_error_str_rejects_non_char_boundaries() {
+        let text = "héllo wörld";
+        assert_eq!(original_error_str(&m("R", 2, 3, None), text), "");
+        assert_eq!(original_error_str(&m("R", 0, 2, None), text), "");
+        assert_eq!(original_error_str(&m("R", 1, 4, None), text), "él");
+        assert_eq!(original_error_str(&m("R", 0, 1, None), text), "h");
     }
 }
