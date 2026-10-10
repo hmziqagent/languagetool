@@ -23,7 +23,171 @@ pub struct XmlDisambiguator {
     first_literal: Vec<Option<FirstLiteralFilter>>,
     first_regex: Vec<Option<FirstRegexFilter>>,
     partial_postag: Vec<Option<PartialPosTagFilterSpec>>,
+    rule_index: DisambigRuleIndex,
     english_tagger: Option<std::sync::Arc<crate::english_tagger::EnglishTagger>>,
+}
+
+struct DisambigRuleIndex {
+    by_token: std::collections::HashMap<String, Vec<u32>>,
+    unclassified: Vec<u32>,
+}
+
+fn expand_literal_regexp(pattern: &str) -> Option<Vec<String>> {
+    let chars: Vec<char> = pattern.chars().collect();
+    let (values, pos) = expand_regexp_alternation(&chars, 0)?;
+    if pos != chars.len() || values.is_empty() || values.len() > 256 {
+        return None;
+    }
+    let mut out = values;
+    out.sort_unstable();
+    out.dedup();
+    Some(out)
+}
+
+fn expand_regexp_alternation(chars: &[char], mut pos: usize) -> Option<(Vec<String>, usize)> {
+    let mut branches = Vec::new();
+    loop {
+        let (branch, next) = expand_regexp_concat(chars, pos)?;
+        branches.push(branch);
+        pos = next;
+        if pos < chars.len() && chars[pos] == '|' {
+            pos += 1;
+            continue;
+        }
+        break;
+    }
+    let mut values = Vec::new();
+    for branch in branches {
+        values.extend(branch);
+    }
+    Some((values, pos))
+}
+
+fn expand_regexp_concat(chars: &[char], mut pos: usize) -> Option<(Vec<String>, usize)> {
+    let mut current = vec![String::new()];
+    while pos < chars.len() {
+        let c = chars[pos];
+        if c == '|' || c == ')' {
+            break;
+        }
+        let mut part_values: Vec<String>;
+        if c == '(' {
+            let mut open_at = pos + 1;
+            if open_at + 1 < chars.len() && chars[open_at] == '?' && chars[open_at + 1] == ':' {
+                open_at += 2;
+            }
+            let (inner, next) = expand_regexp_alternation(chars, open_at)?;
+            if next >= chars.len() || chars[next] != ')' {
+                return None;
+            }
+            part_values = inner;
+            pos = next + 1;
+        } else if c == '\\' {
+            let next = pos + 1;
+            if next >= chars.len() || chars[next].is_alphanumeric() {
+                return None;
+            }
+            part_values = vec![chars[next].to_string()];
+            pos = next + 1;
+        } else if c.is_alphanumeric() || " -_'/,;:!?&%#@\"".contains(c) {
+            part_values = vec![c.to_string()];
+            pos += 1;
+        } else {
+            return None;
+        }
+        if pos < chars.len() && chars[pos] == '?' {
+            part_values.insert(0, String::new());
+            pos += 1;
+        }
+        let mut merged = Vec::with_capacity(current.len() * part_values.len());
+        for prefix in &current {
+            for part in &part_values {
+                merged.push(format!("{prefix}{part}"));
+            }
+        }
+        if merged.len() > 256 {
+            return None;
+        }
+        current = merged;
+    }
+    Some((current, pos))
+}
+
+impl DisambigRuleIndex {
+    fn build(rules: &[CompiledDisambigRule]) -> Self {
+        let mut by_token: std::collections::HashMap<String, Vec<u32>> =
+            std::collections::HashMap::new();
+        let mut unclassified = Vec::new();
+        for (idx, rule) in rules.iter().enumerate() {
+            let idx = idx as u32;
+            let mut best: Option<Vec<String>> = None;
+            if !rule.pattern.has_structured_elements {
+                for token in &rule.pattern.tokens {
+                    let Some(values) = mandatory_literal_values(token) else {
+                        continue;
+                    };
+                    if best.as_ref().is_none_or(|b| values.len() < b.len()) {
+                        best = Some(values);
+                    }
+                }
+            }
+            match best {
+                Some(values) => {
+                    for value in values {
+                        by_token.entry(value).or_default().push(idx);
+                    }
+                }
+                None => unclassified.push(idx),
+            }
+        }
+        Self {
+            by_token,
+            unclassified,
+        }
+    }
+
+    fn rules_for_sentence(
+        &self,
+        lower_texts: &std::collections::HashSet<String>,
+        limit: u32,
+    ) -> Vec<u32> {
+        let mut selected: Vec<u32> = self
+            .unclassified
+            .iter()
+            .copied()
+            .filter(|&idx| idx < limit)
+            .collect();
+        if !self.by_token.is_empty() {
+            for (value, indices) in &self.by_token {
+                if lower_texts.contains(value) {
+                    selected.extend(indices.iter().copied().filter(|&idx| idx < limit));
+                }
+            }
+            selected.sort_unstable();
+            selected.dedup();
+        }
+        selected
+    }
+}
+
+fn mandatory_literal_values(token: &CompiledPatternToken) -> Option<Vec<String>> {
+    let text = token.text.as_deref()?;
+    if text.is_empty()
+        || token.match_no.is_some()
+        || token.min == Some(0)
+        || token.inflected
+        || token.negate
+        || token.negate_pos
+        || token.chunk.is_some()
+    {
+        return None;
+    }
+    let raw: Vec<String> = if token.is_regexp {
+        expand_literal_regexp(text)?
+    } else {
+        vec![text.to_string()]
+    };
+    Some(raw.into_iter().map(|v| v.to_lowercase()).collect())
 }
 
 struct PartialPosTagFilterSpec {
@@ -229,6 +393,8 @@ impl XmlDisambiguator {
             english_tagger
         };
 
+        let rule_index = DisambigRuleIndex::build(&compiled_rules);
+
         Ok(Self {
             rules: compiled_rules,
             unifications,
@@ -237,6 +403,7 @@ impl XmlDisambiguator {
             first_literal,
             first_regex,
             partial_postag,
+            rule_index,
             english_tagger,
         })
     }
@@ -376,10 +543,14 @@ impl XmlDisambiguator {
     }
 
     pub fn apply_rules_through(&self, sentence: &mut AnalyzedSentence, through: usize) {
+        let limit = through.min(self.rules.len());
         let mut env = SentenceEnv::build(sentence);
+        let candidates = self
+            .rule_index
+            .rules_for_sentence(&env.lower_texts, limit as u32);
         let mut memo = RegexMemo::default();
-        for rule_idx in 0..through.min(self.rules.len()) {
-            if self.apply_rule_with_env(sentence, rule_idx, &env, &mut memo) {
+        for rule_idx in candidates {
+            if self.apply_rule_with_env(sentence, rule_idx as usize, &env, &mut memo) {
                 env = SentenceEnv::build(sentence);
                 memo = RegexMemo::default();
             }
@@ -4662,5 +4833,145 @@ mod tests {
             spaced.tokens()[2].readings().len() == 1 && spaced.tokens()[2].has_pos_tag("``"),
             "with whitespace before the token the spacebefore=yes element still matches"
         );
+    }
+
+    fn surface_sentence(text: &str) -> AnalyzedSentence {
+        let mut offset = 0;
+        let mut analyzed = Vec::new();
+        for word in text.split_whitespace() {
+            let start = offset;
+            let end = offset + word.len();
+            analyzed.push(AnalyzedTokenReadings::new(AnalyzedToken::new(
+                word, start, end,
+            )));
+            offset = end + 1;
+        }
+        let mut sentence = AnalyzedSentence::new(text, 0, text.len());
+        sentence.set_tokens(analyzed);
+        sentence
+    }
+
+    fn readings_signature(sentence: &AnalyzedSentence) -> Vec<String> {
+        sentence
+            .tokens()
+            .iter()
+            .map(|t| {
+                let mut sig: Vec<String> = t
+                    .readings()
+                    .iter()
+                    .flat_map(|r| r.pos_tags().to_vec())
+                    .collect();
+                sig.sort();
+                sig
+            })
+            .flatten()
+            .collect()
+    }
+
+    #[test]
+    fn rule_selection_parity_on_real_disambiguation_files() {
+        let cases = [
+            (
+                "pl",
+                "/home/agent/opengrammar-rs/languagetool/languagetool-language-modules/pl/src/main/resources/org/languagetool/resource/pl/disambiguation.xml",
+            ),
+            (
+                "ca",
+                "/home/agent/opengrammar-rs/languagetool/languagetool-language-modules/ca/src/main/resources/org/languagetool/resource/ca/disambiguation.xml",
+            ),
+            (
+                "es",
+                "/home/agent/opengrammar-rs/languagetool/languagetool-language-modules/es/src/main/resources/org/languagetool/resource/es/disambiguation.xml",
+            ),
+        ];
+        for (code, path) in cases {
+            let Ok(xml) = std::fs::read_to_string(path) else {
+                eprintln!("Skipping {code}: disambiguation.xml not present");
+                continue;
+            };
+            let disambiguator = XmlDisambiguator::from_xml(&xml).expect("parse disambiguation.xml");
+            let mut checked = 0usize;
+            for idx in 0..disambiguator.rule_count() {
+                let (untouched, _) = disambiguator.rule_examples(idx);
+                for text in untouched.iter().take(2) {
+                    let mut selected = surface_sentence(text);
+                    disambiguator.disambiguate(&mut selected);
+                    let mut full = surface_sentence(text);
+                    for rule_idx in 0..disambiguator.rule_count() {
+                        disambiguator.apply_rule(&mut full, rule_idx);
+                    }
+                    assert_eq!(
+                        readings_signature(&selected),
+                        readings_signature(&full),
+                        "{code} rule {idx}: selected rules must produce the readings of the full scan on '{text}'"
+                    );
+                    checked += 1;
+                }
+                if checked >= 120 {
+                    break;
+                }
+            }
+            assert!(checked > 0, "{code}: example sentences must be available");
+        }
+    }
+
+    #[test]
+    fn literal_rules_are_pruned_and_absent_literals_keep_readings() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<rules lang="en">
+    <rule id="PRUNE_ME" name="literal first token">
+        <pattern>
+            <token>unprecedented</token>
+            <token postag="NN"/>
+        </pattern>
+        <disambig postag="NN"/>
+    </rule>
+    <rule id="REGEXP_ALT" name="regexp alternation">
+        <pattern>
+            <token regexp="yes">alpha|beta</token>
+        </pattern>
+        <disambig action="remove" postag="VB"/>
+    </rule>
+</rules>"#;
+        let disambiguator = XmlDisambiguator::from_xml(xml).unwrap();
+        let mut absent = make_sentence(vec![("She", vec!["PRP"]), ("runs", vec!["VBZ", "NN"])]);
+        disambiguator.disambiguate(&mut absent);
+        assert_eq!(
+            absent.tokens()[1].readings().len(),
+            2,
+            "no rule's literal values occur in the sentence, so no readings may change"
+        );
+        let mut present = make_sentence(vec![("the", vec!["DT"]), ("alpha", vec!["NN", "VB"])]);
+        disambiguator.disambiguate(&mut present);
+        assert_eq!(
+            present.tokens()[1].readings().len(),
+            1,
+            "the regexp alternation rule must fire on 'alpha' and remove the VB reading"
+        );
+        assert!(present.tokens()[1].has_pos_tag("NN"));
+    }
+
+    #[test]
+    fn expand_literal_regexp_covers_java_shapes() {
+        assert_eq!(
+            expand_literal_regexp("alpha|beta").unwrap(),
+            vec!["alpha".to_string(), "beta".to_string()]
+        );
+        assert_eq!(
+            expand_literal_regexp("colou?r").unwrap(),
+            vec!["color".to_string(), "colour".to_string()]
+        );
+        assert_eq!(
+            expand_literal_regexp("(?:foo|bar)b").unwrap(),
+            vec!["barb".to_string(), "foob".to_string()]
+        );
+        assert_eq!(
+            expand_literal_regexp(r"a\.b").unwrap(),
+            vec!["a.b".to_string()]
+        );
+        assert!(expand_literal_regexp("a.*b").is_none());
+        assert!(expand_literal_regexp("[abc]").is_none());
+        assert!(expand_literal_regexp(r"\d+").is_none());
+        assert!(expand_literal_regexp("(unclosed").is_none());
     }
 }
