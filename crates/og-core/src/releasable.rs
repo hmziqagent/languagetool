@@ -229,4 +229,53 @@ mod tests {
             .expect("second thread must acquire the guard after release");
         handle.join().unwrap();
     }
+
+    #[test]
+    fn poisoned_cell_lock_returns_the_build_without_caching() {
+        let _serialized = SERIALIZE.lock().unwrap();
+        static CELL: Releasable<String> = Releasable::new();
+        static BUILDS: AtomicUsize = AtomicUsize::new(0);
+        let poisoned = std::thread::spawn(move || {
+            let _guard = CELL.cell.lock().unwrap();
+            panic!("poison the cell lock");
+        })
+        .join();
+        assert!(poisoned.is_err());
+        let first = shared_get_or_build(&CELL, || {
+            BUILDS.fetch_add(1, Ordering::SeqCst);
+            Some(Arc::new("a".to_string()))
+        });
+        let second = shared_get_or_build(&CELL, || {
+            BUILDS.fetch_add(1, Ordering::SeqCst);
+            Some(Arc::new("b".to_string()))
+        });
+        assert_eq!(first.as_deref().map(String::as_str), Some("a"));
+        assert_eq!(second.as_deref().map(String::as_str), Some("b"));
+        assert_eq!(BUILDS.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn poisoned_build_lock_recovers_and_caches() {
+        let _serialized = SERIALIZE.lock().unwrap();
+        static CELL: Releasable<String> = Releasable::new();
+        static BUILDS: AtomicUsize = AtomicUsize::new(0);
+        let poisoned = std::thread::spawn(move || {
+            let _guard = CELL.building.lock().unwrap();
+            panic!("poison the build lock");
+        })
+        .join();
+        assert!(poisoned.is_err());
+        let first = shared_get_or_build(&CELL, || {
+            BUILDS.fetch_add(1, Ordering::SeqCst);
+            Some(Arc::new("a".to_string()))
+        })
+        .unwrap();
+        let second = shared_get_or_build(&CELL, || {
+            BUILDS.fetch_add(1, Ordering::SeqCst);
+            Some(Arc::new("b".to_string()))
+        })
+        .unwrap();
+        assert_eq!(BUILDS.load(Ordering::SeqCst), 1);
+        assert!(Arc::ptr_eq(&first, &second));
+    }
 }
