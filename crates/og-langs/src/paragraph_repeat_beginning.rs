@@ -233,3 +233,139 @@ impl TextLevelRule for ParagraphRepeatBeginningRule {
         rule_matches
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_util::{sentence_range, sentences_split_after};
+    use og_core::AnalyzedToken;
+
+    fn rule() -> ParagraphRepeatBeginningRule {
+        ParagraphRepeatBeginningRule::new("desc", "msg", "Style")
+    }
+
+    fn tag_pos(sentence: &mut AnalyzedSentence, word: &str, tag: &str) {
+        for token in sentence.tokens_mut() {
+            if token.token().token() == word {
+                let mut reading = AnalyzedToken::new(
+                    token.token().token(),
+                    token.token().start(),
+                    token.token().end(),
+                );
+                reading.set_pos_tags(vec![tag.to_string()]);
+                *token.readings_mut() = vec![reading];
+            }
+        }
+    }
+
+    fn match_texts(sentences: &[AnalyzedSentence]) -> Vec<(usize, usize)> {
+        rule()
+            .match_text(sentences[0].text(), sentences)
+            .into_iter()
+            .map(|m| (m.offset(), m.length()))
+            .collect()
+    }
+
+    #[test]
+    fn same_word_at_paragraph_start_flags_both_paragraphs() {
+        let text = "Der Hund läuft.\n\nDer Hund schläft.";
+        let sentences = sentences_split_after(text, &["läuft.\n\n"]);
+        let spans = match_texts(&sentences);
+        assert_eq!(spans.len(), 2);
+        assert_eq!(&text[spans[0].0..spans[0].0 + spans[0].1], "Der");
+        assert_eq!(&text[spans[1].0..spans[1].0 + spans[1].1], "Der");
+    }
+
+    #[test]
+    fn equal_article_prefix_extends_the_match_to_the_second_word() {
+        let text = "Der Hund läuft.\n\nDer Hund schläft.";
+        let mut sentences = sentences_split_after(text, &["läuft.\n\n"]);
+        for sentence in &mut sentences {
+            tag_pos(sentence, "Der", "DT");
+        }
+        let spans = match_texts(&sentences);
+        assert_eq!(spans.len(), 2);
+        assert_eq!(&text[spans[0].0..spans[0].0 + spans[0].1], "Der Hund");
+        assert_eq!(&text[spans[1].0..spans[1].0 + spans[1].1], "Der Hund");
+    }
+
+    #[test]
+    fn equal_article_with_different_next_word_yields_no_match() {
+        let text = "Der Hund läuft.\n\nDer schläft.";
+        let mut sentences = sentences_split_after(text, &["läuft.\n\n"]);
+        for sentence in &mut sentences {
+            tag_pos(sentence, "Der", "DT");
+        }
+        assert!(match_texts(&sentences).is_empty());
+    }
+
+    #[test]
+    fn different_opening_words_do_not_match() {
+        let text = "Der Hund läuft.\n\nEine Katze schläft.";
+        let sentences = sentences_split_after(text, &["läuft.\n\n"]);
+        assert!(match_texts(&sentences).is_empty());
+    }
+
+    #[test]
+    fn same_word_without_a_paragraph_break_is_not_flagged() {
+        let text = "Der Hund läuft. Der Hund schläft.";
+        let sentences = sentences_split_after(text, &["läuft. "]);
+        assert!(match_texts(&sentences).is_empty());
+    }
+
+    #[test]
+    fn opening_quote_pair_is_skipped_before_comparing_words() {
+        let text = "\"Guten Morgen.\" sagt er.\n\n\"Guten Tag.\" sagt sie.";
+        let sentences = sentences_split_after(text, &["sagt er.\n\n"]);
+        let spans = match_texts(&sentences);
+        assert_eq!(spans.len(), 2);
+        assert_eq!(&text[spans[0].0..spans[0].0 + spans[0].1], "\"Guten");
+        assert_eq!(&text[spans[1].0..spans[1].0 + spans[1].1], "\"Guten");
+    }
+
+    #[test]
+    fn quote_only_on_one_side_is_no_match() {
+        let text = "\"Guten Morgen.\" sagt er.\n\nGuten Tag. sagt sie.";
+        let sentences = sentences_split_after(text, &["sagt er.\n\n"]);
+        assert!(match_texts(&sentences).is_empty());
+    }
+
+    #[test]
+    fn whitespace_only_sentence_is_merged_into_the_next_paragraph() {
+        let text = "Der Hund läuft.\n\nDer Hund schläft.";
+        let mut sentences = Vec::new();
+        let a_end = "Der Hund läuft.".len();
+        sentences.push(sentence_range(text, 0, a_end));
+        sentences.push(sentence_range(text, a_end, a_end + "\n\n".len()));
+        sentences.push(sentence_range(text, a_end + "\n\n".len(), text.len()));
+        let spans = match_texts(&sentences);
+        assert_eq!(spans.len(), 2);
+        assert_eq!(&text[spans[1].0..spans[1].0 + spans[1].1], "Der");
+    }
+
+    #[test]
+    fn trailing_whitespace_sentence_attaches_to_the_last_paragraph() {
+        let text = "Der Hund läuft.\n\nDer Hund schläft.\n\n";
+        let sentences = sentences_split_after(text, &["läuft.\n\n", "schläft.\n\n"]);
+        let spans = match_texts(&sentences);
+        assert_eq!(spans.len(), 2);
+    }
+
+    #[test]
+    fn short_sentences_and_empty_input_are_ignored() {
+        assert!(rule().match_text("", &[]).is_empty());
+        let text = "Hi.\n\nHi.";
+        let sentences = sentences_split_after(text, &["Hi.\n\n"]);
+        let spans = match_texts(&sentences);
+        assert_eq!(spans.len(), 2);
+        assert_eq!(&text[spans[0].0..spans[0].0 + spans[0].1], "Hi");
+    }
+
+    #[test]
+    fn repeated_beginning_across_three_paragraphs_flags_each_pair() {
+        let text = "Wir starten.\n\nWir laufen.\n\nWir ruhen.";
+        let sentences = sentences_split_after(text, &["starten.\n\n", "laufen.\n\n"]);
+        let spans = match_texts(&sentences);
+        assert_eq!(spans.len(), 4);
+    }
+}

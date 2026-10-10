@@ -132,3 +132,122 @@ pub fn has_no_whitespace_before(
         None => false,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_util::{sentence, token_with_pos};
+    use og_core::AnalyzedToken;
+
+    #[test]
+    fn case_conversion_handles_first_char_only() {
+        assert_eq!(uppercase_first_char("straße"), "Straße");
+        assert_eq!(uppercase_first_char("über"), "Über");
+        assert_eq!(uppercase_first_char("ß"), "SS");
+        assert_eq!(uppercase_first_char(""), "");
+        assert_eq!(lowercase_first_char("ÜBER"), "üBER");
+        assert_eq!(lowercase_first_char("İstanbul"), "i̇stanbul");
+        assert_eq!(lowercase_first_char(""), "");
+    }
+
+    #[test]
+    fn uppercase_predicates_split_the_four_java_cases() {
+        assert!(starts_with_uppercase("Über"));
+        assert!(!starts_with_uppercase("über"));
+        assert!(!starts_with_uppercase(""));
+        assert!(is_all_uppercase("ABC"));
+        assert!(is_all_uppercase("ABC 123"));
+        assert!(!is_all_uppercase(""));
+        assert!(!is_all_uppercase("AbC"));
+        assert!(is_capitalized_word("Word"));
+        assert!(is_capitalized_word("Ä"));
+        assert!(!is_capitalized_word("WORD"));
+        assert!(!is_capitalized_word("word"));
+        assert!(!is_capitalized_word("123"));
+    }
+
+    #[test]
+    fn pos_tag_helpers_read_all_readings() {
+        let tagged = token_with_pos("der", 0, 3, &["ART", "DT:DEF"]);
+        assert!(has_pos_tag_starting_with(&tagged, "DT"));
+        assert!(!has_pos_tag_starting_with(&tagged, "NN"));
+        assert!(matches_pos_tag_regex(&tagged, "DT.*"));
+        assert!(is_tagged(&tagged));
+        assert!(!is_pos_tag_unknown(&tagged));
+        let untagged = token_with_pos("der", 0, 3, &[]);
+        assert!(!is_tagged(&untagged));
+        assert!(is_pos_tag_unknown(&untagged));
+    }
+
+    #[test]
+    fn has_same_lemmas_requires_a_shared_lemma_across_readings() {
+        let token =
+            AnalyzedTokenReadings::new(AnalyzedToken::new("saw", 0, 3)).with_readings(vec![
+                AnalyzedToken::new("see", 0, 3).with_lemma("see"),
+                AnalyzedToken::new("saw", 0, 3).with_lemma("see"),
+            ]);
+        assert!(has_same_lemmas(&token));
+        let differing =
+            AnalyzedTokenReadings::new(AnalyzedToken::new("saw", 0, 3)).with_readings(vec![
+                AnalyzedToken::new("see", 0, 3).with_lemma("see"),
+                AnalyzedToken::new("saw", 0, 3).with_lemma("saw"),
+            ]);
+        assert!(!has_same_lemmas(&differing));
+        let lemmaless = AnalyzedTokenReadings::new(AnalyzedToken::new("saw", 0, 3))
+            .with_readings(vec![AnalyzedToken::new("see", 0, 3)]);
+        assert!(!has_same_lemmas(&lemmaless));
+    }
+
+    #[test]
+    fn eq_ignore_case_folds_per_char_like_java() {
+        assert!(eq_ignore_case("Straße", "STRASSE") == false);
+        assert!(eq_ignore_case("Hallo", "halLO"));
+        assert!(eq_ignore_case("", ""));
+        assert!(!eq_ignore_case("hallo", "hall"));
+    }
+
+    #[test]
+    fn levenshtein_at_most_one_covers_substitution_insert_delete() {
+        assert!(levenshtein_at_most_one("abc", "abc"));
+        assert!(levenshtein_at_most_one("abc", "abd"));
+        assert!(levenshtein_at_most_one("abc", "abdc"));
+        assert!(levenshtein_at_most_one("abc", "ac"));
+        assert!(levenshtein_at_most_one("", "a"));
+        assert!(levenshtein_at_most_one("a", ""));
+        assert!(!levenshtein_at_most_one("abc", "abcde"));
+        assert!(!levenshtein_at_most_one("ab", "ba"));
+        assert!(!levenshtein_at_most_one("abc", "axy"));
+    }
+
+    #[test]
+    fn is_paragraph_end_follows_the_java_line_break_matrix() {
+        let empty: Vec<AnalyzedSentence> = Vec::new();
+        assert!(is_paragraph_end(&empty, 0));
+        let single = vec![sentence("Ein Satz.")];
+        assert!(is_paragraph_end(&single, 0));
+        let pair = vec![sentence("A."), sentence("B.")];
+        assert!(!is_paragraph_end(&pair, 0));
+        assert!(is_paragraph_end(&pair, 1));
+        let double_nl = vec![sentence("A.\n\n"), sentence("B.")];
+        assert!(is_paragraph_end(&double_nl, 0));
+        let nl_crnl_cr = vec![sentence("A.\n\r\n\r"), sentence("B.")];
+        assert!(is_paragraph_end(&nl_crnl_cr, 0));
+        let crlf_crlf = vec![sentence("A.\r\n\r\n"), sentence("B.")];
+        assert!(is_paragraph_end(&crlf_crlf, 0));
+        let leading_nl = vec![sentence("A."), sentence("\nB.")];
+        assert!(is_paragraph_end(&leading_nl, 0));
+        let leading_crlf = vec![sentence("A."), sentence("\r\nB.")];
+        assert!(is_paragraph_end(&leading_crlf, 0));
+    }
+
+    #[test]
+    fn has_no_whitespace_before_looks_at_the_char_before_the_token() {
+        let s = sentence("hallo Welt");
+        let tokens: Vec<_> = s.non_whitespace_tokens().to_vec();
+        assert!(!has_no_whitespace_before(&s, &tokens[1]));
+        assert!(!has_no_whitespace_before(&s, &tokens[0]));
+        let tight = sentence("A:B");
+        let tight_tokens: Vec<_> = tight.non_whitespace_tokens().to_vec();
+        assert!(has_no_whitespace_before(&tight, &tight_tokens[2]));
+    }
+}
