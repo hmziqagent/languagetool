@@ -46,13 +46,13 @@ fn java_replacement(repl: &str) -> Cow<'_, str> {
     Cow::Owned(out)
 }
 
-fn whole_match_regex(pattern: &str, is_regexp: bool) -> Option<regex::Regex> {
+fn whole_match_regex(pattern: &str, is_regexp: bool) -> Option<og_xml::compiler::SharedRegex> {
     let body = if is_regexp {
         pattern.to_string()
     } else {
         regex::escape(pattern)
     };
-    regex::Regex::new(&format!("^(?:{body})$")).ok()
+    og_xml::compiler::shared_cached_regex(&format!("^(?:{body})$"))
 }
 
 fn seg_has_lower_dot_lower(seg: &str) -> bool {
@@ -504,7 +504,7 @@ impl PatternRuleEngine {
                                     let mut value =
                                         group_texts.get(idx).copied().unwrap_or("").to_string();
                                     if let Some(ref rm) = m.regexp_match
-                                        && let Ok(re) = regex::Regex::new(rm)
+                                        && let Some(re) = og_xml::compiler::shared_cached_regex(rm)
                                     {
                                         let replace = m.regexp_replace.as_deref().unwrap_or("");
                                         value = re
@@ -1040,9 +1040,9 @@ impl PatternRuleEngine {
                 targets.iter().any(|t| {
                     let anchored = format!("^(?:{t})$");
                     let re = if pattern_token.case_sensitive {
-                        regex::Regex::new(&anchored).ok()
+                        og_xml::compiler::shared_cached_regex(&anchored)
                     } else {
-                        og_xml::java_case_fold::compile_java_ci(&anchored)
+                        og_xml::compiler::shared_cached_regex_ci(&anchored)
                     };
                     let surface = surface_text(token);
                     re.is_some_and(|re| {
@@ -1100,7 +1100,7 @@ impl PatternRuleEngine {
                     } else {
                         regex::escape(pos_pattern)
                     };
-                    let unanchored = regex::Regex::new(&unanchored_body).ok()?;
+                    let unanchored = og_xml::compiler::shared_cached_regex(&unanchored_body)?;
                     let mut replaced: Vec<String> = if tags.is_empty() {
                         vec![pos_pattern.to_string()]
                     } else {

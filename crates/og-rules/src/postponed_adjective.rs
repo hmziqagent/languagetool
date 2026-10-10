@@ -632,7 +632,7 @@ impl LangSynthesizer {
             pattern = pattern.replace(":neg", ":aff?");
         }
         pattern = pattern.replace('+', "|");
-        let Ok(re) = Regex::new(&format!("^(?:{pattern})$")) else {
+        let Some(re) = og_xml::compiler::shared_cached_regex(&format!("^(?:{pattern})$")) else {
             return Vec::new();
         };
         let mut results = Vec::new();
@@ -679,11 +679,11 @@ impl LangSynthesizer {
         if self.lang == SynthLang::Polish {
             return self.pl_synthesize_regexp(lemma, source_postag, target);
         }
-        let Ok(re) = Regex::new(&format!("^(?:{target})$")) else {
+        let Some(re) = og_xml::compiler::shared_cached_regex(&format!("^(?:{target})$")) else {
             return Vec::new();
         };
         let (head, tail) = self.split_es_lemma(lemma, target);
-        let mut results = self.synthesize(head, &re);
+        let mut results = self.synthesize(head, re.as_ref());
         if results.is_empty() && self.is_german() {
             results = self.compound_forms_matching(head, |t| re.is_match(t));
         }

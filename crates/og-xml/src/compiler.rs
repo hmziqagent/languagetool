@@ -14,75 +14,87 @@ fn is_property_sequence(regexp: &str) -> bool {
     regexp.contains("\\p{Lu}") || regexp.contains("\\p{Ll}")
 }
 
-pub struct XmlCompiler {
-    regex_cache: Vec<RegexCacheShard>,
-    ci_regex_cache: Vec<RegexCacheShard>,
-    fancy_regex_cache: Vec<FancyRegexCacheShard>,
+fn shard_vec<T>() -> Vec<T>
+where
+    T: Default,
+{
+    (0..REGEX_CACHE_SHARDS).map(|_| T::default()).collect()
 }
+
+fn shard_index(pattern: &str, shards: usize) -> usize {
+    let mut h: u64 = 14_695_981_039_346_656_037;
+    for b in pattern.as_bytes() {
+        h ^= *b as u64;
+        h = h.wrapping_mul(1_099_511_628_211);
+    }
+    (h % shards as u64) as usize
+}
+
+fn plain_regex(pattern: &str) -> Option<regex::Regex> {
+    regex::Regex::new(pattern).ok()
+}
+
+fn plain_fancy(pattern: &str) -> Option<fancy_regex::Regex> {
+    fancy_regex::Regex::new(pattern).ok()
+}
+
+pub fn shared_cached_regex(pattern: &str) -> Option<SharedRegex> {
+    static PLAIN: std::sync::OnceLock<Vec<RegexCacheShard>> = std::sync::OnceLock::new();
+    let shards = PLAIN.get_or_init(shard_vec);
+    lookup_or_build(shards, pattern, plain_regex)
+}
+
+pub fn shared_cached_regex_ci(pattern: &str) -> Option<SharedRegex> {
+    static CI: std::sync::OnceLock<Vec<RegexCacheShard>> = std::sync::OnceLock::new();
+    let shards = CI.get_or_init(shard_vec);
+    lookup_or_build(shards, pattern, crate::java_case_fold::compile_java_ci)
+}
+
+pub fn shared_cached_fancy_regex(pattern: &str) -> Option<SharedFancyRegex> {
+    static FANCY: std::sync::OnceLock<Vec<FancyRegexCacheShard>> = std::sync::OnceLock::new();
+    let shards = FANCY.get_or_init(shard_vec);
+    lookup_or_build(shards, pattern, plain_fancy)
+}
+
+fn lookup_or_build<T>(
+    shards: &'static [std::sync::Mutex<
+        std::collections::HashMap<String, Option<std::sync::Arc<T>>>,
+    >],
+    pattern: &str,
+    build: fn(&str) -> Option<T>,
+) -> Option<std::sync::Arc<T>>
+where
+    T: Send + Sync + 'static,
+{
+    let shard = &shards[shard_index(pattern, REGEX_CACHE_SHARDS)];
+    if let Some(hit) = shard.lock().unwrap().get(pattern) {
+        return hit.clone();
+    }
+    let built = build(pattern).map(std::sync::Arc::new);
+    shard
+        .lock()
+        .unwrap()
+        .insert(pattern.to_string(), built.clone());
+    built
+}
+
+pub struct XmlCompiler;
 
 impl XmlCompiler {
     pub fn new() -> Self {
-        Self {
-            regex_cache: (0..REGEX_CACHE_SHARDS)
-                .map(|_| std::sync::Mutex::new(std::collections::HashMap::new()))
-                .collect(),
-            ci_regex_cache: (0..REGEX_CACHE_SHARDS)
-                .map(|_| std::sync::Mutex::new(std::collections::HashMap::new()))
-                .collect(),
-            fancy_regex_cache: (0..REGEX_CACHE_SHARDS)
-                .map(|_| std::sync::Mutex::new(std::collections::HashMap::new()))
-                .collect(),
-        }
+        Self
     }
 
     fn cached_regex(&self, pattern: &str) -> Option<SharedRegex> {
-        let shard = &self.regex_cache[Self::shard_index(pattern, REGEX_CACHE_SHARDS)];
-        if let Some(hit) = shard.lock().unwrap().get(pattern) {
-            return hit.clone();
-        }
-        let built = regex::Regex::new(pattern).ok().map(std::sync::Arc::new);
-        shard
-            .lock()
-            .unwrap()
-            .insert(pattern.to_string(), built.clone());
-        built
+        shared_cached_regex(pattern)
     }
 
     fn cached_regex_ci(&self, pattern: &str) -> Option<SharedRegex> {
-        let shard = &self.ci_regex_cache[Self::shard_index(pattern, REGEX_CACHE_SHARDS)];
-        if let Some(hit) = shard.lock().unwrap().get(pattern) {
-            return hit.clone();
-        }
-        let built = crate::java_case_fold::compile_java_ci(pattern).map(std::sync::Arc::new);
-        shard
-            .lock()
-            .unwrap()
-            .insert(pattern.to_string(), built.clone());
-        built
+        shared_cached_regex_ci(pattern)
     }
 
     fn cached_fancy_regex(&self, pattern: &str) -> Option<SharedFancyRegex> {
-        let shard = &self.fancy_regex_cache[Self::shard_index(pattern, REGEX_CACHE_SHARDS)];
-        if let Some(hit) = shard.lock().unwrap().get(pattern) {
-            return hit.clone();
-        }
-        let built = fancy_regex::Regex::new(pattern)
-            .ok()
-            .map(std::sync::Arc::new);
-        shard
-            .lock()
-            .unwrap()
-            .insert(pattern.to_string(), built.clone());
-        built
-    }
-
-    fn shard_index(pattern: &str, shards: usize) -> usize {
-        let mut h: u64 = 14_695_981_039_346_656_037;
-        for b in pattern.as_bytes() {
-            h ^= *b as u64;
-            h = h.wrapping_mul(1_099_511_628_211);
-        }
-        (h % shards as u64) as usize
+        shared_cached_fancy_regex(pattern)
     }
 
     fn anchor_regex(pattern: &str) -> String {

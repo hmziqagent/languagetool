@@ -49,19 +49,25 @@ struct FirstLiteralFilter {
 
 enum DisambigActionRegex {
     Remove(Vec<RemoveWordMatcher>),
-    RemovePostag(Option<regex::Regex>, Option<fancy_regex::Regex>),
-    Filter(Option<regex::Regex>, Option<fancy_regex::Regex>),
+    RemovePostag(
+        Option<og_xml::compiler::SharedRegex>,
+        Option<og_xml::compiler::SharedFancyRegex>,
+    ),
+    Filter(
+        Option<og_xml::compiler::SharedRegex>,
+        Option<og_xml::compiler::SharedFancyRegex>,
+    ),
     Match {
-        anchored: Option<regex::Regex>,
-        anchored_fancy: Option<fancy_regex::Regex>,
-        raw: Option<regex::Regex>,
-        raw_fancy: Option<fancy_regex::Regex>,
+        anchored: Option<og_xml::compiler::SharedRegex>,
+        anchored_fancy: Option<og_xml::compiler::SharedFancyRegex>,
+        raw: Option<og_xml::compiler::SharedRegex>,
+        raw_fancy: Option<og_xml::compiler::SharedFancyRegex>,
     },
     None,
 }
 
 struct RemoveWordMatcher {
-    regex: Option<regex::Regex>,
+    regex: Option<og_xml::compiler::SharedRegex>,
     literal: Option<String>,
     lemma: Option<String>,
 }
@@ -112,7 +118,7 @@ impl XmlDisambiguator {
                         .map(|w| {
                             let literal = w.pos.clone().filter(|pos| !is_regex_pos(pos));
                             let regex = match (&w.pos, &literal) {
-                                (Some(pos), None) => regex::Regex::new(pos).ok(),
+                                (Some(pos), None) => og_xml::compiler::shared_cached_regex(pos),
                                 _ => None,
                             };
                             RemoveWordMatcher {
@@ -126,15 +132,15 @@ impl XmlDisambiguator {
                 DisambigAction::RemovePostag(postag) => {
                     let anchored = format!("^(?:{})$", postag);
                     DisambigActionRegex::RemovePostag(
-                        regex::Regex::new(&anchored).ok(),
-                        fancy_regex::Regex::new(&anchored).ok(),
+                        og_xml::compiler::shared_cached_regex(&anchored),
+                        og_xml::compiler::shared_cached_fancy_regex(&anchored),
                     )
                 }
                 DisambigAction::Filter { postag } => {
                     let anchored = format!("^(?:{postag})$");
                     DisambigActionRegex::Filter(
-                        regex::Regex::new(&anchored).ok(),
-                        fancy_regex::Regex::new(&anchored).ok(),
+                        og_xml::compiler::shared_cached_regex(&anchored),
+                        og_xml::compiler::shared_cached_fancy_regex(&anchored),
                     )
                 }
                 DisambigAction::Match(m) => {
@@ -143,10 +149,10 @@ impl XmlDisambiguator {
                     };
                     let anchored = format!("^(?:{postag})$");
                     DisambigActionRegex::Match {
-                        anchored: regex::Regex::new(&anchored).ok(),
-                        anchored_fancy: fancy_regex::Regex::new(&anchored).ok(),
-                        raw: regex::Regex::new(postag).ok(),
-                        raw_fancy: fancy_regex::Regex::new(postag).ok(),
+                        anchored: og_xml::compiler::shared_cached_regex(&anchored),
+                        anchored_fancy: og_xml::compiler::shared_cached_fancy_regex(&anchored),
+                        raw: og_xml::compiler::shared_cached_regex(postag),
+                        raw_fancy: og_xml::compiler::shared_cached_fancy_regex(postag),
                     }
                 }
                 _ => DisambigActionRegex::None,
