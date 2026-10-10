@@ -6,7 +6,6 @@ use og_core::{AnalyzedSentence, AnalyzedToken, AnalyzedTokenReadings, RuleMatch}
 use og_rules::pattern_rule::PatternRuleEngine;
 use og_xml::compiler::{CompiledRule, CompiledRuleSet, XmlCompiler};
 use std::collections::HashMap;
-use std::sync::OnceLock;
 
 pub(crate) struct JaPipeline {
     tokenizer: JapaneseWordTokenizer,
@@ -72,15 +71,19 @@ fn grammar_path() -> std::path::PathBuf {
         .join("ja/src/main/resources/org/languagetool/rules/ja/grammar.xml")
 }
 
-fn compiled_rules() -> &'static CompiledRuleSet {
-    static GRAMMAR: OnceLock<CompiledRuleSet> = OnceLock::new();
-    GRAMMAR.get_or_init(|| {
+fn compiled_rules() -> std::sync::Arc<CompiledRuleSet> {
+    static GRAMMAR: og_core::releasable::Releasable<CompiledRuleSet> =
+        og_core::releasable::Releasable::new();
+    og_core::releasable::shared_get_or_build(&GRAMMAR, || {
         let path = grammar_path();
         let xml = std::fs::read_to_string(&path).expect("ja grammar.xml");
-        XmlCompiler::new()
-            .compile_file_with_base(&xml, path.parent())
-            .expect("compile ja grammar.xml")
+        Some(std::sync::Arc::new(
+            XmlCompiler::new()
+                .compile_file_with_base(&xml, path.parent())
+                .expect("compile ja grammar.xml"),
+        ))
     })
+    .expect("ja")
 }
 
 pub(crate) fn module_check(text: &str) -> Vec<RuleMatch> {
@@ -140,7 +143,7 @@ fn rule_groups(rule_set: &CompiledRuleSet) -> Vec<Vec<&CompiledRule>> {
 fn japanese_grammar_examples_with_ja_pipeline() {
     let _release_guard = crate::release_guard();
     let rule_set = compiled_rules();
-    let groups = rule_groups(rule_set);
+    let groups = rule_groups(&rule_set);
     let engine = PatternRuleEngine::new();
     let pipeline = ja_pipeline();
 
@@ -240,7 +243,7 @@ fn grammar_rules_compile_the_java_inventory() {
         735,
         "ja grammar.xml compiles 735 pattern rules (735 standalone <rule> elements, no rulegroups)"
     );
-    let example_count: usize = rule_groups(rule_set)
+    let example_count: usize = rule_groups(&rule_set)
         .iter()
         .filter_map(|g| g.first())
         .flat_map(|r| r.examples.iter())

@@ -4,34 +4,35 @@ use og_xml::compiler::{
     CompiledPattern, CompiledPatternElement, CompiledRule, CompiledRuleSet, XmlCompiler,
 };
 
-pub(crate) fn compiled_rules() -> &'static CompiledRuleSet {
-    static GRAMMAR: std::sync::OnceLock<CompiledRuleSet> = std::sync::OnceLock::new();
-    GRAMMAR.get_or_init(|| {
+pub(crate) fn compiled_rules() -> std::sync::Arc<CompiledRuleSet> {
+    static GRAMMAR: og_core::releasable::Releasable<CompiledRuleSet> =
+        og_core::releasable::Releasable::new();
+    og_core::releasable::shared_get_or_build(&GRAMMAR, || {
         let path = crate::ca::example_suite::ca_rules_dir()
             .expect("ca rules dir")
             .join("grammar.xml");
         let xml = std::fs::read_to_string(&path).expect("ca grammar.xml");
-        XmlCompiler::new()
-            .compile_file_with_base(&xml, path.parent())
-            .expect("compile ca grammar.xml")
+        Some(std::sync::Arc::new(
+            XmlCompiler::new()
+                .compile_file_with_base(&xml, path.parent())
+                .expect("compile ca grammar.xml"),
+        ))
     })
+    .expect("ca")
 }
 
 pub(crate) fn suite_engine() -> PatternRuleEngine {
     PatternRuleEngine::new()
 }
 
-fn group_of(rule_id: &str) -> Vec<&'static CompiledRule> {
-    compiled_rules()
-        .rules
-        .iter()
-        .filter(|r| r.id == rule_id)
-        .collect()
+fn group_of<'a>(rules: &'a CompiledRuleSet, rule_id: &str) -> Vec<&'a CompiledRule> {
+    rules.rules.iter().filter(|r| r.id == rule_id).collect()
 }
 
 pub(crate) fn probe(rule_id: &str, text: &str) {
     let pipeline = CatalanPipeline::shared();
     let engine = suite_engine();
+    let rules = compiled_rules();
     eprintln!("=== probe [{rule_id}] '{text}' ===");
     for (sentence, sentence_start) in pipeline.analyze_offset_text(text) {
         eprintln!(
@@ -54,7 +55,7 @@ pub(crate) fn probe(rule_id: &str, text: &str) {
                 readings.join(", ")
             );
         }
-        for rule in group_of(rule_id) {
+        for rule in group_of(&rules, rule_id) {
             let matches = engine.match_rule(rule, &sentence);
             eprintln!(
                 "   raw matches for {} (sub {:?}): {}",
@@ -85,8 +86,9 @@ pub(crate) fn probe_with_engine_trace(rule_id: &str, text: &str) {
 pub(crate) fn probe_with_engine_trace_sub(rule_id: &str, sub_id: Option<&str>, text: &str) {
     let pipeline = CatalanPipeline::shared();
     let engine = suite_engine();
+    let rules = compiled_rules();
     eprintln!("=== engine trace [{rule_id}::{sub_id:?}] '{text}' ===");
-    for rule in group_of(rule_id)
+    for rule in group_of(&rules, rule_id)
         .iter()
         .filter(|r| sub_id.is_none_or(|s| r.sub_id.as_deref() == Some(s)))
     {
@@ -189,8 +191,9 @@ fn count_matches(rule_id: &str, text: &str) -> usize {
 fn count_matches_sub(rule_id: &str, sub_id: Option<&str>, text: &str) -> usize {
     let pipeline = CatalanPipeline::shared();
     let engine = suite_engine();
+    let rules = compiled_rules();
     let mut matches = 0usize;
-    for rule in group_of(rule_id)
+    for rule in group_of(&rules, rule_id)
         .iter()
         .filter(|r| sub_id.is_none_or(|s| r.sub_id.as_deref() == Some(s)))
     {
@@ -204,9 +207,10 @@ fn count_matches_sub(rule_id: &str, sub_id: Option<&str>, text: &str) -> usize {
 fn count_matches_unsplit(rule_id: &str, sub_id: Option<&str>, text: &str) -> usize {
     let pipeline = CatalanPipeline::shared();
     let engine = suite_engine();
+    let rules = compiled_rules();
     let sentence = pipeline.analyze_range(text, 0, text.len());
     let mut matches = 0usize;
-    for rule in group_of(rule_id)
+    for rule in group_of(&rules, rule_id)
         .iter()
         .filter(|r| sub_id.is_none_or(|s| r.sub_id.as_deref() == Some(s)))
     {
@@ -225,6 +229,7 @@ mod tests {
         let _release_guard = crate::release_guard();
         let pipeline = CatalanPipeline::shared();
         let engine = suite_engine();
+        let rules = compiled_rules();
         for text in [
             "Divendres, 15 d'agost del 2013.",
             "Dilluns, 7 d'octubre de 2014",
@@ -241,7 +246,7 @@ mod tests {
                     );
                 }
             }
-            for rule in group_of("CA_DATE_WEEKDAY") {
+            for rule in group_of(&rules, "CA_DATE_WEEKDAY") {
                 let mut total = 0usize;
                 for (sentence, _) in pipeline.analyze_offset_text(text) {
                     total += engine.match_rule(rule, &sentence).len();
@@ -348,7 +353,8 @@ mod tests {
 
     #[test]
     fn classifier_counts_inflected_tokens_as_dict_dependent() {
-        let accent_solt = compiled_rules()
+        let rules = compiled_rules();
+        let accent_solt = rules
             .rules
             .iter()
             .find(|r| r.id == "ACCENT_SOLT")
@@ -357,7 +363,7 @@ mod tests {
             !rule_needs_readings(accent_solt),
             "ACCENT_SOLT (single [`\u{b4}] regexp token, grammar.xml ACCENT_SOLT) must stay surface-only"
         );
-        let enrecordar = compiled_rules()
+        let enrecordar = rules
             .rules
             .iter()
             .find(|r| r.id == "ENRECORDAR")
@@ -367,7 +373,7 @@ mod tests {
             "ENRECORDAR must carry inflected tokens"
         );
         assert!(rule_needs_readings(enrecordar));
-        let mes1 = compiled_rules()
+        let mes1 = rules
             .rules
             .iter()
             .find(|r| r.id == "MES1")
@@ -385,7 +391,8 @@ mod tests {
 
     #[test]
     fn classifier_reads_antipattern_and_exception_postags() {
-        let palestina = compiled_rules()
+        let rules = compiled_rules();
+        let palestina = rules
             .rules
             .iter()
             .find(|r| r.id == "PALESTINA")
@@ -400,7 +407,7 @@ mod tests {
          (N.[FC]S000|A..[FC]S.|_GN_FS + A..[FC]S., CC, inflected ser, grammar.xml PALESTINA), \
          all of which consult readings - dict-dependent, not engine-side"
         );
-        let diacritics02 = compiled_rules()
+        let diacritics02 = rules
             .rules
             .iter()
             .find(|r| r.id == "DIACRITICS_02")
@@ -416,7 +423,7 @@ mod tests {
          AbstractPatternRulePerformer.java:232-234 isExceptionMatchedCompletely"
         );
         assert!(rule_needs_readings(diacritics02));
-        let hagut = compiled_rules()
+        let hagut = rules
             .rules
             .iter()
             .find(|r| r.id == "HAGUT")
@@ -924,6 +931,7 @@ mod tests {
     #[test]
     fn probe_round20_inline_case_flag_regex() {
         let _release_guard = crate::release_guard();
+        let rules = compiled_rules();
         let month_re = "^(?:(?-i)Gener|Febrer|Mar\u{e7}|Abril|Maig|Juny|Juliol|Agost|Setembre|Octubre|Novembre|Desembre)$";
         match regex::RegexBuilder::new(month_re)
             .case_insensitive(true)
@@ -945,7 +953,7 @@ mod tests {
             ),
             None => eprintln!("java_case_fold: None"),
         }
-        let compiled = compiled_rules()
+        let compiled = rules
             .rules
             .iter()
             .find(|r| r.id == "MESOS_MINUSCULA" && r.sub_id.as_deref() == Some("1"))
@@ -970,6 +978,7 @@ mod tests {
     #[test]
     fn probe_round20_mesos_minuscula_suppression_bisect() {
         let _release_guard = crate::release_guard();
+        let rules = compiled_rules();
         let pipeline = CatalanPipeline::shared();
         let engine = suite_engine();
         for text in [
@@ -981,7 +990,7 @@ mod tests {
             "X 3 de Juliol",
             "el tres de Juliol",
         ] {
-            let per_sub: Vec<String> = group_of("MESOS_MINUSCULA")
+            let per_sub: Vec<String> = group_of(&rules, "MESOS_MINUSCULA")
                 .iter()
                 .map(|rule| {
                     let mut n = 0usize;
@@ -1069,6 +1078,7 @@ mod tests {
     #[test]
     fn probe_round25_sub_rule_inventory() {
         let _release_guard = crate::release_guard();
+        let rules = compiled_rules();
         for id in [
             "DARRERA",
             "QUANT_QUAN",
@@ -1077,7 +1087,7 @@ mod tests {
             "QUE_INICIAL_AMBACCENT_VERB",
             "ACCENTUATION_CHECK",
         ] {
-            for rule in group_of(id).iter().take(3) {
+            for rule in group_of(&rules, id).iter().take(3) {
                 let first: Vec<String> = rule
                     .pattern
                     .tokens

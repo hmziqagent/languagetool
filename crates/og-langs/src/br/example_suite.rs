@@ -3,7 +3,7 @@ use og_core::{AnalyzedSentence, AnalyzedToken, AnalyzedTokenReadings};
 use og_rules::pattern_rule::PatternRuleEngine;
 use og_xml::compiler::{CompiledRule, CompiledRuleSet, XmlCompiler};
 use std::collections::HashMap;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 struct BretonPipeline {
     tokenizer: super::word_tokenizer::BretonWordTokenizer,
@@ -28,7 +28,7 @@ impl BretonPipeline {
                     .map(|xml| super::normalize::normalize_br_disambiguation_xml(&xml).into_owned())
                     .ok()
                     .and_then(|xml| og_tagger::XmlDisambiguator::from_xml(&xml).ok());
-            Some(std::sync::Arc::new(BretonPipeline {
+            Some(Arc::new(BretonPipeline {
                 tokenizer: super::word_tokenizer::BretonWordTokenizer::new(),
                 tagger: super::tagger::BretonTagger::shared_arc().unwrap_or_else(|| {
                     Arc::new(super::tagger::BretonTagger::from_resource_dir(
@@ -122,16 +122,20 @@ fn grammar_path() -> std::path::PathBuf {
         .join("br/src/main/resources/org/languagetool/rules/br/grammar.xml")
 }
 
-fn compiled_rules() -> &'static CompiledRuleSet {
-    static GRAMMAR: OnceLock<CompiledRuleSet> = OnceLock::new();
-    GRAMMAR.get_or_init(|| {
+fn compiled_rules() -> Arc<CompiledRuleSet> {
+    static GRAMMAR: og_core::releasable::Releasable<CompiledRuleSet> =
+        og_core::releasable::Releasable::new();
+    og_core::releasable::shared_get_or_build(&GRAMMAR, || {
         let path = grammar_path();
         let xml = std::fs::read_to_string(&path).expect("br grammar.xml");
         let xml = super::normalize::normalize_br_rules_xml(&xml);
-        XmlCompiler::new()
-            .compile_file_with_base(&xml, path.parent())
-            .expect("compile br grammar.xml")
+        Some(Arc::new(
+            XmlCompiler::new()
+                .compile_file_with_base(&xml, path.parent())
+                .expect("compile br grammar.xml"),
+        ))
     })
+    .expect("br")
 }
 
 fn extract_marker(text: &str) -> (String, Option<(usize, usize)>) {
@@ -189,18 +193,12 @@ pub(crate) fn disambiguated_sentence(text: &str) -> AnalyzedSentence {
         .expect("text must yield at least one sentence")
 }
 
-pub(crate) fn trace_rule_matches(
-    id: &str,
-    text: &str,
-) -> (Vec<&'static CompiledRule>, Vec<AnalyzedSentence>) {
+pub(crate) fn trace_rule_matches(id: &str, text: &str) -> (usize, Vec<AnalyzedSentence>) {
     let engine = PatternRuleEngine::new();
     let pipeline = BretonPipeline::shared();
     og_rules::pattern_rule::set_test_date_hack(true);
-    let rules: Vec<&CompiledRule> = compiled_rules()
-        .rules
-        .iter()
-        .filter(|r| r.id == id)
-        .collect();
+    let rule_set = compiled_rules();
+    let rules: Vec<&CompiledRule> = rule_set.rules.iter().filter(|r| r.id == id).collect();
     let sentences: Vec<AnalyzedSentence> = pipeline
         .analyze_offset_text(text)
         .into_iter()
@@ -211,7 +209,7 @@ pub(crate) fn trace_rule_matches(
             engine.match_rule(rule, sentence);
         }
     }
-    (rules, sentences)
+    (rules.len(), sentences)
 }
 
 const TOKEN_REFERENCE_RESIDUE: &[(&str, &str)] = &[
@@ -244,7 +242,7 @@ const DATE_TRIM_RESIDUE: &[(&str, &str)] = &[
 fn breton_grammar_examples_with_br_pipeline() {
     let _release_guard = crate::release_guard();
     let rule_set = compiled_rules();
-    let groups = rule_groups(rule_set);
+    let groups = rule_groups(&rule_set);
     let engine = PatternRuleEngine::new();
     let pipeline = BretonPipeline::shared();
     og_rules::pattern_rule::set_test_date_hack(true);

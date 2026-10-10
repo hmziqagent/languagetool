@@ -5,7 +5,6 @@ use og_core::{AnalyzedSentence, AnalyzedToken, AnalyzedTokenReadings, RuleMatch}
 use og_rules::pattern_rule::PatternRuleEngine;
 use og_xml::compiler::{CompiledRule, CompiledRuleSet, XmlCompiler};
 use std::collections::HashMap;
-use std::sync::OnceLock;
 
 pub(crate) struct IsPipeline {
     tokenizer: og_tokenizer::DefaultWordTokenizer,
@@ -78,15 +77,19 @@ fn grammar_path() -> std::path::PathBuf {
         .join("is/src/main/resources/org/languagetool/rules/is/grammar.xml")
 }
 
-fn compiled_rules() -> &'static CompiledRuleSet {
-    static GRAMMAR: OnceLock<CompiledRuleSet> = OnceLock::new();
-    GRAMMAR.get_or_init(|| {
+fn compiled_rules() -> std::sync::Arc<CompiledRuleSet> {
+    static GRAMMAR: og_core::releasable::Releasable<CompiledRuleSet> =
+        og_core::releasable::Releasable::new();
+    og_core::releasable::shared_get_or_build(&GRAMMAR, || {
         let path = grammar_path();
         let xml = std::fs::read_to_string(&path).expect("is grammar.xml");
-        XmlCompiler::new()
-            .compile_file_with_base(&xml, path.parent())
-            .expect("compile is grammar.xml")
+        Some(std::sync::Arc::new(
+            XmlCompiler::new()
+                .compile_file_with_base(&xml, path.parent())
+                .expect("compile is grammar.xml"),
+        ))
     })
+    .expect("is")
 }
 
 fn module_check(text: &str) -> Vec<RuleMatch> {
@@ -146,7 +149,7 @@ fn rule_groups(rule_set: &CompiledRuleSet) -> Vec<Vec<&CompiledRule>> {
 fn icelandic_grammar_examples_with_is_pipeline() {
     let _release_guard = crate::release_guard();
     let rule_set = compiled_rules();
-    let groups = rule_groups(rule_set);
+    let groups = rule_groups(&rule_set);
     let engine = PatternRuleEngine::new();
     let pipeline = is_pipeline();
     og_rules::pattern_rule::set_test_date_hack(true);
@@ -239,7 +242,7 @@ fn grammar_rules_compile_the_java_inventory() {
          4 FRAMVINDUHORF, 2 LEYTI and 2 LANGREYÐUR rulegroup sub-rules (35 attribute-bearing \
          <rule ...> plus 4 bare <rule> elements)"
     );
-    let example_count: usize = rule_groups(rule_set)
+    let example_count: usize = rule_groups(&rule_set)
         .iter()
         .filter_map(|g| g.first())
         .flat_map(|r| r.examples.iter())

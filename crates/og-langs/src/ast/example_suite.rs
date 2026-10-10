@@ -2,7 +2,7 @@ use og_core::{AnalyzedSentence, AnalyzedToken, AnalyzedTokenReadings};
 use og_rules::pattern_rule::PatternRuleEngine;
 use og_xml::compiler::{CompiledRuleSet, XmlCompiler};
 use std::path::PathBuf;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 pub(crate) fn ast_rules_dir() -> Option<PathBuf> {
     crate::engine::find_lt_resource_dir()
@@ -110,15 +110,19 @@ impl AsturianPipeline {
     }
 }
 
-fn grammar_rules() -> &'static CompiledRuleSet {
-    static RULES: OnceLock<CompiledRuleSet> = OnceLock::new();
-    RULES.get_or_init(|| {
+fn grammar_rules() -> Arc<CompiledRuleSet> {
+    static RULES: og_core::releasable::Releasable<CompiledRuleSet> =
+        og_core::releasable::Releasable::new();
+    og_core::releasable::shared_get_or_build(&RULES, || {
         let path = ast_rules_dir().expect("ast rules dir").join("grammar.xml");
         let xml = std::fs::read_to_string(&path).expect("ast grammar.xml read");
-        XmlCompiler::new()
-            .compile_file_with_base(&xml, path.parent())
-            .expect("ast grammar compile")
+        Some(Arc::new(
+            XmlCompiler::new()
+                .compile_file_with_base(&xml, path.parent())
+                .expect("ast grammar compile"),
+        ))
     })
+    .expect("ast")
 }
 
 #[cfg(test)]

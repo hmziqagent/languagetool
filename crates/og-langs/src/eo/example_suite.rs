@@ -6,7 +6,7 @@ use og_core::{AnalyzedSentence, AnalyzedToken, AnalyzedTokenReadings, RuleMatch}
 use og_rules::pattern_rule::PatternRuleEngine;
 use og_xml::compiler::{CompiledRule, CompiledRuleSet, XmlCompiler};
 use std::collections::HashMap;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 pub(crate) struct EoPipeline {
     tagger: Arc<og_tagger::EsperantoTagger>,
@@ -25,7 +25,7 @@ pub(crate) fn eo_pipeline() -> std::sync::Arc<EoPipeline> {
         og_core::releasable::Releasable::new();
     og_core::releasable::shared_get_or_build(&PIPE, || {
         let dir = eo_resource_dir();
-        Some(std::sync::Arc::new(EoPipeline {
+        Some(Arc::new(EoPipeline {
             tagger: Arc::new(
                 og_tagger::EsperantoTagger::from_resource_dir(&dir).expect("eo resources"),
             ),
@@ -99,15 +99,19 @@ fn grammar_path() -> std::path::PathBuf {
         .join("eo/src/main/resources/org/languagetool/rules/eo/grammar.xml")
 }
 
-fn compiled_rules() -> &'static CompiledRuleSet {
-    static GRAMMAR: OnceLock<CompiledRuleSet> = OnceLock::new();
-    GRAMMAR.get_or_init(|| {
+fn compiled_rules() -> Arc<CompiledRuleSet> {
+    static GRAMMAR: og_core::releasable::Releasable<CompiledRuleSet> =
+        og_core::releasable::Releasable::new();
+    og_core::releasable::shared_get_or_build(&GRAMMAR, || {
         let path = grammar_path();
         let xml = std::fs::read_to_string(&path).expect("eo grammar.xml");
-        XmlCompiler::new()
-            .compile_file_with_base(&xml, path.parent())
-            .expect("compile eo grammar.xml")
+        Some(Arc::new(
+            XmlCompiler::new()
+                .compile_file_with_base(&xml, path.parent())
+                .expect("compile eo grammar.xml"),
+        ))
     })
+    .expect("eo")
 }
 
 fn module_check(text: &str) -> Vec<RuleMatch> {
@@ -165,7 +169,7 @@ fn rule_groups(rule_set: &CompiledRuleSet) -> Vec<Vec<&CompiledRule>> {
 fn esperanto_grammar_examples_with_eo_pipeline() {
     let _release_guard = crate::release_guard();
     let rule_set = compiled_rules();
-    let groups = rule_groups(rule_set);
+    let groups = rule_groups(&rule_set);
     let engine = PatternRuleEngine::new();
     let pipeline = eo_pipeline();
     og_rules::pattern_rule::set_test_date_hack(true);
@@ -278,7 +282,8 @@ fn cxu_iru_matches_with_java_add_reading_semantics() {
         ("Kiel faru tion?", "faru"),
         ("Kie a\u{109}etu \u{11d}in hodia\u{16d}?", "a\u{109}etu"),
     ];
-    let group: Vec<&CompiledRule> = compiled_rules()
+    let rule_set = compiled_rules();
+    let group: Vec<&CompiledRule> = rule_set
         .rules
         .iter()
         .filter(|r| r.id == "CXU_IRU")
@@ -414,7 +419,8 @@ fn sentence_end_readings_and_cxu_iru_flip_together() {
         ("Kiel faru tion?", "faru"),
         ("Kie a\u{109}etu \u{11d}in hodia\u{16d}?", "a\u{109}etu"),
     ];
-    let group: Vec<&CompiledRule> = compiled_rules()
+    let rule_set = compiled_rules();
+    let group: Vec<&CompiledRule> = rule_set
         .rules
         .iter()
         .filter(|r| r.id == "CXU_IRU")

@@ -1,11 +1,8 @@
 #[test]
 fn probe_klanv_compiles_the_token_level_match_transform() {
-    let (rules, sentences) =
+    let (rule_count, sentences) =
         crate::br::example_suite::trace_rule_matches("KLANV_PE_GLANVOCH", "Klañv pe klañvoc’h.");
-    assert!(
-        !rules.is_empty(),
-        "KLANV_PE_GLANVOCH sub-rules must compile"
-    );
+    assert!(rule_count > 0, "KLANV_PE_GLANVOCH sub-rules must compile");
     let tokens = sentences[0].non_whitespace_tokens();
     let klañvoc_h = tokens
         .iter()
@@ -35,11 +32,11 @@ fn probe_klanv_compiles_the_token_level_match_transform() {
 
 #[test]
 fn probe_och_an_compiles_the_token_level_match_transform() {
-    let (rules, _) = crate::br::example_suite::trace_rule_matches(
+    let (rule_count, _) = crate::br::example_suite::trace_rule_matches(
         "OCH_AN",
         "Diaesoc’h diaesañ eo kavout labour.",
     );
-    assert!(!rules.is_empty(), "OCH_AN sub-rules must compile");
+    assert!(rule_count > 0, "OCH_AN sub-rules must compile");
     let matched =
         crate::br::example_suite::all_grammar_matches("Diaesoc’h diaesañ eo kavout labour.");
     assert!(
