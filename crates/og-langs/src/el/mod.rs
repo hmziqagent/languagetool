@@ -540,4 +540,3 @@ pub fn greek_native_rules() -> GreekNativeRules {
         text_level_rules: vec![Arc::new(GreekWordRepeatBeginningRule::new())],
     }
 }
-
