@@ -804,6 +804,7 @@ fn module_checker_registers_the_java_relevant_rule_inventory() {
 
 #[test]
 fn shared_engine_already_carries_the_generic_el_configuration() {
+    let _release_guard = crate::release_guard();
     let engine = crate::engine::LanguageEngine::shared_for_code("el").expect("el engine");
     let ids = engine.rule_ids();
     for expected in [

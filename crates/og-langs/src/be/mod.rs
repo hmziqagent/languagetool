@@ -133,6 +133,7 @@ mod tests {
 
     #[test]
     fn simple_replace_pins_the_java_example_pair() {
+        let _release_guard = crate::release_guard();
         let engine = crate::engine::LanguageEngine::shared_for_code("be").expect("be engine");
         let mut request = og_core::CheckRequest::new(
             "З большага, гэта быў добры дзень.",

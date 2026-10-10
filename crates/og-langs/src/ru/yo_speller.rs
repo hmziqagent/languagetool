@@ -192,6 +192,7 @@ mod tests {
 
     #[test]
     fn stays_silent_by_default_and_flags_misspelling_when_enabled() {
+        let _release_guard = crate::release_guard();
         let engine = crate::engine::LanguageEngine::shared_for_code("ru").expect("ru engine");
         let good = "Все счастливые семьи похожи друг на друга, каждая несчастливая семья несчастлива по-своему.";
         let bad = "Все счастливые семьи похожи друг на друга, каждя несчастливая семья несчастлива по-своему.";

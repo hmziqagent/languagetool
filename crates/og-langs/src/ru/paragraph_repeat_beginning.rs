@@ -13,6 +13,7 @@ mod tests {
 
     #[test]
     fn flags_repeated_paragraph_beginning_with_java_id_and_ru_messages() {
+        let _release_guard = crate::release_guard();
         let rule = super::russian_paragraph_repeat_beginning_rule();
         assert_eq!(rule.id(), "PARAGRAPH_REPEAT_BEGINNING_RULE");
         assert!(!rule.is_default_on());

@@ -410,6 +410,7 @@ mod tests {
 
     #[test]
     fn italian_test_demo_text_matches_java_expectation() {
+        let _release_guard = crate::release_guard();
         let engine = crate::engine::LanguageEngine::for_code("it").expect("it engine");
         let text = "Inserite qui il vostro testo... Oppure controlate direttamente questo ed avrete un assaggio di quali errori possono essere identificati con LanguageTool.";
         let result = engine.check(text);

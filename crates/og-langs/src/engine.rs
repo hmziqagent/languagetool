@@ -2333,6 +2333,7 @@ mod tests {
 
     #[test]
     fn matches_in_later_sentences_keep_absolute_offsets() {
+        let _release_guard = crate::release_guard();
         let engine = shared_german();
         let text = "Das ist ein vollkommen korrekter Satz. Dies ist ein fhcsal.";
         let typo_at = text.find("fhcsal").expect("test text contains typo");
@@ -2356,6 +2357,7 @@ mod tests {
 
     #[test]
     fn mother_tongue_adds_l2_rules_to_the_check() {
+        let _release_guard = crate::release_guard();
         let base = shared_english();
         let plain = base.rules.len();
         let mut request = CheckRequest::new("Test", Language::English);
@@ -2377,6 +2379,7 @@ mod tests {
 
     #[test]
     fn paragraph_rules_fire_through_the_srx_pipeline() {
+        let _release_guard = crate::release_guard();
         let engine = shared_english();
         let mut request = CheckRequest::new("Hello world. \n\nNext paragraph", Language::English);
         request.enabled_rules = vec![
@@ -2394,6 +2397,7 @@ mod tests {
 
     #[test]
     fn danish_engine_registers_with_tagger_and_rules() {
+        let _release_guard = crate::release_guard();
         let engine = build_engine("da").expect("Danish engine must be registered via for_code");
         assert!(
             engine.rule_count() > 10,
@@ -2414,6 +2418,7 @@ mod tests {
 
     #[test]
     fn greek_engine_registers_java_relevant_natives() {
+        let _release_guard = crate::release_guard();
         let engine = build_engine("el").expect("Greek engine must be registered via for_code");
         let ids = engine.rule_ids();
         for expected in [
@@ -2460,6 +2465,7 @@ mod tests {
 
     #[test]
     fn esperanto_engine_registers_java_relevant_natives() {
+        let _release_guard = crate::release_guard();
         let engine = build_engine("eo").expect("Esperanto engine must be registered via for_code");
         let ids = engine.rule_ids();
         for expected in [
@@ -2524,6 +2530,7 @@ mod tests {
 
     #[test]
     fn persian_engine_registers_java_relevant_natives() {
+        let _release_guard = crate::release_guard();
         let engine = build_engine("fa").expect("Persian engine must be registered via for_code");
         let ids = engine.rule_ids();
         for expected in [
@@ -2587,6 +2594,7 @@ mod tests {
 
     #[test]
     fn irish_engine_registers_java_relevant_natives() {
+        let _release_guard = crate::release_guard();
         let engine = build_engine("ga").expect("Irish engine must be registered via for_code");
         let ids = engine.rule_ids();
         for expected in [
@@ -2648,6 +2656,7 @@ mod tests {
 
     #[test]
     fn galician_engine_registers_java_relevant_natives() {
+        let _release_guard = crate::release_guard();
         let engine = build_engine("gl").expect("Galician engine must be registered via for_code");
         let ids = engine.rule_ids();
         for expected in [
@@ -2718,6 +2727,7 @@ mod tests {
 
     #[test]
     fn icelandic_engine_registers_java_relevant_natives() {
+        let _release_guard = crate::release_guard();
         let engine = build_engine("is").expect("Icelandic engine must be registered via for_code");
         let ids = engine.rule_ids();
         for expected in [
@@ -2788,6 +2798,7 @@ mod tests {
 
     #[test]
     fn japanese_engine_registers_java_relevant_natives() {
+        let _release_guard = crate::release_guard();
         let engine = build_engine("ja").expect("Japanese engine must be registered via for_code");
         let ids = engine.rule_ids();
         for expected in ["COMMA_PARENTHESIS_WHITESPACE", "DOUBLE_PUNCTUATION"] {
@@ -2854,6 +2865,7 @@ mod tests {
 
     #[test]
     fn khmer_engine_registers_java_relevant_natives() {
+        let _release_guard = crate::release_guard();
         let engine = build_engine("km").expect("Khmer engine must be registered via for_code");
         let ids = engine.rule_ids();
         for expected in [
@@ -2907,6 +2919,7 @@ mod tests {
 
     #[test]
     fn lithuanian_engine_registers_java_relevant_natives() {
+        let _release_guard = crate::release_guard();
         let engine = build_engine("lt").expect("Lithuanian engine must be registered via for_code");
         let ids = engine.rule_ids();
         for expected in [
@@ -2976,6 +2989,7 @@ mod tests {
 
     #[test]
     fn malayalam_engine_registers_java_relevant_natives() {
+        let _release_guard = crate::release_guard();
         let engine = build_engine("ml").expect("Malayalam engine must be registered via for_code");
         let ids = engine.rule_ids();
         for expected in [
@@ -3041,6 +3055,7 @@ mod tests {
 
     #[test]
     fn slovak_engine_registers_java_relevant_natives() {
+        let _release_guard = crate::release_guard();
         let engine = build_engine("sk").expect("Slovak engine must be registered via for_code");
         let ids = engine.rule_ids();
         for expected in [
@@ -3125,6 +3140,7 @@ mod tests {
 
     #[test]
     fn slovenian_engine_registers_java_relevant_natives() {
+        let _release_guard = crate::release_guard();
         let engine = build_engine("sl").expect("Slovenian engine must be registered via for_code");
         let ids = engine.rule_ids();
         for expected in [
@@ -3184,6 +3200,7 @@ mod tests {
 
     #[test]
     fn serbian_engine_registers_java_relevant_natives() {
+        let _release_guard = crate::release_guard();
         let engine = build_engine("sr").expect("Serbian engine must be registered via for_code");
         let ids = engine.rule_ids();
         for expected in [
@@ -3268,6 +3285,7 @@ mod tests {
 
     #[test]
     fn tamil_engine_registers_java_relevant_natives() {
+        let _release_guard = crate::release_guard();
         let engine = build_engine("ta").expect("Tamil engine must be registered via for_code");
         let ids = engine.rule_ids();
         for expected in ["COMMA_PARENTHESIS_WHITESPACE", "DOUBLE_PUNCTUATION"] {
@@ -3319,6 +3337,7 @@ mod tests {
 
     #[test]
     fn tagalog_engine_registers_java_relevant_natives() {
+        let _release_guard = crate::release_guard();
         let engine = build_engine("tl").expect("Tagalog engine must be registered via for_code");
         let ids = engine.rule_ids();
         for expected in [
@@ -3376,6 +3395,7 @@ mod tests {
 
     #[test]
     fn ukrainian_engine_registers_java_relevant_natives() {
+        let _release_guard = crate::release_guard();
         let engine = build_engine("uk").expect("Ukrainian engine must be registered via for_code");
         let ids = engine.rule_ids();
         for expected in [
@@ -3458,6 +3478,7 @@ mod tests {
 
     #[test]
     fn chinese_engine_registers_java_relevant_natives() {
+        let _release_guard = crate::release_guard();
         let engine = build_engine("zh").expect("Chinese engine must be registered via for_code");
         let ids = engine.rule_ids();
         for expected in ["DOUBLE_PUNCTUATION", "COMMA_PARENTHESIS_WHITESPACE"] {
@@ -3518,6 +3539,7 @@ mod tests {
 
     #[test]
     fn romanian_engine_registers_with_tagger_and_natives() {
+        let _release_guard = crate::release_guard();
         let engine = build_engine("ro").expect("Romanian engine must be registered via for_code");
         assert!(
             engine.rule_count() > 10,
@@ -3559,6 +3581,7 @@ mod tests {
 
     #[test]
     fn swedish_engine_registers_with_tagger_and_natives() {
+        let _release_guard = crate::release_guard();
         let engine = build_engine("sv").expect("Swedish engine must be registered via for_code");
         assert!(
             engine.rule_count() > 10,
@@ -3579,6 +3602,7 @@ mod tests {
 
     #[test]
     fn russian_engine_registers_tagger_normalization_and_chunker() {
+        let _release_guard = crate::release_guard();
         let engine = build_engine("ru").expect("Russian engine must be registered via for_code");
         assert!(
             engine.rule_count() > 10,
@@ -3603,6 +3627,7 @@ mod tests {
 
     #[test]
     fn french_engine_registers_native_rules() {
+        let _release_guard = crate::release_guard();
         let engine = build_engine("fr").expect("French engine must be registered via for_code");
         assert!(
             engine.rule_count() > 10,
@@ -3623,6 +3648,7 @@ mod tests {
 
     #[test]
     fn spanish_engine_registers_native_rules_and_tagger() {
+        let _release_guard = crate::release_guard();
         let engine = build_engine("es").expect("Spanish engine must be registered via for_code");
         assert!(
             engine.rule_count() > 10,
@@ -3656,6 +3682,7 @@ mod tests {
 
     #[test]
     fn portuguese_engine_registers_native_rules() {
+        let _release_guard = crate::release_guard();
         let engine = build_engine("pt").expect("pt engine must be registered via for_code");
         let ids: Vec<String> = engine.rules.iter().map(|r| r.id().to_string()).collect();
         for expected in ["PT_COMPOUNDS_POST_REFORM", "PT_BARBARISMS_REPLACE"] {
@@ -3674,6 +3701,7 @@ mod tests {
 
     #[test]
     fn portuguese_variant_engines_add_variant_rules() {
+        let _release_guard = crate::release_guard();
         let base = build_engine("pt").expect("pt base engine");
         let pt_pt = base.portuguese_variant("pt-PT");
         let pt_br = base.portuguese_variant("pt-BR");
@@ -3695,6 +3723,7 @@ mod tests {
 
     #[test]
     fn portuguese_engine_disambiguates_through_the_global_xml() {
+        let _release_guard = crate::release_guard();
         let engine = build_engine("pt").expect("pt engine must be registered via for_code");
         assert!(
             engine.disambiguator.is_some(),
@@ -3723,6 +3752,7 @@ mod tests {
 
     #[test]
     fn portuguese_pre_reform_variants_register_native_rules() {
+        let _release_guard = crate::release_guard();
         let base = build_engine("pt").expect("pt base engine");
         for (code, expected_language) in [
             ("pt-AO", og_core::Language::PortugueseAo),
@@ -3744,6 +3774,7 @@ mod tests {
 
     #[test]
     fn dutch_engine_registers_native_rules_and_tagger() {
+        let _release_guard = crate::release_guard();
         let engine = build_engine("nl").expect("Dutch engine must be registered via for_code");
         assert!(
             engine.rule_count() > 10,
@@ -3796,6 +3827,7 @@ mod tests {
 
     #[test]
     fn polish_engine_registers_native_rules_and_tagger() {
+        let _release_guard = crate::release_guard();
         let engine = build_engine("pl").expect("Polish engine must be registered via for_code");
         assert!(
             engine.rule_count() > 10,
@@ -3860,6 +3892,7 @@ mod tests {
 
     #[test]
     fn spelling_global_chunker_shields_speller_and_replace_rules() {
+        let _release_guard = crate::release_guard();
         let engine = shared_english();
         for text in [
             "There is Givenchy here.",
@@ -3879,6 +3912,7 @@ mod tests {
 
     #[test]
     fn italian_engine_wires_java_relevant_natives() {
+        let _release_guard = crate::release_guard();
         let engine = build_engine("it").expect("Italian engine must be registered via for_code");
         let ids = engine.rule_ids();
         for expected in [
@@ -3925,6 +3959,7 @@ mod tests {
 
     #[test]
     fn asturian_engine_wires_java_relevant_natives() {
+        let _release_guard = crate::release_guard();
         let engine = build_engine("ast").expect("Asturian engine must be registered via for_code");
         let ids = engine.rule_ids();
         for expected in [
@@ -3969,6 +4004,7 @@ mod tests {
 
     #[test]
     fn catalan_engine_wires_java_relevant_natives() {
+        let _release_guard = crate::release_guard();
         let engine = build_engine("ca").expect("Catalan engine must be registered via for_code");
         let ids = engine.rule_ids();
         for expected in [
@@ -4062,6 +4098,7 @@ mod tests {
 
     #[test]
     fn catalan_engine_tokenizer_mounts_the_catalan_splitter() {
+        let _release_guard = crate::release_guard();
         let texts = |code: &str| {
             WordTokenizerBridge::for_code(code)
                 .tokenize("Emporta-te'ls a l'observatori dels mars", 0)
@@ -4097,6 +4134,7 @@ mod tests {
 
     #[test]
     fn belarusian_engine_wires_java_relevant_natives() {
+        let _release_guard = crate::release_guard();
         let engine = build_engine("be").expect("Belarusian engine must be registered via for_code");
         let ids = engine.rule_ids();
         for expected in [
@@ -4129,6 +4167,7 @@ mod tests {
 
     #[test]
     fn breton_engine_wires_java_relevant_natives() {
+        let _release_guard = crate::release_guard();
         let engine = build_engine("br").expect("Breton engine must be registered via for_code");
         let ids = engine.rule_ids();
         for expected in [
@@ -4174,6 +4213,7 @@ mod tests {
 
     #[test]
     fn arabic_engine_wires_java_relevant_natives() {
+        let _release_guard = crate::release_guard();
         let engine = build_engine("ar").expect("Arabic engine must be registered via for_code");
         let ids = engine.rule_ids();
         for expected in [
@@ -4248,6 +4288,7 @@ mod tests {
 
     #[test]
     fn german_engine_loads_rules_and_checks_text() {
+        let _release_guard = crate::release_guard();
         let engine = shared_german();
         assert!(
             engine.rule_count() > 100,
@@ -4264,6 +4305,7 @@ mod tests {
 
     #[test]
     fn variant_dictionaries_follow_java_hunspell_differences() {
+        let _release_guard = crate::release_guard();
         let lt_root = match find_lt_resource_dir() {
             Some(p) => p,
             None => return,
@@ -4280,6 +4322,7 @@ mod tests {
 
     #[test]
     fn german_variants_carry_their_own_morfologik_rule_and_variant_grammar() {
+        let _release_guard = crate::release_guard();
         let base = shared_german();
         let base_ids: Vec<String> = base.rules.iter().map(|r| r.id().to_string()).collect();
         assert!(base_ids.iter().any(|i| i == "MORFOLOGIK_RULE_DE_DE"));
@@ -4320,6 +4363,7 @@ mod tests {
 
     #[test]
     fn german_variant_spellers_cover_the_java_wordlist_oracles() {
+        let _release_guard = crate::release_guard();
         let base = shared_german();
 
         let at = base.german_variant("de-AT");
@@ -4393,6 +4437,7 @@ mod tests {
 
     #[test]
     fn regional_variants_carry_their_own_morfologik_rule() {
+        let _release_guard = crate::release_guard();
         let base = shared_english();
         let ids: Vec<String> = base.rules.iter().map(|r| r.id().to_string()).collect();
         assert!(ids.iter().any(|i| i == "MORFOLOGIK_RULE_EN_US"));
@@ -4495,6 +4540,7 @@ mod tests {
 
     #[test]
     fn test_load_real_english_grammar() {
+        let _release_guard = crate::release_guard();
         let lt_root = match find_lt_resource_dir() {
             Some(p) => p,
             None => {
