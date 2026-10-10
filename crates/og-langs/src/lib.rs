@@ -21,11 +21,14 @@ pub(crate) fn release_guard() -> impl Drop {
         }
     }
     impl Drop for ReleaseOnDrop {
-        fn drop(&mut self) {}
+        fn drop(&mut self) {
+            Self::release_shared_statics();
+        }
     }
     let guard = ReleaseOnDrop {
         _heavy: og_core::releasable::heavy_guard(),
     };
+    ReleaseOnDrop::release_shared_statics();
     guard
 }
 
