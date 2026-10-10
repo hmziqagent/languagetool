@@ -10,6 +10,7 @@ pub struct CheckParams {
     pub text: Option<String>,
     pub data: Option<String>,
     pub language: String,
+    #[serde(rename = "motherTongue")]
     pub mother_tongue: Option<String>,
     #[serde(rename = "enabledRules")]
     pub enabled_rules: Option<String>,
@@ -187,5 +188,157 @@ mod tests {
             vec!["A".to_string(), "B".to_string()]
         );
         assert!(params.picky);
+    }
+
+    #[test]
+    fn data_is_used_only_when_text_is_absent() {
+        let mut map = HashMap::new();
+        map.insert("data".to_string(), "from data".to_string());
+        assert_eq!(CheckParams::from_map(&map).get_text(), Some("from data"));
+        map.insert("text".to_string(), "from text".to_string());
+        assert_eq!(CheckParams::from_map(&map).get_text(), Some("from text"));
+    }
+
+    #[test]
+    fn missing_language_defaults_to_empty_and_parses_to_none() {
+        let params = CheckParams::from_map(&HashMap::new());
+        assert_eq!(params.language, "");
+        assert!(params.get_language().is_none());
+        assert_eq!(params.get_text(), None);
+    }
+
+    #[test]
+    fn rule_and_category_lists_trim_and_drop_empty_items() {
+        let mut map = HashMap::new();
+        map.insert("enabledRules".to_string(), " A , B ,, ".to_string());
+        map.insert("disabledRules".to_string(), "C".to_string());
+        map.insert(
+            "enabledCategories".to_string(),
+            " GRAMMAR ,TYPOS ".to_string(),
+        );
+        map.insert("disabledCategories".to_string(), ",".to_string());
+        let params = CheckParams::from_map(&map);
+        assert_eq!(
+            params.get_enabled_rules(),
+            vec!["A".to_string(), "B".to_string()]
+        );
+        assert_eq!(params.get_disabled_rules(), vec!["C".to_string()]);
+        assert_eq!(
+            params.get_enabled_categories(),
+            vec!["GRAMMAR".to_string(), "TYPOS".to_string()]
+        );
+        assert!(params.get_disabled_categories().is_empty());
+    }
+
+    #[test]
+    fn absent_lists_stay_empty() {
+        let params = CheckParams::from_map(&HashMap::new());
+        assert!(params.get_enabled_rules().is_empty());
+        assert!(params.get_disabled_rules().is_empty());
+        assert!(params.get_enabled_categories().is_empty());
+        assert!(params.get_disabled_categories().is_empty());
+    }
+
+    #[test]
+    fn picky_accepts_only_true_and_yes() {
+        let mut map = HashMap::new();
+        assert!(!CheckParams::from_map(&map).picky);
+        for value in ["1", "TRUE", "on", "yes "] {
+            map.insert("picky".to_string(), value.to_string());
+            assert!(!CheckParams::from_map(&map).picky, "picky={value}");
+        }
+        for value in ["true", "yes"] {
+            map.insert("picky".to_string(), value.to_string());
+            assert!(CheckParams::from_map(&map).picky, "picky={value}");
+        }
+    }
+
+    #[test]
+    fn deserializes_camel_case_fields() {
+        let params: CheckParams = serde_json::from_str(
+            r#"{"language":"en-US","enabledRules":"A,B","disabledCategories":"MISC",
+                "motherTongue":"de","level":"picky","picky":true,"text":"hi"}"#,
+        )
+        .unwrap();
+        assert_eq!(params.language, "en-US");
+        assert_eq!(params.get_text(), Some("hi"));
+        assert_eq!(params.mother_tongue.as_deref(), Some("de"));
+        assert_eq!(params.level.as_deref(), Some("picky"));
+        assert_eq!(
+            params.get_enabled_rules(),
+            vec!["A".to_string(), "B".to_string()]
+        );
+        assert_eq!(params.get_disabled_categories(), vec!["MISC".to_string()]);
+        assert!(params.picky);
+        assert!(params.data.is_none());
+    }
+
+    #[test]
+    fn percent_decode_keeps_malformed_sequences_literally() {
+        assert_eq!(percent_decode(b"100%"), "100%");
+        assert_eq!(percent_decode(b"a%2b"), "a+");
+        assert_eq!(percent_decode(b"%ZZ"), "%ZZ");
+        assert_eq!(percent_decode(b"%C3%A4"), "ä");
+        assert_eq!(percent_decode(b"+%41+"), " A ");
+        assert_eq!(percent_decode(b""), "");
+    }
+
+    #[test]
+    fn urlencoded_pairs_split_on_first_equals_only() {
+        let mut map = HashMap::new();
+        parse_urlencoded_into(&mut map, b"a=b=c&empty=&%6Bey=val&skipped&&x=1");
+        assert_eq!(map.get("a").map(String::as_str), Some("b=c"));
+        assert_eq!(map.get("empty").map(String::as_str), Some(""));
+        assert_eq!(map.get("key").map(String::as_str), Some("val"));
+        assert_eq!(map.get("x").map(String::as_str), Some("1"));
+        assert_eq!(map.get("skipped").map(String::as_str), Some(""));
+    }
+
+    #[tokio::test]
+    async fn merged_params_read_query_on_get() {
+        let req = Request::builder()
+            .uri("/v2/check?language=en-US&text=Hello+world")
+            .body(Body::empty())
+            .unwrap();
+        let MergedCheckParams(params) = MergedCheckParams::from_request(req, &()).await.unwrap();
+        assert_eq!(params.get_text(), Some("Hello world"));
+        assert_eq!(
+            params.get_language().map(|l| l.code().to_string()),
+            Some("en-US".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn merged_params_let_query_override_post_body() {
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/v2/check?text=from+query&level=picky")
+            .header("content-type", "application/x-www-form-urlencoded")
+            .body(Body::from("language=en-GB&text=from+body&picky=true"))
+            .unwrap();
+        let MergedCheckParams(params) = MergedCheckParams::from_request(req, &()).await.unwrap();
+        assert_eq!(params.get_text(), Some("from query"));
+        assert_eq!(
+            params.get_language().map(|l| l.code().to_string()),
+            Some("en-GB".to_string())
+        );
+        assert_eq!(params.level.as_deref(), Some("picky"));
+        assert!(params.picky);
+    }
+
+    #[tokio::test]
+    async fn oversized_post_body_is_dropped_but_query_survives() {
+        let huge = "x".repeat(crate::server::MAX_TEXT_LENGTH * 4 + 8192 + 1);
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/v2/check?language=en-US&text=kept")
+            .body(Body::from(huge))
+            .unwrap();
+        let MergedCheckParams(params) = MergedCheckParams::from_request(req, &()).await.unwrap();
+        assert_eq!(params.get_text(), Some("kept"));
+        assert_eq!(
+            params.get_language().map(|l| l.code().to_string()),
+            Some("en-US".to_string())
+        );
     }
 }

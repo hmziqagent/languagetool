@@ -20,8 +20,8 @@ impl EngineCache {
     fn touch(&mut self, code: &str) {
         if let Some(pos) = self.order.iter().position(|c| c == code) {
             self.order.remove(pos);
+            self.order.push_front(code.to_string());
         }
-        self.order.push_front(code.to_string());
     }
 
     fn insert(&mut self, code: String, engine: Arc<LanguageEngine>) {
@@ -298,5 +298,104 @@ mod tests {
         ] {
             assert!(codes.contains(&code), "missing {code}");
         }
+    }
+
+    #[test]
+    fn unknown_codes_have_no_engine_source_or_canonical_key() {
+        for code in ["", "xx", "en-IN", "de-DE ", "PT"] {
+            assert!(engine_source(code).is_none(), "{code}");
+            assert!(canonical_engine_key(code).is_none(), "{code}");
+        }
+    }
+
+    #[test]
+    fn canonical_keys_collapse_families_and_keep_variants_apart() {
+        let mut canonical: Vec<String> = ENGINE_CODES
+            .iter()
+            .filter_map(|code| canonical_engine_key(code))
+            .collect();
+        assert_eq!(canonical_engine_key("en"), canonical_engine_key("en-US"));
+        assert_eq!(canonical_engine_key("de"), canonical_engine_key("de-DE"));
+        assert_eq!(canonical_engine_key("pt"), canonical_engine_key("pt-PT"));
+        canonical.sort_unstable();
+        canonical.dedup();
+        for unique in ["en", "en-GB", "de", "de-CH", "pt-BR", "pt-MZ", "fr", "zh"] {
+            assert!(canonical.contains(&unique.to_string()), "missing {unique}");
+        }
+        assert_eq!(canonical.len(), ENGINE_CODES.len() - 3);
+    }
+
+    #[test]
+    fn language_codes_are_sorted_engine_codes() {
+        let state = AppState::new();
+        let codes = state.language_codes();
+        let mut sorted = codes.clone();
+        sorted.sort_unstable();
+        assert_eq!(codes, sorted);
+        assert_eq!(codes.len(), ENGINE_CODES.len());
+    }
+
+    fn cache_with_capacity(capacity: usize) -> EngineCache {
+        EngineCache {
+            entries: HashMap::new(),
+            order: VecDeque::new(),
+            capacity,
+        }
+    }
+
+    fn engine(code: &str) -> Arc<LanguageEngine> {
+        Arc::new(LanguageEngine::new(
+            og_core::Language::from_code(code).unwrap_or(og_core::Language::English),
+        ))
+    }
+
+    #[test]
+    fn engine_cache_evicts_least_recently_used_beyond_capacity() {
+        let mut cache = cache_with_capacity(2);
+        cache.insert("en".to_string(), engine("en"));
+        cache.insert("de".to_string(), engine("de"));
+        cache.touch("en");
+        cache.insert("fr".to_string(), engine("fr"));
+        assert!(cache.entries.contains_key("en"));
+        assert!(cache.entries.contains_key("fr"));
+        assert!(
+            !cache.entries.contains_key("de"),
+            "LRU entry must be evicted"
+        );
+        assert_eq!(cache.order, ["fr".to_string(), "en".to_string()]);
+    }
+
+    #[test]
+    fn engine_cache_touch_moves_known_code_to_front_only() {
+        let mut cache = cache_with_capacity(3);
+        cache.insert("en".to_string(), engine("en"));
+        cache.insert("de".to_string(), engine("de"));
+        cache.touch("en");
+        assert_eq!(cache.order, ["en".to_string(), "de".to_string()]);
+        cache.touch("fr");
+        assert_eq!(
+            cache.order,
+            ["en".to_string(), "de".to_string()],
+            "touching an absent code must not enqueue it"
+        );
+    }
+
+    #[test]
+    fn engine_cache_reinsert_keeps_a_single_order_entry() {
+        let mut cache = cache_with_capacity(3);
+        cache.insert("en".to_string(), engine("en"));
+        cache.insert("de".to_string(), engine("de"));
+        cache.touch("fr");
+        cache.insert("fr".to_string(), engine("fr"));
+        assert_eq!(
+            cache.order,
+            ["fr".to_string(), "de".to_string(), "en".to_string()]
+        );
+        cache.insert("fr".to_string(), engine("fr"));
+        assert_eq!(
+            cache.order,
+            ["fr".to_string(), "de".to_string(), "en".to_string()],
+            "reinserting a present code must not duplicate its order entry"
+        );
     }
 }
