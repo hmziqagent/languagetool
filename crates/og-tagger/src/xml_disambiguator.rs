@@ -370,8 +370,13 @@ impl XmlDisambiguator {
     }
 
     pub fn apply_rules_through(&self, sentence: &mut AnalyzedSentence, through: usize) {
+        let mut env = SentenceEnv::build(sentence);
+        let mut memo = RegexMemo::default();
         for rule_idx in 0..through.min(self.rules.len()) {
-            self.apply_rule(sentence, rule_idx);
+            if self.apply_rule_with_env(sentence, rule_idx, &env, &mut memo) {
+                env = SentenceEnv::build(sentence);
+                memo = RegexMemo::default();
+            }
         }
     }
 
@@ -427,13 +432,25 @@ impl XmlDisambiguator {
     }
 
     pub fn apply_rule(&self, sentence: &mut AnalyzedSentence, rule_idx: usize) {
+        let env = SentenceEnv::build(sentence);
+        let mut memo = RegexMemo::default();
+        self.apply_rule_with_env(sentence, rule_idx, &env, &mut memo);
+    }
+
+    fn apply_rule_with_env(
+        &self,
+        sentence: &mut AnalyzedSentence,
+        rule_idx: usize,
+        env: &SentenceEnv,
+        memo: &mut RegexMemo,
+    ) -> bool {
         let rule = match self.rules.get(rule_idx) {
             Some(rule) => rule,
-            None => return,
+            None => return false,
         };
         {
             if rule.pattern.tokens.is_empty() && rule.pattern.elements.is_empty() {
-                return;
+                return false;
             }
             let mut pending_ignore_spelling: Vec<(usize, usize)> = Vec::new();
             let mut pending_actions: Vec<(usize, &DisambigAction, &DisambigActionRegex)> =
@@ -445,30 +462,10 @@ impl XmlDisambiguator {
             let mut pending_immunize: Vec<usize> = Vec::new();
 
             {
-                let tokens: Vec<&AnalyzedTokenReadings> = sentence.non_whitespace_tokens();
-                let raw_texts: std::collections::HashSet<&str> =
-                    tokens.iter().map(|t| t.token().token()).collect();
-                let lower_texts: std::collections::HashSet<String> = tokens
-                    .iter()
-                    .map(|t| t.token().token().to_lowercase())
-                    .collect();
-                let mut postag_cache: std::collections::HashMap<&str, Vec<bool>> =
-                    std::collections::HashMap::new();
-                let mut postag_evaluated: std::collections::HashMap<&str, Vec<bool>> =
-                    std::collections::HashMap::new();
-
-                let pos_tags: Vec<std::collections::HashSet<&str>> = tokens
-                    .iter()
-                    .map(|t| {
-                        t.readings()
-                            .iter()
-                            .flat_map(|r| r.pos_tags().iter().map(|t| t.as_str()))
-                            .collect::<std::collections::HashSet<&str>>()
-                    })
-                    .collect();
+                let tokens: Vec<&AnalyzedTokenReadings> = env.token_refs(sentence);
 
                 let Some(first) = first_element_token(rule) else {
-                    return;
+                    return false;
                 };
                 match &self.gates[rule_idx] {
                     FirstTokenGate::Text {
@@ -476,33 +473,34 @@ impl XmlDisambiguator {
                         case_sensitive,
                     } => {
                         let can_match = if *case_sensitive {
-                            raw_texts.contains(text.as_str())
+                            env.raw_texts.contains(text.as_str())
                         } else {
-                            lower_texts.contains(text.as_str()) || raw_texts.contains(text.as_str())
+                            env.lower_texts.contains(text.as_str())
+                                || env.raw_texts.contains(text.as_str())
                         };
                         if !can_match {
-                            return;
+                            return false;
                         }
                     }
                     FirstTokenGate::LiteralSet(set) => {
                         let any = if first.case_sensitive {
-                            tokens.iter().any(|t| set.contains(t.token().token()))
+                            env.raw_texts.iter().any(|t| set.contains(t.as_str()))
                         } else {
-                            lower_texts.iter().any(|l| set.contains(l))
+                            env.lower_texts.iter().any(|l| set.contains(l.as_str()))
                         };
                         if !any {
-                            return;
+                            return false;
                         }
                     }
                     FirstTokenGate::OrLiteralSet(set) => {
-                        if !lower_texts.iter().any(|l| set.contains(l)) {
-                            return;
+                        if !env.lower_texts.iter().any(|l| set.contains(l.as_str())) {
+                            return false;
                         }
                     }
                     FirstTokenGate::PostagPlain { tag, negate_pos } => {
-                        let any = pos_tags.iter().any(|set| set.contains(tag.as_str()));
+                        let any = env.pos_tags.iter().any(|set| set.contains(tag.as_str()));
                         if any == *negate_pos {
-                            return;
+                            return false;
                         }
                     }
                     FirstTokenGate::None => {}
@@ -510,7 +508,7 @@ impl XmlDisambiguator {
 
                 for start_idx in 0..tokens.len() {
                     if let FirstTokenGate::PostagPlain { tag, negate_pos } = &self.gates[rule_idx]
-                        && pos_tags[start_idx].contains(tag.as_str()) == *negate_pos
+                        && env.pos_tags[start_idx].contains(tag.as_str()) == *negate_pos
                     {
                         continue;
                     }
@@ -518,27 +516,30 @@ impl XmlDisambiguator {
                         && first.text.is_none()
                         && first.compiled_regexp.is_none()
                     {
-                        let key = re.as_str();
-                        let evaluated = postag_evaluated.entry(key).or_default();
-                        if evaluated.len() < tokens.len() {
-                            evaluated.resize(tokens.len(), false);
+                        let key = std::sync::Arc::as_ptr(re) as usize;
+                        let entry = memo.postag.entry(key).or_insert_with(|| PostagRegexMemo {
+                            unknown_ok: re.is_match("UNKNOWN"),
+                            results: Vec::new(),
+                            evaluated: Vec::new(),
+                        });
+                        if entry.evaluated.len() < tokens.len() {
+                            entry.evaluated.resize(tokens.len(), false);
+                            entry.results.resize(tokens.len(), false);
                         }
-                        if !evaluated[start_idx] {
-                            let results = postag_cache.entry(key).or_default();
-                            if results.len() < tokens.len() {
-                                results.resize(tokens.len(), false);
-                            }
-                            let unknown_ok = re.is_match("UNKNOWN");
-                            results[start_idx] = tokens[start_idx].readings().iter().any(|r| {
-                                r.pos_tags().iter().any(|t| re.is_match(t))
-                                    || (unknown_ok && reading_tagless(r))
-                            });
-                            evaluated[start_idx] = true;
+                        if !entry.evaluated[start_idx] {
+                            let unknown_ok = entry.unknown_ok;
+                            entry.results[start_idx] =
+                                tokens[start_idx].readings().iter().any(|r| {
+                                    r.pos_tags().iter().any(|t| re.is_match(t))
+                                        || (unknown_ok && reading_tagless(r))
+                                });
+                            entry.evaluated[start_idx] = true;
                         }
-                        if !postag_cache[key][start_idx] && !first.negate_pos {
+                        let hit = entry.results[start_idx];
+                        if !hit && !first.negate_pos {
                             continue;
                         }
-                        if postag_cache[key][start_idx] && first.negate_pos {
+                        if hit && first.negate_pos {
                             continue;
                         }
                     }
@@ -565,16 +566,25 @@ impl XmlDisambiguator {
                         }
                     }
                     if let Some(f) = self.first_regex[rule_idx].as_ref() {
-                        let tok = tokens[start_idx];
-                        let matched = if f.inflected {
-                            tok.readings()
-                                .iter()
-                                .any(|r| f.re.is_match(r.lemma().unwrap_or(tok.token().token())))
-                                || tok.readings().is_empty() && f.re.is_match(tok.token().token())
-                        } else {
-                            f.re.is_match(tok.token().token())
-                        };
-                        if !matched {
+                        let key = (std::sync::Arc::as_ptr(&f.re) as usize, f.inflected);
+                        let entry = memo.first_match.entry(key).or_default();
+                        if entry.evaluated.len() < tokens.len() {
+                            entry.evaluated.resize(tokens.len(), false);
+                            entry.results.resize(tokens.len(), false);
+                        }
+                        if !entry.evaluated[start_idx] {
+                            let tok = tokens[start_idx];
+                            entry.results[start_idx] = if f.inflected {
+                                tok.readings().iter().any(|r| {
+                                    f.re.is_match(r.lemma().unwrap_or(tok.token().token()))
+                                }) || tok.readings().is_empty()
+                                    && f.re.is_match(tok.token().token())
+                            } else {
+                                f.re.is_match(tok.token().token())
+                            };
+                            entry.evaluated[start_idx] = true;
+                        }
+                        if !entry.results[start_idx] {
                             continue;
                         }
                         first_preverified = true;
@@ -993,6 +1003,13 @@ impl XmlDisambiguator {
                 }
             }
 
+            let mutated = !(pending_actions.is_empty()
+                && pending_wd_actions.is_empty()
+                && pending_filterall.is_empty()
+                && pending_ignore_spelling.is_empty()
+                && pending_immunize.is_empty()
+                && pending_unify.is_empty());
+
             for (non_ws_idx, action, matcher) in pending_actions {
                 apply_disambiguation(sentence.tokens_mut(), non_ws_idx, action, matcher);
             }
@@ -1050,7 +1067,71 @@ impl XmlDisambiguator {
                     }
                 }
             }
+            mutated
         }
+    }
+}
+
+#[derive(Default)]
+struct RegexMemo {
+    postag: std::collections::HashMap<usize, PostagRegexMemo>,
+    first_match: std::collections::HashMap<(usize, bool), FirstRegexMemo>,
+}
+
+struct PostagRegexMemo {
+    unknown_ok: bool,
+    results: Vec<bool>,
+    evaluated: Vec<bool>,
+}
+
+#[derive(Default)]
+struct FirstRegexMemo {
+    results: Vec<bool>,
+    evaluated: Vec<bool>,
+}
+
+struct SentenceEnv {
+    nw: Vec<usize>,
+    raw_texts: std::collections::HashSet<String>,
+    lower_texts: std::collections::HashSet<String>,
+    pos_tags: Vec<std::collections::HashSet<String>>,
+}
+
+impl SentenceEnv {
+    fn build(sentence: &AnalyzedSentence) -> Self {
+        let tokens = sentence.tokens();
+        let nw: Vec<usize> = (0..tokens.len())
+            .filter(|&i| !tokens[i].is_whitespace())
+            .collect();
+        let raw_texts = nw
+            .iter()
+            .map(|&i| tokens[i].token().token().to_string())
+            .collect();
+        let lower_texts = nw
+            .iter()
+            .map(|&i| tokens[i].token().token().to_lowercase())
+            .collect();
+        let pos_tags = nw
+            .iter()
+            .map(|&i| {
+                tokens[i]
+                    .readings()
+                    .iter()
+                    .flat_map(|r| r.pos_tags().iter().cloned())
+                    .collect()
+            })
+            .collect();
+        Self {
+            nw,
+            raw_texts,
+            lower_texts,
+            pos_tags,
+        }
+    }
+
+    fn token_refs<'a>(&self, sentence: &'a AnalyzedSentence) -> Vec<&'a AnalyzedTokenReadings> {
+        let tokens = sentence.tokens();
+        self.nw.iter().map(|&i| &tokens[i]).collect()
     }
 }
 
