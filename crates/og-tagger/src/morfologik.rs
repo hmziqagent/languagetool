@@ -5,8 +5,8 @@ type EntriesMap = FxHashMap<Box<str>, Box<[(Box<str>, Box<str>)]>>;
 pub type FormsByLemma = FxHashMap<Box<str>, Vec<(Box<str>, Box<str>)>>;
 type SynthByLemma = FormsByLemma;
 type VerbForms = std::collections::HashMap<String, Vec<String>>;
-type LookupCache =
-    std::sync::RwLock<FxHashMap<&'static str, &'static [(&'static str, &'static str)]>>;
+type LookupCache = std::sync::RwLock<FxHashMap<Box<str>, Box<[(&'static str, &'static str)]>>>;
+const LOOKUP_CACHE_CAP: usize = 1 << 20;
 
 #[derive(Default)]
 pub struct FxHasher {
@@ -1015,7 +1015,7 @@ struct FsaDict {
     encoder: LemmaEncoder,
     encoding: DictEncoding,
     frequency_included: bool,
-    cache: std::sync::RwLock<FxHashMap<&'static str, &'static [(&'static str, &'static str)]>>,
+    cache: LookupCache,
 }
 
 struct Materialized {
@@ -1364,41 +1364,42 @@ impl MorfologikDictionary {
         }
     }
 
-    pub fn lookup(&self, word: &str) -> &[(&'static str, &'static str)] {
-        let (cache, miss) = match &self.source {
-            Source::Fsa { dict, .. } => (&dict.cache, dict.lookup_uncached(word)),
-            Source::Decoded { cache, .. } => {
-                let miss: ReadingList = self
-                    .entries_map()
-                    .get(word)
-                    .map(|v| {
-                        v.iter()
-                            .map(|(lemma, tag)| {
-                                (
-                                    global_intern(lemma.to_string()),
-                                    global_intern(tag.to_string()),
-                                )
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                (cache, miss)
-            }
+    pub fn lookup(&self, word: &str) -> Vec<(&'static str, &'static str)> {
+        let cache = match &self.source {
+            Source::Fsa { dict, .. } => &dict.cache,
+            Source::Decoded { cache, .. } => cache,
         };
+        if let Ok(guard) = cache.read()
+            && let Some(hit) = guard.get(word)
         {
-            let guard = cache.read().unwrap();
-            if let Some(hit) = guard.get(word) {
-                return hit;
-            }
+            return hit.to_vec();
         }
-        let leaked: &'static [(&'static str, &'static str)] = if miss.is_empty() {
-            &[]
-        } else {
-            Box::leak(miss.into_boxed_slice())
+        let miss: ReadingList = match &self.source {
+            Source::Fsa { dict, .. } => dict.lookup_uncached(word),
+            Source::Decoded { .. } => self
+                .entries_map()
+                .get(word)
+                .map(|v| {
+                    v.iter()
+                        .map(|(lemma, tag)| {
+                            (
+                                global_intern(lemma.to_string()),
+                                global_intern(tag.to_string()),
+                            )
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
         };
-        let key: &'static str = Box::leak(word.to_string().into_boxed_str());
-        let mut guard = cache.write().unwrap();
-        guard.entry(key).or_insert(leaked)
+        if let Ok(mut guard) = cache.write() {
+            if guard.len() >= LOOKUP_CACHE_CAP {
+                guard.clear();
+            }
+            guard
+                .entry(Box::from(word))
+                .or_insert_with(|| miss.clone().into_boxed_slice());
+        }
+        miss
     }
 
     pub fn len(&self) -> usize {

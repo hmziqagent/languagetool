@@ -232,7 +232,7 @@ impl GenericTagger {
             .map(|v| v.to_vec())
             .unwrap_or_default();
         if let Some(dictionary) = &self.dictionary {
-            readings.extend(dictionary.lookup(word).iter().copied());
+            readings.extend(dictionary.lookup(word));
         }
         if let Some(removals) = self.removals.get(word) {
             readings.retain(|(lemma, tag)| {

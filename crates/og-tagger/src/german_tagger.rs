@@ -1046,7 +1046,7 @@ impl GermanTagger {
 
     fn word_tag(&self, word: &str) -> Readings {
         let mut readings: Readings = self.manual.get(word).cloned().unwrap_or_default();
-        readings.extend(self.dictionary.lookup(word).iter().copied());
+        readings.extend(self.dictionary.lookup(word));
         if let Some(removals) = self.removals.get(word) {
             readings.retain(|(lemma, tag)| {
                 !removals
