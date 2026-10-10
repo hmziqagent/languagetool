@@ -111,7 +111,7 @@ impl SpellingSupport {
         variant: SpellerVariant,
     ) -> Self {
         let dictionary = dictionary.into();
-        let suggestion_engine = SuggestionEngine::new(&dictionary);
+        let suggestion_engine = SuggestionEngine::new(std::sync::Arc::clone(&dictionary));
         Self {
             dictionary,
             suggestion_engine,

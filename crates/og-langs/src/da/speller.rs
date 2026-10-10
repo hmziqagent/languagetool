@@ -75,7 +75,7 @@ impl DanishSpellerRule {
         let dictionary = Arc::new(speller_dictionary(&resource_dir));
         Self {
             hunspell: shared_hunspell(),
-            suggestion_engine: SuggestionEngine::new(&dictionary),
+            suggestion_engine: SuggestionEngine::new(std::sync::Arc::clone(&dictionary)),
             ignore_words: da_ignore_words(&resource_dir),
             dictionary,
             category: Category::new("TYPOS", "Possible Typo")

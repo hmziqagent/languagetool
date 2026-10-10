@@ -40,9 +40,10 @@ impl RussianYoSpellerRule {
     }
 
     fn suggestions(&self, word: &str) -> Vec<String> {
-        let engine = self
-            .suggestion_engine
-            .get_or_init(|| self.dictionary().map(|dict| SuggestionEngine::new(dict)));
+        let engine = self.suggestion_engine.get_or_init(|| {
+            self.dictionary()
+                .map(|dict| SuggestionEngine::new(std::sync::Arc::clone(dict)))
+        });
         let Some(engine) = engine else {
             return Vec::new();
         };

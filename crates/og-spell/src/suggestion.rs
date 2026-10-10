@@ -1,16 +1,21 @@
 use crate::dictionary::Dictionary;
+use std::sync::{Arc, OnceLock};
 
 pub struct SuggestionEngine {
-    words: Vec<String>,
+    dictionary: Arc<Dictionary>,
+    words: OnceLock<Vec<String>>,
 }
 
 impl SuggestionEngine {
-    pub fn new(dictionary: &Dictionary) -> Self {
-        let words: Vec<String> = dictionary.word_list();
-        Self { words }
+    pub fn new(dictionary: Arc<Dictionary>) -> Self {
+        Self {
+            dictionary,
+            words: OnceLock::new(),
+        }
     }
 
     pub fn suggest(&self, word: &str, max: usize) -> Vec<String> {
+        let words = self.words.get_or_init(|| self.dictionary.word_list());
         let lower = word.to_lowercase();
         let is_capitalized = word
             .chars()
@@ -29,8 +34,7 @@ impl SuggestionEngine {
         let word_len = lower.len();
         let max_dist = if word_len <= 4 { 2 } else { 3 };
 
-        let mut scored: Vec<(String, usize)> = self
-            .words
+        let mut scored: Vec<(String, usize)> = words
             .iter()
             .filter(|w| {
                 let wlen = w.len();
@@ -124,7 +128,7 @@ mod tests {
     #[test]
     fn test_suggest() {
         let dict = Dictionary::from_words(&["hello", "world", "help", "held", "hell", "helm"]);
-        let engine = SuggestionEngine::new(&dict);
+        let engine = SuggestionEngine::new(Arc::new(dict));
         let suggestions = engine.suggest("helo", 5);
         assert!(
             suggestions.contains(&"hello".to_string()) || suggestions.contains(&"help".to_string()),

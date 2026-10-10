@@ -468,7 +468,7 @@ impl GermanSpeller {
         );
         load_set_file(&resource_dir.join("alt_neu.csv"), &mut old_spelling);
 
-        let suggestion_engine = SuggestionEngine::new(&dictionary);
+        let suggestion_engine = SuggestionEngine::new(std::sync::Arc::clone(&dictionary));
         Self {
             dictionary,
             suggestion_engine,
@@ -501,7 +501,7 @@ impl GermanSpeller {
     }
 
     pub fn with_shared_data(&self, dictionary: Arc<Dictionary>, variant: &str) -> Self {
-        let suggestion_engine = SuggestionEngine::new(&dictionary);
+        let suggestion_engine = SuggestionEngine::new(std::sync::Arc::clone(&dictionary));
         Self {
             dictionary,
             suggestion_engine,
@@ -525,7 +525,7 @@ impl GermanSpeller {
         }
         Self {
             dictionary: self.dictionary.clone(),
-            suggestion_engine: SuggestionEngine::new(&self.dictionary),
+            suggestion_engine: SuggestionEngine::new(Arc::clone(&self.dictionary)),
             shared: Arc::new(data),
             swiss: self.swiss,
             hunspell: self.hunspell.clone(),

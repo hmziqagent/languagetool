@@ -18,10 +18,11 @@ pub struct SpellingCheckRule {
 
 impl SpellingCheckRule {
     pub fn new(dictionary: Dictionary) -> Self {
-        let suggestion_engine = SuggestionEngine::new(&dictionary);
+        let dictionary = std::sync::Arc::new(dictionary);
+        let suggestion_engine = SuggestionEngine::new(std::sync::Arc::clone(&dictionary));
         Self {
             id: "SPELLING_RULE".to_string(),
-            dictionary: std::sync::Arc::new(dictionary),
+            dictionary,
             extra_words: HashSet::new(),
             ignore_words: HashSet::new(),
             category: Category::new("TYPOS", "Possible Typo")
@@ -42,7 +43,7 @@ impl SpellingCheckRule {
     }
 
     pub fn with_shared_dictionary(dictionary: std::sync::Arc<Dictionary>) -> Self {
-        let suggestion_engine = SuggestionEngine::new(&dictionary);
+        let suggestion_engine = SuggestionEngine::new(std::sync::Arc::clone(&dictionary));
         Self {
             id: "SPELLING_RULE".to_string(),
             dictionary,
