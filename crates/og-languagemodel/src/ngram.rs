@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::fs;
-use std::io::BufRead;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -109,31 +108,47 @@ impl SortedTsvLookup {
         Some(Self { file, len })
     }
 
-    fn read_line_at(&self, mut pos: u64) -> Option<String> {
-        use std::io::{Seek, SeekFrom};
-        let mut reader = std::io::BufReader::new(&self.file);
-        reader.seek(SeekFrom::Start(pos)).ok()?;
-        let mut line = String::new();
-        reader.read_line(&mut line).ok()?;
-        if line.is_empty() && pos < self.len {
-            pos += 1;
-            reader.seek(SeekFrom::Start(pos)).ok()?;
-            line.clear();
-            reader.read_line(&mut line).ok()?;
+    fn read_some(&self, pos: u64, buf: &mut [u8]) -> Option<usize> {
+        if pos >= self.len || buf.is_empty() {
+            return Some(0);
         }
-        let trimmed = line.trim_end_matches(['\n', '\r']);
-        if trimmed.is_empty() {
-            return Some(String::new());
+        file_read_at(&self.file, buf, pos).ok()
+    }
+
+    fn line_at<'a>(&self, pos: u64, buf: &'a mut Vec<u8>) -> Option<&'a [u8]> {
+        let mut start = pos;
+        let mut cap = 512usize;
+        let mut retried = false;
+        loop {
+            buf.clear();
+            buf.resize(cap, 0);
+            let n = self.read_some(start, buf)?;
+            buf.truncate(n);
+            if let Some(nl) = buf.iter().position(|&b| b == b'\n') {
+                buf.truncate(nl);
+            } else if start + (n as u64) < self.len {
+                cap = cap.saturating_mul(2);
+                continue;
+            }
+            while buf.last() == Some(&b'\r') {
+                buf.pop();
+            }
+            if buf.is_empty() && !retried && start < self.len {
+                retried = true;
+                start += 1;
+                continue;
+            }
+            return Some(buf);
         }
-        Some(trimmed.to_string())
     }
 
     pub fn get(&self, key: &str) -> Option<u64> {
-        let first = self.read_line_at(0)?;
+        let mut buf = Vec::with_capacity(512);
+        let first = self.line_at(0, &mut buf)?;
         if first.is_empty() {
             return None;
         }
-        match compare_line(&first, key) {
+        match compare_line(first, key) {
             Some((std::cmp::Ordering::Equal, count)) => return Some(count),
             Some((std::cmp::Ordering::Greater, _)) => return None,
             _ => {}
@@ -149,11 +164,11 @@ impl SortedTsvLookup {
             if ls >= hi {
                 break;
             }
-            let line = self.read_line_at(ls)?;
+            let line = self.line_at(ls, &mut buf)?;
             if line.is_empty() {
                 break;
             }
-            match compare_line(&line, key) {
+            match compare_line(line, key) {
                 Some((std::cmp::Ordering::Equal, count)) => return Some(count),
                 Some((std::cmp::Ordering::Less, _)) => {
                     lo = ls + line.len() as u64 + 1;
@@ -166,21 +181,13 @@ impl SortedTsvLookup {
     }
 
     fn line_start_of(&self, pos: u64) -> u64 {
-        use std::io::{Read, Seek, SeekFrom};
         if pos == 0 {
             return 0;
         }
-        let mut reader = std::io::BufReader::with_capacity(8192, &self.file);
-        if reader.seek(SeekFrom::Start(pos - 1)).is_err() {
-            return pos;
-        }
         let window = 512u64;
         let base = pos.saturating_sub(window);
-        let mut buf = Vec::new();
-        if reader.seek(SeekFrom::Start(base)).is_err() {
-            return pos;
-        }
-        if reader.take(pos - base).read_to_end(&mut buf).is_err() {
+        let mut buf = vec![0u8; (pos - base) as usize];
+        if self.read_some(base, &mut buf).is_none() {
             return pos;
         }
         match buf.iter().rposition(|b| *b == b'\n') {
@@ -196,10 +203,27 @@ impl SortedTsvLookup {
     }
 }
 
-fn compare_line(line: &str, key: &str) -> Option<(std::cmp::Ordering, u64)> {
-    let (term, count) = line.split_once('\t')?;
-    let count = count.trim().parse::<u64>().ok()?;
-    Some((term.as_bytes().cmp(key.as_bytes()), count))
+#[cfg(unix)]
+fn file_read_at(file: &fs::File, buf: &mut [u8], pos: u64) -> std::io::Result<usize> {
+    use std::os::unix::fs::FileExt;
+    file.read_at(buf, pos)
+}
+
+#[cfg(windows)]
+fn file_read_at(file: &fs::File, buf: &mut [u8], pos: u64) -> std::io::Result<usize> {
+    use std::os::windows::fs::FileExt;
+    file.seek_read(buf, pos)
+}
+
+fn compare_line(line: &[u8], key: &str) -> Option<(std::cmp::Ordering, u64)> {
+    let tab = line.iter().position(|&b| b == b'\t')?;
+    let (term, count) = line.split_at(tab);
+    let count = std::str::from_utf8(&count[1..])
+        .ok()?
+        .trim()
+        .parse::<u64>()
+        .ok()?;
+    Some((term.cmp(key.as_bytes()), count))
 }
 
 impl DiskLanguageModel {
@@ -332,6 +356,36 @@ pub type SharedModel = Arc<dyn LanguageModel>;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tsv_lookups_stay_correct_under_concurrent_reads() {
+        let dir = PathBuf::from("/home/agent/opengrammar-rs/ngram-data/extracted/de");
+        if !dir.join("1grams.tsv").exists() {
+            eprintln!("Skipping: extracted German ngram data not present");
+            return;
+        }
+        let model = Arc::new(
+            DiskLanguageModel::from_dir(&dir).expect("model must load from extracted dir"),
+        );
+        let probes = ["Leerzeile", "Lehrzeile", "Haus", "der", "Zebra"];
+        let expected: Vec<u64> = probes.iter().map(|w| model.get_count(&[w])).collect();
+        let expected = Arc::new(expected);
+        let mut handles = Vec::new();
+        for _ in 0..4 {
+            let model = Arc::clone(&model);
+            let expected = Arc::clone(&expected);
+            handles.push(std::thread::spawn(move || {
+                for _ in 0..2000 {
+                    for (word, want) in probes.iter().zip(expected.iter()) {
+                        assert_eq!(model.get_count(&[word]), *want);
+                    }
+                }
+            }));
+        }
+        for handle in handles {
+            handle.join().expect("no thread may panic");
+        }
+    }
 
     #[test]
     fn chain_rule_matches_java_pseudo_probability() {
