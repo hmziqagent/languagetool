@@ -171,28 +171,28 @@ fn rule_needs_tags(rule: &CompiledRule) -> bool {
 #[test]
 #[ignore]
 fn catalan_grammar_examples_with_ca_pipeline() {
+    use rayon::prelude::*;
     let _release_guard = crate::release_guard();
     let rule_set = compiled_rules();
     let groups = rule_groups(rule_set);
     let engine = PatternRuleEngine::new();
     let pipeline = CatalanPipeline::shared();
     og_rules::pattern_rule::set_test_date_hack(true);
-
-    let mut passed = 0usize;
-    let mut failed = 0usize;
-    let mut outcome_counts: HashMap<Outcome, usize> = HashMap::new();
-    let mut tag_starved: usize = 0usize;
-    let mut engine_side: usize = 0usize;
-    let mut fail_lines: Vec<String> = Vec::new();
-    let mut fail_by_rule: HashMap<String, usize> = HashMap::new();
     let started = std::time::Instant::now();
-    let mut evaluated = 0usize;
 
-    for group in &groups {
-        let Some(rule) = group.first() else {
-            continue;
-        };
-        for example in &rule.examples {
+    let pairs: Vec<(
+        &Vec<&og_xml::compiler::CompiledRule>,
+        &og_xml::types::XmlExample,
+    )> = groups
+        .iter()
+        .filter_map(|group| group.first().map(|rule| (group, rule)))
+        .flat_map(|(group, rule)| rule.examples.iter().map(move |e| (group, e)))
+        .collect();
+
+    let per_example: Vec<(String, String, Option<(Outcome, String)>, bool)> = pairs
+        .par_iter()
+        .map(|(group, example)| {
+            let rule = group[0];
             let (clean_text, marker_range) = extract_marker(&example.text);
             let mut matches = Vec::new();
             // Java tests ca incorrect examples unsplit (PatternRuleTest.java:617-620)
@@ -251,26 +251,39 @@ fn catalan_grammar_examples_with_ca_pipeline() {
                 }
                 og_xml::types::XmlExampleType::TriggersError => None,
             };
-            evaluated += 1;
-            if evaluated.is_multiple_of(2000) {
-                eprintln!(
-                    "ca suite progress: {evaluated} examples, {:.1}s",
-                    started.elapsed().as_secs_f64()
-                );
-            }
-            match failure {
-                None => passed += 1,
-                Some((outcome, message)) => {
-                    failed += 1;
-                    *outcome_counts.entry(outcome).or_default() += 1;
-                    if rule_needs_tags(rule) {
-                        tag_starved += 1;
-                    } else {
-                        engine_side += 1;
-                    }
-                    *fail_by_rule.entry(rule.id.clone()).or_default() += 1;
-                    fail_lines.push(format!("FAIL: [{}] {}: '{}'", rule.id, message, clean_text));
+            (rule.id.clone(), clean_text, failure, rule_needs_tags(rule))
+        })
+        .collect();
+
+    let mut passed = 0usize;
+    let mut failed = 0usize;
+    let mut outcome_counts: HashMap<Outcome, usize> = HashMap::new();
+    let mut tag_starved: usize = 0usize;
+    let mut engine_side: usize = 0usize;
+    let mut fail_lines: Vec<String> = Vec::new();
+    let mut fail_by_rule: HashMap<String, usize> = HashMap::new();
+    let mut evaluated = 0usize;
+
+    for (rule, clean_text, failure, needs_tags) in per_example {
+        evaluated += 1;
+        if evaluated.is_multiple_of(2000) {
+            eprintln!(
+                "ca suite progress: {evaluated} examples, {:.1}s",
+                started.elapsed().as_secs_f64()
+            );
+        }
+        match failure {
+            None => passed += 1,
+            Some((outcome, message)) => {
+                failed += 1;
+                *outcome_counts.entry(outcome).or_default() += 1;
+                if needs_tags {
+                    tag_starved += 1;
+                } else {
+                    engine_side += 1;
                 }
+                fail_lines.push(format!("FAIL: [{}] {}: '{}'", rule, message, clean_text));
+                *fail_by_rule.entry(rule).or_default() += 1;
             }
         }
     }

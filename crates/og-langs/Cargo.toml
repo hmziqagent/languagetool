@@ -12,6 +12,7 @@ og-spell = { workspace = true }
 og-tokenizer = { workspace = true }
 og-tagger = { workspace = true }
 regex = { workspace = true }
+rayon = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

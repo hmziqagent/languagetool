@@ -351,86 +351,102 @@ fn evaluate_examples_file(path: &std::path::Path, label: &str, artifact: &str) {
     let engine = build_pattern_engine();
     let pipeline = SpanishPipeline::shared();
     og_rules::pattern_rule::set_test_date_hack(true);
+    let started = std::time::Instant::now();
+
+    let pairs: Vec<(
+        &Vec<&og_xml::compiler::CompiledRule>,
+        &og_xml::types::XmlExample,
+    )> = groups
+        .iter()
+        .filter_map(|group| group.first().map(|rule| (group, rule)))
+        .flat_map(|(group, rule)| rule.examples.iter().map(move |e| (group, e)))
+        .collect();
+
+    let per_example: Vec<(String, String, bool, Outcome, String)> = {
+        use rayon::prelude::*;
+        pairs
+            .par_iter()
+            .map(|(group, example)| {
+                let rule = group[0];
+                let (clean_text, marker_range) = extract_marker(&example.text);
+                let mut matches = Vec::new();
+                for aux in group.iter() {
+                    for (sentence, sentence_start) in pipeline.analyze_offset_text(&clean_text) {
+                        let tokens: Vec<&og_core::AnalyzedTokenReadings> =
+                            sentence.non_whitespace_tokens();
+                        for m in engine.match_rule(aux, &sentence) {
+                            let Some(mut m) = apply_es_filters(aux, &tokens, sentence.text(), m)
+                            else {
+                                continue;
+                            };
+                            m.set_offset_length(m.offset() + sentence_start, m.length());
+                            matches.push(m);
+                        }
+                    }
+                }
+                let (ok, outcome, message) = match example.example_type {
+                    og_xml::types::XmlExampleType::Incorrect => {
+                        if matches.is_empty() {
+                            (
+                                false,
+                                Outcome::NoMatch,
+                                "Expected match on incorrect example but got none".to_string(),
+                            )
+                        } else if let Some((m_start, m_end)) = marker_range {
+                            let first = &matches[0];
+                            let match_start = first.offset();
+                            let match_end = match_start + first.length();
+                            if match_start <= m_start && match_end >= m_end {
+                                (true, Outcome::Passed, String::new())
+                            } else {
+                                (
+                                    false,
+                                    Outcome::Marker,
+                                    format!(
+                                        "Match {}..{} does not contain marker {}..{}",
+                                        match_start, match_end, m_start, m_end
+                                    ),
+                                )
+                            }
+                        } else {
+                            (true, Outcome::Passed, String::new())
+                        }
+                    }
+                    og_xml::types::XmlExampleType::Correct => {
+                        if matches.is_empty() {
+                            (true, Outcome::Passed, String::new())
+                        } else {
+                            (
+                                false,
+                                Outcome::FalsePositive,
+                                format!(
+                                    "Expected no match on correct example but got {}",
+                                    matches.len()
+                                ),
+                            )
+                        }
+                    }
+                    og_xml::types::XmlExampleType::TriggersError => {
+                        (true, Outcome::Passed, String::new())
+                    }
+                };
+                (rule.id.clone(), clean_text, ok, outcome, message)
+            })
+            .collect()
+    };
 
     let mut passed = 0usize;
     let mut failed = 0usize;
     let mut outcome_counts: HashMap<Outcome, usize> = HashMap::new();
     let mut fail_lines: Vec<String> = Vec::new();
-    let started = std::time::Instant::now();
 
-    for group in &groups {
-        let Some(rule) = group.first() else {
-            continue;
-        };
-        for example in &rule.examples {
-            let (clean_text, marker_range) = extract_marker(&example.text);
-            let mut matches = Vec::new();
-            for aux in group.iter() {
-                for (sentence, sentence_start) in pipeline.analyze_offset_text(&clean_text) {
-                    let tokens: Vec<&og_core::AnalyzedTokenReadings> =
-                        sentence.non_whitespace_tokens();
-                    for m in engine.match_rule(aux, &sentence) {
-                        let Some(mut m) = apply_es_filters(aux, &tokens, sentence.text(), m) else {
-                            continue;
-                        };
-                        m.set_offset_length(m.offset() + sentence_start, m.length());
-                        matches.push(m);
-                    }
-                }
-            }
-            let (ok, outcome, message) = match example.example_type {
-                og_xml::types::XmlExampleType::Incorrect => {
-                    if matches.is_empty() {
-                        (
-                            false,
-                            Outcome::NoMatch,
-                            "Expected match on incorrect example but got none".to_string(),
-                        )
-                    } else if let Some((m_start, m_end)) = marker_range {
-                        let first = &matches[0];
-                        let match_start = first.offset();
-                        let match_end = match_start + first.length();
-                        if match_start <= m_start && match_end >= m_end {
-                            (true, Outcome::Passed, String::new())
-                        } else {
-                            (
-                                false,
-                                Outcome::Marker,
-                                format!(
-                                    "Match {}..{} does not contain marker {}..{}",
-                                    match_start, match_end, m_start, m_end
-                                ),
-                            )
-                        }
-                    } else {
-                        (true, Outcome::Passed, String::new())
-                    }
-                }
-                og_xml::types::XmlExampleType::Correct => {
-                    if matches.is_empty() {
-                        (true, Outcome::Passed, String::new())
-                    } else {
-                        (
-                            false,
-                            Outcome::FalsePositive,
-                            format!(
-                                "Expected no match on correct example but got {}",
-                                matches.len()
-                            ),
-                        )
-                    }
-                }
-                og_xml::types::XmlExampleType::TriggersError => {
-                    (true, Outcome::Passed, String::new())
-                }
-            };
-            if ok {
-                passed += 1;
-            } else {
-                failed += 1;
-                *outcome_counts.entry(outcome).or_default() += 1;
-                fail_lines.push(format!("FAIL: [{}] {}: '{}'", rule.id, message, clean_text));
-            }
+    for (rule_id, clean_text, ok, outcome, message) in per_example {
+        if ok {
+            passed += 1;
+        } else {
+            failed += 1;
+            *outcome_counts.entry(outcome).or_default() += 1;
+            fail_lines.push(format!("FAIL: [{}] {}: '{}'", rule_id, message, clean_text));
         }
     }
 
