@@ -29,3 +29,20 @@ impl Default for LanguageRegistry {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn registry_lists_languages_and_finds_them_by_code() {
+        let registry = LanguageRegistry::default();
+        let codes = registry.supported_codes();
+        assert!(!codes.is_empty());
+        assert!(codes.contains(&"en-US"));
+        let en = registry.get_language("en-US").expect("en-US registered");
+        assert_eq!(en.code(), "en-US");
+        assert!(registry.get_language("zz").is_none());
+        assert_eq!(registry.all_languages().len(), codes.len());
+    }
+}

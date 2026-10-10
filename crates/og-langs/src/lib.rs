@@ -21,14 +21,11 @@ pub(crate) fn release_guard() -> impl Drop {
         }
     }
     impl Drop for ReleaseOnDrop {
-        fn drop(&mut self) {
-            Self::release_shared_statics();
-        }
+        fn drop(&mut self) {}
     }
     let guard = ReleaseOnDrop {
         _heavy: og_core::releasable::heavy_guard(),
     };
-    ReleaseOnDrop::release_shared_statics();
     guard
 }
 
@@ -102,3 +99,32 @@ pub mod tl;
 pub mod uk;
 pub mod upper_case_ngram;
 pub mod zh;
+
+#[cfg(test)]
+mod weak_shared_tests {
+    use super::weak_shared;
+    use std::sync::Arc;
+
+    struct Probe(u32);
+
+    #[test]
+    fn reuses_the_built_arc_while_it_is_alive() {
+        let first = weak_shared(|| Some(Arc::new(Probe(7)))).expect("built");
+        let second = weak_shared(|| Some(Arc::new(Probe(9)))).expect("built");
+        assert!(std::ptr::eq(first.as_ref(), second.as_ref()));
+        assert_eq!(second.0, 7);
+        drop(second);
+        let third = weak_shared(|| Some(Arc::new(Probe(11)))).expect("built");
+        assert!(std::ptr::eq(first.as_ref(), third.as_ref()));
+    }
+
+    #[test]
+    fn rebuilds_after_the_last_arc_drops_and_propagates_none() {
+        let built = weak_shared(|| Some(Arc::new(Probe(1)))).expect("built");
+        drop(built);
+        let rebuilt = weak_shared(|| Some(Arc::new(Probe(2)))).expect("rebuilt");
+        assert_eq!(rebuilt.0, 2);
+        struct Never;
+        assert!(weak_shared::<Never>(|| None).is_none());
+    }
+}
