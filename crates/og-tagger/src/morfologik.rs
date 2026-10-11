@@ -2002,3 +2002,467 @@ mod tests {
         assert!(!one.is_empty());
     }
 }
+
+#[cfg(test)]
+mod cfsa2_tests {
+    use super::*;
+    use std::hash::Hasher;
+
+    fn vint(mut value: usize, out: &mut Vec<u8>) {
+        loop {
+            let byte = (value & 0x7f) as u8;
+            value >>= 7;
+            if value == 0 {
+                out.push(byte);
+                return;
+            }
+            out.push(byte | 0x80);
+        }
+    }
+
+    fn arc(flags: u8, label: u8, dest: usize) -> Vec<u8> {
+        let mut out = vec![flags, label];
+        vint(dest, &mut out);
+        out
+    }
+
+    const FINAL: u8 = 0x20;
+    const LAST: u8 = 0x40;
+
+    fn small_cfsa2() -> Vec<u8> {
+        let mut a: Vec<u8> = vec![0x00, 0x00];
+        vint(3, &mut a);
+        a.extend(arc(FINAL, b'a', 9));
+        a.extend(arc(LAST, b'l', 54));
+        a.extend(arc(0x00, b'+', 15));
+        a.extend(arc(FINAL | LAST, b'b', 24));
+        a.extend(arc(LAST, b'x', 18));
+        a.extend(arc(LAST, b'+', 21));
+        a.extend(arc(FINAL | LAST, b'y', 0));
+        a.extend(arc(LAST, b'+', 27));
+        a.extend(arc(LAST, b'p', 30));
+        a.extend(arc(LAST, b'+', 33));
+        for (i, b) in b"VER:INF".iter().enumerate() {
+            let last = i == b"VER:INF".len() - 1;
+            let flags = if last { FINAL | LAST } else { LAST };
+            let dest = if last { 0 } else { a.len() + 3 };
+            a.extend(arc(flags, *b, dest));
+        }
+        a.extend(arc(LAST, b'|', 57));
+        a.extend(arc(FINAL | LAST, b'm', 60));
+        a.extend(arc(LAST, b'+', 63));
+        a.extend(arc(FINAL | LAST, b'A', 0));
+        assert_eq!(a.len(), 66);
+        a
+    }
+
+    fn cfsa2_bytes(data: Vec<u8>) -> Fsa {
+        let mut file = b"\\fsa".to_vec();
+        file.push(0xc6);
+        file.extend_from_slice(&[0x00, 0x00]);
+        file.push(0x00);
+        file.extend_from_slice(&data);
+        Fsa::from_bytes(std::sync::Arc::from(file.into_boxed_slice())).expect("cfsa2 fixture")
+    }
+
+    fn deep_cfsa2() -> Fsa {
+        let mut a: Vec<u8> = vec![0x00, 0x00];
+        vint(3, &mut a);
+        a.extend(arc(FINAL | LAST, b'a', 6));
+        a.extend(arc(LAST, b'+', 9));
+        while a.len() < 3 * 150 {
+            let next = if a.len() + 3 < 128 {
+                a.len() + 3
+            } else {
+                a.len() + 4
+            };
+            a.extend(arc(LAST, b'x', next));
+        }
+        let next = if a.len() + 3 < 128 {
+            a.len() + 3
+        } else {
+            a.len() + 4
+        };
+        a.extend(arc(LAST, b'+', next));
+        a.extend(arc(FINAL | LAST, b'y', 0));
+        cfsa2_bytes(a)
+    }
+
+    #[test]
+    fn cfsa2_reader_walks_seeks_and_answers_contains_word() {
+        let fsa = cfsa2_bytes(small_cfsa2());
+        let Fsa::C2(c2) = &fsa else {
+            panic!("fixture must dispatch to the CFSA2 reader");
+        };
+        assert_eq!(c2.root(), 3);
+
+        let mut sequences = Vec::new();
+        fsa.for_each_sequence(&mut |s: &[u8]| sequences.push(s.to_vec()));
+        assert_eq!(
+            sequences,
+            [
+                b"a".to_vec(),
+                b"a+x+y".to_vec(),
+                b"ab".to_vec(),
+                b"ab+p+VER:INF".to_vec(),
+                b"l|m".to_vec(),
+                b"l|m+A".to_vec(),
+            ]
+        );
+
+        assert!(fsa.seek(b"a").is_some());
+        assert!(fsa.seek(b"ab").is_some());
+        assert!(fsa.seek(b"l|m").is_some());
+        assert!(fsa.seek(b"zzz").is_none());
+
+        assert!(fsa.contains_word(b"a", b'+'));
+        assert!(fsa.contains_word(b"ab", b'+'));
+        assert!(fsa.contains_word(b"l|m", b'+'));
+        assert!(!fsa.contains_word(b"c", b'+'));
+        assert!(fsa.has_sequence());
+    }
+
+    #[test]
+    fn cfsa2_reader_handles_multibyte_vint_destinations() {
+        let fsa = deep_cfsa2();
+        let mut lengths = Vec::new();
+        fsa.for_each_sequence(&mut |s: &[u8]| lengths.push(s.len()));
+        assert_eq!(lengths.len(), 2);
+        assert_eq!(lengths[0], 1);
+        assert!(lengths[1] > 100, "deep sequence length: {lengths:?}");
+
+        assert!(fsa.seek(b"a").is_some());
+        assert!(fsa.contains_word(b"a", b'+'));
+    }
+
+    #[test]
+    fn hasher_integer_writes_agree_with_repeated_runs() {
+        let mut first = FxHasher::default();
+        first.write_u8(0x7f);
+        first.write_u16(0xbeef);
+        first.write_u32(0xdead_beef);
+        first.write_u64(0x0123_4567_89ab_cdef);
+        first.write_usize(42);
+        let mut second = FxHasher::default();
+        second.write_u8(0x7f);
+        second.write_u16(0xbeef);
+        second.write_u32(0xdead_beef);
+        second.write_u64(0x0123_4567_89ab_cdef);
+        second.write_usize(42);
+        assert_eq!(first.finish(), second.finish());
+
+        let mut other = FxHasher::default();
+        other.write_u8(0x7e);
+        other.write_u16(0xbeef);
+        other.write_u32(0xdead_beef);
+        other.write_u64(0x0123_4567_89ab_cdef);
+        other.write_usize(42);
+        assert_ne!(first.finish(), other.finish());
+    }
+
+    #[test]
+    fn trim_frequency_tag_variants() {
+        assert_eq!(trim_frequency_tag(false, "NN:1"), "NN:1");
+        assert_eq!(trim_frequency_tag(true, "NN:1"), "NN:");
+        assert_eq!(trim_frequency_tag(true, "1"), "1");
+        assert_eq!(trim_frequency_tag(true, ""), "");
+    }
+
+    #[test]
+    fn decode_suffix_variants() {
+        assert_eq!(decode_suffix(b"haus", b""), None);
+        assert_eq!(decode_suffix(b"haus", b"\xffaus"), None);
+        assert_eq!(decode_suffix(b"haus", b"@aus"), Some(b"aus".to_vec()));
+        assert_eq!(decode_suffix(b"haus", b"Ae"), Some(b"hause".to_vec()));
+        assert_eq!(decode_suffix(b"haus", b"E"), Some(b"".to_vec()));
+    }
+
+    #[test]
+    fn decode_prefix_and_suffix_variants() {
+        assert_eq!(decode_prefix_and_suffix(b"word", b""), None);
+        assert_eq!(decode_prefix_and_suffix(b"word", b"A"), None);
+        assert_eq!(decode_prefix_and_suffix(b"word", b"\xff\xffx"), None);
+        assert_eq!(
+            decode_prefix_and_suffix(b"word", b"@@x"),
+            Some(b"x".to_vec())
+        );
+        assert_eq!(
+            decode_prefix_and_suffix(b"word", b"ABxy"),
+            Some(b"worxy".to_vec())
+        );
+        assert_eq!(
+            decode_prefix_and_suffix(b"word", b"BCxy"),
+            Some(b"oxy".to_vec())
+        );
+        assert_eq!(decode_prefix_and_suffix(b"word", b"DCxy"), None);
+    }
+
+    #[test]
+    fn dict_encoding_parses_every_alias() {
+        assert!(matches!(DictEncoding::parse("koi8-r"), DictEncoding::Koi8R));
+        assert!(matches!(
+            DictEncoding::parse(" KOI8-R "),
+            DictEncoding::Koi8R
+        ));
+        assert!(matches!(
+            DictEncoding::parse("windows-1251"),
+            DictEncoding::Windows1251
+        ));
+        assert!(matches!(
+            DictEncoding::parse("cp1251"),
+            DictEncoding::Windows1251
+        ));
+        assert!(matches!(
+            DictEncoding::parse("iso-8859-1"),
+            DictEncoding::Latin1
+        ));
+        assert!(matches!(
+            DictEncoding::parse("ISO8859-1"),
+            DictEncoding::Latin1
+        ));
+        assert!(matches!(
+            DictEncoding::parse("iso-8859-15"),
+            DictEncoding::Latin15
+        ));
+        assert!(matches!(
+            DictEncoding::parse("iso8859-15"),
+            DictEncoding::Latin15
+        ));
+        assert!(matches!(
+            DictEncoding::parse("anything-else"),
+            DictEncoding::Utf8
+        ));
+    }
+
+    #[test]
+    fn dict_encoding_decodes_single_byte_charsets() {
+        assert_eq!(DictEncoding::Koi8R.decode(&[0xe6]), "Ф");
+        assert_eq!(DictEncoding::Koi8R.decode(&[0xd0]), "п");
+        assert_eq!(DictEncoding::Windows1251.decode(&[0xff]), "я");
+        assert_eq!(DictEncoding::Windows1251.decode(&[0xef]), "п");
+        assert_eq!(DictEncoding::Latin1.decode(&[0x80]), "€");
+        assert_eq!(DictEncoding::Latin15.decode(&[0xa4]), "€");
+        assert_eq!(DictEncoding::Latin15.decode(&[0xa6]), "Š");
+        assert_eq!(DictEncoding::Latin15.decode(&[0xbd]), "œ");
+        assert_eq!(DictEncoding::Utf8.decode(&[0x61, 0xff]), "a\u{fffd}");
+        assert_eq!(decode_bytes("koi8-r", &[0xc1]), "а");
+    }
+
+    #[test]
+    fn dict_encoding_encodes_and_rejects_unmappable_text() {
+        assert_eq!(
+            DictEncoding::Utf8.encode("häus"),
+            Some(b"h\xc3\xa4us".to_vec())
+        );
+        assert_eq!(
+            DictEncoding::Koi8R.encode("дом"),
+            Some(vec![0xc4, 0xcf, 0xcd])
+        );
+        assert_eq!(DictEncoding::Koi8R.encode("€"), None);
+        assert_eq!(DictEncoding::Windows1251.encode("я"), Some(vec![0xff]));
+        assert_eq!(DictEncoding::Latin1.encode("é"), Some(vec![0xe9]));
+        assert_eq!(DictEncoding::Latin15.encode("€"), Some(vec![0xa4]));
+        assert_eq!(DictEncoding::Latin15.encode("€"), Some(vec![0xa4]));
+    }
+
+    #[test]
+    fn info_value_finds_keys_and_trims() {
+        let info = "fsa.dict.encoding = utf8\nother=x\nfsa.dict.separator=+\n";
+        assert_eq!(
+            info_value(info, "fsa.dict.separator="),
+            Some("+".to_string())
+        );
+        assert_eq!(
+            info_value(info, "fsa.dict.encoding ="),
+            Some("utf8".to_string())
+        );
+        assert_eq!(info_value(info, "missing="), None);
+    }
+
+    fn with_dict_files(data: &[u8], info: &str, f: impl FnOnce(&Path, &Path)) {
+        let unique = format!(
+            "og_tagger_morf_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let dir = std::env::temp_dir().join(unique);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let dict = dir.join("test.dict");
+        let info_path = dir.join("test.info");
+        std::fs::write(&dict, data).expect("write dict");
+        std::fs::write(&info_path, info).expect("write info");
+        f(&dict, &info_path);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn cfsa2_file(data: Vec<u8>) -> Vec<u8> {
+        let mut file = b"\\fsa".to_vec();
+        file.push(0xc6);
+        file.extend_from_slice(&[0x00, 0x00, 0x00]);
+        file.extend_from_slice(&data);
+        file
+    }
+
+    const INFO: &str = "fsa.dict.separator=+\nfsa.dict.encoding=utf8\n";
+
+    #[test]
+    fn fsa_word_set_loads_and_answers_membership() {
+        let bytes = cfsa2_file(small_cfsa2());
+        with_dict_files(&bytes, INFO, |dict, info| {
+            let set = FsaWordSet::load(dict, info).expect("word set loads");
+            assert!(!set.is_empty());
+            assert!(set.contains("a"));
+            assert!(set.contains("ab"));
+            assert!(set.contains("l|m"));
+            assert!(!set.contains(""));
+            assert!(!set.contains("zzz"));
+            assert_eq!(set.word_count(), 3);
+
+            let mut words = Vec::new();
+            set.for_each_word(|w| words.push(w.to_string()));
+            assert_eq!(words.len(), 6);
+            assert_eq!(set.word_list(), vec!["a", "ab", "l|m"]);
+        });
+    }
+
+    #[test]
+    fn fsa_word_set_rejects_words_containing_the_separator() {
+        let bytes = cfsa2_file(small_cfsa2());
+        with_dict_files(&bytes, INFO, |dict, _info| {
+            let set = FsaWordSet::load(dict, _info).expect("word set loads");
+            assert!(!set.contains("a+x"));
+        });
+    }
+
+    #[test]
+    fn load_fsa_word_list_returns_distinct_decoded_words() {
+        let bytes = cfsa2_file(small_cfsa2());
+        with_dict_files(&bytes, INFO, |dict, info| {
+            let mut words = load_fsa_word_list(dict, info).expect("word list loads");
+            words.sort();
+            assert_eq!(words, vec!["a", "ab", "l|m"]);
+        });
+    }
+
+    #[test]
+    fn load_fsa_word_list_fails_without_separator_info() {
+        let bytes = cfsa2_file(small_cfsa2());
+        with_dict_files(&bytes, "fsa.dict.encoding=utf8\n", |dict, info| {
+            assert!(load_fsa_word_list(dict, info).is_none());
+        });
+    }
+
+    #[test]
+    fn morfologik_dictionary_loads_lookups_and_materializes() {
+        let bytes = cfsa2_file(small_cfsa2());
+        with_dict_files(&bytes, INFO, |dict, info| {
+            let d = MorfologikDictionary::load(dict, info).expect("dict loads");
+            assert!(d.has_entries());
+            assert_eq!(d.lookup("a"), vec![("x", "y")]);
+            assert_eq!(d.lookup("ab"), vec![("p", "VER:INF")]);
+            assert_eq!(d.lookup("l|m"), Vec::<(&str, &str)>::new());
+            assert_eq!(d.lookup("zzz"), Vec::<(&str, &str)>::new());
+            assert_eq!(d.lookup("a"), vec![("x", "y")]);
+
+            assert_eq!(d.len(), 2);
+            let mut words = d.word_list();
+            words.sort();
+            assert_eq!(words, vec!["a", "ab"]);
+            let mut keys: Vec<&str> = d.keys().collect();
+            keys.sort_unstable();
+            assert_eq!(keys, vec!["a", "ab"]);
+            assert_eq!(
+                d.fsa_word_list().expect("fsa words"),
+                vec!["a", "ab", "l|m"]
+            );
+
+            let forms = d.forms_by_lemma();
+            let x_forms = forms.get("x").expect("x forms");
+            assert_eq!(x_forms.len(), 1);
+            assert_eq!(&*x_forms[0].0, "y");
+            assert_eq!(&*x_forms[0].1, "a");
+            assert_eq!(
+                d.verb_forms_by_lemma().get("p").map(|v| v.as_slice()),
+                Some(&["ab".to_string()][..])
+            );
+            let synth = d.synth_forms_by_lemma().expect("synth");
+            let l_synth = synth.get("l").expect("l synth");
+            assert_eq!(l_synth.len(), 1);
+            assert_eq!(&*l_synth[0].0, "m");
+            assert_eq!(&*l_synth[0].1, "A");
+        });
+    }
+
+    #[test]
+    fn morfologik_dictionary_load_rejects_missing_files() {
+        assert!(
+            MorfologikDictionary::load(
+                Path::new("/nonexistent/x.dict"),
+                Path::new("/nonexistent/x.info")
+            )
+            .is_none()
+        );
+        assert!(
+            FsaWordSet::load(
+                Path::new("/nonexistent/x.dict"),
+                Path::new("/nonexistent/x.info")
+            )
+            .is_none()
+        );
+        assert!(
+            SynthDictionary::load(
+                Path::new("/nonexistent/x.dict"),
+                Path::new("/nonexistent/x.info")
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn synth_dictionary_decodes_identity_lemmas() {
+        let bytes = cfsa2_file(small_cfsa2());
+        with_dict_files(&bytes, INFO, |dict, info| {
+            let synth = SynthDictionary::load(dict, info).expect("synth loads");
+            assert_eq!(synth.lookup("l|m"), vec!["l|m".to_string()]);
+            assert_eq!(synth.lookup("a"), Vec::<String>::new());
+            assert_eq!(synth.lookup("zzz"), Vec::<String>::new());
+        });
+    }
+
+    #[test]
+    fn shared_synth_dictionary_caches_by_path() {
+        let bytes = cfsa2_file(small_cfsa2());
+        with_dict_files(&bytes, INFO, |dict, info| {
+            let dir = dict.parent().unwrap();
+            let first = shared_synth_dictionary(dir, "test").expect("shared synth");
+            let second = shared_synth_dictionary(dir, "test").expect("shared synth again");
+            assert!(std::sync::Arc::ptr_eq(&first, &second));
+            drop(first);
+            drop(second);
+        });
+        assert!(shared_synth_dictionary(Path::new("/nonexistent"), "none").is_none());
+    }
+
+    #[test]
+    fn from_decoded_text_skips_malformed_lines_and_keeps_verbs() {
+        let d = MorfologikDictionary::from_decoded_text(
+            "# comment\n\nhaus\thaus\tNN\nbadline\nform\t\tVER:3:SIN\nform2\tlemma\n",
+        );
+        assert!(d.has_entries());
+        assert_eq!(d.lookup("haus"), vec![("haus", "NN")]);
+        assert_eq!(d.lookup("form"), vec![("form", "VER:3:SIN")]);
+        assert_eq!(d.lookup("form2"), Vec::<(&str, &str)>::new());
+        assert!(d.fsa_word_list().is_none());
+        assert!(d.synth_forms_by_lemma().is_none());
+        assert_eq!(
+            d.verb_forms_by_lemma().get("form").map(|v| v.as_slice()),
+            Some(&["form".to_string()][..])
+        );
+        let mut words = d.word_list();
+        words.sort();
+        assert_eq!(words, vec!["form", "haus"]);
+    }
+}
