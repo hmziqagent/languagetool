@@ -96,3 +96,89 @@ pub fn dative_plural_standard_replace_rule() -> GaSimpleReplaceRule {
             .collect(),
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use og_core::rule::Rule as _;
+    use og_core::{AnalyzedSentence, AnalyzedToken, AnalyzedTokenReadings};
+
+    fn make_sentence(text: &str) -> AnalyzedSentence {
+        let mut sentence = AnalyzedSentence::new(text, 0, text.len());
+        let mut tokens = vec![AnalyzedTokenReadings::new(
+            AnalyzedToken::new("<S>", 0, 0).with_pos_tags(vec!["SENT_START".to_string()]),
+        )];
+        let mut pos = 0usize;
+        for word in text.split_whitespace() {
+            let start = pos + text[pos..].find(word).expect("word offset");
+            let end = start + word.len();
+            tokens.push(AnalyzedTokenReadings::new(AnalyzedToken::new(
+                word, start, end,
+            )));
+            pos = end;
+        }
+        sentence.set_tokens(tokens);
+        sentence
+    }
+
+    fn single_match(text: &str) -> og_core::RuleMatch {
+        let matches = dative_plural_standard_replace_rule().match_sentence(&make_sentence(text));
+        assert_eq!(matches.len(), 1);
+        matches.into_iter().next().unwrap()
+    }
+
+    #[test]
+    fn maps_the_prestandard_dative_plural_to_the_standard_form() {
+        let text = "as na beachaibh sin.";
+        let m = single_match(text);
+        assert_eq!(m.offset(), text.find("beachaibh").unwrap());
+        assert_eq!(m.replacements()[0].value(), "beacha");
+        assert_eq!(
+            m.message(),
+            "Is litriú réamhchaighdeánach (tabharthach iolra) é \"beachaibh\"; an \"beacha\" a bhí i gceist agat?"
+        );
+        assert_eq!(m.rule().id(), "GA_DATIVE_PLURALS_STD");
+    }
+
+    #[test]
+    fn lenited_and_eclipsed_variants_map_to_mutated_standards() {
+        assert_eq!(
+            single_match("as na bheachaibh sin.").replacements()[0].value(),
+            "bheacha"
+        );
+        assert_eq!(
+            single_match("as na mbeachaibh sin.").replacements()[0].value(),
+            "mbeacha"
+        );
+    }
+
+    #[test]
+    fn vowel_initial_forms_gain_the_h_prefix() {
+        assert_eq!(
+            single_match("as na háiteachaibh sin.").replacements()[0].value(),
+            "háiteanna"
+        );
+        assert_eq!(
+            single_match("as na h-áiteachaibh sin.").replacements()[0].value(),
+            "háiteanna"
+        );
+    }
+
+    #[test]
+    fn modern_spelling_variant_maps_to_the_same_standard() {
+        assert_eq!(
+            single_match("as na buaibh sin.").replacements()[0].value(),
+            "ba"
+        );
+    }
+
+    #[test]
+    fn standard_dative_plural_is_not_flagged() {
+        let rule = dative_plural_standard_replace_rule();
+        assert_eq!(
+            rule.match_sentence(&make_sentence("as na beacha sin."))
+                .len(),
+            0
+        );
+    }
+}
