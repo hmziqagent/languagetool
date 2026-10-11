@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufReader, Read, Seek, SeekFrom, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 const BUFFER_CAPACITY: usize = 1 << 16;
 
@@ -698,15 +698,27 @@ fn walk_blocks<R: Read + Seek>(
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    std::process::exit(run(&args));
+}
+
+fn run(args: &[String]) -> i32 {
     if args.len() < 2 {
         eprintln!(
             "usage: lucene_dump <ngram-dir> (>Ngrams.tsv per n on stdout not supported; writes <dir>/<n>grams.tsv)"
         );
-        std::process::exit(1);
+        return 1;
     }
     let dir = PathBuf::from(&args[1]);
     let only: Option<usize> = args.get(2).and_then(|a| a.parse().ok());
+    dump_dir(&dir, only);
+    0
+}
+
+fn dump_dir(dir: &Path, only: Option<usize>) {
     for n in 1..=3usize {
+        if only.is_some_and(|o| o != n) {
+            continue;
+        }
         if only.is_some_and(|o| o != n) {
             continue;
         }
@@ -1250,5 +1262,318 @@ mod tests {
         let path = scratch_file("fdtbad", "seg.fdt", &[0u8; 32]);
         assert!(parse_fdt(&path, 1, None).is_none());
         cleanup_file(&path);
+    }
+
+    fn block_bytes(
+        ent_count: u64,
+        last: bool,
+        leaf: bool,
+        suffix: &[u8],
+        stats: &[u8],
+        meta: &[u8],
+    ) -> Vec<u8> {
+        let mut out = vint((ent_count << 1) | u64::from(last));
+        out.extend_from_slice(&vint(((suffix.len() as u64) << 1) | u64::from(leaf)));
+        out.extend_from_slice(suffix);
+        out.extend_from_slice(&vint(stats.len() as u64));
+        out.extend_from_slice(stats);
+        out.extend_from_slice(&vint(meta.len() as u64));
+        out.extend_from_slice(meta);
+        out
+    }
+
+    fn leaf_suffix(terms: &[&str]) -> Vec<u8> {
+        let mut out = Vec::new();
+        for term in terms {
+            out.extend_from_slice(&vint(term.len() as u64));
+            out.extend_from_slice(term.as_bytes());
+        }
+        out
+    }
+
+    fn singleton_meta(doc_ids: &[u64], longs_size: u64) -> Vec<u8> {
+        let mut out = Vec::new();
+        for &doc in doc_ids {
+            for _ in 0..longs_size {
+                out.extend_from_slice(&vint(0));
+            }
+            out.extend_from_slice(&vint(doc));
+        }
+        out
+    }
+
+    fn field_dir(
+        root_fp: u64,
+        num_terms: u64,
+        sum_doc_freq: u64,
+        doc_count: u64,
+        longs_size: u64,
+        four_x: bool,
+    ) -> Vec<u8> {
+        let mut out = vint(1);
+        out.extend_from_slice(&vint(0));
+        out.extend_from_slice(&vint(num_terms));
+        let root_code = vint(root_fp << 2);
+        out.extend_from_slice(&vint(root_code.len() as u64));
+        out.extend_from_slice(&root_code);
+        out.extend_from_slice(&vint(sum_doc_freq));
+        out.extend_from_slice(&vint(doc_count));
+        out.extend_from_slice(&vint(longs_size));
+        if !four_x {
+            out.extend_from_slice(&vint(0));
+            out.extend_from_slice(&vint(0));
+        }
+        out
+    }
+
+    fn finish_tim(mut file: Vec<u8>, dir_offset: u64) -> Vec<u8> {
+        file.extend_from_slice(&dir_offset.to_be_bytes());
+        file.extend_from_slice(&[0u8; 16]);
+        file
+    }
+
+    #[test]
+    fn dump_terms_walks_a_leaf_block_and_writes_counts() {
+        let mut file = codec_header_5x("Lucene50", 0);
+        file.extend_from_slice(&codec_header_5x("Lucene50", 0));
+        file.extend_from_slice(&vint(0));
+        let root_fp = file.len() as u64;
+        file.extend_from_slice(&block_bytes(
+            2,
+            true,
+            true,
+            &leaf_suffix(&["abc", "def"]),
+            &[vint(1), vint(1)].concat(),
+            &singleton_meta(&[0, 1], 1),
+        ));
+        let dir_offset = file.len() as u64;
+        file.extend_from_slice(&field_dir(root_fp, 2, 2, 2, 1, false));
+        let path = scratch_file("timleaf", "seg.tim", &finish_tim(file, dir_offset));
+        let out = path.parent().unwrap().join("terms.tsv");
+        let (terms, sum_doc_freq) = dump_terms(&path, &[10, 20], true, &out).unwrap();
+        assert_eq!(terms, 2);
+        assert_eq!(sum_doc_freq, 2);
+        assert_eq!(std::fs::read_to_string(&out).unwrap(), "abc\t10\ndef\t20\n");
+        cleanup_file(&path);
+    }
+
+    #[test]
+    fn dump_terms_recurses_into_sub_blocks() {
+        let mut file = codec_header_5x("Lucene50", 0);
+        file.extend_from_slice(&codec_header_5x("Lucene50", 0));
+        file.extend_from_slice(&vint(0));
+        let child_fp = file.len() as u64;
+        file.extend_from_slice(&block_bytes(
+            1,
+            true,
+            true,
+            &leaf_suffix(&["y"]),
+            &vint(1),
+            &singleton_meta(&[0], 1),
+        ));
+        let root_fp = file.len() as u64;
+        let sub_code = root_fp - child_fp;
+        let mut suffix = vint((1 << 2) | 1);
+        suffix.extend_from_slice(b"x");
+        suffix.extend_from_slice(&vint(sub_code));
+        file.extend_from_slice(&block_bytes(1, true, false, &suffix, &[], &[]));
+        let dir_offset = file.len() as u64;
+        file.extend_from_slice(&field_dir(root_fp, 1, 1, 1, 1, false));
+        let path = scratch_file("timsub", "seg.tim", &finish_tim(file, dir_offset));
+        let out = path.parent().unwrap().join("terms.tsv");
+        let (terms, _) = dump_terms(&path, &[33], true, &out).unwrap();
+        assert_eq!(terms, 1);
+        assert_eq!(std::fs::read_to_string(&out).unwrap(), "xy\t33\n");
+        cleanup_file(&path);
+    }
+
+    #[test]
+    fn dump_terms_follows_floor_blocks() {
+        let mut file = codec_header_5x("Lucene50", 0);
+        file.extend_from_slice(&codec_header_5x("Lucene50", 0));
+        file.extend_from_slice(&vint(0));
+        let first_fp = file.len() as u64;
+        file.extend_from_slice(&block_bytes(
+            1,
+            false,
+            true,
+            &leaf_suffix(&["aa"]),
+            &vint(1),
+            &singleton_meta(&[0], 1),
+        ));
+        file.extend_from_slice(&block_bytes(
+            1,
+            true,
+            true,
+            &leaf_suffix(&["bb"]),
+            &vint(1),
+            &singleton_meta(&[1], 1),
+        ));
+        let dir_offset = file.len() as u64;
+        file.extend_from_slice(&field_dir(first_fp, 2, 2, 2, 1, false));
+        let path = scratch_file("timfloor", "seg.tim", &finish_tim(file, dir_offset));
+        let out = path.parent().unwrap().join("terms.tsv");
+        let (terms, _) = dump_terms(&path, &[1, 2], true, &out).unwrap();
+        assert_eq!(terms, 2);
+        assert_eq!(std::fs::read_to_string(&out).unwrap(), "aa\t1\nbb\t2\n");
+        cleanup_file(&path);
+    }
+
+    #[test]
+    fn dump_terms_reads_a_4x_dict_index() {
+        let mut header = MAGIC.to_vec();
+        header.extend_from_slice(&vstr("Dict"));
+        header.extend_from_slice(&0u32.to_le_bytes());
+        let mut file = header.clone();
+        file.extend_from_slice(&header);
+        file.extend_from_slice(&vint(0));
+        let root_fp = file.len() as u64;
+        file.extend_from_slice(&block_bytes(
+            1,
+            true,
+            true,
+            &leaf_suffix(&["qq"]),
+            &vint(1),
+            &singleton_meta(&[0], 1),
+        ));
+        let dir_offset = file.len() as u64;
+        file.extend_from_slice(&field_dir(root_fp, 1, 1, 1, 1, true));
+        let path = scratch_file("tim4x", "seg.tim", &finish_tim(file, dir_offset));
+        let out = path.parent().unwrap().join("terms.tsv");
+        let (terms, _) = dump_terms(&path, &[5], true, &out).unwrap();
+        assert_eq!(terms, 1);
+        assert_eq!(std::fs::read_to_string(&out).unwrap(), "qq\t5\n");
+        cleanup_file(&path);
+    }
+
+    #[test]
+    fn dump_terms_skips_terms_that_span_multiple_docs() {
+        let mut file = codec_header_5x("Lucene50", 0);
+        file.extend_from_slice(&codec_header_5x("Lucene50", 0));
+        file.extend_from_slice(&vint(0));
+        let root_fp = file.len() as u64;
+        file.extend_from_slice(&block_bytes(
+            1,
+            true,
+            true,
+            &leaf_suffix(&["mm"]),
+            &vint(3),
+            &vint(0),
+        ));
+        let dir_offset = file.len() as u64;
+        file.extend_from_slice(&field_dir(root_fp, 1, 3, 3, 1, false));
+        let path = scratch_file("timmulti", "seg.tim", &finish_tim(file, dir_offset));
+        let out = path.parent().unwrap().join("terms.tsv");
+        let (terms, _) = dump_terms(&path, &[5], true, &out).unwrap();
+        assert_eq!(terms, 0);
+        assert_eq!(std::fs::read_to_string(&out).unwrap(), "");
+        cleanup_file(&path);
+    }
+
+    fn write_segment(dir: &Path, seg: &str, term: &str, count: u64) {
+        let grams = dir.join("1grams");
+        std::fs::create_dir_all(&grams).unwrap();
+        let stem = seg.strip_suffix("_Lucene50_0").unwrap_or(seg);
+        std::fs::write(
+            grams.join(format!("{stem}.fnm")),
+            fnm_5x(&[("ngram", 0), ("count", 1)]),
+        )
+        .unwrap();
+        let mut fdt = codec_header_5x("Lucene50", 0);
+        fdt.extend_from_slice(&vint(0));
+        fdt.extend_from_slice(&vint(2));
+        fdt.extend_from_slice(&vint(1));
+        fdt.extend_from_slice(&vint(2));
+        fdt.extend_from_slice(&lz4_literals(
+            &[field_info(1, 2).as_slice(), &vint(count << 1)].concat(),
+        ));
+        fdt.extend_from_slice(&[0u8; 16]);
+        std::fs::write(grams.join(format!("{stem}.fdt")), &fdt).unwrap();
+
+        let mut file = codec_header_5x("Lucene50", 0);
+        file.extend_from_slice(&codec_header_5x("Lucene50", 0));
+        file.extend_from_slice(&vint(0));
+        let root_fp = file.len() as u64;
+        file.extend_from_slice(&block_bytes(
+            1,
+            true,
+            true,
+            &leaf_suffix(&[term]),
+            &vint(1),
+            &singleton_meta(&[0], 1),
+        ));
+        let dir_offset = file.len() as u64;
+        file.extend_from_slice(&field_dir(root_fp, 1, 1, 1, 1, false));
+        std::fs::write(
+            grams.join(format!("{seg}.tim")),
+            finish_tim(file, dir_offset),
+        )
+        .unwrap();
+    }
+
+    fn scratch_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("lucene-dump-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn run_without_args_prints_usage_and_fails() {
+        assert_eq!(run(&[]), 1);
+    }
+
+    #[test]
+    fn dump_dir_writes_tsv_and_meta_for_a_single_segment() {
+        let dir = scratch_dir("e2e");
+        write_segment(&dir, "seg_Lucene50_0", "abc", 42);
+        assert_eq!(
+            run(&[
+                "lucene_dump".to_string(),
+                dir.to_string_lossy().into_owned(),
+                "1".to_string(),
+            ]),
+            0
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join("1grams.tsv")).unwrap(),
+            "abc\t42\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join("1grams.meta")).unwrap(),
+            "total_token_count\t0\n"
+        );
+        assert!(!dir.join("2grams.tsv").exists());
+        cleanup_file(&dir.join("1grams.tsv"));
+    }
+
+    #[test]
+    fn dump_dir_merges_parts_across_segments() {
+        let dir = scratch_dir("e2emerge");
+        write_segment(&dir, "a_Lucene50_0", "aa", 7);
+        write_segment(&dir, "b_Lucene50_0", "zz", 9);
+        dump_dir(&dir, Some(1));
+        assert_eq!(
+            std::fs::read_to_string(dir.join("1grams.tsv")).unwrap(),
+            "aa\t7\nzz\t9\n"
+        );
+        assert!(!dir.join("1grams.a_Lucene50_0.part").exists());
+        assert!(!dir.join("1grams.b_Lucene50_0.part").exists());
+        cleanup_file(&dir.join("1grams.tsv"));
+    }
+
+    #[test]
+    fn dump_dir_falls_back_to_the_stale_meta_and_skips_empty_gram_dirs() {
+        let dir = scratch_dir("e2eskip");
+        std::fs::write(dir.join("1grams.meta"), "total_token_count\t777\n").unwrap();
+        dump_dir(&dir, None);
+        assert_eq!(
+            std::fs::read_to_string(dir.join("1grams.meta")).unwrap(),
+            "total_token_count\t777\n"
+        );
+        assert!(!dir.join("1grams.tsv").exists());
+        assert!(!dir.join("2grams.tsv").exists());
+        assert!(!dir.join("2grams.meta").exists());
+        cleanup_file(&dir.join("1grams.meta"));
     }
 }
