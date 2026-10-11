@@ -1660,6 +1660,7 @@ fn update_apparitions_fr(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use og_core::{RuleMatchContext, RuleMatchRule};
 
     fn pl_synth() -> Option<LangSynthesizer> {
         let dir = std::path::Path::new(
@@ -1898,6 +1899,202 @@ mod tests {
                 "časopise".to_string(),
                 "časopisom".to_string(),
             ]
+        );
+    }
+    fn lang_dir(module: &str) -> std::path::PathBuf {
+        std::path::Path::new(
+            "/home/agent/opengrammar-rs/languagetool/languagetool-language-modules",
+        )
+        .join(module)
+        .join("src/main/resources/org/languagetool/resource")
+        .join(module)
+    }
+
+    fn tagged(text: &str, lemma: &str, tags: &[&str]) -> AnalyzedTokenReadings {
+        let readings = tags
+            .iter()
+            .map(|t| {
+                AnalyzedToken::new(text, 0, text.len())
+                    .with_lemma(lemma)
+                    .with_pos_tags(vec![t.to_string()])
+            })
+            .collect();
+        AnalyzedTokenReadings::new(AnalyzedToken::new(text, 0, text.len())).with_readings(readings)
+    }
+
+    fn rm_for(text: &str) -> RuleMatch {
+        RuleMatch::new(
+            "m",
+            0,
+            4,
+            RuleMatchRule::new("X", "d"),
+            RuleMatchContext::new(text.to_string(), 0, 4),
+        )
+    }
+
+    fn values_of(rm: &RuleMatch) -> Vec<String> {
+        rm.replacements()
+            .iter()
+            .map(|r| r.value().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn es_postponed_adjective_concordance_matches_java_examples() {
+        let dir = lang_dir("es");
+        let Some(synth) = LangSynthesizer::for_language(&dir, "es") else {
+            return;
+        };
+        let pueblo = vec![
+            tagged("La", "el", &["DA0FS0"]),
+            tagged("casa", "casa", &["NCFS000"]),
+            tagged("del", "del", &["SPS00"]),
+            tagged("pueblo", "pueblo", &["NCMS000"]),
+            tagged("blancas", "blanco", &["AQ0FP0"]),
+        ];
+        let refs: Vec<&AnalyzedTokenReadings> = pueblo.iter().collect();
+        let out = accept_es(Some(&synth), "key:value", &[4], &refs, rm_for("x")).expect("kept");
+        assert_eq!(
+            values_of(&out),
+            vec!["blanco".to_string(), "blanca".to_string()]
+        );
+        let casas = vec![
+            tagged("Son", "ser", &["VMIP3P0"]),
+            tagged("casas", "casa", &["NCFP000"]),
+            tagged("rojos", "rojo", &["AQ0MP0"]),
+        ];
+        let refs: Vec<&AnalyzedTokenReadings> = casas.iter().collect();
+        let out = accept_es(Some(&synth), "key:value", &[2], &refs, rm_for("x")).expect("kept");
+        assert_eq!(values_of(&out), vec!["rojas".to_string()]);
+        let lujosa = vec![
+            tagged("en", "en", &["SPS00"]),
+            tagged("un", "uno", &["DI0MS0"]),
+            tagged("restaurante", "restaurante", &["NCMS000"]),
+            tagged("lujosa", "lujoso", &["AQ0FS0"]),
+        ];
+        let refs: Vec<&AnalyzedTokenReadings> = lujosa.iter().collect();
+        let out = accept_es(Some(&synth), "key:value", &[3], &refs, rm_for("x")).expect("kept");
+        assert_eq!(values_of(&out), vec!["lujoso".to_string()]);
+    }
+
+    #[test]
+    fn es_add_comma_prepends_the_comma_suggestion() {
+        let dir = lang_dir("es");
+        let Some(synth) = LangSynthesizer::for_language(&dir, "es") else {
+            return;
+        };
+        let tokens = vec![
+            tagged("Disculpe", "disculpar", &["VMSP3S0"]),
+            tagged("el", "el", &["DA0MS0"]),
+            tagged("retraso", "retraso", &["NCMS000"]),
+            tagged("maestra", "maestro", &["AQ0FS0"]),
+        ];
+        let refs: Vec<&AnalyzedTokenReadings> = tokens.iter().collect();
+        let mut rm = rm_for("Disculpe el retraso maestra");
+        rm.set_replacements(vec![SuggestedReplacement::new("{suggestion}")]);
+        let out = accept_es(Some(&synth), "addComma:true", &[3], &refs, rm).expect("kept");
+        assert_eq!(
+            values_of(&out),
+            vec![", maestra".to_string(), " maestro".to_string()]
+        );
+    }
+
+    #[test]
+    fn es_without_positions_or_synthesizer_keeps_or_drops_the_match() {
+        let tokens = vec![tagged("casa", "casa", &["NCFS000"])];
+        let refs: Vec<&AnalyzedTokenReadings> = tokens.iter().collect();
+        assert!(accept_es(None, "key:value", &[], &refs, rm_for("x")).is_none());
+        assert!(accept_es(None, "key:value", &[0], &refs, rm_for("x")).is_none());
+        let lujosa = vec![
+            tagged("en", "en", &["SPS00"]),
+            tagged("un", "uno", &["DI0MS0"]),
+            tagged("restaurante", "restaurante", &["NCMS000"]),
+            tagged("lujosa", "lujoso", &["AQ0FS0"]),
+        ];
+        let refs: Vec<&AnalyzedTokenReadings> = lujosa.iter().collect();
+        let out = accept_es(None, "key:value", &[3], &refs, rm_for("x"))
+            .expect("kept unchanged without a synthesizer");
+        assert!(out.replacements().is_empty());
+    }
+
+    #[test]
+    fn fr_postponed_adjective_concordance_matches_java_examples() {
+        let dir = lang_dir("fr");
+        let Some(synth) = LangSynthesizer::for_language(&dir, "fr") else {
+            return;
+        };
+        let maison = vec![
+            tagged("la", "le", &["D f s"]),
+            tagged("maison", "maison", &["N f s"]),
+            tagged("bleu", "bleu", &["J m s"]),
+        ];
+        let refs: Vec<&AnalyzedTokenReadings> = maison.iter().collect();
+        let out = accept_fr(Some(&synth), "key:value", &[2], &refs, rm_for("x")).expect("kept");
+        assert_eq!(values_of(&out), vec!["bleue".to_string()]);
+        assert!(accept_fr(Some(&synth), "key:value", &[], &refs, rm_for("x")).is_none());
+    }
+
+    #[test]
+    fn lang_synthesizer_covers_german_and_manual_paths() {
+        let dir = lang_dir("de");
+        let Some(synth) = LangSynthesizer::for_language(&dir, "de") else {
+            return;
+        };
+        let plural = Regex::new("^(?:SUB:AKK:PLU:NEU)$").unwrap();
+        assert!(
+            synth
+                .synthesize("Haus", &plural)
+                .contains(&"Häuser".to_string())
+        );
+        let exact = synth.synthesize_exact_for("Haus", None, "SUB:AKK:PLU:NEU");
+        assert_eq!(exact, vec!["Häuser".to_string()]);
+        let compound = synth.synthesize_exact_for("Bundesautobahn", None, "SUB:NOM:SIN:FEM");
+        assert_eq!(
+            compound,
+            vec!["Bundesautobahn".to_string()],
+            "compound fallback recombines the split parts"
+        );
+        assert!(synth.target_postag(&[]).is_none());
+        let last = synth.target_postag(&["A", "B"]);
+        assert_eq!(last, Some("B"));
+        assert!(!synth.is_determiner_tag("DT"));
+        assert!(synth.determiner_forms("house", "+INDT").len() == 1);
+        let es = LangSynthesizer::for_language(&lang_dir("es"), "es").expect("es synthesizer");
+        assert_eq!(
+            es.target_postag(&["VMIP3S0", "VMM02S0"]),
+            Some("VMIP3S0"),
+            "spanish keeps the indicative reading for imperatives"
+        );
+    }
+
+    #[test]
+    fn lang_synthesizer_english_uses_the_decoded_dict() {
+        let dir = lang_dir("en");
+        let Some(synth) = LangSynthesizer::for_language(&dir, "en") else {
+            return;
+        };
+        assert!(synth.is_determiner_tag("+DT"));
+        let forms = synth.determiner_forms("university", "+DT");
+        assert!(forms.contains(&"a university".to_string()), "{forms:?}");
+        let re = Regex::new("^(?:VBD)$").unwrap();
+        let went = synth.synthesize("go", &re);
+        assert!(went.contains(&"went".to_string()), "{went:?}");
+        assert!(
+            !went.iter().any(|f| f.starts_with('\'')),
+            "exceptions filtered"
+        );
+    }
+
+    #[test]
+    fn spanish_lemma_split_handles_clitic_leading_verbs() {
+        let dir = lang_dir("es");
+        let Some(synth) = LangSynthesizer::for_language(&dir, "es") else {
+            return;
+        };
+        let forms = synth.synthesize_exact_for("dar lo", None, "VMIP3S0");
+        assert!(
+            forms.iter().all(|f| f.ends_with(" lo")),
+            "tail is appended: {forms:?}"
         );
     }
 }
