@@ -68,6 +68,11 @@ impl StatisticSentenceStyleRule {
         }
     }
 
+    pub fn with_min_percent(mut self, min_percent: i32) -> Self {
+        self.min_percent = min_percent;
+        self
+    }
+
     fn id_for(&self) -> &'static str {
         match self.condition {
             SentenceCondition::Passive => "PASSIVE_SENTENCE_DE",
@@ -668,6 +673,11 @@ impl StatisticWordStyleRule {
         }
     }
 
+    pub fn with_min_percent(mut self, min_percent: i32) -> Self {
+        self.min_percent = min_percent;
+        self
+    }
+
     fn id_for(&self) -> &'static str {
         match self.condition {
             WordCondition::FillerWords => "FILLER_WORDS_DE",
@@ -995,6 +1005,65 @@ impl TextLevelRule for StatisticWordStyleRule {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use og_core::AnalyzedToken;
+
+    fn tagged(parts: &[(&str, &str, &str)]) -> AnalyzedSentence {
+        let text = parts
+            .iter()
+            .map(|(t, _, _)| format!("{t} "))
+            .collect::<String>()
+            .trim_end()
+            .to_string();
+        let mut tokens = vec![AnalyzedTokenReadings::new(
+            AnalyzedToken::new("<S>", 0, 0).with_pos_tags(vec!["SENT_START".to_string()]),
+        )];
+        let mut pos = 0usize;
+        for (t, tag, lemma) in parts {
+            let mut token = AnalyzedToken::new(*t, pos, pos + t.len());
+            if !tag.is_empty() {
+                token = token.with_pos_tags(vec![tag.to_string()]);
+            }
+            if !lemma.is_empty() {
+                token = token.with_lemma(*lemma);
+            }
+            tokens.push(AnalyzedTokenReadings::new(token));
+            pos += t.len() + 1;
+        }
+        let mut sentence = AnalyzedSentence::new(&text, 0, text.len());
+        sentence.set_tokens(tokens);
+        sentence
+    }
+
+    fn sentence_rule_matches(
+        rule: &StatisticSentenceStyleRule,
+        sentences: &[AnalyzedSentence],
+    ) -> Vec<(String, usize)> {
+        let text = sentences
+            .iter()
+            .map(|s| s.text().to_string())
+            .collect::<Vec<_>>()
+            .join(" ");
+        rule.match_text(&text, sentences)
+            .into_iter()
+            .map(|m| (m.message().to_string(), m.offset()))
+            .collect()
+    }
+
+    fn word_rule_matches(
+        rule: &StatisticWordStyleRule,
+        sentences: &[AnalyzedSentence],
+    ) -> Vec<(String, usize)> {
+        let text = sentences
+            .iter()
+            .map(|s| s.text().to_string())
+            .collect::<Vec<_>>()
+            .join(" ");
+        rule.match_text(&text, sentences)
+            .into_iter()
+            .map(|m| (m.message().to_string(), m.offset()))
+            .collect()
+    }
 
     #[test]
     fn passive_sentences_flagged_when_frequent() {
@@ -1030,5 +1099,262 @@ mod tests {
                 .any(|m| m.rule().id() == "FILLER_WORDS_DE"),
             "expected filler word matches"
         );
+    }
+
+    #[test]
+    fn passive_condition_covers_both_scan_directions() {
+        let rule = StatisticSentenceStyleRule::new(SentenceCondition::Passive);
+        let werden_first = tagged(&[
+            ("Das", "ART:DEF:NOM:SIN:NEU", ""),
+            ("Haus", "SUB:NOM:SIN:NEU", "Haus"),
+            ("wurde", "VER:AUX:3:SIN:PRT:IND", "werden"),
+            ("gebaut", "VER:PA2:PRD:GRU:VER", "bauen"),
+            (".", "$.", ""),
+        ]);
+        let participle_first = tagged(&[
+            ("Gebaut", "VER:PA2:PRD:GRU:VER", "bauen"),
+            ("wurde", "VER:AUX:3:SIN:PRT:IND", "werden"),
+            (".", "$.", ""),
+        ]);
+        for sentences in [[werden_first.clone()], [participle_first.clone()]] {
+            let matches = sentence_rule_matches(&rule, &sentences);
+            assert_eq!(matches.len(), 1, "{:?}", sentences[0].text());
+            assert!(matches[0].0.contains("Mehr als 8% Passivsätze"));
+        }
+        let interrupted = tagged(&[
+            ("Das", "ART:DEF:NOM:SIN:NEU", ""),
+            ("Haus", "SUB:NOM:SIN:NEU", "Haus"),
+            ("wurde", "VER:AUX:3:SIN:PRT:IND", "werden"),
+            (",", "$,", ""),
+            ("gebaut", "VER:PA2:PRD:GRU:VER", "bauen"),
+            (".", "$.", ""),
+        ]);
+        assert!(sentence_rule_matches(&rule, &[interrupted]).is_empty());
+    }
+
+    #[test]
+    fn modal_verb_condition_flags_modal_infinitive_pairs() {
+        let rule = StatisticSentenceStyleRule::new(SentenceCondition::ModalVerb);
+        let modal_first = tagged(&[
+            ("Wir", "PRO:PER:NOM:1:PLU", ""),
+            ("müssen", "VER:MOD:1:PLU:PRT:IND", "müssen"),
+            ("gehen", "VER:INF", "gehen"),
+            (".", "$.", ""),
+        ]);
+        let infinitive_first = tagged(&[
+            ("Gehen", "VER:INF", "gehen"),
+            ("müssen", "VER:MOD:1:PLU:PRT:IND", "müssen"),
+            ("wir", "PRO:PER:NOM:1:PLU", ""),
+            (".", "$.", ""),
+        ]);
+        for sentences in [[modal_first.clone()], [infinitive_first.clone()]] {
+            let matches = sentence_rule_matches(&rule, &sentences);
+            assert_eq!(matches.len(), 1);
+            assert!(matches[0].0.contains("Mehr als 18%"));
+        }
+        let plain = tagged(&[
+            ("Wir", "PRO:PER:NOM:1:PLU", ""),
+            ("gehen", "VER:INF", "gehen"),
+            (".", "$.", ""),
+        ]);
+        assert!(sentence_rule_matches(&rule, &[plain]).is_empty());
+    }
+
+    #[test]
+    fn man_condition_flags_sentences_addressing_the_reader() {
+        let rule = StatisticSentenceStyleRule::new(SentenceCondition::Man);
+        let with_man = tagged(&[
+            ("Man", "PRO:IND:NOM:SIN:NEU", "man"),
+            ("geht", "VER:3:SIN:PRT:IND", "gehen"),
+            ("heim", "ADV:DIR", ""),
+            (".", "$.", ""),
+        ]);
+        let matches = sentence_rule_matches(&rule, &[with_man]);
+        assert_eq!(matches.len(), 1);
+        assert!(matches[0].0.contains("indirekten Leseransprache"));
+        let without = tagged(&[
+            ("Wir", "PRO:PER:NOM:1:PLU", ""),
+            ("gehen", "VER:INF", "gehen"),
+            (".", "$.", ""),
+        ]);
+        assert!(sentence_rule_matches(&rule, &[without]).is_empty());
+    }
+
+    #[test]
+    fn conjunction_at_begin_flags_and_honors_the_correlative_exceptions() {
+        let rule = StatisticSentenceStyleRule::new(SentenceCondition::ConjunctionAtBegin);
+        let flagged = tagged(&[
+            ("Und", "KON:UNT", ""),
+            ("wir", "PRO:PER:NOM:1:PLU", ""),
+            ("gehen", "VER:INF", "gehen"),
+            (".", "$.", ""),
+        ]);
+        let matches = sentence_rule_matches(&rule, &[flagged.clone()]);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].1, 0);
+        assert!(matches[0].0.contains("Mehr als 10%"));
+        let quoted = tagged(&[
+            ("\u{201E}", "$(", ""),
+            ("Und", "KON:UNT", ""),
+            ("wir", "PRO:PER:NOM:1:PLU", ""),
+            ("gehen", "VER:INF", "gehen"),
+            (".", "$.", ""),
+        ]);
+        let matches = sentence_rule_matches(&rule, &[quoted]);
+        assert_eq!(matches.len(), 1);
+        for (conj, followup) in [
+            ("Entweder", &[("oder", "KON")][..]),
+            ("Weder", &[("noch", "ADV")][..]),
+            ("Sowohl", &[("als", "KON"), ("auch", "ADV")][..]),
+        ] {
+            let mut head = vec![(conj, "KON", ""), ("wir", "PRO:PER:NOM:1:PLU", "")];
+            head.extend(
+                followup
+                    .iter()
+                    .map(|(t, tag)| (*t, *tag, ""))
+                    .collect::<Vec<(&str, &str, &str)>>(),
+            );
+            head.push(("gehen", "VER:INF", "gehen"));
+            head.push((".", "$.", ""));
+            let sentences = vec![tagged(&head), flagged.clone(), flagged.clone()];
+            let matches = sentence_rule_matches(&rule, &sentences);
+            assert_eq!(
+                matches.len(),
+                2,
+                "{conj}: the correlative pair must stay unflagged, got {matches:?}"
+            );
+        }
+        let um_herum = tagged(&[
+            ("Um", "KON:UNT", ""),
+            ("den", "ART:DEF:AKK:SIN:MAS", ""),
+            ("See", "SUB:AKK:SIN:MAS", "See"),
+            ("herum", "ADV", ""),
+            ("führt", "VER:3:SIN:PRT:IND", "führen"),
+            ("ein", "ART:IND:NOM:SIN:NEU", ""),
+            ("Weg", "SUB:NOM:SIN:MAS", "Weg"),
+            (".", "$.", ""),
+        ]);
+        assert!(sentence_rule_matches(&rule, &[um_herum]).is_empty());
+    }
+
+    #[test]
+    fn zero_limit_shows_every_hit_with_the_short_message() {
+        let rule = StatisticSentenceStyleRule::new(SentenceCondition::Passive).with_min_percent(0);
+        let sentence = tagged(&[
+            ("Das", "ART:DEF:NOM:SIN:NEU", ""),
+            ("Haus", "SUB:NOM:SIN:NEU", "Haus"),
+            ("wurde", "VER:AUX:3:SIN:PRT:IND", "werden"),
+            ("gebaut", "VER:PA2:PRD:GRU:VER", "bauen"),
+            (".", "$.", ""),
+        ]);
+        let matches = sentence_rule_matches(&rule, &[sentence]);
+        assert_eq!(matches.len(), 1);
+        assert!(matches[0].0.starts_with("Passivsatz:"));
+        let word_rule = StatisticWordStyleRule::new(WordCondition::FillerWords).with_min_percent(0);
+        let filler = tagged(&[
+            ("Das", "ART:DEF:NOM:SIN:NEU", ""),
+            ("ist", "VER:3:SIN:PRT:IND", "sein"),
+            ("eigentlich", "ADV", ""),
+            ("gut", "ADJ:PRD:GRU", ""),
+            (".", "$.", ""),
+        ]);
+        let matches = word_rule_matches(&word_rule, &[filler]);
+        assert_eq!(matches.len(), 1);
+        assert!(
+            matches[0]
+                .0
+                .starts_with("Dieses Wort könnte ein Füllwort sein")
+        );
+    }
+
+    #[test]
+    fn non_significant_verbs_flag_plain_machen_but_not_the_idioms() {
+        let rule = StatisticWordStyleRule::new(WordCondition::NonSignificantVerbs);
+        let plain = tagged(&[
+            ("Er", "PRO:PER:NOM:3:SIN:MAS", ""),
+            ("macht", "VER:3:SIN:PRT:IND", "machen"),
+            ("das", "PRO:DEM:AKK:SIN:NEU", ""),
+            (".", "$.", ""),
+        ]);
+        let matches = word_rule_matches(&rule, &[plain]);
+        assert_eq!(matches.len(), 1);
+        assert!(matches[0].0.contains("wenig aussagekräftige Verben"));
+        let angst = tagged(&[
+            ("Er", "PRO:PER:NOM:3:SIN:MAS", ""),
+            ("macht", "VER:3:SIN:PRT:IND", "machen"),
+            ("Angst", "SUB:AKK:SIN:FEM", "Angst"),
+            (".", "$.", ""),
+        ]);
+        assert!(word_rule_matches(&rule, &[angst]).is_empty());
+        let haben_glueck = tagged(&[
+            ("Er", "PRO:PER:NOM:3:SIN:MAS", ""),
+            ("hat", "VER:3:SIN:PRT:IND", "haben"),
+            ("Glück", "SUB:AKK:SIN:NEU", "Glück"),
+            (".", "$.", ""),
+        ]);
+        assert!(word_rule_matches(&rule, &[haben_glueck]).is_empty());
+    }
+
+    #[test]
+    fn unnecessary_phrases_flag_the_multiword_fillers() {
+        let rule = StatisticWordStyleRule::new(WordCondition::UnnecessaryPhrases);
+        let phrase = tagged(&[
+            ("Meines", "PRO:POS:GEN:SIN:NEU", ""),
+            ("Erachtens", "SUB:DAT:SIN:NEU", "Erachten"),
+            ("ist", "VER:3:SIN:PRT:IND", "sein"),
+            ("das", "ART:DEF:NOM:SIN:NEU", ""),
+            ("gut", "ADJ:PRD:GRU", ""),
+            (".", "$.", ""),
+        ]);
+        let matches = word_rule_matches(&rule, &[phrase]);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].1, 0);
+        let in_der_tat = tagged(&[
+            ("In", "APPR", ""),
+            ("der", "ART:DEF:DAT:SIN:FEM", ""),
+            ("Tat", "SUB:DAT:SIN:FEM", "Tat"),
+            ("half", "VER:3:SIN:PRT:IND", "helfen"),
+            ("es", "PRO:PER:AKK:SIN:NEU", ""),
+            (".", "$.", ""),
+        ]);
+        let matches = word_rule_matches(&rule, &[in_der_tat]);
+        assert_eq!(matches.len(), 1);
+    }
+
+    #[test]
+    fn direct_speech_is_excluded_from_the_statistics() {
+        let rule = StatisticSentenceStyleRule::new(SentenceCondition::Man);
+        let parts: [(&str, &str, &str, usize); 8] = [
+            ("Er", "PRO:PER:NOM:3:SIN:MAS", "", 0),
+            ("sagt", "VER:3:SIN:PRT:IND", "sagen", 1),
+            (":", "$.", "", 1),
+            ("\u{201E}", "$(", "", 1),
+            ("Man", "PRO:IND:NOM:SIN:NEU", "man", 0),
+            ("geht", "VER:3:SIN:PRT:IND", "gehen", 1),
+            (".", "$.", "", 1),
+            ("\u{201C}", "$(", "", 0),
+        ];
+        let mut text = String::new();
+        let mut tokens = vec![AnalyzedTokenReadings::new(
+            AnalyzedToken::new("<S>", 0, 0).with_pos_tags(vec!["SENT_START".to_string()]),
+        )];
+        for (token_text, tag, lemma, gap) in parts {
+            for _ in 0..gap {
+                text.push(' ');
+            }
+            let start = text.len();
+            text.push_str(token_text);
+            let mut token = AnalyzedToken::new(token_text, start, text.len());
+            if !tag.is_empty() {
+                token = token.with_pos_tags(vec![tag.to_string()]);
+            }
+            if !lemma.is_empty() {
+                token = token.with_lemma(lemma);
+            }
+            tokens.push(AnalyzedTokenReadings::new(token));
+        }
+        let mut sentence = AnalyzedSentence::new(text.clone(), 0, text.len());
+        sentence.set_tokens(tokens);
+        assert!(sentence_rule_matches(&rule, &[sentence]).is_empty());
     }
 }
