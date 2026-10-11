@@ -363,16 +363,22 @@ mod tests {
     use og_core::AnalyzedToken;
 
     fn with_tags(sentence: &mut AnalyzedSentence, tags: &[&str]) {
+        let mut next = 0usize;
         let tokens = sentence.tokens_mut();
-        for (i, tag) in tags.iter().enumerate() {
-            if i < tokens.len() {
-                let text = tokens[i].token().token().to_string();
-                let start = tokens[i].token().start();
-                let end = tokens[i].token().end();
-                tokens[i].readings_mut().push(
-                    AnalyzedToken::new(text, start, end).with_pos_tags(vec![tag.to_string()]),
-                );
+        for tag in tags {
+            while next < tokens.len() && tokens[next].token().token().trim().is_empty() {
+                next += 1;
             }
+            if next >= tokens.len() {
+                break;
+            }
+            let text = tokens[next].token().token().to_string();
+            let start = tokens[next].token().start();
+            let end = tokens[next].token().end();
+            tokens[next]
+                .readings_mut()
+                .push(AnalyzedToken::new(text, start, end).with_pos_tags(vec![tag.to_string()]));
+            next += 1;
         }
     }
 
@@ -405,5 +411,146 @@ mod tests {
     #[test]
     fn rule_is_default_off_like_java() {
         assert!(!PortugueseAccentuationCheckRule::new().is_default_on());
+    }
+
+    #[test]
+    fn noun_arms_fire_across_the_context_patterns() {
+        let rule = PortugueseAccentuationCheckRule::new();
+        for (text, tags, expected) in [
+            (
+                "Gosto de abobada.",
+                &["", "VMIP1S0", "SPS00", "", ""][..],
+                "abóbada",
+            ),
+            ("o abrenuncio", &["", "DA0MS0", ""][..], "abrenúncio"),
+            (
+                "Ele comeu a abobada logo.",
+                &["", "PP3CS000", "VMIS3S0", "DA0FS0", "", "RG", ""],
+                "abóbada",
+            ),
+            (
+                "Ele comeu a abobada logo.",
+                &["", "PP3CS000", "VMIS3S0", "", "", "RG", ""],
+                "abóbada",
+            ),
+            (
+                "A abobada de caiu.",
+                &["", "DA0FS0", "", "SPS00", "VMIS3S0", ""],
+                "abóbada",
+            ),
+            (
+                "A abobada boa caiu.",
+                &["", "DA0FS0", "", "AQ0FS0", "VMIS3S0", ""],
+                "abóbada",
+            ),
+            (
+                "A boa abobada caiu.",
+                &["", "DA0FS0", "AQ0FS0", "", "VMIS3S0", ""],
+                "abóbada",
+            ),
+            (
+                "A abobada que caiu.",
+                &["", "DA0FS0", "", "PR0CN000", "VMIS3S0", ""],
+                "abóbada",
+            ),
+            (
+                "de boa abobada",
+                &["", "SPS00", "AQ0FS0", ""][..],
+                "abóbada",
+            ),
+            (
+                "comprou e abobada agora.",
+                &["", "VMIS3S0", "CC", "", "RG", ""],
+                "abóbada",
+            ),
+            (
+                "Abobada boa caiu.",
+                &["", "", "AQ0FS0", "VMIS3S0", ""],
+                "abóbada",
+            ),
+        ] {
+            let mut sentence = make_sentence(text);
+            with_tags(&mut sentence, tags);
+            let matches = rule.match_sentence(&sentence);
+            assert_eq!(
+                matches.len(),
+                1,
+                "{text}: expected one accentuation match, got {matches:?}"
+            );
+            assert_eq!(
+                matches[0].replacements()[0].value(),
+                expected,
+                "{text}: wrong replacement"
+            );
+        }
+    }
+
+    #[test]
+    fn noun_arms_stay_quiet_for_pronoun_subjects_and_verb_readings() {
+        let rule = PortugueseAccentuationCheckRule::new();
+        for (text, tags) in [(
+            "Ele abobada ontem.",
+            &["", "PP3CS000", "VMIS3S0", "RG", ""][..],
+        )] {
+            let mut sentence = make_sentence(text);
+            with_tags(&mut sentence, tags);
+            assert!(
+                rule.match_sentence(&sentence).is_empty(),
+                "{text}: must stay unflagged"
+            );
+        }
+    }
+
+    #[test]
+    fn adjective_arms_fire_across_the_context_patterns() {
+        let rule = PortugueseAccentuationCheckRule::new();
+        for (text, tags, expected) in [
+            ("canto acarido", &["", "NCMS000", "VMIS1S0"][..], "acárido"),
+            (
+                "de maneira acarida",
+                &["", "SPS00", "NCFS000", ""][..],
+                "acárida",
+            ),
+            (
+                "em acarida casa",
+                &["", "SPS00", "", "NCFS000"][..],
+                "acárida",
+            ),
+            (
+                "a acarida casa",
+                &["", "DA0FS0", "", "NCFS000"][..],
+                "acárida",
+            ),
+        ] {
+            let mut sentence = make_sentence(text);
+            with_tags(&mut sentence, tags);
+            let matches = rule.match_sentence(&sentence);
+            assert_eq!(
+                matches.len(),
+                1,
+                "{text}: expected one accentuation match, got {matches:?}"
+            );
+            assert_eq!(
+                matches[0].replacements()[0].value(),
+                expected,
+                "{text}: wrong replacement"
+            );
+        }
+    }
+
+    #[test]
+    fn adjective_arms_stay_quiet_after_que_and_before_infinitives() {
+        let rule = PortugueseAccentuationCheckRule::new();
+        for (text, tags) in [
+            ("que acarida casa", &["", "PR0CN000", "", "NCFS000"][..]),
+            ("para acarida agora", &["", "SPS00", "", "RG", ""][..]),
+        ] {
+            let mut sentence = make_sentence(text);
+            with_tags(&mut sentence, tags);
+            assert!(
+                rule.match_sentence(&sentence).is_empty(),
+                "{text}: must stay unflagged"
+            );
+        }
     }
 }
