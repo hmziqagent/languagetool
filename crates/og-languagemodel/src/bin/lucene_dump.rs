@@ -811,3 +811,183 @@ fn main() {
         .ok();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn vint(mut v: u64) -> Vec<u8> {
+        let mut out = Vec::new();
+        loop {
+            let mut b = (v & 0x7f) as u8;
+            v >>= 7;
+            if v != 0 {
+                b |= 0x80;
+            }
+            out.push(b);
+            if v == 0 {
+                return out;
+            }
+        }
+    }
+
+    fn vstr(s: &str) -> Vec<u8> {
+        let mut out = vint(s.len() as u64);
+        out.extend_from_slice(s.as_bytes());
+        out
+    }
+
+    fn cursor_over(data: Vec<u8>) -> Cursor<std::io::Cursor<Vec<u8>>> {
+        let mut cur = Cursor::new(std::io::Cursor::new(data));
+        cur.u8();
+        cur.seek(0);
+        cur
+    }
+
+    #[test]
+    fn cursor_parses_vints_bytes_and_tracks_file_pos() {
+        let mut data = Vec::new();
+        data.push(0xaa);
+        data.extend_from_slice(&vint(0));
+        data.extend_from_slice(&vint(127));
+        data.extend_from_slice(&vint(128));
+        data.extend_from_slice(&vint(300));
+        data.extend_from_slice(&vint(16383));
+        data.extend_from_slice(&vint(16384));
+        data.extend_from_slice(&vint(u64::MAX));
+        data.extend_from_slice(b"tail");
+        let mut cur = cursor_over(data);
+        assert_eq!(cur.file_pos(), 0);
+        assert_eq!(cur.u8(), Some(0xaa));
+        assert_eq!(cur.vint(), Some(0));
+        assert_eq!(cur.vint(), Some(127));
+        assert_eq!(cur.vint(), Some(128));
+        assert_eq!(cur.vint(), Some(300));
+        assert_eq!(cur.vint(), Some(16383));
+        assert_eq!(cur.vint(), Some(16384));
+        assert_eq!(cur.vlong(), Some(u64::MAX));
+        let mut out = Vec::new();
+        cur.bytes(&mut out, 4);
+        assert_eq!(out, b"tail");
+        assert_eq!(cur.file_pos(), 26);
+        assert_eq!(cur.u8(), None);
+    }
+
+    #[test]
+    fn cursor_refills_across_the_buffer_boundary() {
+        let mut data = vec![0x5a; BUFFER_CAPACITY - 1];
+        data.push(0xac);
+        data.push(0x02);
+        data.extend_from_slice(&vint(1 << 20));
+        let mut cur = cursor_over(data.clone());
+        let mut out = Vec::new();
+        cur.bytes(&mut out, BUFFER_CAPACITY - 1);
+        assert_eq!(out, vec![0x5a; BUFFER_CAPACITY - 1]);
+        assert_eq!(cur.vint(), Some(300));
+        assert_eq!(cur.vlong(), Some(1 << 20));
+        assert_eq!(cur.file_pos() as usize, data.len());
+        assert_eq!(cur.vint(), None);
+    }
+
+    #[test]
+    fn cursor_rejects_reads_larger_than_the_buffer() {
+        let mut cur = cursor_over(vec![1u8; 8]);
+        let mut out = Vec::new();
+        cur.bytes(&mut out, BUFFER_CAPACITY + 1);
+        assert!(out.is_empty());
+        assert_eq!(cur.file_pos(), 0);
+    }
+
+    #[test]
+    fn cursor_seek_repositions_inside_and_outside_the_buffer() {
+        let mut cur = cursor_over(b"abcdef".to_vec());
+        let mut out = Vec::new();
+        cur.bytes(&mut out, 4);
+        assert_eq!(out, b"abcd");
+        cur.seek(1);
+        assert_eq!(cur.file_pos(), 1);
+        cur.bytes(&mut out, 2);
+        assert_eq!(&out[4..], b"bc");
+        cur.seek(100);
+        assert_eq!(cur.u8(), None);
+        cur.seek(4);
+        cur.bytes(&mut out, 2);
+        assert_eq!(&out[6..], b"ef");
+    }
+
+    #[test]
+    fn cursor_peek_magic_does_not_consume() {
+        let mut cur = cursor_over(vec![0x3f, 0xd7, 0x6c, 0x17, 0x99]);
+        assert_eq!(cur.peek_magic(), Some([0x3f, 0xd7, 0x6c, 0x17]));
+        assert_eq!(cur.peek_magic(), Some([0x3f, 0xd7, 0x6c, 0x17]));
+        assert_eq!(cur.file_pos(), 0);
+        assert_eq!(cur.u8(), Some(0x3f));
+        let mut cur = cursor_over(vec![1, 2]);
+        assert_eq!(cur.peek_magic(), None);
+    }
+
+    #[test]
+    fn byte_reader_walks_scalars_and_slices() {
+        let mut data = Vec::new();
+        data.push(0x42);
+        data.extend_from_slice(&vint(70000));
+        data.extend_from_slice(b"xyz");
+        let mut reader = ByteReader {
+            data: &data,
+            pos: 0,
+        };
+        assert_eq!(reader.u8(), Some(0x42));
+        assert_eq!(reader.vlong(), Some(70000));
+        assert_eq!(reader.bytes(3), Some(&b"xyz"[..]));
+        assert_eq!(reader.bytes(1), None);
+        assert_eq!(reader.u8(), None);
+    }
+
+    #[test]
+    fn decompress_block_reads_pure_literals() {
+        let mut cur = cursor_over(vec![0x30, b'a', b'b', b'c']);
+        assert_eq!(decompress_block(&mut cur, 3), Some(b"abc".to_vec()));
+    }
+
+    #[test]
+    fn decompress_block_expands_literal_lengths() {
+        let mut stream = vec![0xf0, 0xff, 0x04];
+        stream.extend_from_slice(&vec![b'q'; 15 + 255 + 4]);
+        let mut cur = cursor_over(stream);
+        let out = decompress_block(&mut cur, 274).unwrap();
+        assert_eq!(out.len(), 274);
+        assert!(out.iter().all(|&b| b == b'q'));
+    }
+
+    #[test]
+    fn decompress_block_copies_overlapping_matches() {
+        let mut cur = cursor_over(vec![0x11, b'x', 0x01, 0x00, 0x00]);
+        let out = decompress_block(&mut cur, 6).unwrap();
+        assert_eq!(out, b"xxxxxx");
+    }
+
+    #[test]
+    fn decompress_block_expands_match_lengths() {
+        let mut cur = cursor_over(vec![0x1f, b'x', 0x01, 0x00, 0x03, 0x00]);
+        let out = decompress_block(&mut cur, 23).unwrap();
+        assert_eq!(out, vec![b'x'; 23]);
+    }
+
+    #[test]
+    fn decompress_block_chains_sequences() {
+        let mut cur = cursor_over(vec![0x20, b'a', b'b', 0x01, 0x00, 0x00]);
+        assert_eq!(decompress_block(&mut cur, 6), Some(b"abbbbb".to_vec()));
+    }
+
+    #[test]
+    fn decompress_block_rejects_offset_past_the_window() {
+        let mut cur = cursor_over(vec![0x10, b'a', 0x05, 0x00]);
+        assert_eq!(decompress_block(&mut cur, 6), None);
+    }
+
+    #[test]
+    fn decompress_block_rejects_truncated_streams() {
+        let mut cur = cursor_over(vec![0x30, b'a']);
+        assert_eq!(decompress_block(&mut cur, 3), None);
+    }
+}
