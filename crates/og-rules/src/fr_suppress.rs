@@ -163,3 +163,101 @@ pub fn accept_rule_match(
         Some(rm)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use og_core::{RuleMatchContext, RuleMatchRule, SuggestedReplacement};
+
+    fn rm_with(replacements: &[&str]) -> RuleMatch {
+        let mut rm = RuleMatch::new(
+            "msg",
+            0,
+            4,
+            RuleMatchRule::new("X", "d"),
+            RuleMatchContext::new("text".to_string(), 0, 4),
+        );
+        rm.set_replacements(
+            replacements
+                .iter()
+                .map(|r| SuggestedReplacement::new(*r))
+                .collect(),
+        );
+        rm
+    }
+
+    #[test]
+    fn walker_resolves_the_french_resource_layout() {
+        let dir = fr_resource_dir().expect("fr resource dir");
+        assert!(dir.join("french.dict").is_file());
+        assert!(dir.join("hunspell/spelling.txt").is_file());
+        assert!(shared_french_spelling_dictionary().is_some());
+    }
+
+    #[test]
+    fn is_misspelled_checks_the_shared_dictionary() {
+        assert!(is_misspelled("bonjou"));
+        assert!(!is_misspelled("bonjour"));
+        assert!(!is_misspelled(""));
+        assert!(!is_misspelled("123"));
+        assert!(is_misspelled("śćć"));
+    }
+
+    #[test]
+    fn replacement_is_misspelled_tokenizes_the_value() {
+        assert!(replacement_is_misspelled("je bonjou"));
+        assert!(!replacement_is_misspelled("je mange"));
+        assert!(!replacement_is_misspelled(""));
+    }
+
+    #[test]
+    fn parse_filter_args_resolves_bare_and_escaped_indices() {
+        let matched = vec!["un".to_string(), "deux".to_string()];
+        let parsed = parse_filter_args("a:1 b:\\2 c:plain d:\\9", &matched);
+        assert_eq!(parsed.get("a").map(String::as_str), Some("un"));
+        assert_eq!(parsed.get("b").map(String::as_str), Some("deux"));
+        assert_eq!(parsed.get("c").map(String::as_str), Some("plain"));
+        assert_eq!(parsed.get("d").map(String::as_str), Some("\\9"));
+        assert_eq!(parse_filter_args("nokey a:x", &[]).len(), 1);
+    }
+
+    #[test]
+    fn replacement_matches_postag_uses_the_french_tagger() {
+        assert!(replacement_matches_postag("voiture", "N.*"));
+        assert!(!replacement_matches_postag("voiture", "V.*"));
+        assert!(replacement_matches_postag("manger", "V.*"));
+    }
+
+    #[test]
+    fn accept_rule_match_suppresses_fully_misspelled_suggestions() {
+        assert!(accept_rule_match(rm_with(&["bonjou", "śćć"]), "", &[]).is_none());
+        let out = accept_rule_match(rm_with(&["bonjou", "bonjour"]), "", &[]).expect("kept");
+        let values: Vec<&str> = out.replacements().iter().map(|r| r.value()).collect();
+        assert_eq!(values, vec!["bonjour"]);
+    }
+
+    #[test]
+    fn accept_rule_match_can_keep_the_match_without_suggestions() {
+        let out = accept_rule_match(rm_with(&["bonjou"]), "suppressMatch:false", &[])
+            .expect("kept even with no replacements left");
+        assert!(out.replacements().is_empty());
+    }
+
+    #[test]
+    fn accept_rule_match_honours_suppress_and_filter_postags() {
+        let out = accept_rule_match(rm_with(&["voiture", "mangera"]), "SuppressPostag:N.*", &[])
+            .expect("kept");
+        let values: Vec<&str> = out.replacements().iter().map(|r| r.value()).collect();
+        assert_eq!(values, vec!["mangera"]);
+        let out = accept_rule_match(
+            rm_with(&["voiture"]),
+            "FilterPostag:V.* suppressMatch:false",
+            &[],
+        )
+        .expect("kept");
+        assert!(out.replacements().is_empty());
+        let out = accept_rule_match(rm_with(&["voiture"]), "FilterPostag:N.*", &[]).expect("kept");
+        let values: Vec<&str> = out.replacements().iter().map(|r| r.value()).collect();
+        assert_eq!(values, vec!["voiture"]);
+    }
+}
