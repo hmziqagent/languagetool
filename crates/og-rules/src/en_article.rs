@@ -235,4 +235,31 @@ mod tests {
         assert_eq!(data().suggest_a_or_an("Hour"), "an hour");
         assert_eq!(data().suggest_a_or_an("FBI"), "FBI");
     }
+    #[test]
+    fn prefix_and_cleanup_helpers_match_java_string_tools() {
+        assert!(an_prefix_match("unidentified"));
+        assert!(an_prefix_match("unimaginable"));
+        assert!(!an_prefix_match("unidentified1"));
+        assert!(!an_prefix_match("unim"));
+        assert!(!an_prefix_match("house"));
+        assert!(an_exception_prefix_match("euphoric"));
+        assert!(an_exception_prefix_match("onerous"));
+        assert!(an_exception_prefix_match("unicorn"));
+        assert!(an_exception_prefix_match("usual"));
+        assert!(!an_exception_prefix_match("umbrella"));
+        assert_eq!(cleanup_word("a-b+c!"), "abc");
+        assert_eq!(cleanup_word("a.b;c,d:e'f"), "a.b;c,d:e'f");
+    }
+
+    #[test]
+    fn shared_article_data_loads_det_a() {
+        let dir = std::path::Path::new(
+            "/home/agent/opengrammar-rs/languagetool/languagetool-language-modules/en/src/main/resources/org/languagetool/rules/en",
+        );
+        let Some(data) = shared_article_data(dir) else {
+            panic!("det_a.txt must load");
+        };
+        assert_eq!(data.suggest_a_or_an("hour"), "an hour");
+        assert_eq!(data.suggest_a_or_an("unicorn"), "a unicorn");
+    }
 }

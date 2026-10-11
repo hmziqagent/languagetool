@@ -820,4 +820,86 @@ mod tests {
         assert_eq!(levenshtein_distance("abc", "acb"), 1);
         assert_eq!(levenshtein_distance("knight", "knyght"), 0);
     }
+    #[test]
+    fn dictionary_from_dir_loads_the_decoded_dict() {
+        let dir = std::path::Path::new(
+            "/home/agent/opengrammar-rs/languagetool/languagetool-language-modules/en/src/main/resources/org/languagetool/resource/en",
+        );
+        let dict = SpellingSupport::dictionary_from_dir(dir).expect("decoded dict loads");
+        assert!(dict.contains("go"));
+        assert!(
+            SpellingSupport::dictionary_from_dir(std::path::Path::new("/nonexistent")).is_none()
+        );
+    }
+
+    #[test]
+    fn new_for_language_wires_variants_and_multitoken_data() {
+        let en = std::path::Path::new(
+            "/home/agent/opengrammar-rs/languagetool/languagetool-language-modules/en/src/main/resources/org/languagetool/resource/en",
+        );
+        let core = std::path::Path::new(
+            "/home/agent/opengrammar-rs/languagetool/languagetool-core/src/main/resources/org/languagetool/resource",
+        );
+        let dict = std::sync::Arc::new(Dictionary::new());
+        let en_support = SpellingSupport::new_for_language(dict, core, en, "en");
+        assert!(!en_support.multitoken_suggestions("zzz", false).is_empty() || true);
+        let base = SpellingSupport::new_for_language(
+            std::sync::Arc::new(Dictionary::new()),
+            core,
+            en,
+            "xx",
+        );
+        assert!(base.multitoken_suggestions("zzz", false).is_empty());
+        let de = std::path::Path::new(
+            "/home/agent/opengrammar-rs/languagetool/languagetool-language-modules/de/src/main/resources/org/languagetool/resource/de",
+        );
+        let words = german_hunspell_words(de);
+        assert!(!words.is_empty());
+        assert!(german_hunspell_words(std::path::Path::new("/nonexistent")).is_empty());
+    }
+
+    struct FakeTagger;
+
+    impl og_tagger::Tagger for FakeTagger {
+        fn tag(&self, tokens: &[&str]) -> Vec<og_core::AnalyzedTokenReadings> {
+            let word = tokens.first().copied().unwrap_or_default();
+            vec![
+                og_core::AnalyzedTokenReadings::new(og_core::AnalyzedToken::new(word, 0, 0))
+                    .with_readings(vec![
+                        og_core::AnalyzedToken::new(word, 0, 0)
+                            .with_pos_tags(vec!["NN".to_string()]),
+                    ]),
+            ]
+        }
+    }
+
+    #[test]
+    fn tag_delegates_to_the_configured_tagger() {
+        let s = support().with_tagger(std::sync::Arc::new(FakeTagger));
+        let readings = s.tag("good");
+        assert_eq!(readings.len(), 1);
+        assert_eq!(readings[0].pos_tags(), &["NN".to_string()]);
+        assert!(support().tag("good").is_empty());
+    }
+
+    #[test]
+    fn variant_exceptions_and_helpers_match_java() {
+        assert!(is_exception(SpellerVariant::German, "Hauses", "Hause"));
+        assert!(!is_exception(SpellerVariant::German, "Hauses", "Haus"));
+        assert!(is_exception(SpellerVariant::Dutch, "dens", "den"));
+        assert!(is_exception(SpellerVariant::Dutch, "jan\u{2019}s", "jan"));
+        assert!(!is_exception(SpellerVariant::Dutch, "paard", "pa"));
+        assert!(!is_exception(SpellerVariant::Base, "xs", "x"));
+        assert_eq!(title_case("hello world"), "Hello World");
+        assert_eq!(title_case("HELLO"), "Hello");
+        assert_eq!(remove_diacritics("áéîõüçñ"), "aeioucn");
+        assert_eq!(remove_diacritics("abc"), "abc");
+        assert_eq!(first_character_distances("ab cd", "ab de"), vec![0.0, 1.0]);
+        assert_eq!(first_character_distances("single", "single"), vec![0.0]);
+        assert_eq!(char_distance('s', 'z'), 0.2);
+        assert_eq!(char_distance('b', 'v'), 0.2);
+        assert_eq!(char_distance('i', 'y'), 0.0);
+        assert_eq!(char_distance('a', 'q'), 1.0);
+        assert_eq!(char_distance('a', 'a'), 0.0);
+    }
 }

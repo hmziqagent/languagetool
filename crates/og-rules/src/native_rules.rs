@@ -1149,4 +1149,100 @@ mod tests {
         let matches = rule.match_sentence(&sentence);
         assert!(!matches.is_empty(), "Space before comma and no space after");
     }
+    #[test]
+    fn whitespace_before_punctuation_flags_colon_semicolon_percent() {
+        let rule = WhitespaceBeforePunctuationRule::new();
+        assert_eq!(rule.id(), "WHITESPACE_PUNCTUATION");
+        let s = make_punct_sentence("word : more");
+        assert!(
+            !rule.match_sentence(&s).is_empty(),
+            "space before colon is flagged"
+        );
+        let s = make_punct_sentence("word ; more");
+        assert!(
+            !rule.match_sentence(&s).is_empty(),
+            "space before semicolon is flagged"
+        );
+        let s = make_punct_sentence("50 %");
+        assert!(
+            !rule.match_sentence(&s).is_empty(),
+            "space before percentage after a number is flagged"
+        );
+        let s = make_punct_sentence("ratio : 2");
+        assert!(
+            rule.match_sentence(&s).is_empty(),
+            "colon before a digit is tolerated"
+        );
+        let clean = make_punct_sentence("word: more; 50%.");
+        assert!(rule.match_sentence(&clean).is_empty());
+    }
+
+    #[test]
+    fn comma_whitespace_period_arms_and_domain_exception() {
+        let rule = CommaWhitespaceRule::new();
+        let s = make_punct_sentence("end .");
+        assert!(
+            !rule.match_sentence(&s).is_empty(),
+            "space before period is flagged"
+        );
+        let s = make_punct_sentence("end .5");
+        assert!(
+            rule.match_sentence(&s).is_empty(),
+            "digit after period is tolerated"
+        );
+        let with_exception = CommaWhitespaceRule::new().with_domain_after_dot_exception();
+        let s = make_punct_sentence("end .web-Domains");
+        assert!(
+            !rule.match_sentence(&s).is_empty(),
+            "plain rule flags the period"
+        );
+        assert!(
+            with_exception.match_sentence(&s).is_empty(),
+            "domain exception suppresses the period match"
+        );
+    }
+
+    #[test]
+    fn builders_override_ids_messages_and_flags() {
+        let repeat = WordRepeatRule::new()
+            .with_id("CUSTOM_REPEAT")
+            .with_ignored_words(&["very"])
+            .with_ignore_single_letter_repeats();
+        assert_eq!(repeat.id(), "CUSTOM_REPEAT");
+        let s = make_sentence("very very good");
+        assert!(
+            repeat.match_sentence(&s).is_empty(),
+            "ignored words skip repeats"
+        );
+        let letters = make_sentence("a a");
+        assert!(
+            repeat.match_sentence(&letters).is_empty(),
+            "single letter repeats skipped"
+        );
+        let plain = WordRepeatRule::new();
+        assert!(!plain.match_sentence(&letters).is_empty());
+
+        let punct = DoublePunctuationRule::new()
+            .with_id("CUSTOM_DP")
+            .with_description("custom")
+            .with_comma_character(';')
+            .with_messages("d", "ds", "c", "cs");
+        assert_eq!(punct.id(), "CUSTOM_DP");
+        assert_eq!(punct.description(), "custom");
+        let s = make_punct_sentence("word;; more");
+        assert!(
+            !punct.match_sentence(&s).is_empty(),
+            "custom comma character flagged"
+        );
+
+        let comma = CommaWhitespaceRule::new()
+            .with_id("CUSTOM_CW")
+            .with_comma_character(';');
+        assert_eq!(comma.id(), "CUSTOM_CW");
+        let s = make_punct_sentence("word ; ; more");
+        assert!(
+            !comma.match_sentence(&s).is_empty(),
+            "custom comma pair flagged"
+        );
+    }
 }

@@ -798,7 +798,7 @@ mod tests {
     use og_core::rule::TextLevelRule;
     use og_core::{AnalyzedToken, AnalyzedTokenReadings};
 
-    fn make_sentence_with_whitespace(text: &str, offset: usize) -> AnalyzedSentence {
+    pub(super) fn make_sentence_with_whitespace(text: &str, offset: usize) -> AnalyzedSentence {
         let mut sentence = AnalyzedSentence::new(text, offset, offset + text.len());
         let mut tokens = Vec::new();
         let chars: Vec<char> = text.chars().collect();
@@ -832,7 +832,7 @@ mod tests {
         sentence
     }
 
-    fn make_simple_sentence(text: &str, offset: usize) -> AnalyzedSentence {
+    pub(super) fn make_simple_sentence(text: &str, offset: usize) -> AnalyzedSentence {
         let mut sentence = AnalyzedSentence::new(text, offset, offset + text.len());
         let mut tokens = Vec::new();
         let mut pos = 0;
@@ -1748,5 +1748,50 @@ mod paragraph_tests {
         ];
         let matches = rule.match_text("", &sentences);
         assert_eq!(matches.len(), 1, "{matches:?}");
+    }
+    use super::tests::{make_sentence_with_whitespace, make_simple_sentence};
+
+    #[test]
+    fn unpaired_quotes_flag_a_lone_closing_quote() {
+        let rule = GenericUnpairedQuotesRule::english();
+        let s1 = make_sentence_with_whitespace("He said hello \u{201D} today", 0);
+        let matches = rule.match_text("", &[s1]);
+        assert_eq!(matches.len(), 1);
+        assert!(matches[0].message().contains("Unpaired closing quote"));
+        let s_ok = make_sentence_with_whitespace("He said \u{201C} hello \u{201D} today", 0);
+        assert!(rule.match_text("", &[s_ok]).is_empty());
+    }
+
+    #[test]
+    fn long_paragraph_rule_flags_only_overlong_paragraphs() {
+        let rule = LongParagraphRule::new(5)
+            .with_description("d")
+            .with_message("m");
+        assert_eq!(rule.description(), "d");
+        let short: Vec<AnalyzedSentence> = (0..3)
+            .map(|i| make_simple_sentence(&format!("words here number {i}."), 0))
+            .collect();
+        assert!(rule.match_text("", &short).is_empty());
+        let mut long = Vec::new();
+        for i in 0..8 {
+            let text = if i == 7 {
+                "final words here.\n\n"
+            } else {
+                "filler words here."
+            };
+            long.push(make_simple_sentence(text, 0));
+        }
+        let matches = rule.match_text("", &long);
+        assert!(!matches.is_empty(), "an overlong paragraph is flagged");
+    }
+
+    #[test]
+    fn long_paragraph_rule_skips_paragraphs_with_internal_linebreaks() {
+        let rule = LongParagraphRule::new(3);
+        let paras = vec![
+            make_simple_sentence("a b c d\ne f g h", 0),
+            make_simple_sentence("next para.", 0),
+        ];
+        assert!(rule.match_text("", &paras).is_empty());
     }
 }
