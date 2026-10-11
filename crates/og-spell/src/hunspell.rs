@@ -218,7 +218,7 @@ impl HunspellChecker {
             let fields: Vec<&str> = line.split_whitespace().collect();
             match fields[0] {
                 "PFX" | "SFX" => {
-                    let Some(name) = fields[1].chars().next() else {
+                    let Some(name) = fields.get(1).and_then(|f| f.chars().next()) else {
                         continue;
                     };
                     let is_prefix = fields[0] == "PFX";
@@ -897,5 +897,306 @@ mod tests {
         for word in rejected {
             assert!(!checker.spell(word), "expected rejected: {word}");
         }
+    }
+
+    struct TempAffDic {
+        aff: std::path::PathBuf,
+        dic: std::path::PathBuf,
+    }
+
+    impl TempAffDic {
+        fn new(name: &str, aff: &str, dic: &str) -> Self {
+            let dir = std::env::temp_dir();
+            let files = TempAffDic {
+                aff: dir.join(format!(
+                    "og-spell-hunspell-{name}-{}.aff",
+                    std::process::id()
+                )),
+                dic: dir.join(format!(
+                    "og-spell-hunspell-{name}-{}.dic",
+                    std::process::id()
+                )),
+            };
+            std::fs::write(&files.aff, aff).unwrap();
+            std::fs::write(&files.dic, dic).unwrap();
+            files
+        }
+
+        fn load(&self) -> HunspellChecker {
+            HunspellChecker::load(&self.aff, &self.dic).expect("fixture loads")
+        }
+    }
+
+    impl Drop for TempAffDic {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.aff);
+            let _ = std::fs::remove_file(&self.dic);
+        }
+    }
+
+    #[test]
+    fn load_fails_for_missing_or_empty_inputs() {
+        let missing = TempAffDic::new("missing", "", "");
+        assert!(HunspellChecker::load(&missing.aff, &missing.dic).is_none());
+        let empty = TempAffDic::new("emptydic", "COMPOUNDMIN 3\n", "0\n");
+        assert!(HunspellChecker::load(&empty.aff, &empty.dic).is_none());
+    }
+
+    #[test]
+    fn parser_skips_malformed_lines_and_comments() {
+        let files = TempAffDic::new(
+            "parse",
+            "# leading comment\nCOMPOUNDMIN 3 # trailing comment\nPFX\nSFX A 0\nSFX B 0 s\nCOMPOUNDBEGIN B\nCOMPOUNDEND E\n",
+            "3\nsun/BO\nshine/E\nnosuffix/B\n",
+        );
+        let checker = files.load();
+        assert!(checker.spell("sun"));
+        assert!(checker.spell("shine"));
+        assert!(checker.spell("sunshine"));
+        assert!(!checker.spell("sunshines"));
+    }
+
+    #[test]
+    fn plain_lookup_and_number_like_words() {
+        let files = TempAffDic::new("plain", "", "3\nhello\nworld\nfoo\n");
+        let checker = files.load();
+        assert!(checker.spell("hello"));
+        assert!(checker.spell("Hello"));
+        assert!(checker.spell("HELLO"));
+        assert!(!checker.spell("helxo"));
+        assert!(!checker.spell("hELLO"));
+        assert!(!checker.spell("HEllo"));
+        assert!(checker.spell("1,5"));
+        assert!(checker.spell("3-4"));
+        assert!(checker.spell("1.2.3"));
+        assert!(!checker.spell("x2"));
+        assert!(!checker.spell("12a"));
+        assert!(checker.spell("."));
+        assert!(checker.spell("   "));
+        assert!(checker.spell("  hello"));
+        assert!(!checker.spell(&"a".repeat(100)));
+    }
+
+    #[test]
+    fn abbreviations_recheck_with_trailing_dot() {
+        let files = TempAffDic::new("abbv", "", "3\nusw.\nhello\nABc.\n");
+        let checker = files.load();
+        assert!(checker.spell("usw."));
+        assert!(checker.spell("Usw."));
+        assert!(checker.spell("ABc."));
+        assert!(checker.spell("Hello."));
+        assert!(!checker.spell("wrld."));
+    }
+
+    #[test]
+    fn suffix_and_prefix_expansion_with_conditions() {
+        let files = TempAffDic::new(
+            "affix",
+            "SFX A Y 1\nSFX A 0 s .\nPFX B Y 1\nPFX B 0 un .\nSFX S e ing .\nSFX N 0 s [^x]\n",
+            "5\nword/A\nhappy/BA\nmake/S\nfox/N\ncats/N\n",
+        );
+        let checker = files.load();
+        assert!(checker.spell("word"));
+        assert!(checker.spell("words"));
+        assert!(!checker.spell("wordss"));
+        assert!(checker.spell("happy"));
+        assert!(checker.spell("unhappy"));
+        assert!(checker.spell("unhappys"));
+        assert!(checker.spell("make"));
+        assert!(checker.spell("making"));
+        assert!(checker.spell("cats"));
+        assert!(checker.spell("catss"));
+        assert!(checker.spell("fox"));
+        assert!(!checker.spell("foxs"));
+    }
+
+    #[test]
+    fn forbidden_words_reject_stems_and_affixed_forms() {
+        let files = TempAffDic::new(
+            "forbidden",
+            "FORBIDDENWORD X\nSFX A Y 1\nSFX A 0 s .\n",
+            "3\nword\nbad/X\nevil/AX\n",
+        );
+        let checker = files.load();
+        assert!(checker.spell("word"));
+        assert!(!checker.spell("bad"));
+        assert!(!checker.spell("evil"));
+        assert!(!checker.spell("evils"));
+    }
+
+    #[test]
+    fn needaffix_stems_only_match_with_an_affix() {
+        let files = TempAffDic::new(
+            "needaffix",
+            "NEEDAFFIX N\nSFX A Y 1\nSFX A 0 s .\nPFX U Y 1\nPFX U 0 0 .\nSFX V 0 0 .\n",
+            "4\nbare/NA\nword\nzug/NU\nqux/NV\n",
+        );
+        let checker = files.load();
+        assert!(!checker.spell("bare"));
+        assert!(checker.spell("bares"));
+        assert!(checker.spell("zug"));
+        assert!(checker.spell("qux"));
+    }
+
+    #[test]
+    fn needaffix_continuation_blocks_the_affix_line() {
+        let files = TempAffDic::new(
+            "needaffixcont",
+            "NEEDAFFIX N\nPFX P Y 1\nPFX P 0 pre/N .\nPFX Q Y 1\nPFX Q 0 pre .\n",
+            "3\nhappy/P\nglad/Q\nother\n",
+        );
+        let checker = files.load();
+        assert!(!checker.spell("prehappy"));
+        assert!(checker.spell("happy"));
+    }
+
+    #[test]
+    fn keepcase_words_reject_recapitalizations() {
+        let files = TempAffDic::new(
+            "keepcase",
+            "KEEPCASE K\nSFX A Y 1\nSFX A 0 s .\n",
+            "3\nstreet/K\nway/AK\nplain\n",
+        );
+        let checker = files.load();
+        assert!(checker.spell("street"));
+        assert!(!checker.spell("Street"));
+        assert!(!checker.spell("STREET"));
+        assert!(checker.spell("way"));
+        assert!(checker.spell("ways"));
+        assert!(!checker.spell("Ways"));
+        assert!(checker.spell("Plain"));
+        assert!(checker.spell("PLAIN"));
+    }
+
+    #[test]
+    fn checksharps_lets_allcaps_strasse_match_strasse_with_sharp_s() {
+        let with = TempAffDic::new(
+            "sharps",
+            "KEEPCASE K\nCHECKSHARPS\n",
+            "2\nstraße/K\nplain\n",
+        );
+        let checker = with.load();
+        assert!(checker.spell("straße"));
+        assert!(checker.spell("Straße"));
+        assert!(checker.spell("STRASSE"));
+        assert!(checker.spell("STRASSE."));
+
+        let without = TempAffDic::new("nosharps", "KEEPCASE K\n", "2\nstraße/K\nplain\n");
+        let checker = without.load();
+        assert!(checker.spell("straße"));
+        assert!(!checker.spell("Straße"));
+        assert!(!checker.spell("STRASSE"));
+    }
+
+    #[test]
+    fn onlyincompound_words_only_match_inside_compounds() {
+        let files = TempAffDic::new(
+            "onlyincompound",
+            "COMPOUNDBEGIN B\nCOMPOUNDMIDDLE M\nCOMPOUNDEND E\nCOMPOUNDMIN 3\nONLYINCOMPOUND O\nSFX A Y 1\nSFX A 0 s .\n",
+            "4\nsun/BO\nmoon/M\nshine/E\nmid/OA\n",
+        );
+        let checker = files.load();
+        assert!(!checker.spell("sun"));
+        assert!(checker.spell("shine"));
+        assert!(checker.spell("sunshine"));
+        assert!(checker.spell("sunmoonshine"));
+        assert!(!checker.spell("moonshine"));
+        assert!(!checker.spell("mid"));
+        assert!(!checker.spell("mids"));
+    }
+
+    #[test]
+    fn compoundmin_gates_short_merges() {
+        let long = TempAffDic::new(
+            "cmin3",
+            "COMPOUNDBEGIN B\nCOMPOUNDEND E\n",
+            "2\nab/B\ncde/E\n",
+        );
+        let checker = long.load();
+        assert!(!checker.spell("abcde"));
+
+        let short = TempAffDic::new(
+            "cmin2",
+            "COMPOUNDMIN 2\nCOMPOUNDBEGIN B\nCOMPOUNDEND E\n",
+            "2\nab/B\ncde/E\n",
+        );
+        let checker = short.load();
+        assert!(checker.spell("abcde"));
+    }
+
+    #[test]
+    fn forbidden_compound_parts_abort_the_split() {
+        let files = TempAffDic::new(
+            "forbcomp",
+            "FORBIDDENWORD X\nCOMPOUNDBEGIN B\nCOMPOUNDEND E\nCOMPOUNDMIN 3\n",
+            "4\nbad/BX\ngood/B\ncde/EX\nfgh/E\n",
+        );
+        let checker = files.load();
+        assert!(!checker.spell("badcde"));
+        assert!(!checker.spell("goodcde"));
+        assert!(checker.spell("goodfgh"));
+    }
+
+    #[test]
+    fn compound_permit_flag_lets_affixed_parts_compound() {
+        let files = TempAffDic::new(
+            "permit",
+            "COMPOUNDBEGIN B\nCOMPOUNDEND E\nCOMPOUNDMIN 3\nCOMPOUNDPERMITFLAG P\nSFX S Y 1\nSFX S 0 s/PB .\nSFX T Y 1\nSFX T 0 s/PE .\n",
+            "4\nsun/BS\nshine/TE\nlamp/E\nword\n",
+        );
+        let checker = files.load();
+        assert!(checker.spell("sunslamp"));
+        assert!(checker.spell("sunshine"));
+        assert!(checker.spell("sunshines"));
+
+        let nopermit = TempAffDic::new(
+            "nopermit",
+            "COMPOUNDBEGIN B\nCOMPOUNDEND E\nCOMPOUNDMIN 3\nSFX S Y 1\nSFX S 0 s/B .\n",
+            "2\nsun/BS\nlamp/E\n",
+        );
+        let checker = nopermit.load();
+        assert!(!checker.spell("sunslamp"));
+    }
+
+    #[test]
+    fn circumfix_requires_matching_prefix_and_suffix_flags() {
+        let files = TempAffDic::new(
+            "circumfix",
+            "CIRCUMFIX Z\nPFX Q Y 1\nPFX Q 0 be/Z .\nPFX R Y 1\nPFX R 0 be .\nSFX C Y 1\nSFX C 0 ing/Z .\nSFX D Y 1\nSFX D 0 ing .\n",
+            "4\ncome/QC\narrive/QD\ngo/C\nwalk/D\n",
+        );
+        let checker = files.load();
+        assert!(checker.spell("becomeing"));
+        assert!(!checker.spell("begoing"));
+        assert!(!checker.spell("becoming"));
+        assert!(!checker.spell("comeing"));
+        assert!(checker.spell("walking"));
+        assert!(!checker.spell("going"));
+    }
+
+    #[test]
+    fn non_cross_product_prefix_rejects_further_suffixes() {
+        let files = TempAffDic::new(
+            "nocross",
+            "PFX N N 1\nPFX N 0 un .\nSFX A Y 1\nSFX A 0 s .\n",
+            "2\nhappy/NA\nother\n",
+        );
+        let checker = files.load();
+        assert!(checker.spell("unhappy"));
+        assert!(!checker.spell("unhappys"));
+    }
+
+    #[test]
+    fn oversized_still_spell_checks_through_the_fallback_lookup() {
+        let strip = "a".repeat(130);
+        let files = TempAffDic::new(
+            "overflow",
+            &format!("SFX F Y 1\nSFX F {strip} 0 .\n"),
+            "2\nword/F\nother\n",
+        );
+        let checker = files.load();
+        let long = "b".repeat(99);
+        assert!(!checker.spell(&long));
+        assert!(checker.spell("word"));
     }
 }
