@@ -1487,6 +1487,111 @@ pub fn shared_synth_dictionary(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    fn fsa5_fixture() -> Fsa {
+        let mut data = Vec::new();
+        data.extend_from_slice(b"\\fsa");
+        data.extend_from_slice(&[0x05, b'_', b'+', 0x02]);
+        let mut arcs = vec![0u8; 17];
+        arcs[0] = 0x00;
+        arcs[1] = 0x04;
+        arcs[2] = 0x00;
+        arcs[3] = 0x28;
+        arcs[4] = 0x00;
+        arcs[5] = 0x61;
+        arcs[6] = 0x42;
+        arcs[7] = 0x00;
+        arcs[8] = 0x2b;
+        arcs[9] = 0x70;
+        arcs[10] = 0x00;
+        arcs[11] = 0x62;
+        arcs[12] = 0x8b;
+        arcs[13] = 0x00;
+        arcs[14] = 0x7a;
+        arcs[15] = 0x8b;
+        arcs[16] = 0x00;
+        data.extend_from_slice(&arcs);
+        Fsa::from_bytes(std::sync::Arc::from(data.into_boxed_slice())).expect("fsa5 fixture")
+    }
+
+    #[test]
+    fn fsa5_reader_walks_seeks_and_answers_contains_word() {
+        let fsa = fsa5_fixture();
+        let Fsa::V5(fsa5) = &fsa else {
+            panic!("fixture must dispatch to the FSA5 reader");
+        };
+        let root = fsa5.root_node().expect("root node");
+        assert_eq!(root, 5);
+
+        let mut sequences = Vec::new();
+        fsa.for_each_sequence(&mut |s: &[u8]| sequences.push(s.to_vec()));
+        assert_eq!(sequences, [b"a+z".to_vec(), b"ab".to_vec()]);
+
+        assert!(fsa5.seek(root, b"ab").is_some());
+        assert!(fsa5.seek(root, b"az").is_none());
+
+        assert!(fsa5.contains_word(root, b"a", b'+'));
+        assert!(fsa5.contains_word(root, b"ab", b'+'));
+        assert!(fsa5.contains_word(root, b"a+z", b'+'));
+        assert!(!fsa5.contains_word(root, b"a+", b'+'));
+        assert!(!fsa5.contains_word(root, b"z", b'+'));
+        assert!(!fsa5.contains_word(root, b"b", b'+'));
+        assert!(!fsa5.contains_word(root, b"aq", b'+'));
+    }
+
+    fn cfsa1_fixture() -> Fsa {
+        let mut data = vec![0u8; 55];
+        data[0..4].copy_from_slice(b"\\fsa");
+        data[4] = 0xc5;
+        data[7] = 0x02;
+        data[9] = b'z';
+        let arcs_start = 40;
+        let mut set = |offset: usize, bytes: &[u8]| {
+            data[arcs_start + offset..arcs_start + offset + bytes.len()].copy_from_slice(bytes);
+        };
+        set(0, &[0x04, 0x00]);
+        set(2, &[0x28, 0x00, 0x00]);
+        set(5, &[0x42, 0x61, 0x00]);
+        set(8, &[0x70, 0x2b, 0x00]);
+        set(11, &[0x7b, 0x62, 0x00]);
+        set(14, &[0x0f]);
+        Fsa::from_bytes(std::sync::Arc::from(data.into_boxed_slice())).expect("cfsa1 fixture")
+    }
+
+    #[test]
+    fn cfsa1_reader_decodes_labels_walks_and_seeks() {
+        let fsa = cfsa1_fixture();
+        let Fsa::C1(cfsa1) = &fsa else {
+            panic!("fixture must dispatch to the CFSA1 reader");
+        };
+        let root = cfsa1.root_node().expect("root node");
+        assert_eq!(root, 5);
+
+        let mut sequences = Vec::new();
+        fsa.for_each_sequence(&mut |s: &[u8]| sequences.push(s.to_vec()));
+        assert_eq!(sequences, [b"a+z".to_vec(), b"ab".to_vec()]);
+
+        assert!(cfsa1.seek(root, b"ab").is_some());
+        assert!(cfsa1.seek(root, b"az").is_none());
+
+        assert!(cfsa1.contains_word(root, b"a", b'+'));
+        assert!(cfsa1.contains_word(root, b"ab", b'+'));
+        assert!(cfsa1.contains_word(root, b"a+z", b'+'));
+        assert!(!cfsa1.contains_word(root, b"a+", b'+'));
+        assert!(!cfsa1.contains_word(root, b"z", b'+'));
+    }
+
+    #[test]
+    fn fsa_rejects_unknown_versions() {
+        let mut data = Vec::new();
+        data.extend_from_slice(b"\\fsa");
+        data.push(0x07);
+        data.extend_from_slice(&[0, 0, 0x02]);
+        data.extend_from_slice(&[0u8; 64]);
+        assert!(Fsa::from_bytes(std::sync::Arc::from(data.into_boxed_slice())).is_none());
+    }
+
     #[test]
     fn arabic_synth_lookup_decodes_suffix_encoded_forms() {
         let dir = std::path::PathBuf::from(
