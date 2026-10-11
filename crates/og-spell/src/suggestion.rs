@@ -142,4 +142,62 @@ mod tests {
                 .all(|s| levenshtein_distance("helo", s) <= 1)
         );
     }
+
+    fn engine(words: &[&str]) -> SuggestionEngine {
+        SuggestionEngine::new(Arc::new(Dictionary::from_words(words)))
+    }
+
+    #[test]
+    fn all_upper_query_uppercases_candidates() {
+        let engine = engine(&["hello", "help", "world"]);
+        let suggestions = engine.suggest("HELO", 5);
+        assert!(suggestions.contains(&"HELLO".to_string()));
+        assert!(suggestions.iter().all(|s| s == &s.to_uppercase()));
+    }
+
+    #[test]
+    fn capitalized_query_capitalizes_candidates() {
+        let engine = engine(&["hello", "help", "world"]);
+        let suggestions = engine.suggest("Helo", 5);
+        assert!(suggestions.contains(&"Hello".to_string()));
+        assert!(!suggestions.contains(&"hello".to_string()));
+    }
+
+    #[test]
+    fn short_queries_use_distance_cap_two() {
+        let engine = engine(&["hello", "held", "hxyz"]);
+        let suggestions = engine.suggest("helo", 5);
+        assert!(suggestions.contains(&"hello".to_string()));
+        assert!(suggestions.contains(&"held".to_string()));
+        assert!(!suggestions.contains(&"hxyz".to_string()));
+    }
+
+    #[test]
+    fn long_queries_use_distance_cap_three() {
+        let engine = engine(&["greeting", "greetinx", "greetinxyza"]);
+        let suggestions = engine.suggest("greeting", 5);
+        assert!(suggestions.contains(&"greetinx".to_string()));
+        assert!(!suggestions.contains(&"greetinxyza".to_string()));
+    }
+
+    #[test]
+    fn max_truncates_and_single_letter_words_are_skipped() {
+        let engine = engine(&["hello", "hell", "helm", "x"]);
+        assert!(engine.suggest("helo", 1).len() <= 1);
+        assert!(!engine.suggest("helo", 5).contains(&"x".to_string()));
+    }
+
+    #[test]
+    fn empty_query_and_no_match_yield_nothing() {
+        let engine = engine(&["hello", "world"]);
+        assert!(engine.suggest("", 5).is_empty());
+        assert!(engine.suggest("zzzzzz", 5).is_empty());
+    }
+
+    #[test]
+    fn levenshtein_handles_empty_inputs() {
+        assert_eq!(levenshtein_distance("", "abc"), 3);
+        assert_eq!(levenshtein_distance("abc", ""), 3);
+        assert_eq!(levenshtein_distance("", ""), 0);
+    }
 }

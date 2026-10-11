@@ -234,6 +234,7 @@ impl Rule for SpellingCheckRule {
 mod tests {
     use super::*;
     use og_core::rule::Rule;
+    use og_core::{AnalyzedToken, AnalyzedTokenReadings};
 
     fn make_sentence_with_words(text: &str) -> AnalyzedSentence {
         use og_core::{AnalyzedToken, AnalyzedTokenReadings};
@@ -330,5 +331,158 @@ mod tests {
         let matches = rule.match_sentence(&sentence);
         assert_eq!(matches.len(), 1, "Expected 1 match for 'qzrmple'");
         assert!(matches[0].message().contains("qzrmple"));
+    }
+
+    fn base_dict() -> Dictionary {
+        Dictionary::from_words(&["hello", "world", "the", "test", "Haus"])
+    }
+
+    #[test]
+    fn constructors_wire_id_extras_and_shared_dictionary() {
+        let dict = std::sync::Arc::new(base_dict());
+        let shared = SpellingCheckRule::with_shared_dictionary(std::sync::Arc::clone(&dict));
+        assert_eq!(shared.id(), "SPELLING_RULE");
+        assert!(shared.shared_dictionary().contains("hello"));
+
+        let renamed = shared
+            .with_id("DE_SPELLER")
+            .with_ignore_words(HashSet::from(["igno".to_string()]));
+        assert_eq!(renamed.id(), "DE_SPELLER");
+        assert!(renamed.is_known_word("IGNO"));
+
+        let mut extra = HashSet::new();
+        extra.insert("extra".to_string());
+        let rule = SpellingCheckRule::new_shared(std::sync::Arc::clone(&dict), "OTHER_ID", extra);
+        assert_eq!(rule.id(), "OTHER_ID");
+        assert!(rule.is_known_word("extra"));
+        assert!(!rule.is_known_word("Hausx"));
+        assert_eq!(rule.dict_size(), dict.len());
+    }
+
+    #[test]
+    fn trait_accessors_report_metadata() {
+        let rule = SpellingCheckRule::new(base_dict());
+        assert_eq!(rule.id(), "SPELLING_RULE");
+        assert_eq!(rule.description(), "Possible spelling mistake");
+        assert_eq!(rule.category().name(), "Possible Typo");
+        assert_eq!(rule.issue_type(), IssueType::Misspelling);
+    }
+
+    #[test]
+    fn is_known_word_skips_non_words_and_ignores() {
+        let rule = SpellingCheckRule::new(base_dict());
+        for word in [
+            "123", "-", "--", "3.5", "a", "B", "x/y", "u@v", "httpx", "www.site", "abc12",
+        ] {
+            assert!(rule.is_known_word(word), "expected known: {word}");
+        }
+        assert!(rule.is_known_word("hello"));
+        assert!(rule.is_known_word("haus"));
+        assert!(!rule.is_known_word("hellos"));
+
+        let ignoring = SpellingCheckRule::new(base_dict())
+            .with_ignore_words(HashSet::from(["Wrdx".to_string(), "igno".to_string()]));
+        assert!(ignoring.is_known_word("Wrdx"));
+        assert!(ignoring.is_known_word("IGNO"));
+    }
+
+    #[test]
+    fn match_sentence_skips_special_tokens() {
+        let rule = SpellingCheckRule::new(base_dict());
+        let mut sentence = AnalyzedSentence::new("hello wrld test", 0, "hello wrld test".len());
+        let hello = AnalyzedTokenReadings::new(AnalyzedToken::new("hello", 0, 5));
+        let sent_start = AnalyzedTokenReadings::new(AnalyzedToken::new("wrld", 6, 10))
+            .with_readings(vec![
+                AnalyzedToken::new("wrld", 6, 10).with_pos_tags(vec!["SENT_START".to_string()]),
+            ]);
+        let marker = AnalyzedTokenReadings::new(AnalyzedToken::new("<S>", 11, 14));
+        let mut immunized = AnalyzedTokenReadings::new(AnalyzedToken::new("qqqq", 0, 0));
+        immunized.immunize();
+        let mut ignored = AnalyzedTokenReadings::new(AnalyzedToken::new("zzzz", 0, 0));
+        ignored.ignore_spelling();
+        let whitespace = AnalyzedTokenReadings::new(AnalyzedToken::new(" ", 0, 0));
+        let multi_dot = AnalyzedTokenReadings::new(AnalyzedToken::new("e.g.", 0, 0));
+        let digits = AnalyzedTokenReadings::new(AnalyzedToken::new("abc12", 0, 0));
+        sentence.set_tokens(vec![
+            hello, sent_start, marker, immunized, ignored, whitespace, multi_dot, digits,
+        ]);
+        assert!(rule.match_sentence(&sentence).is_empty());
+    }
+
+    #[test]
+    fn first_word_misspelling_gets_capitalized_replacement() {
+        let rule = SpellingCheckRule::new(base_dict());
+        let sentence = make_sentence_with_words("helo wrld");
+        let matches = rule.match_sentence(&sentence);
+        assert_eq!(matches.len(), 2);
+        let first = matches
+            .iter()
+            .find(|m| m.message().contains("helo"))
+            .expect("helo flagged");
+        let first_values: Vec<String> = first
+            .replacements()
+            .iter()
+            .map(|r| r.value().to_string())
+            .collect();
+        assert_eq!(first_values.first(), Some(&"Hello".to_string()));
+        let second = matches
+            .iter()
+            .find(|m| m.message().contains("wrld"))
+            .expect("wrld flagged");
+        assert!(
+            second
+                .replacements()
+                .iter()
+                .all(|r| r.value() == r.value().to_lowercase())
+        );
+    }
+
+    #[test]
+    fn capitalized_first_word_keeps_already_capitalized_replacement() {
+        let rule = SpellingCheckRule::new(base_dict());
+        let sentence = make_sentence_with_words("Helo test");
+        let matches = rule.match_sentence(&sentence);
+        assert_eq!(matches.len(), 1);
+        let values: Vec<String> = matches[0]
+            .replacements()
+            .iter()
+            .map(|r| r.value().to_string())
+            .collect();
+        assert_eq!(values.first(), Some(&"Hello".to_string()));
+        assert_eq!(
+            matches[0].message(),
+            "Possible spelling mistake found: 'Helo'"
+        );
+    }
+
+    #[test]
+    fn context_snaps_to_char_boundaries_around_multibyte_text() {
+        let rule = SpellingCheckRule::new(base_dict());
+        let text = format!(
+            "{}x{} wrld {}",
+            "ä".repeat(20),
+            "ö".repeat(20),
+            "ü".repeat(30)
+        );
+        let mut sentence = AnalyzedSentence::new(text.clone(), 0, text.len());
+        let mut readings = Vec::new();
+        let mut search_from = 0;
+        for word in text.split_whitespace() {
+            let start = text[search_from..].find(word).unwrap() + search_from;
+            let end = start + word.len();
+            search_from = end;
+            readings.push(AnalyzedTokenReadings::new(AnalyzedToken::new(
+                word, start, end,
+            )));
+        }
+        sentence.set_tokens(readings);
+        let matches = rule.match_sentence(&sentence);
+        let target = matches
+            .iter()
+            .find(|m| m.message().contains("wrld"))
+            .expect("wrld flagged");
+        let context = target.context().text();
+        assert!(context.contains("wrld"));
+        assert!(text.contains(context));
     }
 }
