@@ -422,4 +422,121 @@ mod tests {
             "rule must not crash: {matches:?}"
         );
     }
+
+    fn tagged_sentence(text: &str, tags: &[&str]) -> AnalyzedSentence {
+        use og_core::{AnalyzedToken, AnalyzedTokenReadings};
+        let mut tokens = vec![AnalyzedTokenReadings::new(
+            AnalyzedToken::new("<S>", 0, 0).with_pos_tags(vec!["SENT_START".to_string()]),
+        )];
+        let mut words: Vec<&str> = Vec::new();
+        for word in text.split(' ') {
+            if word.is_empty() {
+                continue;
+            }
+            match word.strip_suffix(['.', '!', '?']) {
+                Some(stem) if !stem.is_empty() => {
+                    words.push(stem);
+                    words.push(&word[word.len() - 1..]);
+                }
+                _ => words.push(word),
+            }
+        }
+        let mut search = 0usize;
+        for (idx, word) in words.iter().enumerate() {
+            let start = text[search..].find(word).expect("word from split") + search;
+            let tag = tags.get(idx).copied().unwrap_or("");
+            let mut reading = AnalyzedToken::new(*word, start, start + word.len());
+            if !tag.is_empty() {
+                reading = reading.with_pos_tags(vec![tag.to_string()]);
+            }
+            tokens.push(AnalyzedTokenReadings::new(reading.clone()).with_readings(vec![reading]));
+            search = start + word.len();
+        }
+        let mut sentence = AnalyzedSentence::new(text, 0, text.len());
+        sentence.set_tokens(tokens);
+        sentence
+    }
+
+    #[test]
+    fn english_rule_flags_a_globally_known_lowercase_word() {
+        let model = DiskLanguageModel::from_pairs(&[
+            (vec!["&", "peer2peer", "the"], 900),
+            (vec!["&"], 1000),
+            (vec!["the"], 1000),
+            (vec!["peer2peer"], 900),
+            (vec!["files"], 500),
+            (vec!["his"], 800),
+        ]);
+        let rule = EnglishUpperCaseNgramRule::new(Arc::new(model));
+        let sentence = tagged_sentence("his & Peer2peer the files.", &["", "", "VBZ", "", ""]);
+        let matches = rule.match_sentence(&sentence);
+        assert_eq!(matches.len(), 1, "{matches:?}");
+        assert_eq!(matches[0].replacements()[0].value(), "peer2peer");
+        assert!(matches[0].message().starts_with("Only proper nouns"));
+    }
+
+    #[test]
+    fn english_rule_skips_the_java_guard_cases() {
+        let model = DiskLanguageModel::from_pairs(&[
+            (vec!["&", "peer2peer", "the"], 900),
+            (vec!["&"], 1000),
+            (vec!["the"], 1000),
+            (vec!["peer2peer"], 900),
+        ]);
+        let rule = EnglishUpperCaseNgramRule::new(Arc::new(model));
+        for (text, tags) in [
+            ("Peer2peer the files now.", &["VBZ", "", "", ""][..]),
+            ("and Go the files now.", &["VBZ", "", "", ""]),
+            ("and PEER2PEER the files now.", &["VBZ", "", "", ""]),
+            ("and I the files now.", &["VBZ", "", "", ""]),
+            ("his & Peer2peer the files", &["", "VBZ", "", ""]),
+            ("the Council of Trent met.", &["NNP", "", "NNP", ""]),
+            ("his & Peer2peer the files now.", &["", "NNP", "", "", ""]),
+        ] {
+            let sentence = tagged_sentence(text, tags);
+            assert!(
+                rule.match_sentence(&sentence).is_empty(),
+                "{text}: must stay unflagged"
+            );
+        }
+    }
+
+    #[test]
+    fn german_rule_flags_tage_in_both_directions() {
+        let noun_model = DiskLanguageModel::from_pairs(&[
+            (vec!["Wir", "Tage", "dort"], 900),
+            (vec!["Wir"], 1000),
+            (vec!["Tage"], 800),
+            (vec!["tage"], 5),
+            (vec!["dort"], 700),
+        ]);
+        let rule = GermanUpperCaseNgramRule::new(Arc::new(noun_model));
+        let lower = tagged_sentence("Wir tage dort.", &["", "", ""]);
+        let matches = rule.match_sentence(&lower);
+        assert_eq!(matches.len(), 1, "{matches:?}");
+        assert_eq!(matches[0].replacements()[0].value(), "Tage");
+        assert!(matches[0].message().contains("das Nomen"));
+
+        let verb_model = DiskLanguageModel::from_pairs(&[
+            (vec!["Wir", "tage", "dort"], 900),
+            (vec!["Wir"], 1000),
+            (vec!["Tage"], 5),
+            (vec!["tage"], 800),
+            (vec!["dort"], 700),
+        ]);
+        let rule = GermanUpperCaseNgramRule::new(Arc::new(verb_model));
+        let upper = tagged_sentence("Wir Tage dort.", &["", "", ""]);
+        let matches = rule.match_sentence(&upper);
+        assert_eq!(matches.len(), 1, "{matches:?}");
+        assert_eq!(matches[0].replacements()[0].value(), "tage");
+        assert!(matches[0].message().contains("das Verb"));
+
+        for text in ["WIR TAGEN dort.", "Wir hausen dort."] {
+            let sentence = tagged_sentence(text, &["", "", ""]);
+            assert!(
+                rule.match_sentence(&sentence).is_empty(),
+                "{text}: must stay unflagged"
+            );
+        }
+    }
 }
