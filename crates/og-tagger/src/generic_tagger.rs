@@ -520,6 +520,94 @@ impl og_core::checker::Tagger for GenericTagger {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn french_prefix_stages_tag_verbs_and_nouns() {
+        let Some(dir) = resource_dir("fr") else {
+            return;
+        };
+        let tagger = GenericTagger::french(&dir);
+
+        let verb = tagger.tag_word("remaquiller", 0, 11);
+        assert_eq!(
+            verb.iter()
+                .map(|r| r.pos_tags().join(","))
+                .collect::<Vec<_>>(),
+            vec!["V inf".to_string()]
+        );
+        assert_eq!(verb[0].lemma(), Some("remaquiller"));
+
+        for (word, tag) in [
+            ("minicrevasse", "N f s"),
+            ("mégaorchestre", "N m s"),
+            ("micro-cahier", "N m s"),
+            ("anti-garage", "N m s"),
+            ("post-baguette", "N f s"),
+            ("pseudo-orchestre", "N m s"),
+        ] {
+            let readings = tagger.tag_word(word, 0, word.len());
+            assert!(
+                readings
+                    .iter()
+                    .any(|r| r.pos_tags().contains(&tag.to_string())),
+                "{word}: {:?}",
+                readings
+                    .iter()
+                    .map(|r| r.pos_tags().to_vec())
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn french_oe_ligature_falls_back_to_the_dict_form() {
+        let Some(dir) = resource_dir("fr") else {
+            return;
+        };
+        let tagger = GenericTagger::french(&dir);
+        let coeur = tagger.tag_word("coeur", 0, 5);
+        assert!(coeur.iter().any(|r| r.lemma() == Some("cœur")));
+        assert!(
+            coeur
+                .iter()
+                .any(|r| r.pos_tags().contains(&"N m s".to_string()))
+        );
+        assert!(tagger.is_word_tagged("coeur"));
+        assert!(tagger.is_word_tagged("maison"));
+        assert!(!tagger.is_word_tagged("qwxz"));
+    }
+
+    #[test]
+    fn french_checker_tagging_marks_apostrophes_by_kind() {
+        let Some(dir) = resource_dir("fr") else {
+            return;
+        };
+        let tagger = GenericTagger::french(&dir);
+        let mut tokens = vec![
+            og_core::AnalyzedTokenReadings::new(og_core::AnalyzedToken::new("<S>", 0, 0)),
+            og_core::AnalyzedTokenReadings::new(og_core::AnalyzedToken::new("l’été", 0, 7)),
+            og_core::AnalyzedTokenReadings::new(og_core::AnalyzedToken::new("l'été", 8, 13)),
+        ];
+        og_core::checker::Tagger::tag(&tagger, &mut tokens);
+        assert_eq!(
+            tokens[1].chunks(),
+            &["containsTypographicApostrophe".to_string()]
+        );
+        assert_eq!(
+            tokens[2].chunks(),
+            &["containsTypewriterApostrophe".to_string()]
+        );
+        assert_eq!(tokens[0].chunks(), &[] as &[String]);
+    }
+
+    #[test]
+    fn shared_dictionary_caches_by_path() {
+        let Some(dir) = resource_dir("fr") else {
+            return;
+        };
+        let first = shared_dictionary(&dir, "french").expect("shared french dict");
+        let second = shared_dictionary(&dir, "french").expect("shared french dict again");
+        assert!(std::sync::Arc::ptr_eq(&first, &second));
+    }
 
     fn resource_dir(lang: &str) -> Option<std::path::PathBuf> {
         [
