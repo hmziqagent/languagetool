@@ -189,3 +189,94 @@ impl Rule for DanishSpellerRule {
         matches
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use og_core::{AnalyzedSentence, AnalyzedToken, AnalyzedTokenReadings};
+
+    fn make_sentence(text: &str) -> AnalyzedSentence {
+        let mut sentence = AnalyzedSentence::new(text, 0, text.len());
+        let mut tokens = vec![AnalyzedTokenReadings::new(
+            AnalyzedToken::new("<S>", 0, 0).with_pos_tags(vec!["SENT_START".to_string()]),
+        )];
+        let mut pos = 0usize;
+        for word in text.split_whitespace() {
+            let start = pos + text[pos..].find(word).expect("word offset");
+            let end = start + word.len();
+            tokens.push(AnalyzedTokenReadings::new(AnalyzedToken::new(
+                word, start, end,
+            )));
+            pos = end;
+        }
+        sentence.set_tokens(tokens);
+        sentence
+    }
+
+    #[test]
+    fn java_pin_dash_run_is_not_flagged() {
+        let rule = DanishSpellerRule::new();
+        assert_eq!(
+            rule.match_sentence(&make_sentence("De står under ----"))
+                .len(),
+            0
+        );
+    }
+
+    #[test]
+    fn known_danish_words_are_not_flagged() {
+        let rule = DanishSpellerRule::new();
+        assert!(rule.dictionary_size() > 0);
+        assert_eq!(
+            rule.match_sentence(&make_sentence("Hunden sover trygt"))
+                .len(),
+            0
+        );
+        assert_eq!(
+            rule.match_sentence(&make_sentence("København er stor"))
+                .len(),
+            0
+        );
+    }
+
+    #[test]
+    fn nonsense_word_is_flagged_as_unknown() {
+        let text = "qwxzjfm海带bane";
+        let matches = DanishSpellerRule::new().match_sentence(&make_sentence(text));
+        assert_eq!(matches.len(), 1);
+        assert_eq!(
+            matches[0].message(),
+            format!("Possible spelling mistake found: '{text}'")
+        );
+        assert_eq!(matches[0].rule().id(), "HUNSPELL_RULE");
+        assert_eq!(
+            &text[matches[0].offset()..matches[0].offset() + matches[0].length()],
+            text
+        );
+    }
+
+    #[test]
+    fn urls_digits_and_addresses_are_skipped() {
+        let rule = DanishSpellerRule::new();
+        assert_eq!(
+            rule.match_sentence(&make_sentence("Se http://eksempel.dk/qqwxz nu"))
+                .len(),
+            0
+        );
+        assert_eq!(
+            rule.match_sentence(&make_sentence("Besøg www.qqwxz.dk i dag"))
+                .len(),
+            0
+        );
+        assert_eq!(
+            rule.match_sentence(&make_sentence("Varenummer qqwxz123 findes"))
+                .len(),
+            0
+        );
+        assert_eq!(
+            rule.match_sentence(&make_sentence("Skriv til navn@qqwxz.dk i dag"))
+                .len(),
+            0
+        );
+    }
+}
