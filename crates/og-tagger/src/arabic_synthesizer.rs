@@ -188,6 +188,66 @@ mod tests {
     }
 
     #[test]
+    fn correct_tag_clears_clitics_and_unifies_pronouns() {
+        assert_eq!(correct_tag("NJ-;F3--;W-L"), "NJ-;F3--;---");
+        assert_eq!(correct_tag("NJ-;F3I;-KL"), "NJ-;F3I;--L");
+        assert_eq!(correct_tag("V41;M3H-paU;W-H"), "V41;M3H-paU;--H");
+        assert_eq!(correct_tag("PART;---;---"), "PART;---;---");
+    }
+
+    #[test]
+    fn missing_dictionary_synthesizes_nothing() {
+        let synth = ArabicSynthesizer::from_resource_dir(std::path::Path::new("/nonexistent"));
+        assert!(!synth.has_dictionary());
+        assert!(synth.synthesize("آب", "NJ-;F1--;--H").is_empty());
+    }
+
+    #[test]
+    fn inflecting_an_unknown_lemma_returns_the_bracketed_lemma() {
+        let synth = ArabicSynthesizer::from_resource_dir(&resource_dir());
+        let tagger = ArabicTagger::from_resource_dir(&resource_dir());
+        let source = AnalyzedToken::new("كتاب", 0, 0)
+            .with_lemma("كتاب".to_string())
+            .with_pos_tags(vec!["NJ-;F3--;--H".to_string()]);
+        assert_eq!(
+            synth.inflect_lemma_like(&tagger, "قققةق", &source),
+            vec!["[قققةق]".to_string()]
+        );
+    }
+
+    #[test]
+    fn inflect_lemma_like_shapes_pronoun_and_definite_forms() {
+        let synth = ArabicSynthesizer::from_resource_dir(&resource_dir());
+        let tagger = ArabicTagger::from_resource_dir(&resource_dir()).with_new_style_pronoun_tag();
+        let mk = |word: &str, tag: &str| {
+            AnalyzedToken::new(word, 0, 0)
+                .with_lemma(word.to_string())
+                .with_pos_tags(vec![tag.to_string()])
+        };
+
+        let forms = synth.inflect_lemma_like(&tagger, "كتاب", &mk("كتابهم", "NJ-;F3--;--H"));
+        assert_eq!(forms, vec!["كتاباتهم", "كتابتهم", "كتابياتهم"]);
+
+        let forms = synth.inflect_lemma_like(&tagger, "كتاب", &mk("كتابه", "NJ-;F3--;--H"));
+        assert_eq!(forms, vec!["كتاباته", "كتابته", "كتابياته"]);
+
+        let forms = synth.inflect_lemma_like(&tagger, "كتاب", &mk("الكتاب", "NJ-;F3--;--L"));
+        assert_eq!(
+            forms,
+            vec![
+                "الكتابات",
+                "الكتابة",
+                "الكتابتان",
+                "الكتابيات",
+                "الكتابيتان"
+            ]
+        );
+
+        let forms = synth.inflect_lemma_like(&tagger, "كتاب", &mk("وبالكتاب", "NJ-;F3I;-KL"));
+        assert_eq!(forms, vec!["(وبكتاب)"]);
+    }
+
+    #[test]
     fn synthesize_returns_corrected_stem_for_attached_tag() {
         let synth = ArabicSynthesizer::from_resource_dir(&resource_dir());
         if !synth.has_dictionary() {
