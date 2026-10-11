@@ -11,7 +11,7 @@ const ES_END_SYMBOLS: [&str; 8] = ["]", ")", "}", "”", "»", "\"", "'", "’"]
 fn numerals_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(r"(?i)^\d{1,2}?[a-z']*|M*(D?C{0,3}|C[DM])(L?X{0,3}|X[LC])(V?I{0,3}|I[VX])$")
+        Regex::new(r"(?i)^(?:\d{1,2}?[a-z']*|M*(D?C{0,3}|C[DM])(L?X{0,3}|X[LC])(V?I{0,3}|I[VX]))$")
             .unwrap()
     })
 }
@@ -66,13 +66,11 @@ impl SpanishUnpairedBracketsRule {
     fn is_no_exception(
         &self,
         token_str: &str,
-        tokens: &[&AnalyzedTokenReadings],
+        view: &SentenceView<'_>,
         i: usize,
         _j: usize,
     ) -> bool {
-        if i < 1 {
-            return true;
-        }
+        let tokens = &view.tokens;
         if i > 0 {
             let prev = tokens[i - 1].token().token();
             if (prev.starts_with("http://") || prev.starts_with("https://")) && prev.contains('(') {
@@ -91,10 +89,10 @@ impl SpanishUnpairedBracketsRule {
         }
         if i >= 1 {
             let prev = tokens[i - 1].token().token();
-            if prev == ":" && (token_str == ")" || token_str == "(") {
+            if prev == ":" && !view.ws_before[i] && (token_str == ")" || token_str == "(") {
                 return false;
             }
-            if prev == ";" && (token_str == ")" || token_str == "(") {
+            if prev == ";" && !view.ws_before[i] && (token_str == ")" || token_str == "(") {
                 return false;
             }
         }
@@ -107,11 +105,13 @@ impl SpanishUnpairedBracketsRule {
         }
         if i + 1 < tokens.len()
             && Self::is_quote(token_str)
+            && !view.ws_before[i + 1]
             && tokens[i + 1].token().token().eq_ignore_ascii_case("s")
         {
             return false;
         }
         if (token_str == "\"" || token_str == "'")
+            && !view.ws_before[i]
             && number_re().is_match(tokens[i - 1].token().token())
             && ((i > 2
                 && (tokens[i - 2].token().token().contains('º')
@@ -128,7 +128,7 @@ impl SpanishUnpairedBracketsRule {
         if i > 1 && token_str == ")" {
             let mut is_there_opening_parenthesis = false;
             let mut k = 1;
-            while i >= k {
+            while i > k {
                 let t = tokens[i - k].token().token();
                 if t == ")" {
                     break;
@@ -170,7 +170,7 @@ fn sentence_view(sentence: &AnalyzedSentence) -> SentenceView<'_> {
     let mut tokens = Vec::new();
     let mut ws_before = Vec::new();
     let mut pending_ws = false;
-    for atr in sentence.tokens().iter().skip(1) {
+    for atr in sentence.tokens().iter() {
         if atr.is_whitespace() {
             pending_ws = true;
             continue;
@@ -231,7 +231,7 @@ impl TextLevelRule for SpanishUnpairedBracketsRule {
                         } else {
                             true
                         };
-                    let no_exception = self.is_no_exception(token, &view.tokens, i, j);
+                    let no_exception = self.is_no_exception(token, &view, i, j);
                     if no_exception && preceded_by_whitespace && token == ES_START_SYMBOLS[j] {
                         symbol_stack.push(SymbolEntry {
                             symbol: ES_START_SYMBOLS[j],
@@ -244,17 +244,18 @@ impl TextLevelRule for SpanishUnpairedBracketsRule {
                         && (is_special_case || view.tokens[i].is_sentence_end())
                         && token == ES_END_SYMBOLS[j]
                     {
-                        let numerals_before_paren = (i > 2
-                            && ES_END_SYMBOLS[j] == ")"
-                            && (view.tokens[i - 3].has_pos_tag("SENT_START")
-                                || view.ws_before[i - 2])
-                            && view.tokens[i - 1].token().token() == "."
-                            && numerals_re().is_match(view.tokens[i - 2].token().token())
-                            && !matches!(symbol_stack.last(), Some(se) if se.symbol == "("))
-                            || (i > 1
+                        let numerals_before_paren = !view.ws_before[i]
+                            && ((i > 2
                                 && ES_END_SYMBOLS[j] == ")"
-                                && numerals_re().is_match(view.tokens[i - 1].token().token())
-                                && !matches!(symbol_stack.last(), Some(se) if se.symbol == "("));
+                                && (view.tokens[i - 3].has_pos_tag("SENT_START")
+                                    || view.ws_before[i - 2])
+                                && view.tokens[i - 1].token().token() == "."
+                                && numerals_re().is_match(view.tokens[i - 2].token().token())
+                                && !matches!(symbol_stack.last(), Some(se) if se.symbol == "("))
+                                || (i > 1
+                                    && ES_END_SYMBOLS[j] == ")"
+                                    && numerals_re().is_match(view.tokens[i - 1].token().token())
+                                    && !matches!(symbol_stack.last(), Some(se) if se.symbol == "(")));
                         if numerals_before_paren {
                         } else if let Some(last) = symbol_stack.last() {
                             if last.symbol == ES_START_SYMBOLS[j] {
@@ -366,5 +367,62 @@ mod tests {
         let sentences = analyze_spanish("Eso (sí está) bien.");
         let matches = rule.match_text("Eso (sí está) bien.", &sentences);
         assert!(matches.is_empty());
+    }
+
+    fn match_count(text: &str) -> usize {
+        let rule = SpanishUnpairedBracketsRule::new();
+        rule.match_text(text, &analyze_spanish(text)).len()
+    }
+
+    #[test]
+    fn java_test_correct_sentences() {
+        for text in [
+            "Soy un hombre (muy honrado).",
+            "D'Hondt.",
+            "Guns N’ Roses",
+            "Guns N' Roses",
+            "D’Hondt.",
+            "L’Équipe",
+            "rock ’n’ roll",
+            "Harper's Dictionary of Classical Antiquities",
+            "Harper’s Dictionary of Classical Antiquities",
+        ] {
+            assert_eq!(match_count(text), 0, "{text}");
+        }
+    }
+
+    #[test]
+    fn java_test_unpaired_symbols_are_flagged() {
+        for text in [
+            "Soy un hombre muy honrado).",
+            "Soy un hombre (muy honrado.",
+            "Eso es “importante y qué pasa. ",
+            "Eso es \"importante y qué. ",
+            "Eso es (imposible. ",
+            "Eso es (imposible.\n\n",
+            "Eso es) imposible. ",
+            "Eso es imposible).\t\n ",
+            "Eso es «importante, ¿ah que sí?",
+        ] {
+            assert_eq!(match_count(text), 1, "{text}");
+        }
+    }
+
+    #[test]
+    fn java_test_numbered_and_lettered_list_items_pass() {
+        for text in [
+            "\n\na) New York\nb) Boston\n",
+            "\n\n1.) New York\n2.) Boston\n",
+            "\n\nXII.) New York\nXIII.) Boston\n",
+            "\n\nA) New York\nB) Boston\nC) Foo\n",
+        ] {
+            assert_eq!(match_count(text), 0, "{text}");
+        }
+    }
+
+    #[test]
+    fn sentence_initial_symbols_are_processed_like_java() {
+        assert_eq!(match_count("(hola."), 1);
+        assert_eq!(match_count("\"Hola\" dijo."), 0);
     }
 }
