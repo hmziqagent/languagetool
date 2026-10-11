@@ -509,3 +509,74 @@ mod tests {
         assert!(t.tag(&["better"]).remove(0).has_pos_tag("JJR"));
     }
 }
+
+#[cfg(test)]
+mod coverage_tests {
+    use super::*;
+
+    #[test]
+    fn is_word_tagged_answers_membership() {
+        let mut t = EnglishTagger::new();
+        t.load_fsa_data("run\trun\tVB\n");
+        t.finish();
+        assert!(t.is_word_tagged("run"));
+        assert!(!t.is_word_tagged("walk"));
+    }
+
+    #[test]
+    fn manual_separator_override_and_malformed_lines() {
+        let mut t = EnglishTagger::new();
+        t.load_manual_data("#separatorRegExp=,\nword,word,NN\nbad,line\n", "");
+        t.finish();
+        assert!(t.tag(&["word"]).remove(0).has_pos_tag("NN"));
+        assert!(t.tag(&["bad"]).remove(0).all_pos_tags().is_empty());
+    }
+
+    #[test]
+    fn fsa_lines_with_empty_lemma_default_to_the_form() {
+        let mut t = EnglishTagger::new();
+        let count = t.load_fsa_data("word\t\tNN\n# comment\n\nbroken\n");
+        assert_eq!(count, 1);
+        t.finish();
+        let atr = t.tag(&["word"]).remove(0);
+        assert_eq!(atr.token().lemma(), Some("word"));
+        assert!(atr.has_pos_tag("NN"));
+    }
+
+    #[test]
+    fn from_resource_dir_without_files_yields_an_empty_tagger() {
+        let dir = std::env::temp_dir();
+        let t = EnglishTagger::from_resource_dir(&dir);
+        assert_eq!(t.entry_count(), 0);
+        assert!(t.tag(&["anything"]).remove(0).all_pos_tags().is_empty());
+    }
+
+    #[test]
+    fn checker_trait_tagging_rewrites_sentence_tokens() {
+        let mut t = EnglishTagger::new();
+        t.load_fsa_data("the\tthe\tDT\ncan't\tcan\tMD\n");
+        t.finish();
+        let mut tokens = vec![
+            AnalyzedTokenReadings::new(AnalyzedToken::new("<S>", 0, 0)),
+            AnalyzedTokenReadings::new(AnalyzedToken::new("the", 0, 3)),
+            AnalyzedTokenReadings::new(AnalyzedToken::new("can’t", 4, 9)),
+        ];
+        <EnglishTagger as og_core::checker::Tagger>::tag(&t, &mut tokens);
+        assert_eq!(tokens[1].token().token(), "the");
+        assert!(tokens[1].has_pos_tag("DT"));
+        assert_eq!(tokens[2].token().token(), "can't");
+        assert!(tokens[2].has_pos_tag("MD"));
+        assert!(tokens[2].has_typographic_apostrophe());
+        assert_eq!(tokens[2].token().start(), 4);
+        assert_eq!(tokens[2].token().end(), 9);
+        assert!(tokens[0].token().token() == "<S>");
+    }
+
+    #[test]
+    fn shared_english_tagger_returns_the_same_instance() {
+        let first = shared_english_tagger().expect("english resources");
+        assert!(first.tag(&["the"]).remove(0).has_pos_tag("DT"));
+        let second = shared_english_tagger().expect("english resources again");
+        assert!(std::sync::Arc::ptr_eq(&first, &second));
+    }
+}

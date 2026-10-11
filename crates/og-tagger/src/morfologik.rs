@@ -1628,8 +1628,6 @@ mod tests {
         });
     }
 
-    use super::*;
-
     fn dict_path() -> Option<std::path::PathBuf> {
         [
             "/home/agent/opengrammar-rs/languagetool/languagetool-language-modules/de/src/main/resources/org/languagetool/resource/de",
@@ -2435,7 +2433,7 @@ mod cfsa2_tests {
     #[test]
     fn shared_synth_dictionary_caches_by_path() {
         let bytes = cfsa2_file(small_cfsa2());
-        with_dict_files(&bytes, INFO, |dict, info| {
+        with_dict_files(&bytes, INFO, |dict, _info| {
             let dir = dict.parent().unwrap();
             let first = shared_synth_dictionary(dir, "test").expect("shared synth");
             let second = shared_synth_dictionary(dir, "test").expect("shared synth again");
