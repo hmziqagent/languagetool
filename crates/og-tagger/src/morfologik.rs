@@ -1555,16 +1555,13 @@ mod tests {
         assert!(!entries.is_empty(), "{stem} dictionary must enumerate");
         for (word, readings) in entries.iter() {
             let lazy = dict.lookup(word);
-            let lazy_pairs: Vec<(String, String)> = lazy
-                .iter()
-                .map(|(lemma, tag)| (lemma.to_string(), tag.to_string()))
-                .collect();
-            let eager_pairs: Vec<(String, String)> = readings
-                .iter()
-                .map(|(lemma, tag)| (lemma.to_string(), tag.to_string()))
-                .collect();
-            assert_eq!(
-                lazy_pairs, eager_pairs,
+            let diverged = lazy.len() != readings.len()
+                || lazy
+                    .iter()
+                    .zip(readings.iter())
+                    .any(|(l, e)| l.0 != e.0.as_ref() || l.1 != e.1.as_ref());
+            assert!(
+                !diverged,
                 "{stem}: lazy lookup diverged for {word}: {lazy:?} vs {readings:?}"
             );
         }
