@@ -315,3 +315,19 @@ async fn test_v2_check_variant_code_falls_back_to_base_engine() {
     assert_eq!(json["language"]["code"].as_str(), Some("nl-BE"));
     assert!(json["matches"].is_array());
 }
+
+#[tokio::test]
+async fn test_v2_check_simple_german_code_falls_back_to_the_german_engine() {
+    let json = check_response(
+        "/v2/check?language=de-DE-x-simple-language&text=Ich+habe+ein+Fehler+gemachtt.",
+    )
+    .await;
+    assert_eq!(
+        json["language"]["code"].as_str(),
+        Some("de-DE-x-simple-language")
+    );
+    assert!(
+        has_match_with_rule(&json, "MORFOLOGIK_RULE_DE_DE"),
+        "the base German speller must fire on 'gemachtt' via the short-code fallback: {json}"
+    );
+}
