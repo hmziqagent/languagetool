@@ -1123,3 +1123,294 @@ fn lemma_is_capitalized(word: &str) -> bool {
 fn is_all_uppercase_uk(word: &str) -> bool {
     word.chars().all(|c| !c.is_lowercase()) && word.chars().any(|c| c.is_uppercase())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::uk::word_tokenizer::UkrainianWordTokenizer;
+    use og_core::{AnalyzedSentence, AnalyzedToken, AnalyzedTokenReadings};
+    use og_tokenizer::WordTokenizer as _;
+
+    fn sent_start() -> AnalyzedTokenReadings {
+        AnalyzedTokenReadings::new(
+            AnalyzedToken::new("<S>", 0, 0).with_pos_tags(vec!["SENT_START".to_string()]),
+        )
+    }
+
+    fn tokenized(text: &str) -> AnalyzedSentence {
+        let mut sentence = AnalyzedSentence::new(text, 0, text.len());
+        let mut tokens = vec![sent_start()];
+        tokens.extend(
+            UkrainianWordTokenizer::new()
+                .tokenize(text)
+                .into_iter()
+                .map(|t| {
+                    AnalyzedTokenReadings::new(AnalyzedToken::new(t.text(), t.start(), t.end()))
+                }),
+        );
+        sentence.set_tokens(tokens);
+        sentence
+    }
+
+    fn tokenized_with_readings(text: &str) -> AnalyzedSentence {
+        let mut sentence = AnalyzedSentence::new(text, 0, text.len());
+        let mut tokens = vec![sent_start()];
+        for t in UkrainianWordTokenizer::new().tokenize(text) {
+            let atr = AnalyzedTokenReadings::new(AnalyzedToken::new(t.text(), t.start(), t.end()));
+            if !t.text().trim().is_empty() {
+                let reading = AnalyzedToken::new(t.text(), t.start(), t.end())
+                    .with_pos_tags(vec!["noun:inanim".to_string()]);
+                tokens.push(atr.with_readings(vec![reading]));
+            } else {
+                tokens.push(atr);
+            }
+        }
+        sentence.set_tokens(tokens);
+        sentence
+    }
+
+    fn plain_sentence(text: &str) -> AnalyzedSentence {
+        let mut sentence = AnalyzedSentence::new(text, 0, text.len());
+        let mut tokens = vec![sent_start()];
+        let mut pos = 0usize;
+        for word in text.split_whitespace() {
+            let start = pos + text[pos..].find(word).expect("word offset");
+            let end = start + word.len();
+            tokens.push(AnalyzedTokenReadings::new(AnalyzedToken::new(
+                word, start, end,
+            )));
+            pos = end;
+        }
+        sentence.set_tokens(tokens);
+        sentence
+    }
+
+    fn values(m: &RuleMatch) -> Vec<&str> {
+        m.replacements().iter().map(|r| r.value()).collect()
+    }
+
+    #[test]
+    fn java_pin_mixed_alphabets_correct_sentences() {
+        let rule = UkrainianMixedAlphabetsRule::new();
+        for text in [
+            "сміття",
+            "not mixed",
+            "123454",
+            "ЛЮДИНИ І НАЦІЇ",
+            "ЗА І ПРОТИ",
+        ] {
+            assert_eq!(
+                rule.match_sentence(&tokenized(text)).len(),
+                0,
+                "expected no matches for {text}"
+            );
+        }
+    }
+
+    #[test]
+    fn java_pin_mixed_alphabets_single_word_mixes() {
+        let rule = UkrainianMixedAlphabetsRule::new();
+        let matches = rule.match_sentence(&tokenized("смiття"));
+        assert_eq!(matches.len(), 1);
+        assert_eq!(
+            matches[0].message(),
+            "Вжито кириличні й латинські літери в одному слові"
+        );
+        assert_eq!(values(&matches[0]), vec!["сміття"]);
+        let matches = rule.match_sentence(&tokenized("mіхed"));
+        assert_eq!(matches.len(), 1);
+        assert_eq!(
+            matches[0].message(),
+            "Вжито кириличні літери замість латинських"
+        );
+        assert_eq!(values(&matches[0]), vec!["mixed"]);
+        let matches = rule.match_sentence(&tokenized("горíти"));
+        assert_eq!(matches.len(), 1);
+        assert_eq!(values(&matches[0]), vec!["горі́ти"]);
+        let matches = rule.match_sentence(&tokenized("австрo-турецької"));
+        assert_eq!(matches.len(), 1);
+        assert_eq!(values(&matches[0]), vec!["австро-турецької"]);
+    }
+
+    #[test]
+    fn java_pin_mixed_alphabets_latin_letters_for_cyrillic() {
+        let rule = UkrainianMixedAlphabetsRule::new();
+        let matches = rule.match_sentence(&tokenized("Чорного i Азовського"));
+        assert_eq!(matches.len(), 1);
+        assert_eq!(
+            matches[0].message(),
+            "Вжито латинську «i» замість кириличної"
+        );
+        assert_eq!(values(&matches[0]), vec!["і"]);
+        let matches = rule.match_sentence(&tokenized("A нема"));
+        assert_eq!(matches.len(), 1);
+        assert_eq!(
+            matches[0].message(),
+            "Вжито латинську «A» замість кириличної"
+        );
+        assert_eq!(values(&matches[0]), vec!["А"]);
+        let matches = rule.match_sentence(&tokenized("Петро І"));
+        assert_eq!(matches.len(), 1);
+        assert_eq!(
+            matches[0].message(),
+            "Вжито кириличну літеру замість латинської"
+        );
+        assert_eq!(values(&matches[0]), vec!["I"]);
+    }
+
+    #[test]
+    fn java_pin_mixed_alphabets_roman_numerals() {
+        let rule = UkrainianMixedAlphabetsRule::new();
+        let matches = rule.match_sentence(&tokenized("XІ"));
+        assert_eq!(matches.len(), 1);
+        assert_eq!(
+            matches[0].message(),
+            "Вжито кириличні літери замість латинських"
+        );
+        assert_eq!(values(&matches[0]), vec!["XI"]);
+        let matches = rule.match_sentence(&tokenized("ХI"));
+        assert_eq!(values(&matches[0]), vec!["XI"]);
+        let matches = rule.match_sentence(&tokenized("VIIІ-го"));
+        assert_eq!(matches.len(), 1);
+        assert_eq!(
+            matches[0].message(),
+            "Вжито кириличні літери замість латинських. Також: до римських цифр букви не дописуються."
+        );
+        assert_eq!(values(&matches[0]), vec!["VIII"]);
+        let matches = rule.match_sentence(&tokenized("ІІІ-го"));
+        assert_eq!(matches.len(), 1);
+        assert_eq!(
+            matches[0].message(),
+            "Вжито кириличні літери замість латинських на позначення римської цифри. Також: до римських цифр букви не дописуються."
+        );
+        assert_eq!(values(&matches[0]), vec!["III"]);
+        let matches = rule.match_sentence(&tokenized("ХІ"));
+        assert_eq!(matches.len(), 1);
+        assert_eq!(
+            matches[0].message(),
+            "Вжито кириличні літери замість латинських на позначення римської цифри"
+        );
+        assert_eq!(values(&matches[0]), vec!["XI"]);
+        let matches = rule.match_sentence(&tokenized("СOVID-19"));
+        assert_eq!(values(&matches[0]), vec!["COVID-19"]);
+    }
+
+    #[test]
+    fn java_pin_mixed_alphabets_degree_sign() {
+        let matches = UkrainianMixedAlphabetsRule::new().match_sentence(&tokenized("На 0,6°С."));
+        assert_eq!(matches.len(), 1);
+        assert_eq!(
+            matches[0].message(),
+            "Вжито кириличну літеру замість латинської"
+        );
+        assert_eq!(values(&matches[0]), vec!["C"]);
+    }
+
+    #[test]
+    fn java_pin_typography_rule() {
+        let rule = UkrainianTypographyRule::new();
+        assert_eq!(rule.match_sentence(&tokenized("як-небудь")).len(), 0);
+        assert_eq!(rule.match_sentence(&tokenized("Вовка,— волкова")).len(), 0);
+        assert_eq!(
+            rule.match_sentence(&tokenized("\u{2014} Київ, 1994")).len(),
+            0
+        );
+        let matches = rule.match_sentence(&tokenized("яскраво\u{2013}рожевий."));
+        assert_eq!(matches.len(), 1);
+        assert_eq!(
+            values(&matches[0]),
+            vec!["яскраво-рожевий", "яскраво \u{2014} рожевий"]
+        );
+        let matches = rule.match_sentence(&tokenized("Вовка\u{2014}Волкова."));
+        assert_eq!(matches.len(), 1);
+        assert_eq!(
+            values(&matches[0]),
+            vec!["Вовка-Волкова", "Вовка \u{2014} Волкова"]
+        );
+        let matches = rule.match_sentence(&tokenized("цукерок \u{2014}знову низька"));
+        assert_eq!(matches.len(), 1);
+        assert_eq!(
+            values(&matches[0]),
+            vec!["цукерок-знову", "цукерок \u{2014} знову"]
+        );
+        let matches = rule.match_sentence(&tokenized("\u{2014}знову низька"));
+        assert_eq!(matches.len(), 1);
+        assert_eq!(values(&matches[0]), vec!["\u{2014} знову"]);
+        let matches = rule.match_sentence(&tokenized("знову\u{2014}"));
+        assert_eq!(matches.len(), 1);
+        assert_eq!(values(&matches[0]), vec!["знову \u{2014}"]);
+        let matches = rule.match_sentence(&tokenized("важливіше \u{2013}потенційні"));
+        assert_eq!(matches.len(), 1);
+        assert_eq!(
+            values(&matches[0]),
+            vec!["важливіше-потенційні", "важливіше \u{2014} потенційні"]
+        );
+    }
+
+    #[test]
+    fn hidden_character_rule_strips_the_soft_hyphen() {
+        let text = "слово\u{00AD}м у реченні";
+        let matches = UkrainianHiddenCharacterRule::new().match_sentence(&plain_sentence(text));
+        assert_eq!(matches.len(), 1);
+        assert_eq!(values(&matches[0]), vec!["словом"]);
+        assert!(
+            matches[0]
+                .message()
+                .contains("невидимий знак м’якого перенесення")
+        );
+        assert_eq!(rule_matches_text(&matches[0], text), "слово\u{00AD}м");
+    }
+
+    fn rule_matches_text<'a>(m: &RuleMatch, text: &'a str) -> &'a str {
+        &text[m.offset()..m.offset() + m.length()]
+    }
+
+    #[test]
+    fn java_pin_word_repeat_ignored_cases() {
+        let rule = UkrainianWordRepeatRule::new();
+        for text in [
+            "без повного розрахунку",
+            "без бугіма бугіма",
+            "без 100 100",
+            "1.30 3.20 3.20",
+            "ще в В.Кандинського",
+            "Від добра добра не шукають.",
+            "Що, що, а кіно в Україні...",
+            "Відповідно до ст. ст. 3, 7, 18.",
+            "Не можу сказати ні так, ні ні.",
+        ] {
+            assert_eq!(
+                rule.match_sentence(&tokenized(text)).len(),
+                0,
+                "expected no matches for {text}"
+            );
+        }
+    }
+
+    #[test]
+    fn java_pin_word_repeat_flagged_cases() {
+        let rule = UkrainianWordRepeatRule::new();
+        let matches = rule.match_sentence(&tokenized_with_readings("без без повного розрахунку"));
+        assert_eq!(matches.len(), 1);
+        assert_eq!(values(&matches[0]), vec!["без"]);
+        let matches =
+            rule.match_sentence(&tokenized_with_readings("Верховної Ради І і ІІ скликань"));
+        assert_eq!(matches.len(), 1);
+        assert_eq!(values(&matches[0]), vec!["І", "I і"]);
+        assert_eq!(matches[0].rule().id(), "UKRAINIAN_WORD_REPEAT_RULE");
+    }
+
+    #[test]
+    fn java_pin_uppercase_sentence_start() {
+        let rule = UkrainianUppercaseSentenceStartRule::new();
+        let sentences = vec![tokenized("Автор написав це речення з великої літери.")];
+        assert_eq!(rule.match_text("", &sentences).len(), 0);
+        let sentences = vec![tokenized("Він приїхав в с. Вижівка.")];
+        assert_eq!(rule.match_text("", &sentences).len(), 0);
+        let sentences = vec![tokenized("автор написав це речення з маленької літери.")];
+        let matches = rule.match_text("", &sentences);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(values(&matches[0]), vec!["Автор"]);
+        assert_eq!(matches[0].rule().id(), "UPPERCASE_SENTENCE_START");
+    }
+}
