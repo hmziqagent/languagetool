@@ -1601,29 +1601,72 @@ mod tests {
         .find(|p| p.join("german.dict").exists())
     }
 
-    fn speller() -> Option<GermanSpeller> {
-        let dir = resource_dir()?;
-        let mut dict = Dictionary::from_shared_words(std::sync::Arc::new(
-            crate::morfologik_view::MorfologikView::new(
-                og_tagger::german_tagger::shared_german_dictionary(&dir)?,
-            ),
-        ));
-        if let Ok(words) = std::fs::read_to_string(dir.join("hunspell/de_DE.dic")) {
-            for line in words.lines() {
-                let word = line.split('/').next().unwrap_or("").trim();
-                if !word.is_empty() && !word.starts_with('#') {
-                    dict.add_word(word);
+    fn shared_dictionary() -> Option<&'static Arc<Dictionary>> {
+        static DICT: LazyLock<Option<Arc<Dictionary>>> = LazyLock::new(|| {
+            let dir = resource_dir()?;
+            let mut dict = Dictionary::from_shared_words(Arc::new(
+                crate::morfologik_view::MorfologikView::new(
+                    og_tagger::german_tagger::shared_german_dictionary(&dir)?,
+                ),
+            ));
+            if let Ok(words) = std::fs::read_to_string(dir.join("hunspell/de_DE.dic")) {
+                for line in words.lines() {
+                    let word = line.split('/').next().unwrap_or("").trim();
+                    if !word.is_empty() && !word.starts_with('#') {
+                        dict.add_word(word);
+                    }
                 }
             }
-        }
-        let tagger = og_tagger::GermanTagger::from_resource_dir(&dir)?;
-        Some(GermanSpeller::new(
-            Arc::new(dict),
-            &dir,
-            None,
-            Some(Arc::new(tagger)),
-            "de-DE",
-        ))
+            Some(Arc::new(dict))
+        });
+        DICT.as_ref()
+    }
+
+    fn speller_arc() -> Option<&'static Arc<GermanSpeller>> {
+        static SPELLER: LazyLock<Option<Arc<GermanSpeller>>> = LazyLock::new(|| {
+            let dir = resource_dir()?;
+            let tagger = og_tagger::GermanTagger::from_resource_dir(&dir)?;
+            Some(Arc::new(GermanSpeller::new(
+                Arc::clone(shared_dictionary()?),
+                &dir,
+                None,
+                Some(Arc::new(tagger)),
+                "de-DE",
+            )))
+        });
+        SPELLER.as_ref()
+    }
+
+    fn swiss_speller() -> Option<&'static GermanSpeller> {
+        static SPELLER: LazyLock<Option<GermanSpeller>> = LazyLock::new(|| {
+            let dir = resource_dir()?;
+            Some(GermanSpeller::new(
+                Arc::clone(shared_dictionary()?),
+                &dir,
+                None,
+                None,
+                "de-CH",
+            ))
+        });
+        SPELLER.as_ref()
+    }
+
+    fn taggerless_speller() -> Option<&'static GermanSpeller> {
+        static SPELLER: LazyLock<Option<GermanSpeller>> = LazyLock::new(|| {
+            let dir = resource_dir()?;
+            Some(GermanSpeller::new(
+                Arc::clone(shared_dictionary()?),
+                &dir,
+                None,
+                None,
+                "de-DE",
+            ))
+        });
+        SPELLER.as_ref()
+    }
+
+    fn speller() -> Option<&'static GermanSpeller> {
+        speller_arc().map(|arc| arc.as_ref())
     }
 
     #[test]
@@ -1725,5 +1768,248 @@ mod tests {
             ]
         );
         assert_eq!(expand_line("Foo Bar # note"), vec!["Foo Bar".to_string()]);
+    }
+
+    #[test]
+    fn swiss_variant_swaps_the_active_ignore_set() {
+        let Some(de) = speller() else {
+            eprintln!("Skipping: German resources not present");
+            return;
+        };
+        let Some(ch) = swiss_speller() else {
+            eprintln!("Skipping: German resources not present");
+            return;
+        };
+        assert!(de.is_misspelled("Badstrasse"));
+        assert!(!ch.is_misspelled("Badstrasse"));
+        assert!(!de.is_misspelled("Badstraße"));
+
+        let re_shared = ch.with_shared_data(Arc::clone(shared_dictionary().unwrap()), "de-DE");
+        assert!(re_shared.is_misspelled("Badstrasse"));
+    }
+
+    #[test]
+    fn extra_ignore_words_add_both_sharp_s_forms() {
+        let Some(de) = speller() else {
+            eprintln!("Skipping: German resources not present");
+            return;
+        };
+        let Some(ch) = swiss_speller() else {
+            eprintln!("Skipping: German resources not present");
+            return;
+        };
+        assert!(de.is_misspelled("Qxßweg"));
+        let extended = de.with_extra_ignore_words(vec!["Qxßweg".to_string()]);
+        assert!(!extended.is_misspelled("Qxßweg"));
+        assert!(extended.is_misspelled("Qxssweg"));
+
+        assert!(ch.is_misspelled("Qxssweg"));
+        let extended_ch = ch.with_extra_ignore_words(vec!["Qxßweg".to_string()]);
+        assert!(!extended_ch.is_misspelled("Qxssweg"));
+        assert!(extended_ch.is_misspelled("Qxßweg"));
+    }
+
+    #[test]
+    fn with_hunspell_core_routes_spell_through_hunspell() {
+        let Some(s) = speller_arc() else {
+            eprintln!("Skipping: German resources not present");
+            return;
+        };
+        let Some(dir) = resource_dir() else {
+            return;
+        };
+        let hunspell_dir = dir.join("hunspell");
+        let Some(checker) = crate::hunspell::HunspellChecker::load(
+            &hunspell_dir.join("de_DE.aff"),
+            &hunspell_dir.join("de_DE.dic"),
+        ) else {
+            eprintln!("Skipping: hunspell resources not present");
+            return;
+        };
+        let with_core = s
+            .with_extra_ignore_words(Vec::new())
+            .with_hunspell_core(Arc::new(checker));
+        assert!(!with_core.is_misspelled("hocheffizientes"));
+        assert!(!with_core.is_misspelled("Haus"));
+        assert!(with_core.is_misspelled("Hausx"));
+        assert!(with_core.dictionary().contains("Haus"));
+        assert!(!with_core.suggestions("Hausx", 3).is_empty());
+    }
+
+    #[test]
+    fn ignore_word_in_sentence_gates() {
+        let Some(s) = speller() else {
+            eprintln!("Skipping: German resources not present");
+            return;
+        };
+        let oversized = "x".repeat(MAX_TOKEN_LENGTH + 10);
+        assert!(s.ignore_word_in_sentence(&[&oversized], 0));
+        assert!(s.ignore_word_in_sentence(&["--"], 0));
+        assert!(s.ignore_word_in_sentence(&["a"], 0));
+        assert!(s.ignore_word_in_sentence(&["Badstraße."], 0));
+        assert!(!s.ignore_word_in_sentence(&["Qxqweg"], 0));
+
+        let extended = s.with_extra_ignore_words(vec!["qxqweg".to_string()]);
+        assert!(extended.ignore_word_in_sentence(&["Qxqweg"], 0));
+    }
+
+    #[test]
+    fn hanging_hyphen_uses_the_next_compound() {
+        let Some(s) = speller() else {
+            eprintln!("Skipping: German resources not present");
+            return;
+        };
+        assert!(s.ignore_word_in_sentence(&["Meinungs-", "Meinungsfreiheit"], 0));
+        assert!(!s.ignore_word_in_sentence(&["Stil-", "und", ","], 0));
+        assert!(!s.ignore_word_in_sentence(&["Stil-"], 0));
+    }
+
+    #[test]
+    fn hyphenated_compounds_with_ignored_parts() {
+        let Some(s) = speller() else {
+            eprintln!("Skipping: German resources not present");
+            return;
+        };
+        assert!(s.ignore_word_in_sentence(&["Big-Data-Analysis"], 0));
+        assert!(s.ignore_word_in_sentence(&["Haus-Einpseudowortmitßfürlanguagetooltests"], 0));
+        assert!(!s.ignore_word_in_sentence(&["Bla-Einpseudowortmitßfürlanguagetooltests"], 0));
+    }
+
+    #[test]
+    fn direction_prefixed_compounds_stay_accepted() {
+        let Some(s) = speller() else {
+            eprintln!("Skipping: German resources not present");
+            return;
+        };
+        for word in ["Ostwald", "Nordbahn", "Südbahn", "Westwind"] {
+            assert!(!s.is_misspelled(word), "'{word}' must be accepted");
+        }
+    }
+
+    #[test]
+    fn java_compound_families_behave_like_the_reference() {
+        let Some(s) = speller() else {
+            eprintln!("Skipping: German resources not present");
+            return;
+        };
+        let accepted = [
+            "Montagmorgen",
+            "Weltenbrand",
+            "Wortschatz",
+            "Wörterbuch",
+            "Arbeitnehmer",
+            "Arbeitsamt",
+            "Linkliste",
+            "Linksabbieger",
+            "Rechtsanwalt",
+            "Verbandskasse",
+            "Badezimmer",
+            "Wiedergabe",
+            "Widerspruch",
+            "Badforelle",
+            "Sonnenblumenkern",
+            "Bundeskanzler",
+        ];
+        for word in accepted {
+            assert!(!s.is_misspelled(word), "'{word}' must be accepted");
+        }
+        for word in ["Montagsmorgen", "Weltbrand"] {
+            assert!(s.is_misspelled(word), "'{word}' must stay flagged");
+        }
+    }
+
+    #[test]
+    fn gender_star_and_camel_case_words() {
+        let Some(s) = speller() else {
+            eprintln!("Skipping: German resources not present");
+            return;
+        };
+        assert!(!s.is_misspelled("Expert*innen"));
+        assert!(!s.is_misspelled("Fahrerinnen"));
+        assert!(s.is_misspelled("Kund*innen"));
+        assert!(s.is_misspelled("FooBar"));
+    }
+
+    #[test]
+    fn adjective_suffix_and_mitarbeitende_words_stay_accepted() {
+        let Some(s) = speller() else {
+            eprintln!("Skipping: German resources not present");
+            return;
+        };
+        for word in ["arbeitsrelevant", "umweltrelevant", "Mitarbeitende"] {
+            assert!(!s.is_misspelled(word), "'{word}' must be accepted");
+        }
+    }
+
+    #[test]
+    fn is_misspelled_cache_survives_eviction() {
+        let Some(s) = speller() else {
+            eprintln!("Skipping: German resources not present");
+            return;
+        };
+        for i in 0..(8192 + 16) {
+            assert!(s.is_misspelled(&format!("q{i}x")));
+        }
+        assert!(s.is_misspelled("Weltbrand"));
+        assert!(!s.is_misspelled("Weltenbrand"));
+    }
+
+    #[test]
+    fn taggerless_speller_keeps_the_core_gates() {
+        let Some(s) = taggerless_speller() else {
+            eprintln!("Skipping: German resources not present");
+            return;
+        };
+        assert!(s.is_misspelled("Weltbrand"));
+        assert!(s.is_misspelled("Montagsmorgen"));
+        assert!(!s.is_misspelled("Weltenbrand"));
+    }
+
+    #[test]
+    fn strict_mode_flags_hyphenated_unknown_compounds() {
+        let Some(s) = speller() else {
+            eprintln!("Skipping: German resources not present");
+            return;
+        };
+        assert!(s.is_misspelled_strict("Bundes-Arbeitgeber"));
+        assert!(!s.is_misspelled_strict("Weltenbrand"));
+    }
+
+    #[test]
+    fn german_rule_match_sentence_gates_and_metadata() {
+        use og_core::AnalyzedTokenReadings;
+        let Some(s) = speller_arc() else {
+            eprintln!("Skipping: German resources not present");
+            return;
+        };
+        let rule = GermanSpellerRule::new(Arc::clone(s), "DE_HUNSPELL_RULE");
+        assert_eq!(rule.id(), "DE_HUNSPELL_RULE");
+        assert_eq!(rule.description(), "Possible spelling mistake");
+        assert_eq!(rule.category().name(), "Possible Typo");
+        assert_eq!(rule.issue_type(), IssueType::Misspelling);
+        assert!(Arc::ptr_eq(rule.speller(), s));
+
+        let mut sentence = AnalyzedSentence::new("Hallo wrldx.", 0, "Hallo wrldx.".len());
+        let mut immunized = AnalyzedTokenReadings::new(AnalyzedToken::new("wrldx", 6, 11));
+        immunized.immunize();
+        sentence.set_tokens(vec![
+            AnalyzedTokenReadings::new(AnalyzedToken::new("Hallo", 0, 5)),
+            AnalyzedTokenReadings::new(AnalyzedToken::new("<S>", 0, 0)),
+            AnalyzedTokenReadings::new(AnalyzedToken::new(" ", 0, 0)),
+            immunized,
+            AnalyzedTokenReadings::new(AnalyzedToken::new("http://x", 0, 0)),
+            AnalyzedTokenReadings::new(AnalyzedToken::new("e.g.", 0, 0)),
+            AnalyzedTokenReadings::new(AnalyzedToken::new("abc12", 0, 0)),
+        ]);
+        assert!(rule.match_sentence(&sentence).is_empty());
+
+        sentence.set_tokens(vec![
+            AnalyzedTokenReadings::new(AnalyzedToken::new("Hallo", 0, 5)),
+            AnalyzedTokenReadings::new(AnalyzedToken::new("wrldx", 6, 11)),
+        ]);
+        let matches = rule.match_sentence(&sentence);
+        assert_eq!(matches.len(), 1);
+        assert!(matches[0].message().contains("wrldx"));
+        assert_eq!(matches[0].rule().id(), "DE_HUNSPELL_RULE");
     }
 }
