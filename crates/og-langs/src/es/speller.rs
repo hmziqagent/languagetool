@@ -2,8 +2,15 @@ use std::sync::Arc;
 
 struct EsSpellerOracle {
     surfaces: Vec<String>,
-    chars: Vec<Box<[char]>>,
+    char_offsets: Vec<u32>,
+    chars: Vec<char>,
     dictionary: og_spell::Dictionary,
+}
+
+impl EsSpellerOracle {
+    fn candidate_chars(&self, i: usize) -> &[char] {
+        &self.chars[self.char_offsets[i] as usize..self.char_offsets[i + 1] as usize]
+    }
 }
 
 fn es_speller_oracle() -> Option<Arc<EsSpellerOracle>> {
@@ -14,10 +21,13 @@ fn es_speller_oracle() -> Option<Arc<EsSpellerOracle>> {
         let dictionary = og_tagger::generic_tagger::shared_dictionary(&resource_dir, "spanish")?;
         let mut surfaces: Vec<String> = dictionary.keys().map(str::to_string).collect();
         surfaces.sort_unstable();
-        let chars: Vec<Box<[char]>> = surfaces
-            .iter()
-            .map(|s| s.chars().collect::<Vec<char>>().into_boxed_slice())
-            .collect();
+        let mut char_offsets: Vec<u32> = Vec::with_capacity(surfaces.len() + 1);
+        let mut chars: Vec<char> = Vec::new();
+        for surface in &surfaces {
+            char_offsets.push(chars.len() as u32);
+            chars.extend(surface.chars());
+        }
+        char_offsets.push(chars.len() as u32);
         let mut dict = og_spell::Dictionary::from_shared_words(Arc::new(
             og_spell::morfologik_view::MorfologikView::new(Arc::clone(&dictionary)),
         ));
@@ -43,6 +53,7 @@ fn es_speller_oracle() -> Option<Arc<EsSpellerOracle>> {
         }
         Some(Arc::new(EsSpellerOracle {
             surfaces,
+            char_offsets,
             chars,
             dictionary: dict,
         }))
@@ -161,13 +172,13 @@ pub fn find_similar_words(word: &str) -> Vec<String> {
     let mut exact: Vec<&str> = Vec::new();
     let mut near: Vec<&str> = Vec::new();
     for (i, candidate) in oracle.surfaces.iter().enumerate() {
-        if oracle.chars[i].len() + 1 < len {
+        let candidate_chars = oracle.candidate_chars(i);
+        if candidate_chars.len() + 1 < len {
             continue;
         }
         if candidate.as_str() == word {
             continue;
         }
-        let candidate_chars = oracle.chars[i].as_ref();
         if len + 1 < candidate_chars.len() {
             continue;
         }
