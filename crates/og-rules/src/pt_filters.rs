@@ -50,7 +50,7 @@ pub fn is_capitalized_word(s: &str) -> bool {
     let mut chars = s.chars();
     match chars.next() {
         Some(first) if first.is_uppercase() => {
-            chars.all(|c| !c.is_alphabetic() || !c.is_lowercase())
+            chars.all(|c| !c.is_alphabetic() || c.is_lowercase())
         }
         _ => false,
     }
@@ -929,4 +929,1090 @@ pub fn apply_engine_pt_filter_with_groups(
         ..call
     };
     apply_pt_filter(&filter.class, call, rm)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use og_core::{AnalyzedToken, RuleMatchContext, RuleMatchRule, SuggestedReplacement};
+    use og_xml::compiler::{CompiledPattern, CompiledRuleRegexp};
+    use std::io::Write;
+
+    fn reading(token: &str, lemma: &str, postag: &str, start: usize) -> AnalyzedTokenReadings {
+        AnalyzedTokenReadings::new(AnalyzedToken::new(token, start, start + token.len()))
+            .with_readings(vec![
+                AnalyzedToken::new(token, start, start + token.len())
+                    .with_lemma(lemma)
+                    .with_pos_tags(vec![postag.to_string()]),
+            ])
+    }
+
+    fn match_at(offset: usize, length: usize, text: &str, template: &str) -> RuleMatch {
+        let mut rm = RuleMatch::new(
+            "msg",
+            offset,
+            length,
+            RuleMatchRule::new("X", "d"),
+            RuleMatchContext::new(text.to_string(), offset, length),
+        );
+        if !template.is_empty() {
+            rm.set_replacements(vec![SuggestedReplacement::new(template)]);
+        }
+        rm
+    }
+
+    fn empty_call<'a>(tokens: &'a [&'a AnalyzedTokenReadings]) -> PtFilterCall<'a> {
+        PtFilterCall {
+            variant: "pt-PT",
+            args: "",
+            matched_texts: &[],
+            matched_positions: &[],
+            tokens,
+            regexp_groups: None,
+            synthesizer: None,
+        }
+    }
+
+    fn temp_synth(entries: &str) -> LangSynthesizer {
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("og-pt-synth-{}-{n}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut f = std::fs::File::create(dir.join("added.txt")).unwrap();
+        f.write_all(entries.as_bytes()).unwrap();
+        drop(f);
+        LangSynthesizer::for_language(&dir, "pt").expect("temp pt synthesizer")
+    }
+
+    fn real_synth() -> Option<LangSynthesizer> {
+        pt_resource_dir().and_then(|dir| LangSynthesizer::for_language(&dir, "pt"))
+    }
+
+    #[test]
+    fn resolve_args_maps_backslash_indices_and_literals() {
+        let matched = vec!["um".to_string(), "año".to_string()];
+        let parsed = resolve_args("form:\\1 other:plain zero:\\0 oob:\\9", &matched);
+        assert_eq!(parsed.get("form").map(String::as_str), Some("um"));
+        assert_eq!(parsed.get("other").map(String::as_str), Some("plain"));
+        assert_eq!(parsed.get("zero").map(String::as_str), Some("\\0"));
+        assert_eq!(parsed.get("oob").map(String::as_str), Some("\\9"));
+        let bare = resolve_args("nokey form:x", &[]);
+        assert_eq!(bare.len(), 1);
+        assert_eq!(bare.get("form").map(String::as_str), Some("x"));
+    }
+
+    #[test]
+    fn raw_arg_finds_first_value_only() {
+        assert_eq!(raw_arg("a:1 b:2 a:3", "a"), Some("1"));
+        assert_eq!(raw_arg("a:1 b:2", "b"), Some("2"));
+        assert_eq!(raw_arg("a:1", "c"), None);
+    }
+
+    #[test]
+    fn pattern_token_range_slices_between_first_and_last_match() {
+        let t1 = reading("a", "a", "A", 0);
+        let t2 = reading("b", "b", "B", 2);
+        let t3 = reading("c", "c", "C", 4);
+        let tokens = [&t1, &t2, &t3];
+        assert_eq!(pattern_token_range(&tokens, &[1, 2]).len(), 2);
+        assert!(pattern_token_range(&tokens, &[]).is_empty());
+        assert!(pattern_token_range(&tokens, &[5]).is_empty());
+    }
+
+    #[test]
+    fn case_helpers_match_java_stringtools() {
+        assert!(is_all_uppercase("ABC"));
+        assert!(is_all_uppercase("ÁÉ"));
+        assert!(!is_all_uppercase("AbC"));
+        assert!(is_all_uppercase("123"));
+        assert!(is_capitalized_word("Casa"));
+        assert!(is_capitalized_word("Às"));
+        assert!(!is_capitalized_word("casa"));
+        assert!(!is_capitalized_word(""));
+        assert!(!is_capitalized_word("CAsa"));
+        assert_eq!(uppercase_first_char("casa"), "Casa");
+        assert_eq!(uppercase_first_char("às"), "Às");
+        assert_eq!(uppercase_first_char(""), "");
+    }
+
+    #[test]
+    fn diacritics_and_full_match_are_anchored() {
+        assert!(has_diacritics("ação"));
+        assert!(!has_diacritics("acao"));
+        assert!(!has_diacritics("123!"));
+        assert!(full_match("NC.S000", "NCMS000"));
+        assert!(!full_match("NC.S000", "xNCMS000x"));
+        assert!(!full_match("NC.S000", "NCMS00"));
+    }
+
+    #[test]
+    fn readings_match_pos_tag_regex_scans_all_readings() {
+        let atr = AnalyzedTokenReadings::new(AnalyzedToken::new("x", 0, 1)).with_readings(vec![
+            AnalyzedToken::new("x", 0, 1).with_pos_tags(vec!["DI0MS0".to_string()]),
+            AnalyzedToken::new("x", 0, 1).with_pos_tags(vec!["NCMS000".to_string()]),
+        ]);
+        assert!(readings_match_pos_tag_regex(&atr, "NC.+"));
+        assert!(!readings_match_pos_tag_regex(&atr, "V.+"));
+    }
+
+    #[test]
+    fn confusion_pairs_load_variants_and_merge_duplicate_lines() {
+        let pt = confusion_pairs(false);
+        let br = confusion_pairs(true);
+        assert!(!pt.is_empty());
+        assert!(!br.is_empty());
+        let entry = pt.get("abobora").expect("base-file entry");
+        assert_eq!(entry.word, "abóbora");
+        assert!(entry.tags.contains(&"NCFS000".to_string()));
+        assert_eq!(pt.get("anonimo").unwrap().word, "anónimo");
+        assert_eq!(br.get("anonimo").unwrap().word, "anônimo");
+        let both = br.get("anonimo").expect("variant entry with two lines");
+        assert_eq!(
+            both.tags,
+            vec!["AQ0MS0".to_string(), "NCMS000".to_string()],
+            "repeated keys accumulate tags"
+        );
+    }
+
+    #[test]
+    fn confusion_check_filter_substitutes_the_confusion_word() {
+        let owned = reading("abobora", "abobora", "NCFS000", 0);
+        let tokens: Vec<&AnalyzedTokenReadings> = vec![&owned];
+        let matched = vec!["abobora".to_string()];
+        let out = confusion_check_filter(
+            "pt-PT",
+            "postag:NCFS000 form:\\1",
+            &matched,
+            &tokens,
+            match_at(0, 7, "abobora", "{suggestion} bonita"),
+        )
+        .expect("match kept");
+        assert_eq!(out.replacements()[0].value(), "abóbora bonita");
+        assert_eq!(out.message(), "msg");
+    }
+
+    #[test]
+    fn confusion_check_filter_keeps_the_tilde_message_for_plain_accent_pairs() {
+        let owned = reading("anonima", "anonima", "AQ0FS0", 0);
+        let tokens: Vec<&AnalyzedTokenReadings> = vec![&owned];
+        let matched = vec!["anonima".to_string()];
+        let mut rm = match_at(0, 7, "anonima", "{suggestion}");
+        rm.set_message("se escribe con tilde");
+        let out = confusion_check_filter("pt-PT", "postag:AQ0FS0 form:\\1", &matched, &tokens, rm)
+            .unwrap();
+        assert_eq!(out.replacements()[0].value(), "anónima");
+        assert_eq!(out.message(), "se escribe con tilde");
+    }
+
+    #[test]
+    fn confusion_check_filter_requires_postag_and_form_args() {
+        let owned = reading("abobora", "abobora", "NCFS000", 0);
+        let tokens: Vec<&AnalyzedTokenReadings> = vec![&owned];
+        let matched = vec!["abobora".to_string()];
+        assert!(
+            confusion_check_filter(
+                "pt-PT",
+                "postag:NCFS000",
+                &matched,
+                &tokens,
+                match_at(0, 7, "abobora", "{suggestion}")
+            )
+            .is_none()
+        );
+        assert!(
+            confusion_check_filter(
+                "pt-PT",
+                "postag:VMIP3S0 form:\\1",
+                &matched,
+                &tokens,
+                match_at(0, 7, "abobora", "{suggestion}")
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn confusion_check_filter_gender_number_agreement_gates_the_replacement() {
+        let noun_fs = reading("casa", "casa", "NCFS000", 0);
+        let matched = vec!["casa".to_string(), "abobora".to_string()];
+        let args = "postag:NCFS000 form:\\2 gendernumberFrom:1";
+        let tokens: Vec<&AnalyzedTokenReadings> = vec![&noun_fs];
+        let out = confusion_check_filter(
+            "pt-PT",
+            args,
+            &matched,
+            &tokens,
+            match_at(0, 7, "abobora", "{suggestion}"),
+        )
+        .expect("FS agreement");
+        assert_eq!(out.replacements()[0].value(), "abóbora");
+        let adj_fs = reading("boa", "bom", "AQ0FS0", 0);
+        let tokens: Vec<&AnalyzedTokenReadings> = vec![&adj_fs];
+        let out = confusion_check_filter(
+            "pt-PT",
+            args,
+            &matched,
+            &tokens,
+            match_at(0, 7, "abobora", "{suggestion}"),
+        )
+        .expect("FS agreement via adjective");
+        assert_eq!(out.replacements()[0].value(), "abóbora");
+        let noun_mp = reading("bons", "bom", "AQ0MP0", 0);
+        let tokens: Vec<&AnalyzedTokenReadings> = vec![&noun_mp];
+        assert!(
+            confusion_check_filter(
+                "pt-PT",
+                args,
+                &matched,
+                &tokens,
+                match_at(0, 7, "abobora", "{suggestion}")
+            )
+            .is_none()
+        );
+        assert!(
+            confusion_check_filter(
+                "pt-PT",
+                "postag:NCFS000 form:\\1 gendernumberFrom:0",
+                &matched,
+                &tokens,
+                match_at(0, 7, "abobora", "{suggestion}")
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn toponym_lookup_uses_municipality_suffixes() {
+        assert!(is_valid_toponym("São Paulo"));
+        assert!(is_valid_toponym("são-paulo"));
+        assert!(!is_valid_toponym("Zzzz Não Existe"));
+    }
+
+    #[test]
+    fn brazilian_toponym_filter_matches_java_suggestion_gate() {
+        let out = brazilian_toponym_filter(
+            &["full", "São Paulo", "-SP", "SP"],
+            match_at(0, 10, "São Paulo -SP", ""),
+        )
+        .expect("kept");
+        assert_eq!(out.replacements()[0].value(), "–SP");
+        assert!(
+            brazilian_toponym_filter(
+                &["full", "São Paulo", "–SP", "SP"],
+                match_at(0, 10, "x", "")
+            )
+            .is_none()
+        );
+        assert!(
+            brazilian_toponym_filter(
+                &["full", "Zzz Não Existe", "-SP", "SP"],
+                match_at(0, 10, "x", "")
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn soros_digit_shape_covers_all_arabic_digits() {
+        assert_eq!(soros_digit_shape(1, ["I", "V", "X"]), "I");
+        assert_eq!(soros_digit_shape(2, ["I", "V", "X"]), "II");
+        assert_eq!(soros_digit_shape(3, ["I", "V", "X"]), "III");
+        assert_eq!(soros_digit_shape(4, ["I", "V", "X"]), "IV");
+        assert_eq!(soros_digit_shape(5, ["I", "V", "X"]), "V");
+        assert_eq!(soros_digit_shape(6, ["I", "V", "X"]), "VI");
+        assert_eq!(soros_digit_shape(7, ["I", "V", "X"]), "VII");
+        assert_eq!(soros_digit_shape(8, ["I", "V", "X"]), "VIII");
+        assert_eq!(soros_digit_shape(9, ["I", "V", "X"]), "IX");
+        assert_eq!(soros_digit_shape(0, ["I", "V", "X"]), "");
+        assert_eq!(soros_digit_shape(4, ["M", "-", "-"]), "M-");
+    }
+
+    #[test]
+    fn soros_overline_combines_per_character() {
+        assert_eq!(soros_overline("4"), "4\u{0305}");
+        assert_eq!(soros_overline("12"), "1\u{0305}2\u{0305}");
+        assert_eq!(soros_overline(""), "");
+    }
+
+    #[test]
+    fn soros_roman_converts_the_classical_range() {
+        for (arabic, roman) in [
+            ("1", "I"),
+            ("2", "II"),
+            ("3", "III"),
+            ("4", "IV"),
+            ("9", "IX"),
+            ("14", "XIV"),
+            ("40", "XL"),
+            ("90", "XC"),
+            ("249", "CCXLIX"),
+            ("1999", "MCMXCIX"),
+            ("3999", "MMMCMXCIX"),
+        ] {
+            assert_eq!(soros_roman(arabic), roman, "{arabic}");
+        }
+    }
+
+    #[test]
+    fn soros_roman_uses_overlines_beyond_3999_like_roman_sor() {
+        assert_eq!(soros_roman("4000"), "4\u{0305}");
+        assert_eq!(soros_roman("12345"), "1\u{0305}2\u{0305}CCCXLV");
+        assert_eq!(
+            soros_roman("1234567"),
+            "1\u{0305}2\u{0305}3\u{0305}4\u{0305}DLXVII"
+        );
+        assert_eq!(soros_roman("0"), "");
+        assert_eq!(soros_roman("007"), "VII");
+        assert_eq!(soros_roman(""), "");
+        assert_eq!(soros_roman("12a4"), "");
+        assert_eq!(soros_roman("000"), "");
+    }
+
+    #[test]
+    fn roman_numeral_filter_suggests_from_arabic_source() {
+        let matched = vec!["xii".to_string(), "12".to_string()];
+        let out = roman_numeral_filter("arabicSource:\\2", &matched, match_at(0, 3, "xii", ""))
+            .expect("kept");
+        assert_eq!(out.replacements()[0].value(), "XII");
+        let out = roman_numeral_filter("", &[], match_at(0, 3, "xii", "")).expect("kept");
+        assert_eq!(out.replacements()[0].value(), "");
+    }
+
+    #[test]
+    fn pronoun_helpers_cover_accusative_conversion() {
+        assert_eq!(convert_pronoun_to_accusative("PP1CPN00"), "PP1CPA00");
+        assert_eq!(convert_pronoun_to_accusative("PP1CSO00"), "PP1CSO00");
+        let nos = reading("nos", "nos", "PP1CPN00", 0);
+        assert_eq!(pronoun_tags(&nos, "comemos", false), vec!["PP1CPO00"]);
+        assert_eq!(
+            pronoun_tags(&nos, "comeram", false),
+            vec!["PP1CPO00", "PP3MPA00"]
+        );
+        assert_eq!(
+            pronoun_tags(&nos, "põe", false),
+            vec!["PP1CPO00", "PP3MPA00"]
+        );
+        let lo = reading("lo", "lo", "PP3MSN00", 0);
+        assert_eq!(pronoun_tags(&lo, "comeu", true), vec!["PP3MSA00"]);
+        let lhe = reading("lhe", "lhe", "PP3CSD0", 0);
+        assert_eq!(pronoun_tags(&lhe, "x", false), vec!["PP3CSD0"]);
+    }
+
+    #[test]
+    fn portuguese_enclisis_filter_synthesizes_contracted_forms() {
+        let synth = temp_synth("come-o\tcomer\tVMIP3S0:PP3MSA00\n");
+        let verb = reading("come", "comer", "VMIP3S0", 0);
+        let pronoun = reading("o", "o", "PP3MSA00", 5);
+        let tokens: Vec<&AnalyzedTokenReadings> = vec![&verb, &pronoun];
+        let out = portuguese_enclisis_filter(
+            Some(&synth),
+            "verbPos:0 pronounPos:1 convertToAccusative:false",
+            &tokens,
+            &[0, 1],
+            match_at(0, 6, "come o", ""),
+        )
+        .expect("kept");
+        assert_eq!(out.replacements()[0].value(), "come-o");
+    }
+
+    #[test]
+    fn portuguese_enclisis_filter_preserves_title_case_and_caps() {
+        let synth = temp_synth("Como\tcomer\tVMIP1S0:PP1CPO00\nCOMO\tcomer\tVMIP1S0:PP1CPO00\n");
+        let verb = reading("Como", "comer", "VMIP1S0", 0);
+        let pronoun = reading("nos", "nos", "PP1CPN00", 5);
+        let tokens: Vec<&AnalyzedTokenReadings> = vec![&verb, &pronoun];
+        let out = portuguese_enclisis_filter(
+            Some(&synth),
+            "verbPos:0 pronounPos:1",
+            &tokens,
+            &[0, 1],
+            match_at(0, 7, "Como nos", ""),
+        )
+        .unwrap();
+        assert_eq!(out.replacements()[0].value(), "Como");
+        let verb = reading("COMO", "comer", "VMIP1S0", 0);
+        let tokens: Vec<&AnalyzedTokenReadings> = vec![&verb, &pronoun];
+        let out = portuguese_enclisis_filter(
+            Some(&synth),
+            "verbPos:0 pronounPos:1",
+            &tokens,
+            &[0, 1],
+            match_at(0, 7, "COMO nos", ""),
+        )
+        .unwrap();
+        assert_eq!(out.replacements()[0].value(), "COMO");
+    }
+
+    #[test]
+    fn portuguese_enclisis_filter_rejects_pronounless_and_unargued_calls() {
+        let verb = reading("come", "comer", "VMIP3S0", 0);
+        let noun = reading("casa", "casa", "NCFS000", 5);
+        let tokens: Vec<&AnalyzedTokenReadings> = vec![&verb, &noun];
+        assert!(
+            portuguese_enclisis_filter(
+                None,
+                "verbPos:0 pronounPos:1",
+                &tokens,
+                &[0, 1],
+                match_at(0, 6, "come casa", "")
+            )
+            .is_none()
+        );
+        assert!(
+            portuguese_enclisis_filter(
+                None,
+                "pronounPos:1",
+                &tokens,
+                &[0, 1],
+                match_at(0, 6, "come casa", "")
+            )
+            .is_none()
+        );
+        assert!(
+            portuguese_enclisis_filter(
+                None,
+                "verbPos:9 pronounPos:8",
+                &tokens,
+                &[0, 1],
+                match_at(0, 6, "come casa", "")
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn portuguese_enclisis_filter_without_synthesizer_clears_replacements() {
+        let verb = reading("come", "comer", "VMIP3S0", 0);
+        let pronoun = reading("o", "o", "PP3MSA00", 5);
+        let tokens: Vec<&AnalyzedTokenReadings> = vec![&verb, &pronoun];
+        let out = portuguese_enclisis_filter(
+            None,
+            "verbPos:0 pronounPos:1",
+            &tokens,
+            &[0, 1],
+            match_at(0, 6, "come o", "{suggestion}"),
+        )
+        .expect("kept");
+        assert!(out.replacements().is_empty());
+    }
+
+    #[test]
+    fn portuguese_enclisis_filter_dedups_repeated_forms() {
+        let synth =
+            temp_synth("come-o\tcomer\tVMIP3S0:PP3MSA00\ncome-o\tcomer\tVMIP3S0:PP3MSA00\n");
+        let verb = reading("come", "comer", "VMIP3S0", 0);
+        let pronoun = reading("o", "o", "PP3MSA00", 5);
+        let tokens: Vec<&AnalyzedTokenReadings> = vec![&verb, &pronoun];
+        let out = portuguese_enclisis_filter(
+            Some(&synth),
+            "verbPos:0 pronounPos:1",
+            &tokens,
+            &[0, 1],
+            match_at(0, 6, "come o", ""),
+        )
+        .expect("kept");
+        assert_eq!(out.replacements().len(), 1);
+    }
+
+    #[test]
+    fn proclisis_pronoun_forms_cover_the_java_switch() {
+        assert_eq!(proclisis_pronoun_forms("lo", "x"), vec!["o"]);
+        assert_eq!(proclisis_pronoun_forms("no", "x"), vec!["o"]);
+        assert_eq!(proclisis_pronoun_forms("la", "x"), vec!["a"]);
+        assert_eq!(proclisis_pronoun_forms("na", "x"), vec!["a"]);
+        assert_eq!(proclisis_pronoun_forms("los", "x"), vec!["os"]);
+        assert_eq!(proclisis_pronoun_forms("las", "x"), vec!["as"]);
+        assert_eq!(proclisis_pronoun_forms("nas", "x"), vec!["as"]);
+        assert_eq!(proclisis_pronoun_forms("nos", "x"), vec!["nos"]);
+        assert_eq!(proclisis_pronoun_forms("nos", "comeram"), vec!["nos", "os"]);
+        assert_eq!(proclisis_pronoun_forms("nos", "põe"), vec!["nos", "os"]);
+        assert_eq!(proclisis_pronoun_forms("vos", "x"), vec!["vos"]);
+    }
+
+    #[test]
+    fn portuguese_proclisis_filter_splits_the_enclitic_token() {
+        let Some(synth) = real_synth() else {
+            panic!("portuguese synthesizer must load");
+        };
+        let enclitic = reading("encontra-o", "encontrar", "VMIP3S0:PP3MSA00", 0);
+        let tokens: Vec<&AnalyzedTokenReadings> = vec![&enclitic];
+        let out = portuguese_proclisis_filter(
+            Some(&synth),
+            &tokens,
+            &[0],
+            match_at(0, 10, "encontra-o", ""),
+        )
+        .expect("kept");
+        let values: Vec<&str> = out.replacements().iter().map(|r| r.value()).collect();
+        assert_eq!(values, vec!["o encontra"]);
+    }
+
+    #[test]
+    fn portuguese_proclisis_filter_skips_non_enclitic_readings() {
+        let Some(synth) = real_synth() else {
+            panic!("portuguese synthesizer must load");
+        };
+        let plain = reading("casa", "casa", "NCFS000", 0);
+        let tokens: Vec<&AnalyzedTokenReadings> = vec![&plain];
+        let out = portuguese_proclisis_filter(
+            Some(&synth),
+            &tokens,
+            &[0],
+            match_at(0, 4, "casa", "{suggestion}"),
+        )
+        .expect("kept");
+        assert!(out.replacements().is_empty());
+        let hyphenless = reading("encontra", "encontrar", "VMIP3S0", 0);
+        let tokens: Vec<&AnalyzedTokenReadings> = vec![&hyphenless];
+        let out = portuguese_proclisis_filter(
+            Some(&synth),
+            &tokens,
+            &[0],
+            match_at(0, 8, "encontra", ""),
+        )
+        .expect("kept");
+        assert!(out.replacements().is_empty());
+        let tokens: Vec<&AnalyzedTokenReadings> = vec![&plain];
+        let out = portuguese_proclisis_filter(None, &tokens, &[0], match_at(0, 4, "casa", ""))
+            .expect("kept");
+        assert!(out.replacements().is_empty());
+    }
+
+    #[test]
+    fn marker_or_index_resolves_markers_and_bounded_indices() {
+        let t0 = reading("a", "a", "A", 0);
+        let t1 = reading("b", "b", "B", 2);
+        let tokens = [&t0, &t1];
+        assert_eq!(marker_or_index("1", &tokens, 0), Some(0));
+        assert_eq!(marker_or_index("2", &tokens, 0), Some(1));
+        assert_eq!(marker_or_index("0", &tokens, 0), None);
+        assert_eq!(marker_or_index("3", &tokens, 0), None);
+        assert_eq!(marker_or_index("x", &tokens, 0), None);
+        assert_eq!(marker_or_index("marker", &tokens, 0), Some(0));
+        assert_eq!(marker_or_index("marker1", &tokens, 0), Some(1));
+        assert_eq!(marker_or_index("marker2", &tokens, 0), None);
+        let t2 = reading("c", "c", "C", 4);
+        let tokens = [&t0, &t1, &t2];
+        assert_eq!(marker_or_index("marker", &tokens, 2), Some(1));
+    }
+
+    #[test]
+    fn select_reading_prefers_matching_then_first_reading() {
+        let atr = AnalyzedTokenReadings::new(AnalyzedToken::new("x", 0, 1)).with_readings(vec![
+            AnalyzedToken::new("x", 0, 1)
+                .with_lemma("l1")
+                .with_pos_tags(vec!["AQ0MS0".to_string()]),
+            AnalyzedToken::new("x", 0, 1)
+                .with_lemma("l2")
+                .with_pos_tags(vec!["NCMS000".to_string()]),
+        ]);
+        let (lemma, tag) = select_reading(&atr, "NC.+");
+        assert_eq!(lemma, Some("l2"));
+        assert_eq!(tag, "NCMS000");
+        let (lemma, tag) = select_reading(&atr, "V.+");
+        assert_eq!(lemma, Some("l1"));
+        assert_eq!(tag, "AQ0MS0");
+        let empty = AnalyzedTokenReadings::new(AnalyzedToken::new("x", 0, 1));
+        let (lemma, tag) = select_reading(&empty, "NC.+");
+        assert_eq!(lemma, None);
+        assert_eq!(tag, "UNKNOWN");
+    }
+
+    #[test]
+    fn composite_postag_splices_capture_groups() {
+        let out = composite_postag(
+            "(VMIP)(1)S0",
+            "(NC)(F)S000",
+            "VMIP1S0",
+            "NCFS000",
+            r"\a2-\b2",
+        );
+        assert_eq!(out, "1-F");
+        assert_eq!(composite_postag("A", "B", "x", "y", "plain"), "plain");
+    }
+
+    #[test]
+    fn move_pronoun_tag_keeps_the_pronoun_suffix() {
+        assert_eq!(
+            move_pronoun_tag("VMIP1S0:PP1CPO00", "VMIP1S0:PP1CSN00"),
+            "VMIP1S0:PP1CPO00"
+        );
+        assert_eq!(
+            move_pronoun_tag("VMIP1S0", "VMIP1S0:PP1CSN00"),
+            "VMIP1S0:PP1CSN00"
+        );
+        assert_eq!(
+            move_pronoun_tag("VMIP1S0:", "VMIP1S0:PP1CSN00"),
+            "VMIP1S0:PP1CSN00"
+        );
+    }
+
+    #[test]
+    fn is_suggestion_exception_pt_gates_first_person_plurals() {
+        assert!(is_suggestion_exception_pt("canta", "VMIP1P0"));
+        assert!(!is_suggestion_exception_pt("cantamos", "VMIP1P0"));
+        assert!(is_suggestion_exception_pt("canta", "VMIP2P0"));
+        assert!(!is_suggestion_exception_pt("canta", "VMIP3S0"));
+    }
+
+    #[test]
+    fn advanced_synthesizer_filter_agrees_the_adjective_with_the_noun() {
+        let Some(synth) = real_synth() else {
+            panic!("portuguese synthesizer must load");
+        };
+        let adj = reading("bonito", "bonito", "AQ0MS0", 0);
+        let noun = reading("casa", "casa", "NCFS000", 7);
+        let tokens: Vec<&AnalyzedTokenReadings> = vec![&adj, &noun];
+        let matched = vec!["bonito".to_string(), "casa".to_string()];
+        let args = "postagSelect:NC(F)S000 lemmaSelect:AQ0MS0 postagFrom:2 lemmaFrom:1 postagReplace:AQ0\\b1S0";
+        let out = advanced_synthesizer_filter(
+            Some(&synth),
+            args,
+            &matched,
+            &[0, 1],
+            &tokens,
+            match_at(0, 6, "bonito casa", "{suggestion}"),
+        )
+        .expect("kept");
+        let values: Vec<&str> = out.replacements().iter().map(|r| r.value()).collect();
+        assert_eq!(values, vec!["bonita"]);
+    }
+
+    #[test]
+    fn advanced_synthesizer_filter_bails_out_on_missing_arguments_or_windows() {
+        let adj = reading("bonito", "bonito", "AQ0MS0", 0);
+        let tokens: Vec<&AnalyzedTokenReadings> = vec![&adj];
+        let matched = vec!["bonito".to_string()];
+        let out = advanced_synthesizer_filter(
+            None,
+            "postagSelect:AQ0FS0",
+            &matched,
+            &[],
+            &tokens,
+            match_at(0, 6, "bonito", "{suggestion}"),
+        )
+        .unwrap();
+        assert_eq!(out.replacements()[0].value(), "{suggestion}");
+        assert!(
+            advanced_synthesizer_filter(
+                None,
+                "postagSelect:AQ0FS0 lemmaSelect:AQ0MS0 lemmaFrom:9 postagFrom:1",
+                &matched,
+                &[0],
+                &tokens,
+                match_at(0, 6, "bonito", "{suggestion}")
+            )
+            .is_none()
+        );
+        assert!(
+            advanced_synthesizer_filter(
+                None,
+                "postagSelect:AQ0FS0 lemmaSelect:AQ0MS0 lemmaFrom:1 postagFrom:9",
+                &matched,
+                &[0],
+                &tokens,
+                match_at(0, 6, "bonito", "{suggestion}")
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn advanced_synthesizer_filter_replaces_the_lemma() {
+        let synth = temp_synth("má\tmau\tAQ0FS0\n");
+        let bom = reading("bom", "bom", "AQ0MS0", 0);
+        let boa = reading("boa", "bom", "AQ0FS0", 4);
+        let tokens: Vec<&AnalyzedTokenReadings> = vec![&bom, &boa];
+        let matched = vec!["bom".to_string(), "boa".to_string()];
+        let args = "postagSelect:AQ0FS0 lemmaSelect:AQ0MS0 postagFrom:2 lemmaFrom:1 newLemma:mau";
+        let out = advanced_synthesizer_filter(
+            Some(&synth),
+            args,
+            &matched,
+            &[0, 1],
+            &tokens,
+            match_at(0, 3, "bom boa", "{Suggestion}!"),
+        )
+        .expect("kept");
+        assert_eq!(out.replacements()[0].value(), "Má!");
+    }
+
+    #[test]
+    fn advanced_synthesizer_filter_keep_pronoun_moves_the_pronoun_tag() {
+        let synth = temp_synth("como-o\tcomer\tVMIP1S0:PP3MSA00\n");
+        let enclisis = reading("como-o", "comer", "VMIP1S0:PP3MSA00", 0);
+        let plain = reading("como", "comer", "VMIP1S0", 7);
+        let tokens: Vec<&AnalyzedTokenReadings> = vec![&enclisis, &plain];
+        let matched = vec!["como-o".to_string(), "como".to_string()];
+        let args = "postagSelect:VMIP1S0 lemmaSelect:VMIP1S0:PP3MSA00 postagFrom:2 lemmaFrom:1 postagReplace:keepPronoun";
+        let out = advanced_synthesizer_filter(
+            Some(&synth),
+            args,
+            &matched,
+            &[0, 1],
+            &tokens,
+            match_at(0, 6, "como-o como", "{suggestion}"),
+        )
+        .expect("kept");
+        assert_eq!(out.replacements()[0].value(), "como-o");
+    }
+
+    #[test]
+    fn advanced_synthesizer_filter_underscore_new_lemma_suppresses_synthesis() {
+        let synth = temp_synth("forma\tnunca\tAQ0FS0\n");
+        let tok = reading("x", "x", "AQ0MS0", 0);
+        let tokens: Vec<&AnalyzedTokenReadings> = vec![&tok];
+        let matched = vec!["x".to_string()];
+        let args = "postagSelect:AQ0MS0 lemmaSelect:AQ0MS0 postagFrom:1 lemmaFrom:1 newLemma:_ postagReplace:AQ0FS0";
+        assert!(
+            advanced_synthesizer_filter(
+                Some(&synth),
+                args,
+                &matched,
+                &[0],
+                &tokens,
+                match_at(0, 1, "x", "")
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn advanced_synthesizer_filter_caps_the_suggestion_like_the_surface() {
+        let synth = temp_synth("Boa\tbom\tAQ0FS0\n");
+        let adj = reading("Boa", "bom", "AQ0FS0", 0);
+        let tokens: Vec<&AnalyzedTokenReadings> = vec![&adj];
+        let matched = vec!["Boa".to_string()];
+        let args = "postagSelect:AQ0FS0 lemmaSelect:AQ0FS0 postagFrom:1 lemmaFrom:1";
+        let out = advanced_synthesizer_filter(
+            Some(&synth),
+            args,
+            &matched,
+            &[0],
+            &tokens,
+            match_at(0, 3, "Boa", "{suggestion}"),
+        )
+        .expect("kept");
+        assert_eq!(out.replacements()[0].value(), "Boa");
+    }
+
+    #[test]
+    fn advanced_synthesizer_filter_appends_bare_forms_without_template() {
+        let synth = temp_synth("boa\tbom\tAQ0FS0\n");
+        let adj = reading("bonito", "bom", "AQ0MS0", 0);
+        let tokens: Vec<&AnalyzedTokenReadings> = vec![&adj];
+        let matched = vec!["bonito".to_string()];
+        let args =
+            "postagSelect:AQ0FS0 lemmaSelect:AQ0MS0 postagFrom:1 lemmaFrom:1 postagReplace:AQ0FS0";
+        let out = advanced_synthesizer_filter(
+            Some(&synth),
+            args,
+            &matched,
+            &[0],
+            &tokens,
+            match_at(0, 6, "bonito", ""),
+        )
+        .expect("kept");
+        let values: Vec<&str> = out.replacements().iter().map(|r| r.value()).collect();
+        assert_eq!(values, vec!["boa"]);
+    }
+
+    #[test]
+    fn advanced_synthesizer_filter_skipped_exceptions_fall_back_to_raw_forms() {
+        let synth = temp_synth("canta\tcantar\tVMIP1P0\n");
+        let verb = reading("x", "cantar", "VMIP1S0", 0);
+        let tokens: Vec<&AnalyzedTokenReadings> = vec![&verb];
+        let matched = vec!["x".to_string()];
+        let args = "postagSelect:VMIP1S0 lemmaSelect:VMIP1S0 postagFrom:1 lemmaFrom:1 postagReplace:VMIP1P0";
+        let out = advanced_synthesizer_filter(
+            Some(&synth),
+            args,
+            &matched,
+            &[0],
+            &tokens,
+            match_at(0, 1, "x", "{suggestion}"),
+        )
+        .expect("kept");
+        let values: Vec<&str> = out.replacements().iter().map(|r| r.value()).collect();
+        assert_eq!(values, vec!["canta"]);
+    }
+
+    #[test]
+    fn is_pt_filter_and_dispatch_route_every_class() {
+        for class in [
+            "org.languagetool.rules.pt.ConfusionCheckFilter",
+            "org.languagetool.rules.pt.BrazilianToponymFilter",
+            "org.languagetool.rules.pt.RegularIrregularParticipleFilter",
+            "org.languagetool.rules.pt.RomanNumeralFilter",
+            "org.languagetool.rules.pt.PortugueseEnclisisFilter",
+            "org.languagetool.rules.pt.PortugueseProclisisFilter",
+            "org.languagetool.rules.pt.AdvancedSynthesizerFilter",
+        ] {
+            assert!(is_pt_filter(class), "{class}");
+        }
+        assert!(!is_pt_filter("org.languagetool.rules.pt.FutureDateFilter"));
+        let tokens: Vec<&AnalyzedTokenReadings> = vec![];
+        assert!(
+            apply_pt_filter(
+                "no.such.Class",
+                empty_call(&tokens),
+                match_at(0, 1, "x", "")
+            )
+            .is_none()
+        );
+        assert!(
+            apply_pt_filter(
+                "org.languagetool.rules.pt.BrazilianToponymFilter",
+                empty_call(&tokens),
+                match_at(0, 1, "x", "")
+            )
+            .is_none()
+        );
+        let groups = ["full", "São Paulo", "-SP", "SP"];
+        let out = apply_engine_pt_filter_with_groups(
+            &XmlFilter {
+                class: "org.languagetool.rules.pt.BrazilianToponymFilter".to_string(),
+                args: String::new(),
+            },
+            &groups,
+            empty_call(&tokens),
+            match_at(0, 10, "São Paulo -SP", ""),
+        )
+        .expect("kept");
+        assert_eq!(out.replacements()[0].value(), "–SP");
+        let empty_groups: [&str; 0] = [];
+        assert!(
+            apply_engine_pt_filter_with_groups(
+                &XmlFilter {
+                    class: "org.languagetool.rules.pt.BrazilianToponymFilter".to_string(),
+                    args: String::new(),
+                },
+                &empty_groups,
+                empty_call(&tokens),
+                match_at(0, 10, "São Paulo -SP", ""),
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn regexp_group_texts_selects_the_group_matching_the_span() {
+        let plain = CompiledRuleRegexp {
+            regex: Some(std::sync::Arc::new(Regex::new(r"(\w+) (\w+)").unwrap())),
+            fancy_regex: None,
+            mark: 0,
+        };
+        assert_eq!(
+            regexp_group_texts(&plain, "alpha beta", 0, 10),
+            Some(vec![
+                "alpha beta".to_string(),
+                "alpha".to_string(),
+                "beta".to_string()
+            ])
+        );
+        let fancy = CompiledRuleRegexp {
+            regex: None,
+            fancy_regex: Some(std::sync::Arc::new(
+                fancy_regex::Regex::new(r"(\w+) (\w+)").unwrap(),
+            )),
+            mark: 0,
+        };
+        assert_eq!(
+            regexp_group_texts(&fancy, "alpha beta", 0, 10),
+            Some(vec![
+                "alpha beta".to_string(),
+                "alpha".to_string(),
+                "beta".to_string()
+            ])
+        );
+        let neither = CompiledRuleRegexp {
+            regex: None,
+            fancy_regex: None,
+            mark: 0,
+        };
+        assert_eq!(regexp_group_texts(&neither, "alpha beta", 0, 5), None);
+        let marked = CompiledRuleRegexp {
+            regex: Some(std::sync::Arc::new(Regex::new("(a)(lpha)").unwrap())),
+            fancy_regex: None,
+            mark: 1,
+        };
+        assert_eq!(
+            regexp_group_texts(&marked, "alpha", 0, 1),
+            Some(vec![
+                "alpha".to_string(),
+                "a".to_string(),
+                "lpha".to_string()
+            ])
+        );
+        assert_eq!(regexp_group_texts(&marked, "alpha", 1, 5), None);
+    }
+
+    #[test]
+    fn apply_engine_pt_filter_extracts_groups_from_the_rule_regexp() {
+        let mut rule = CompiledRule {
+            id: "X".to_string(),
+            sub_id: None,
+            name: "X".to_string(),
+            description: String::new(),
+            source_file: None,
+            category: Default::default(),
+            antipatterns: Vec::new(),
+            pattern: CompiledPattern {
+                tokens: Vec::new(),
+                elements: Vec::new(),
+                case_sensitive: false,
+                marker_start: None,
+                marker_end: None,
+                marker_elem_start: None,
+                marker_elem_end: None,
+                has_structured_elements: false,
+                unify_groups: Vec::new(),
+                raw_pos: false,
+            },
+            regexp: Some(CompiledRuleRegexp {
+                regex: Some(std::sync::Arc::new(
+                    Regex::new("(.*?)(–|-)([A-Z]{2})").unwrap(),
+                )),
+                fancy_regex: None,
+                mark: 0,
+            }),
+            message: String::new(),
+            short_message: None,
+            suggestions: Vec::new(),
+            examples: Vec::new(),
+            unifications: Vec::new(),
+            url: None,
+            default_on: true,
+            deprecated: false,
+            filter: None,
+            issue_type: String::new(),
+            suppress_misspelled: false,
+            picky: false,
+        };
+        let filter = XmlFilter {
+            class: "org.languagetool.rules.pt.BrazilianToponymFilter".to_string(),
+            args: String::new(),
+        };
+        let tokens: Vec<&AnalyzedTokenReadings> = vec![];
+        let out = apply_engine_pt_filter(
+            &rule,
+            &filter,
+            "São Paulo -SP",
+            match_at(0, 10, "São Paulo -SP", ""),
+            empty_call(&tokens),
+        );
+        assert!(out.is_none());
+        rule.regexp = None;
+        let out = apply_engine_pt_filter(
+            &rule,
+            &filter,
+            "São Paulo -SP",
+            match_at(0, 10, "São Paulo -SP", ""),
+            empty_call(&tokens),
+        );
+        assert!(out.is_none());
+    }
+
+    #[test]
+    fn regular_irregular_participle_filter_flips_directions() {
+        let Some(synth) = real_synth() else {
+            panic!("portuguese synthesizer must load");
+        };
+        let verb = reading("matada", "matar", "VMP00SF", 0);
+        let tokens: Vec<&AnalyzedTokenReadings> = vec![&verb];
+        let out = regular_irregular_participle_filter(
+            Some(&synth),
+            "direction:RegularToIrregular",
+            &tokens,
+            match_at(0, 6, "matada", "{suggestion}"),
+        )
+        .expect("kept");
+        assert_eq!(out.replacements()[0].value(), "morta");
+        let verb = reading("morta", "matar", "VMP00SF", 0);
+        let tokens: Vec<&AnalyzedTokenReadings> = vec![&verb];
+        let out = regular_irregular_participle_filter(
+            Some(&synth),
+            "direction:IrregularToRegular",
+            &tokens,
+            match_at(0, 5, "morta", "{suggestion}"),
+        )
+        .expect("kept");
+        assert_eq!(out.replacements()[0].value(), "matada");
+    }
+
+    #[test]
+    fn regular_irregular_participle_filter_rejects_mismatches() {
+        let Some(synth) = real_synth() else {
+            panic!("portuguese synthesizer must load");
+        };
+        let noun = reading("casa", "casa", "NCFS000", 0);
+        let tokens: Vec<&AnalyzedTokenReadings> = vec![&noun];
+        assert!(
+            regular_irregular_participle_filter(
+                Some(&synth),
+                "direction:RegularToIrregular",
+                &tokens,
+                match_at(0, 4, "casa", "")
+            )
+            .is_none()
+        );
+        let verb = reading("matada", "matar", "VMP00SF", 4);
+        let tokens: Vec<&AnalyzedTokenReadings> = vec![&verb];
+        assert!(
+            regular_irregular_participle_filter(
+                Some(&synth),
+                "direction:RegularToIrregular",
+                &tokens,
+                match_at(0, 6, "x matada", "")
+            )
+            .is_none()
+        );
+        assert!(
+            regular_irregular_participle_filter(
+                Some(&synth),
+                "direction:Sideways",
+                &tokens,
+                match_at(4, 6, "x matada", "")
+            )
+            .is_none()
+        );
+        assert!(
+            regular_irregular_participle_filter(
+                None,
+                "direction:RegularToIrregular",
+                &tokens,
+                match_at(4, 6, "x matada", "")
+            )
+            .is_none()
+        );
+        let verb = reading("matada", "matar", "VMP00SF", 0);
+        let tokens: Vec<&AnalyzedTokenReadings> = vec![&verb];
+        assert!(
+            regular_irregular_participle_filter(
+                Some(&synth),
+                "direction:IrregularToRegular",
+                &tokens,
+                match_at(0, 6, "matada", "")
+            )
+            .is_none()
+        );
+        let verb = reading("morta", "matar", "VMP00SF", 0);
+        let tokens: Vec<&AnalyzedTokenReadings> = vec![&verb];
+        assert!(
+            regular_irregular_participle_filter(
+                Some(&synth),
+                "direction:RegularToIrregular",
+                &tokens,
+                match_at(0, 5, "morta", "")
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn lt_modules_root_resolves_the_checkout() {
+        assert!(lt_modules_root().is_some());
+        assert!(pt_rules_dir().is_some());
+        assert!(pt_resource_dir().is_some());
+    }
 }

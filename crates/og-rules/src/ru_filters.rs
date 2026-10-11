@@ -205,7 +205,7 @@ fn is_capitalized_word(s: &str) -> bool {
     let mut chars = s.chars();
     match chars.next() {
         Some(first) if first.is_uppercase() => {
-            chars.all(|c| !c.is_alphabetic() || !c.is_lowercase())
+            chars.all(|c| !c.is_alphabetic() || c.is_lowercase())
         }
         _ => false,
     }
