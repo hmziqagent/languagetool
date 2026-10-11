@@ -48,7 +48,7 @@ fn load_renamed_lists(data: &str) -> HashMap<String, Vec<String>> {
         if line.is_empty() {
             continue;
         }
-        let mut parts = line.split([' ', '|']);
+        let mut parts = line.split(['=', '|']).map(str::trim);
         let Some(key) = parts.next() else { continue };
         let list: Vec<String> = parts.map(str::to_string).collect();
         map.insert(key.to_string(), list);
@@ -176,7 +176,7 @@ impl UkrainianSimpleReplaceRule {
         false
     }
 
-    fn message(&self, token_str: &str, replacements: &[String]) -> String {
+    fn message(&self, token_str: &str, replacements: &mut Vec<String>) -> String {
         match self.flavor {
             ReplaceFlavor::Plain => {
                 format!(
@@ -187,7 +187,7 @@ impl UkrainianSimpleReplaceRule {
             ReplaceFlavor::Soft => {
                 let mut contexts = Vec::new();
                 let mut repls = Vec::new();
-                for repl in replacements {
+                for repl in replacements.iter() {
                     if let Some(ctx) = repl.strip_prefix("ctx:") {
                         for part in ctx.trim().split(',') {
                             let part = part.trim();
@@ -199,6 +199,7 @@ impl UkrainianSimpleReplaceRule {
                         repls.push(repl.clone());
                     }
                 }
+                replacements.retain(|r| !r.starts_with("ctx:"));
                 if !contexts.is_empty() {
                     return format!(
                         "«{token_str}» вживається лише в таких контекстах: {}, можливо, ви мали на увазі: {}?",
@@ -305,7 +306,7 @@ impl UkrainianSimpleReplaceRule {
             return Vec::new();
         }
 
-        let message = self.message(original_token_str, &replacements);
+        let message = self.message(original_token_str, &mut replacements);
         if !self.case_sensitive() && starts_with_uppercase(original_token_str) {
             for repl in replacements.iter_mut() {
                 *repl = uppercase_first(repl);
@@ -495,5 +496,193 @@ impl Rule for UkrainianSimpleReplaceRenamedRule {
             );
         }
         rule_matches
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use og_core::{AnalyzedSentence, AnalyzedToken, AnalyzedTokenReadings};
+
+    fn make_sentence(text: &str) -> AnalyzedSentence {
+        let mut sentence = AnalyzedSentence::new(text, 0, text.len());
+        let mut tokens = vec![AnalyzedTokenReadings::new(
+            AnalyzedToken::new("<S>", 0, 0).with_pos_tags(vec!["SENT_START".to_string()]),
+        )];
+        let mut pos = 0usize;
+        for word in text.split_whitespace() {
+            let start = pos + text[pos..].find(word).expect("word offset");
+            let end = start + word.len();
+            tokens.push(AnalyzedTokenReadings::new(AnalyzedToken::new(
+                word, start, end,
+            )));
+            pos = end;
+        }
+        sentence.set_tokens(tokens);
+        sentence
+    }
+
+    fn make_lemma_sentence(pairs: &[(&str, &str, &str)]) -> AnalyzedSentence {
+        let text = pairs
+            .iter()
+            .map(|(t, _, _)| *t)
+            .collect::<Vec<_>>()
+            .join(" ");
+        let mut sentence = AnalyzedSentence::new(text.clone(), 0, text.len());
+        let mut tokens = vec![AnalyzedTokenReadings::new(
+            AnalyzedToken::new("<S>", 0, 0).with_pos_tags(vec!["SENT_START".to_string()]),
+        )];
+        let mut pos = 0usize;
+        for (token, lemma, pos_tag) in pairs {
+            let start = pos + text[pos..].find(token).expect("token offset");
+            let end = start + token.len();
+            let reading = AnalyzedToken::new(*token, start, end)
+                .with_lemma(*lemma)
+                .with_pos_tags(vec![pos_tag.to_string()]);
+            tokens.push(
+                AnalyzedTokenReadings::new(AnalyzedToken::new(*token, start, end))
+                    .with_readings(vec![reading]),
+            );
+            pos = end;
+        }
+        sentence.set_tokens(tokens);
+        sentence
+    }
+
+    fn suggestion_values(m: &og_core::RuleMatch) -> Vec<&str> {
+        m.replacements().iter().map(|r| r.value()).collect()
+    }
+
+    #[test]
+    fn java_pin_plain_rule_battery() {
+        let rule = UkrainianSimpleReplaceRule::plain();
+        assert_eq!(
+            rule.match_sentence(&make_sentence("Ці рядки повинні збігатися."))
+                .len(),
+            0
+        );
+        let text = "Ці рядки повинні співпадати";
+        let matches = rule.match_sentence(&make_sentence(text));
+        assert_eq!(matches.len(), 1);
+        assert_eq!(
+            suggestion_values(&matches[0]),
+            vec!["збігатися", "сходитися"]
+        );
+        assert_eq!(
+            matches[0].message(),
+            "«співпадати» - помилкове слово, виправлення: збігатися, сходитися."
+        );
+        assert_eq!(matches[0].offset(), text.find("співпадати").unwrap());
+        let matches = rule.match_sentence(&make_sentence("Нападаючий"));
+        assert_eq!(matches.len(), 1);
+        assert_eq!(
+            suggestion_values(&matches[0]),
+            vec!["Нападник", "Нападальний", "Нападний"]
+        );
+        let matches = rule.match_sentence(&make_sentence("щедрота"));
+        assert_eq!(matches.len(), 1);
+        assert_eq!(
+            suggestion_values(&matches[0]),
+            vec!["щедрість", "гойність", "щедриня"]
+        );
+        assert_eq!(rule.match_sentence(&make_sentence("щедроти")).len(), 0);
+    }
+
+    #[test]
+    fn java_pin_derivat_suggestions() {
+        let matches =
+            UkrainianSimpleReplaceRule::plain().match_sentence(&make_sentence("перелиставши"));
+        assert_eq!(matches.len(), 1);
+        assert_eq!(
+            suggestion_values(&matches[0]),
+            vec!["перегорнувши", "прогортаючи"]
+        );
+    }
+
+    #[test]
+    fn derivat_fallback_maps_the_base_replacement_to_a_matching_key() {
+        let matches =
+            UkrainianSimpleReplaceRule::plain().match_sentence(&make_sentence("аукнувшись"));
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].message(), "Неправильне слово.");
+        assert_eq!(matches[0].short_message(), Some("Помилка?"));
+        assert_eq!(suggestion_values(&matches[0]), vec!["відгукнувшись"]);
+    }
+
+    #[test]
+    fn plain_rule_skips_verb_tagged_but_not_subst_tagged_tokens() {
+        let rule = UkrainianSimpleReplaceRule::plain();
+        let verb_tagged = make_lemma_sentence(&[("співпадати", "співпадати", "verb:inf")]);
+        assert_eq!(rule.match_sentence(&verb_tagged).len(), 0);
+        let subst_tagged = make_lemma_sentence(&[("співпадати", "співпадати", "noun:subst")]);
+        assert_eq!(rule.match_sentence(&subst_tagged).len(), 1);
+    }
+
+    #[test]
+    fn java_pin_soft_rule_battery() {
+        let rule = UkrainianSimpleReplaceRule::soft();
+        assert_eq!(
+            rule.match_sentence(&make_sentence("Ці рядки повинні збігатися."))
+                .len(),
+            0
+        );
+        assert_eq!(rule.match_sentence(&make_sentence("завидна")).len(), 0);
+        let matches = rule.match_sentence(&make_sentence("Цей брелок"));
+        assert_eq!(matches.len(), 1);
+        assert_eq!(suggestion_values(&matches[0]), vec!["дармовис"]);
+    }
+
+    #[test]
+    fn soft_rule_strips_the_ctx_marker_from_suggestions_like_java() {
+        let matches =
+            UkrainianSimpleReplaceRule::soft().match_sentence(&make_sentence("Не знайде спасіння"));
+        assert_eq!(matches.len(), 1);
+        assert_eq!(
+            suggestion_values(&matches[0]),
+            vec!["рятування", "рятунок", "порятунок", "визволення"]
+        );
+        assert!(matches[0].message().contains(": релігія"));
+        assert_eq!(
+            matches[0].message(),
+            "«спасіння» вживається лише в таких контекстах: релігія, поезія, можливо, ви мали на увазі: рятування, рятунок, порятунок, визволення?"
+        );
+    }
+
+    #[test]
+    fn soft_rule_message_without_context_uses_the_recommended_form() {
+        let matches =
+            UkrainianSimpleReplaceRule::soft().match_sentence(&make_sentence("Цей брелок"));
+        assert_eq!(
+            matches[0].message(),
+            "«брелок» — нерекомендоване слово, кращий варіант: дармовис."
+        );
+        assert_eq!(matches[0].rule().id(), "UK_SIMPLE_REPLACE_SOFT");
+    }
+
+    #[test]
+    fn renamed_rule_suggests_the_current_toponym() {
+        let sentence = make_lemma_sentence(&[("Аврора", "Аврора", "noun:inanim:f:prop")]);
+        let matches = UkrainianSimpleReplaceRenamedRule::new().match_sentence(&sentence);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(suggestion_values(&matches[0]), vec!["Татиш-Конрат"]);
+        assert_eq!(
+            matches[0].message(),
+            "«Аврора» було перейменовано (декомунізовано)"
+        );
+        assert_eq!(matches[0].short_message(), Some("Перейменована назва"));
+    }
+
+    #[test]
+    fn renamed_rule_ignores_non_geo_or_mixed_readings() {
+        let rule = UkrainianSimpleReplaceRenamedRule::new();
+        let verb_reading = make_lemma_sentence(&[("Аврора", "Аврора", "verb:past")]);
+        assert_eq!(rule.match_sentence(&verb_reading).len(), 0);
+        let mixed = make_lemma_sentence(&[
+            ("Аврора", "Аврора", "noun:inanim:f:prop"),
+            ("тануть", "танути", "verb:pres"),
+        ]);
+        assert_eq!(rule.match_sentence(&mixed).len(), 1);
+        let overlapping = make_lemma_sentence(&[("Аврора", "аврора", "noun:anim:f:prop")]);
+        assert_eq!(rule.match_sentence(&overlapping).len(), 0);
     }
 }
