@@ -321,3 +321,95 @@ impl Rule for IrishCompoundRule {
         rule_matches
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use og_core::{AnalyzedSentence, AnalyzedToken};
+
+    fn make_sentence(text: &str) -> AnalyzedSentence {
+        let mut sentence = AnalyzedSentence::new(text, 0, text.len());
+        let mut tokens = vec![AnalyzedTokenReadings::new(
+            AnalyzedToken::new("<S>", 0, 0).with_pos_tags(vec!["SENT_START".to_string()]),
+        )];
+        let bytes = text.as_bytes();
+        let mut i = 0usize;
+        while i < bytes.len() {
+            let is_space = bytes[i] == b' ';
+            let mut j = i;
+            while j < bytes.len() && (bytes[j] == b' ') == is_space {
+                j += 1;
+            }
+            tokens.push(AnalyzedTokenReadings::new(AnalyzedToken::new(
+                &text[i..j],
+                i,
+                j,
+            )));
+            i = j;
+        }
+        sentence.set_tokens(tokens);
+        sentence
+    }
+
+    #[test]
+    fn loads_the_two_compound_entries() {
+        assert_eq!(IrishCompoundRule::new().entry_count(), 2);
+    }
+
+    #[test]
+    fn suggests_the_hyphenated_form_mid_sentence() {
+        let text = "is ró úsáid a bhí ann";
+        let matches = IrishCompoundRule::new().match_sentence(&make_sentence(text));
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].offset(), text.find("ró úsáid").unwrap());
+        assert_eq!(matches[0].length(), "ró úsáid".len());
+        assert_eq!(matches[0].replacements()[0].value(), "ró-úsáid");
+        assert_eq!(
+            matches[0].message(),
+            "Litrítear an focal seo le fleiscín de ghnáth."
+        );
+        assert_eq!(
+            matches[0].short_message(),
+            Some("Fadhb leis an bhfleiscíniú")
+        );
+    }
+
+    #[test]
+    fn sentence_start_compound_keeps_the_initial_capital() {
+        let text = "Ró úsáid a bhí ann";
+        let matches = IrishCompoundRule::new().match_sentence(&make_sentence(text));
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].offset(), text.find("Ró úsáid").unwrap());
+        assert_eq!(matches[0].replacements()[0].value(), "Ró-úsáid");
+    }
+
+    #[test]
+    fn already_hyphenated_compound_is_accepted() {
+        let rule = IrishCompoundRule::new();
+        assert_eq!(
+            rule.match_sentence(&make_sentence("is ró-úsáid a bhí ann"))
+                .len(),
+            0
+        );
+        assert_eq!(
+            rule.match_sentence(&make_sentence("Ró-úsáid a bhí ann"))
+                .len(),
+            0
+        );
+    }
+
+    #[test]
+    fn second_dash_entry_and_plain_text_are_ignored() {
+        let rule = IrishCompoundRule::new();
+        assert_eq!(
+            rule.match_sentence(&make_sentence("is mí úsáid a bhí ann"))
+                .len(),
+            1
+        );
+        assert_eq!(
+            rule.match_sentence(&make_sentence("níl aon fhadhb ann anseo"))
+                .len(),
+            0
+        );
+    }
+}
