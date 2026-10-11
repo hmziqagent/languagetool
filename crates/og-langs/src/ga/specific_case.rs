@@ -122,3 +122,98 @@ impl Rule for IrishSpecificCaseRule {
         matches
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use og_core::{AnalyzedSentence, AnalyzedToken, AnalyzedTokenReadings};
+
+    fn make_sentence(text: &str) -> AnalyzedSentence {
+        let mut sentence = AnalyzedSentence::new(text, 0, text.len());
+        let mut tokens = vec![AnalyzedTokenReadings::new(
+            AnalyzedToken::new("<S>", 0, 0).with_pos_tags(vec!["SENT_START".to_string()]),
+        )];
+        let mut pos = 0usize;
+        for word in text.split_whitespace() {
+            let start = pos + text[pos..].find(word).expect("word offset");
+            let end = start + word.len();
+            tokens.push(AnalyzedTokenReadings::new(AnalyzedToken::new(
+                word, start, end,
+            )));
+            pos = end;
+        }
+        sentence.set_tokens(tokens);
+        sentence
+    }
+
+    #[test]
+    fn flags_lowercase_mutated_proper_noun_with_proper_spelling() {
+        let text = "i mbéal Feirste atá cónaí orm.";
+        let matches = IrishSpecificCaseRule::new().match_sentence(&make_sentence(text));
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].replacements()[0].value(), "mBéal Feirste");
+        assert_eq!(
+            &text[matches[0].offset()..matches[0].offset() + matches[0].length()],
+            "mbéal Feirste"
+        );
+        assert_eq!(
+            matches[0].message(),
+            "Más ainmfhocal dílis é, scríobh é i gceannlitreacha."
+        );
+    }
+
+    #[test]
+    fn partially_capitalized_phrase_is_flagged() {
+        let text = "i mBéal feirste atá cónaí orm.";
+        let matches = IrishSpecificCaseRule::new().match_sentence(&make_sentence(text));
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].replacements()[0].value(), "mBéal Feirste");
+    }
+
+    #[test]
+    fn correct_and_all_uppercase_phrases_are_ignored() {
+        let rule = IrishSpecificCaseRule::new();
+        assert_eq!(
+            rule.match_sentence(&make_sentence("i mBéal Feirste atá cónaí orm."))
+                .len(),
+            0
+        );
+        assert_eq!(
+            rule.match_sentence(&make_sentence("i MBÉAL FEIRSTE atá cónaí orm."))
+                .len(),
+            0
+        );
+    }
+
+    #[test]
+    fn phrase_with_lowercased_word_uses_the_plain_message() {
+        let text = "ar bhealach na bó finne a shiúil muid.";
+        let matches = IrishSpecificCaseRule::new().match_sentence(&make_sentence(text));
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].replacements()[0].value(), "Bhealach na Bó Finne");
+        assert_eq!(
+            matches[0].message(),
+            "If the term is a proper noun, use the suggested capitalization."
+        );
+    }
+
+    #[test]
+    fn match_spans_the_whole_multiword_phrase() {
+        let text = "Bhí sinn féin sásta.";
+        let matches = IrishSpecificCaseRule::new().match_sentence(&make_sentence(text));
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].offset(), text.find("sinn féin").unwrap());
+        assert_eq!(matches[0].length(), "sinn féin".len());
+        assert_eq!(matches[0].replacements()[0].value(), "Sinn Féin");
+    }
+
+    #[test]
+    fn ordinary_text_produces_no_matches() {
+        let rule = IrishSpecificCaseRule::new();
+        assert_eq!(
+            rule.match_sentence(&make_sentence("Seo abairt bheag gan ainmneacha."))
+                .len(),
+            0
+        );
+    }
+}
