@@ -2362,4 +2362,405 @@ mod tests {
             result[0].readings()
         );
     }
+
+    fn has_partial_tag(atr: &og_core::AnalyzedTokenReadings, partial: &str) -> bool {
+        atr.readings()
+            .iter()
+            .any(|r| r.pos_tags().iter().any(|t| t.contains(partial)))
+    }
+
+    fn tags_of(atr: &og_core::AnalyzedTokenReadings) -> Vec<(String, String)> {
+        atr.readings()
+            .iter()
+            .flat_map(|r| {
+                let lemma = r.lemma().unwrap_or_default().to_string();
+                r.pos_tags().iter().map(move |t| (lemma.clone(), t.clone()))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn adjectives_from_spelling_txt_expand_pa2_readings() {
+        let tagger = tagger();
+        let readings = tags_of(
+            &Tagger::tag(&tagger, &["abgemindert"])
+                .into_iter()
+                .next()
+                .unwrap(),
+        );
+        assert_eq!(
+            readings,
+            vec![("abgemindert".to_string(), "PA2:PRD:GRU:VER".to_string())]
+        );
+
+        let es = tags_of(
+            &Tagger::tag(&tagger, &["abgemindertes"])
+                .into_iter()
+                .next()
+                .unwrap(),
+        );
+        assert_eq!(es.len(), 4);
+        assert!(es.iter().all(|(lemma, _)| lemma == "abgemindert"));
+        assert!(
+            es.iter()
+                .all(|(_, tag)| tag.starts_with("PA2:") && tag.contains(":SIN:NEU:GRU:"))
+        );
+
+        assert!(tagger.lookup("fünftjüngste").is_none());
+
+        let meist = tags_of(
+            &Tagger::tag(&tagger, &["meistgewünschtes"])
+                .into_iter()
+                .next()
+                .unwrap(),
+        );
+        assert_eq!(meist.len(), 4);
+        assert!(meist.iter().all(|(l, _)| l == "meistgewünscht"));
+        assert!(
+            meist
+                .iter()
+                .all(|(_, t)| t.starts_with("ADJ:") && t.contains(":SIN:NEU:GRU:"))
+        );
+
+        let ter = tags_of(
+            &Tagger::tag(&tagger, &["meistgewünschter"])
+                .into_iter()
+                .next()
+                .unwrap(),
+        );
+        assert_eq!(ter.len(), 7);
+
+        let plain = tags_of(
+            &Tagger::tag(&tagger, &["meistgewünscht"])
+                .into_iter()
+                .next()
+                .unwrap(),
+        );
+        assert_eq!(
+            plain,
+            vec![("meistgewünscht".to_string(), "ADJ:PRD:GRU".to_string())]
+        );
+    }
+
+    #[test]
+    fn dash_compound_lemma_is_joined() {
+        let tagger = tagger();
+        let readings = tagger.lookup("Zahn-Arzt-Verband").expect("readings");
+        assert!(
+            readings
+                .iter()
+                .any(|r| r.lemma() == Some("Zahnarztverband"))
+        );
+    }
+
+    #[test]
+    fn gender_gap_tokens_carry_feminine_plurals() {
+        let tagger = tagger();
+        for joiner in ["*", "_", ":", "/"] {
+            let result = Tagger::tag(&tagger, &["viele", "Freund", joiner, "innen"]);
+            assert!(
+                has_partial_tag(&result[1], ":PLU:FEM"),
+                "joiner {joiner}: {:?}",
+                tags_of(&result[1])
+            );
+        }
+        let result = Tagger::tag(&tagger, &["jede", "*", "r", "Mitarbeiter", "*", "in"]);
+        assert!(has_partial_tag(&result[0], "PRO:IND:NOM:SIN:FEM"));
+        assert!(has_partial_tag(&result[0], "PRO:IND:NOM:SIN:MAS"));
+        assert!(has_partial_tag(&result[3], "SUB:NOM:SIN:FEM"));
+        assert!(has_partial_tag(&result[3], "SUB:NOM:SIN:MAS"));
+    }
+
+    #[test]
+    fn domains_and_zehnfach_stay_untagged() {
+        let tagger = tagger();
+        let result = Tagger::tag(&tagger, &["bundestag", ".", "de"]);
+        assert!(
+            result[0].readings().iter().all(|r| r.pos_tags().is_empty()),
+            "{:?}",
+            tags_of(&result[0])
+        );
+        let result = Tagger::tag(&tagger, &["zehnfach"]);
+        assert!(
+            result[0].readings().iter().all(|r| r.pos_tags().is_empty()),
+            "{:?}",
+            tags_of(&result[0])
+        );
+    }
+
+    #[test]
+    fn lookup_answers_java_dictionary_cases() {
+        let tagger = tagger();
+        assert!(tagger.lookup("hauses").is_none());
+        assert!(tagger.lookup("Groß").is_none());
+        assert!(tagger.lookup("under").is_none());
+        assert!(tagger.lookup("vanillig-karamelligen").is_none());
+
+        let hauses = tagger.lookup("Hauses").expect("Hauses");
+        assert_eq!(hauses.len(), 1);
+        assert_eq!(hauses[0].lemma(), Some("Haus"));
+        assert_eq!(hauses[0].pos_tags(), &["SUB:GEN:SIN:NEU".to_string()]);
+
+        let zuge = tagger.lookup("Zuge").expect("Zuge");
+        assert_eq!(zuge.len(), 1);
+        assert!(zuge[0].has_pos_tag("SUB:DAT:SIN:MAS"));
+
+        let tische = tagger.lookup("Tische").expect("Tische");
+        assert_eq!(tische.len(), 4);
+        assert!(tische.iter().all(|r| r.lemma() == Some("Tisch")));
+
+        let verletzter = tagger.lookup("Verletzter").expect("Verletzter");
+        assert_eq!(
+            verletzter[0].pos_tags(),
+            &["SUB:NOM:SIN:MAS:ADJ".to_string()]
+        );
+        assert_eq!(
+            verletzter[1].pos_tags(),
+            &["SUB:GEN:PLU:MAS:ADJ".to_string()]
+        );
+
+        let erzkatholisch = tagger.lookup("erzkatholisch").expect("erzkatholisch");
+        assert_eq!(erzkatholisch[0].pos_tags(), &["ADJ:PRD:GRU".to_string()]);
+
+        let unerbeten = tagger.lookup("unerbeten").expect("unerbeten");
+        assert_eq!(unerbeten[0].pos_tags(), &["PA2:PRD:GRU:VER".to_string()]);
+
+        let delisted = tagger.lookup("Donaudampfschiff").expect("Donaudampfschiff");
+        assert_eq!(delisted.len(), 3);
+        assert!(
+            delisted
+                .iter()
+                .all(|r| r.lemma() == Some("Donaudampfschiff"))
+        );
+
+        let uebrig = tagger.lookup("übrigbleibst").expect("übrigbleibst");
+        assert_eq!(uebrig.len(), 1);
+        assert_eq!(uebrig[0].lemma(), Some("übrigbleiben"));
+        assert_eq!(uebrig[0].pos_tags(), &["VER:2:SIN:PRÄ:NON:NEB".to_string()]);
+
+        let it = tagger
+            .lookup("IT-Dienstleistungsunternehmen")
+            .expect("IT compound");
+        assert!(it[0].pos_tags()[0].starts_with("SUB"));
+
+        let entweder = tagger.lookup("Entweder-oder").expect("Entweder-oder");
+        assert!(entweder[0].pos_tags()[0].starts_with("SUB"));
+
+        let polizei = tagger
+            .lookup("Polizeimitarbeitende")
+            .expect("Polizeimitarbeitende");
+        assert_eq!(polizei.len(), 5);
+        let polizei_den = tagger
+            .lookup("Polizeimitarbeitenden")
+            .expect("Polizeimitarbeitenden");
+        assert_eq!(polizei_den.len(), 19);
+        let mut den_tags: Vec<&str> = polizei_den
+            .iter()
+            .flat_map(|r| r.pos_tags().iter().map(|t| t.as_str()))
+            .collect();
+        den_tags.sort_unstable();
+        den_tags.dedup();
+        assert_eq!(den_tags.len(), 19);
+        assert!(
+            den_tags
+                .iter()
+                .all(|t| t.starts_with("SUB:") && t.ends_with(":ADJ"))
+        );
+        assert!(den_tags.contains(&"SUB:AKK:SIN:MAS:ADJ"));
+        assert!(den_tags.contains(&"SUB:DAT:SIN:NEU:ADJ"));
+        assert!(den_tags.contains(&"SUB:NOM:PLU:NEU:ADJ"));
+    }
+
+    #[test]
+    fn pre_reform_spellings_and_manually_added_words_stay() {
+        let tagger = tagger();
+        for word in ["Kuß", "Kuss", "Haß", "Hass"] {
+            let readings = tagger.lookup(word).expect(word);
+            assert_eq!(readings.len(), 3, "{word}");
+            assert!(readings.iter().all(|r| r.lemma() == Some(word)));
+        }
+        let wichtigtuerinnen = Tagger::tag(&tagger, &["Wichtigtuerinnen"]);
+        let tags = tags_of(&wichtigtuerinnen[0]);
+        assert_eq!(tags.len(), 4);
+        assert!(tags.iter().all(|(l, t)| l == "Wichtigtuerin"
+            && t.starts_with("SUB:")
+            && t.ends_with(":PLU:FEM")));
+    }
+
+    #[test]
+    fn colon_triggers_lowercase_fallback_for_the_next_word() {
+        let tagger = tagger();
+        let result = Tagger::tag(
+            &tagger,
+            &["Er", "sagte", ":", "Als", "Erstes", "würde", "ich"],
+        );
+        assert_eq!(result.len(), 7);
+        assert_eq!(result[3].token().token(), "Als");
+        assert_eq!(result[3].readings().len(), 4, "{:?}", tags_of(&result[3]));
+    }
+
+    #[test]
+    fn weise_exception_matches_java() {
+        let tagger = tagger();
+        for word in [
+            "überweise",
+            "verweise",
+            "eimerweise",
+            "meterweise",
+            "literweise",
+            "blätterweise",
+            "erweise",
+        ] {
+            assert!(!tagger.is_weise_exception(word), "{word}");
+        }
+        assert!(tagger.is_weise_exception("lustigerweise"));
+        assert!(tagger.is_weise_exception("idealerweise"));
+    }
+
+    #[test]
+    fn prefix_verbs_from_spelling_txt_match_java_counts() {
+        let tagger = tagger();
+        let cases: &[(&str, usize, &[(&str, &str)])] = &[
+            (
+                "herausfallen",
+                5,
+                &[
+                    ("herausfallen", "VER:1:PLU:KJ1:NON:NEB"),
+                    ("herausfallen", "VER:1:PLU:PRÄ:NON:NEB"),
+                    ("herausfallen", "VER:3:PLU:KJ1:NON:NEB"),
+                    ("herausfallen", "VER:3:PLU:PRÄ:NON:NEB"),
+                    ("herausfallen", "VER:INF:NON"),
+                ],
+            ),
+            (
+                "herumgeben",
+                5,
+                &[
+                    ("herumgeben", "VER:1:PLU:KJ1:NON:NEB"),
+                    ("herumgeben", "VER:1:PLU:PRÄ:NON:NEB"),
+                    ("herumgeben", "VER:3:PLU:KJ1:NON:NEB"),
+                    ("herumgeben", "VER:3:PLU:PRÄ:NON:NEB"),
+                    ("herumgeben", "VER:INF:NON"),
+                ],
+            ),
+            (
+                "herumgab",
+                2,
+                &[
+                    ("herumgeben", "VER:1:SIN:PRT:NON:NEB"),
+                    ("herumgeben", "VER:3:SIN:PRT:NON:NEB"),
+                ],
+            ),
+            (
+                "zurückgeschickt",
+                2,
+                &[
+                    ("zurückschicken", "VER:PA2:SFT"),
+                    ("zurückgeschickt", "PA2:PRD:GRU:VER"),
+                ],
+            ),
+            ("abzuschicken", 1, &[("abschicken", "VER:EIZ:SFT")]),
+            ("reinzunehmen", 1, &[("reinnehmen", "VER:EIZ:NON")]),
+            (
+                "Mitmanagen",
+                3,
+                &[
+                    ("Mitmanagen", "SUB:NOM:SIN:NEU:INF"),
+                    ("Mitmanagen", "SUB:AKK:SIN:NEU:INF"),
+                    ("Mitmanagen", "SUB:DAT:SIN:NEU:INF"),
+                ],
+            ),
+            ("Mitmanagens", 1, &[("Mitmanagen", "SUB:GEN:SIN:NEU:INF")]),
+        ];
+        for (word, count, required) in cases {
+            let result = Tagger::tag(&tagger, &[word]);
+            let tags = tags_of(&result[0]);
+            assert_eq!(tags.len(), *count, "{word}: {tags:?}");
+            for (lemma, tag) in *required {
+                assert!(
+                    tags.iter().any(|(l, t)| l == lemma && t == tag),
+                    "{word} misses {lemma}/{tag}: {tags:?}"
+                );
+            }
+            assert!(
+                tags.iter().all(|(_, t)| !t.starts_with("ADJ:")),
+                "{word} must not gain ADJ readings: {tags:?}"
+            );
+        }
+
+        let wegstrecken = Tagger::tag(&tagger, &["Wegstrecken"]);
+        let tags = tags_of(&wegstrecken[0]);
+        assert_eq!(tags.len(), 7, "{tags:?}");
+        assert!(!tags.iter().any(|(_, t)| t == "SUB:GEN:SIN:NEU:INF"));
+    }
+
+    #[test]
+    fn separable_prefix_verbs_match_java_counts() {
+        let tagger = tagger();
+        let nachguckst = Tagger::tag(&tagger, &["nachguckst"]);
+        let tags = tags_of(&nachguckst[0]);
+        assert_eq!(tags.len(), 1, "{tags:?}");
+        assert_eq!(
+            tags[0],
+            (
+                "nachgucken".to_string(),
+                "VER:2:SIN:PRÄ:SFT:NEB".to_string()
+            )
+        );
+
+        let nachgucke = Tagger::tag(&tagger, &["nachgucke"]);
+        let tags = tags_of(&nachgucke[0]);
+        assert_eq!(tags.len(), 4, "{tags:?}");
+        assert!(tags.iter().any(|(l, t)| l == "nachgucken"
+            && (t == "VER:1:SIN:PRÄ:SFT:NEB"
+                || t == "VER:1:SIN:KJ1:SFT:NEB"
+                || t == "VER:3:SIN:KJ1:SFT:NEB")));
+
+        let nachzugucken = Tagger::tag(&tagger, &["nachzugucken"]);
+        let tags = tags_of(&nachzugucken[0]);
+        assert_eq!(tags.len(), 1, "{tags:?}");
+        assert_eq!(
+            tags[0],
+            ("nachgucken".to_string(), "VER:EIZ:SFT".to_string())
+        );
+
+        let nachguckend = Tagger::tag(&tagger, &["nachguckend"]);
+        let tags = tags_of(&nachguckend[0]);
+        assert_eq!(tags.len(), 2, "{tags:?}");
+        assert!(
+            tags.iter()
+                .any(|(l, t)| l == "nachgucken" && t == "VER:PA1:SFT")
+        );
+        assert!(
+            tags.iter()
+                .any(|(l, t)| l == "nachguckend" && t == "PA1:PRD:GRU:VER")
+        );
+    }
+
+    #[test]
+    fn manual_data_extends_and_removes_readings() {
+        let dir = resource_dir().expect("german resources");
+        let mut tagger = GermanTagger::from_resource_dir(&dir).expect("tagger loads");
+        tagger.load_manual_data("neuwort\tneuwort\tSUB:NOM:SIN:NEU\n", "");
+        let readings = tagger.lookup("neuwort").expect("manual addition");
+        assert!(readings.iter().any(|r| r.has_pos_tag("SUB:NOM:SIN:NEU")));
+
+        tagger.load_manual_data("", "Haus\tHaus\tSUB:NOM:SIN:NEU\n");
+        let haus = tagger.lookup("Haus").expect("Haus");
+        assert!(!haus.iter().any(|r| r.has_pos_tag("SUB:NOM:SIN:NEU")));
+        assert!(haus.iter().any(|r| r.has_pos_tag("SUB:AKK:SIN:NEU")));
+    }
+
+    #[test]
+    fn tag_word_and_entry_count_answer_dictionary_scale() {
+        let dir = resource_dir().expect("german resources");
+        let tagger = tagger();
+        assert!(tagger.entry_count() > 100_000);
+        let readings = tagger.tag_word("Haus", 0, 4);
+        assert!(readings.iter().any(|r| r.has_pos_tag("SUB:NOM:SIN:NEU")));
+
+        let first = shared_german_dictionary(&dir).expect("shared dict");
+        let second = shared_german_dictionary(&dir).expect("shared dict again");
+        assert!(std::sync::Arc::ptr_eq(&first, &second));
+    }
 }
