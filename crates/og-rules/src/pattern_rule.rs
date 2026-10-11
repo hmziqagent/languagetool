@@ -5980,7 +5980,7 @@ mod tests {
         );
     }
 
-    fn compile_and_match(xml: &str, sentence_text: &str) -> Vec<RuleMatch> {
+    pub(super) fn compile_and_match(xml: &str, sentence_text: &str) -> Vec<RuleMatch> {
         let compiler = XmlCompiler::new();
         let rule_set = compiler.compile_file(xml).unwrap();
         let engine = PatternRuleEngine::new();
@@ -6361,7 +6361,7 @@ mod tests {
         *atr = og_core::AnalyzedTokenReadings::new(token).with_readings(vec![reading]);
     }
 
-    fn make_analyzed_sentence(text: &str) -> og_core::AnalyzedSentence {
+    pub(super) fn make_analyzed_sentence(text: &str) -> og_core::AnalyzedSentence {
         use og_core::{AnalyzedToken, AnalyzedTokenReadings};
         let mut sentence = og_core::AnalyzedSentence::new(text, 0, text.len());
         let mut tokens = Vec::new();
@@ -8337,5 +8337,269 @@ mod unify_tests {
         assert_eq!(trim_special_chars("<слово>"), "слово");
         assert_eq!(trim_special_chars("«слово»"), "«слово»");
         assert_eq!(trim_special_chars("➊слово➊"), "слово");
+    }
+    use super::tests::{compile_and_match, make_analyzed_sentence};
+
+    fn compile_and_match_with_dict(
+        xml: &str,
+        sentence_text: &str,
+        words: &[&str],
+    ) -> Vec<RuleMatch> {
+        let compiler = XmlCompiler::new();
+        let rule_set = compiler.compile_file(xml).unwrap();
+        let support = crate::spelling_support::SpellingSupport::new(
+            og_spell::Dictionary::from_words(words),
+            "",
+        );
+        let engine = PatternRuleEngine::new().with_spelling_support(std::sync::Arc::new(support));
+        let sentence = make_analyzed_sentence(sentence_text);
+        rule_set
+            .rules
+            .iter()
+            .flat_map(|r| engine.match_rule(r, &sentence))
+            .collect()
+    }
+
+    fn values_of(rm: &RuleMatch) -> Vec<String> {
+        rm.replacements()
+            .iter()
+            .map(|r| r.value().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn recent_year_filter_bounds_the_matched_year() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="de">
+            <rule id="RY" name="ry">
+                <pattern>
+                    <token regexp="yes">\d{4}</token>
+                </pattern>
+                <message>m</message>
+                <filter class="org.languagetool.rules.de.RecentYearFilter" args="year:\1 maxYearsBack:10"/>
+            </rule>
+        </rules>"#;
+        set_test_date_hack(true);
+        assert!(!compile_and_match(xml, "Im Jahr 2010.").is_empty());
+        assert!(compile_and_match(xml, "Im Jahr 2020.").is_empty());
+        assert!(compile_and_match(xml, "Im Jahr 2000.").is_empty());
+        set_test_date_hack(false);
+    }
+
+    #[test]
+    fn date_range_checker_keeps_only_descending_ranges() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <rule id="DR" name="dr">
+                <pattern>
+                    <token regexp="yes">\d+</token>
+                    <token>to</token>
+                    <token regexp="yes">\d+</token>
+                </pattern>
+                <message>m</message>
+                <filter class="org.languagetool.rules.DateRangeChecker" args="x:\1 y:\3"/>
+            </rule>
+        </rules>"#;
+        assert!(!compile_and_match(xml, "from 5 to 3").is_empty());
+        assert!(compile_and_match(xml, "from 3 to 5").is_empty());
+    }
+
+    #[test]
+    fn regex_antipattern_filter_drops_matching_tokens() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <rule id="AP" name="ap">
+                <pattern>
+                    <token regexp="yes">aa|bb|cc</token>
+                </pattern>
+                <message>m</message>
+                <filter class="org.languagetool.rules.patterns.RegexAntiPatternFilter" args="antipatterns:aa|bb"/>
+            </rule>
+        </rules>"#;
+        assert!(compile_and_match(xml, "aa here").is_empty());
+        assert!(compile_and_match(xml, "bb here").is_empty());
+        assert!(!compile_and_match(xml, "cc here").is_empty());
+    }
+
+    #[test]
+    fn remove_unknown_compounds_filter_checks_the_joined_form() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="de">
+            <rule id="RC" name="rc">
+                <pattern>
+                    <token>blassen</token>
+                    <token>fall</token>
+                </pattern>
+                <message>m</message>
+                <filter class="org.languagetool.rules.de.RemoveUnknownCompoundsFilter" args="part1:\1 part2:\2"/>
+            </rule>
+        </rules>"#;
+        assert!(
+            compile_and_match_with_dict(xml, "der blassen fall", &[]).is_empty(),
+            "unknown compound suppresses the match"
+        );
+        let kept = compile_and_match_with_dict(
+            xml,
+            "der blassen fall",
+            &["blassen", "fall", "blassenfall"],
+        );
+        assert!(!kept.is_empty(), "known compound keeps the match");
+    }
+
+    #[test]
+    fn valid_word_filter_drops_matches_that_form_a_real_word() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="de">
+            <rule id="VW" name="vw">
+                <pattern>
+                    <token>Fahr</token>
+                    <token>rad</token>
+                </pattern>
+                <message>m</message>
+                <filter class="org.languagetool.rules.de.ValidWordFilter" args="word1:\1 word2:\2"/>
+            </rule>
+        </rules>"#;
+        assert!(compile_and_match_with_dict(xml, "das Fahr rad", &["Fahrrad"]).is_empty());
+        assert!(!compile_and_match_with_dict(xml, "das Fahr rad", &[]).is_empty());
+    }
+
+    #[test]
+    fn potential_compound_filter_suggests_joined_or_hyphenated() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="de">
+            <rule id="PC" name="pc">
+                <pattern>
+                    <token>Fahr</token>
+                    <token>rad</token>
+                </pattern>
+                <message>m</message>
+                <filter class="org.languagetool.rules.de.PotentialCompoundFilter" args="part1:\1 part2:\2"/>
+            </rule>
+        </rules>"#;
+        let matches = compile_and_match_with_dict(xml, "das Fahr rad", &["Fahrrad"]);
+        assert_eq!(values_of(&matches[0]), vec!["Fahrrad".to_string()]);
+        let matches = compile_and_match_with_dict(xml, "das Fahr rad", &[]);
+        assert_eq!(values_of(&matches[0]), vec!["Fahr-Rad".to_string()]);
+    }
+
+    #[test]
+    fn number_in_word_filter_replaces_digits_from_the_word() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <rule id="NW" name="nw">
+                <pattern>
+                    <token regexp="yes">w0rd</token>
+                </pattern>
+                <message>m</message>
+                <filter class="org.languagetool.rules.en.EnglishNumberInWordFilter" args="word:\1"/>
+            </rule>
+        </rules>"#;
+        let matches = compile_and_match_with_dict(xml, "the w0rd here", &["word"]);
+        assert_eq!(values_of(&matches[0]), vec!["word".to_string()]);
+        let matches = compile_and_match_with_dict(xml, "the w0rd here", &[]);
+        assert!(
+            matches.is_empty(),
+            "no replacement available drops the match"
+        );
+    }
+
+    #[test]
+    fn suppress_misspelled_suggestions_filter_prunes_replacements() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <rule id="SS" name="ss">
+                <pattern>
+                    <token>xyzzy</token>
+                </pattern>
+                <message>m <suggestion>bonjou</suggestion> or <suggestion>xyzzy</suggestion></message>
+                <filter class="org.languagetool.rules.en.EnglishSuppressMisspelledSuggestionsFilter"/>
+            </rule>
+        </rules>"#;
+        let matches = compile_and_match_with_dict(xml, "the xyzzy here", &["xyzzy"]);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(values_of(&matches[0]), vec!["xyzzy".to_string()]);
+        let xml_all_bad = xml.replace(
+            "<suggestion>xyzzy</suggestion>",
+            "<suggestion>bonjou</suggestion>",
+        );
+        assert!(compile_and_match_with_dict(&xml_all_bad, "the xyzzy here", &["xyzzy"]).is_empty());
+    }
+
+    #[test]
+    fn find_suggestions_filter_keeps_finished_suggestions_without_a_tagger() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <rule id="FS" name="fs">
+                <pattern>
+                    <token>xyzzy</token>
+                </pattern>
+                <message>m <suggestion>finished text</suggestion></message>
+                <filter class="org.languagetool.rules.en.FindSuggestionsFilter" args="wordFrom:marker desiredPostag:NN"/>
+            </rule>
+        </rules>"#;
+        let matches = compile_and_match_with_dict(xml, "the xyzzy here", &["xyzzy"]);
+        assert_eq!(matches.len(), 1);
+        let xml_no_args = xml.replace("wordFrom:marker desiredPostag:NN", "desiredPostag:NN");
+        let matches = compile_and_match_with_dict(&xml_no_args, "the xyzzy here", &["xyzzy"]);
+        assert_eq!(values_of(&matches[0]), vec!["finished text".to_string()]);
+    }
+
+    #[test]
+    fn insert_comma_filter_commas_two_word_suggestions() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="de">
+            <rule id="IC" name="ic">
+                <pattern>
+                    <token>komm</token>
+                    <token>geh</token>
+                </pattern>
+                <message>m <suggestion>komm geh</suggestion></message>
+                <filter class="org.languagetool.rules.de.InsertCommaFilter"/>
+            </rule>
+        </rules>"#;
+        let matches = compile_and_match(xml, "komm geh jetzt");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(values_of(&matches[0]), vec!["komm, geh".to_string()]);
+    }
+
+    #[test]
+    fn apostrophe_type_filter_gates_on_the_typographic_marker() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <rule id="AT" name="at">
+                <pattern>
+                    <token>don</token>
+                </pattern>
+                <message>m</message>
+                <filter class="org.languagetool.rules.patterns.ApostropheTypeFilter" args="wordFrom:1 hasTypographicalApostrophe:true"/>
+            </rule>
+        </rules>"#;
+        let compiler = XmlCompiler::new();
+        let rule_set = compiler.compile_file(xml).unwrap();
+        let engine = PatternRuleEngine::new();
+        let mut sentence = make_analyzed_sentence("don’t go");
+        sentence.tokens_mut()[0].mark_typographic_apostrophe();
+        let matches: Vec<RuleMatch> = rule_set
+            .rules
+            .iter()
+            .flat_map(|r| engine.match_rule(r, &sentence))
+            .collect();
+        assert_eq!(
+            matches.len(),
+            1,
+            "marked token satisfies the typographic gate"
+        );
+        let matches = compile_and_match(xml, "don’t go");
+        assert!(matches.is_empty(), "plain ASCII token is dropped");
+        let xml_plain = xml.replace(
+            "hasTypographicalApostrophe:true",
+            "hasTypographicalApostrophe:false",
+        );
+        let matches = compile_and_match(&xml_plain, "don’t go");
+        assert_eq!(matches.len(), 1);
+        let xml_oob = xml.replace("wordFrom:1", "wordFrom:9");
+        assert!(compile_and_match(&xml_oob, "don’t go").is_empty());
+        let xml_no_from = xml.replace("wordFrom:1 ", "");
+        assert_eq!(compile_and_match(&xml_no_from, "don’t go").len(), 1);
     }
 }
