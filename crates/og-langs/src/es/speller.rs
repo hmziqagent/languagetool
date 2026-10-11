@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 struct EsSpellerOracle {
     surfaces: Vec<String>,
+    chars: Vec<Box<[char]>>,
     dictionary: og_spell::Dictionary,
 }
 
@@ -13,6 +14,10 @@ fn es_speller_oracle() -> Option<Arc<EsSpellerOracle>> {
         let dictionary = og_tagger::generic_tagger::shared_dictionary(&resource_dir, "spanish")?;
         let mut surfaces: Vec<String> = dictionary.keys().map(str::to_string).collect();
         surfaces.sort_unstable();
+        let chars: Vec<Box<[char]>> = surfaces
+            .iter()
+            .map(|s| s.chars().collect::<Vec<char>>().into_boxed_slice())
+            .collect();
         let mut dict = og_spell::Dictionary::from_shared_words(Arc::new(
             og_spell::morfologik_view::MorfologikView::new(Arc::clone(&dictionary)),
         ));
@@ -38,6 +43,7 @@ fn es_speller_oracle() -> Option<Arc<EsSpellerOracle>> {
         }
         Some(Arc::new(EsSpellerOracle {
             surfaces,
+            chars,
             dictionary: dict,
         }))
     })
@@ -147,24 +153,25 @@ pub fn find_similar_words(word: &str) -> Vec<String> {
         return Vec::new();
     };
     let word_chars: Vec<char> = word.chars().collect();
-    if word_chars.is_empty() || word_chars.len() >= 120 {
+    let len = word_chars.len();
+    if len == 0 || len >= 120 {
         return Vec::new();
     }
-    let max_distance = usize::from(word_chars.len() > 1);
+    let max_distance = usize::from(len > 1);
     let mut exact: Vec<&str> = Vec::new();
     let mut near: Vec<&str> = Vec::new();
-    for candidate in &oracle.surfaces {
-        if candidate.len() + 1 < word_chars.len() {
+    for (i, candidate) in oracle.surfaces.iter().enumerate() {
+        if oracle.chars[i].len() + 1 < len {
             continue;
         }
         if candidate.as_str() == word {
             continue;
         }
-        let candidate_chars: Vec<char> = candidate.chars().collect();
-        if word_chars.len() + 1 < candidate_chars.len() {
+        let candidate_chars = oracle.chars[i].as_ref();
+        if len + 1 < candidate_chars.len() {
             continue;
         }
-        match quasi_distance_at_most_one(&word_chars, &candidate_chars) {
+        match quasi_distance_at_most_one(&word_chars, candidate_chars) {
             Some(0) => exact.push(candidate),
             Some(1) if max_distance == 1 => near.push(candidate),
             _ => {}
