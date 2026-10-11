@@ -171,11 +171,6 @@ impl GoldenRunner {
                             || expected_rules.contains(&r.rule_id.as_str())
                     })
                     .collect();
-            for result in &mut case_results {
-                if result.status == ComparisonStatus::MessageMismatch {
-                    result.status = ComparisonStatus::Pass;
-                }
-            }
             for expected in &case.matches {
                 if let Some(fragment) = expected.message_contains
                     && !rust_matches.iter().any(|m| {

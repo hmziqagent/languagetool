@@ -1,4 +1,6 @@
-use og_compat::{GoldenCase, GoldenRunner};
+use std::sync::Arc;
+
+use og_compat::{GoldenCase, GoldenMatch, GoldenRunner};
 
 fn cases() -> Vec<GoldenCase> {
     vec![
@@ -156,4 +158,52 @@ fn golden_parity_cases_pass() {
         report.results.len(),
         failures.join("\n")
     );
+}
+
+#[test]
+fn golden_runner_from_engine_enforces_message_fragments() {
+    let runner = GoldenRunner::from_engine(Arc::new(og_langs::engine::LanguageEngine::english()));
+    assert!(runner.rule_count() > 0);
+
+    let mut present = GoldenCase::new(
+        "typewriter-apostrophe-message-fragment",
+        "An actress’s role",
+    );
+    present.matches.push(
+        GoldenMatch::new("TYPEWRITER_APOSTROPHE", 10, 4)
+            .with_replacements(vec!["'s"])
+            .with_message("typewriter apostrophe"),
+    );
+
+    let mut absent = GoldenCase::new(
+        "message-fragment-absent",
+        "BOD meeting is next week and we all have to jump for it.",
+    );
+    absent.matches.push(
+        GoldenMatch::new("COMMA_COMPOUND_SENTENCE", 24, 4)
+            .with_replacements(vec![", and"])
+            .with_message("ZZZ absent fragment ZZZ"),
+    );
+
+    let report = runner.run(&[present, absent]);
+    assert!(
+        report
+            .results
+            .iter()
+            .any(|r| r.status == og_compat::ComparisonStatus::Pass)
+    );
+    let mismatch = report
+        .results
+        .iter()
+        .find(|r| r.status == og_compat::ComparisonStatus::MessageMismatch)
+        .expect("absent fragment reported as message mismatch");
+    assert_eq!(mismatch.rule_id, "COMMA_COMPOUND_SENTENCE");
+    assert_eq!(
+        mismatch.details,
+        format!(
+            "expected message containing {:?}",
+            "ZZZ absent fragment ZZZ"
+        )
+    );
+    assert!(!report.all_passed());
 }
