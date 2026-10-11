@@ -492,3 +492,146 @@ mod tests {
         assert_eq!(x_system_to_unicode("ax"), "ax");
     }
 }
+
+#[cfg(test)]
+mod suffix_tests {
+    use super::*;
+
+    fn tagger() -> EsperantoTagger {
+        let dir = [
+            "/home/agent/opengrammar-rs/languagetool/languagetool-language-modules/eo/src/main/resources/org/languagetool/resource/eo",
+            "languagetool/languagetool-language-modules/eo/src/main/resources/org/languagetool/resource/eo",
+        ]
+        .iter()
+        .map(std::path::PathBuf::from)
+        .find(|p| p.join("manual-tagger.txt").exists())
+        .expect("eo resources");
+        EsperantoTagger::from_resource_dir(&dir).expect("tagger loads")
+    }
+
+    fn readings(tagger: &EsperantoTagger, word: &str) -> Vec<(String, String)> {
+        tagger
+            .tag_word(word, 0, word.len())
+            .iter()
+            .map(|r| {
+                (
+                    r.lemma().unwrap_or_default().to_string(),
+                    r.pos_tags().join(" "),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn noun_adjective_adverb_endings_carry_number_and_case() {
+        let t = tagger();
+        assert_eq!(
+            readings(&t, "bel'"),
+            vec![("belo".to_string(), "O nak np".to_string())]
+        );
+        assert_eq!(
+            readings(&t, "testoj"),
+            vec![("testo".to_string(), "O nak pl".to_string())]
+        );
+        assert_eq!(
+            readings(&t, "teston"),
+            vec![("testo".to_string(), "O akz np".to_string())]
+        );
+        assert_eq!(
+            readings(&t, "testojn"),
+            vec![("testo".to_string(), "O akz pl".to_string())]
+        );
+        assert_eq!(
+            readings(&t, "simplaj"),
+            vec![("simpla".to_string(), "A nak pl".to_string())]
+        );
+        assert_eq!(
+            readings(&t, "simplan"),
+            vec![("simpla".to_string(), "A akz np".to_string())]
+        );
+        assert_eq!(
+            readings(&t, "simplajn"),
+            vec![("simpla".to_string(), "A akz pl".to_string())]
+        );
+        assert_eq!(
+            readings(&t, "rapiden"),
+            vec![("rapide".to_string(), "E akz".to_string())]
+        );
+    }
+
+    #[test]
+    fn transitivity_rules_strip_prefixes_and_suffixes() {
+        let t = tagger();
+        assert_eq!(
+            readings(&t, "sidiĝi"),
+            vec![("sidiĝi".to_string(), "V nt i".to_string())]
+        );
+        assert_eq!(
+            readings(&t, "farigi"),
+            vec![("farigi".to_string(), "V tr i".to_string())]
+        );
+        assert_eq!(
+            readings(&t, "memmortigi"),
+            vec![("memmortigi".to_string(), "V nt i".to_string())]
+        );
+        assert_eq!(
+            readings(&t, "maldormi"),
+            vec![("maldormi".to_string(), "V nt i".to_string())]
+        );
+        assert_eq!(readings(&t, "zzz"), vec![(String::new(), String::new())]);
+    }
+
+    #[test]
+    fn tabelvortoj_get_correlatives_and_adverb_readings() {
+        let t = tagger();
+        let tia = readings(&t, "tiuj");
+        assert!(
+            tia.contains(&(String::new(), "T nak pl t u".to_string())),
+            "{tia:?}"
+        );
+        let tin = readings(&t, "tiun");
+        assert!(
+            tin.contains(&(String::new(), "T akz np t u".to_string())),
+            "{tin:?}"
+        );
+        let tiam = readings(&t, "tiam");
+        assert!(
+            tiam.contains(&(String::new(), "T xxx pn t am".to_string())),
+            "{tiam:?}"
+        );
+        assert!(
+            tiam.contains(&("tiam".to_string(), "E nak".to_string())),
+            "{tiam:?}"
+        );
+    }
+
+    #[test]
+    fn participles_add_c_readings_unless_the_root_is_listed() {
+        let t = tagger();
+        let laboranta = readings(&t, "laboranta");
+        assert_eq!(
+            laboranta,
+            vec![
+                ("laboranta".to_string(), "A nak np".to_string()),
+                ("labori".to_string(), "C nak np nt a n a".to_string()),
+            ]
+        );
+        let abata = readings(&t, "abata");
+        assert_eq!(abata, vec![("abata".to_string(), "A nak np".to_string())]);
+    }
+
+    #[test]
+    fn overlong_words_stay_untagged_and_slice_tagging_keeps_offsets() {
+        let t = tagger();
+        let long = "a".repeat(51);
+        assert_eq!(readings(&t, &long), vec![(String::new(), String::new())]);
+
+        let out = crate::Tagger::tag(&t, &["testo", "nekonata"]);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].token().token(), "testo");
+        assert_eq!(out[0].token().start(), 0);
+        assert_eq!(out[0].token().end(), 5);
+        assert_eq!(out[1].token().start(), 5);
+        assert_eq!(out[1].token().end(), 13);
+    }
+}
