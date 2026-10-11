@@ -1199,4 +1199,99 @@ mod tests {
         assert!(!checker.spell(&long));
         assert!(checker.spell("word"));
     }
+
+    #[test]
+    fn allcap_forbidden_word_is_rejected_directly() {
+        let files = TempAffDic::new("allcapbad", "FORBIDDENWORD X\n", "2\nBAD/X\nword\n");
+        let checker = files.load();
+        assert!(!checker.spell("BAD"));
+        assert!(checker.spell("WORD"));
+    }
+
+    #[test]
+    fn sharps_falls_back_to_the_capitalized_dotted_form() {
+        let files = TempAffDic::new(
+            "sharpsinit",
+            "KEEPCASE K\nCHECKSHARPS\n",
+            "2\nStraße./K\nx\n",
+        );
+        let checker = files.load();
+        assert!(checker.spell("STRASSE."));
+        assert!(!checker.spell("STRASSE"));
+    }
+
+    #[test]
+    fn sharps_recursion_is_capped() {
+        let files = TempAffDic::new("sharpscap", "CHECKSHARPS\n", "2\nx\ny\n");
+        let checker = files.load();
+        assert!(!checker.spell("SSSSSSSS"));
+    }
+
+    #[test]
+    fn needaffix_continuation_on_a_suffix_gates_it_out() {
+        let files = TempAffDic::new(
+            "needaffixsfx",
+            "NEEDAFFIX N\nSFX M Y 1\nSFX M 0 s/N .\n",
+            "3\nword/M\nother\nx\n",
+        );
+        let checker = files.load();
+        assert!(checker.spell("word"));
+        assert!(!checker.spell("words"));
+    }
+
+    #[test]
+    fn compound_permit_on_a_prefix_lets_it_end_a_compound() {
+        let with = TempAffDic::new(
+            "permitpfx",
+            "COMPOUNDBEGIN B\nCOMPOUNDEND E\nCOMPOUNDMIN 3\nCOMPOUNDPERMITFLAG P\nPFX F Y 1\nPFX F 0 vor/PB .\n",
+            "2\nsun/B\ngang/EF\n",
+        );
+        let checker = with.load();
+        assert!(checker.spell("sunvorgang"));
+
+        let without = TempAffDic::new(
+            "nopermitpfx",
+            "COMPOUNDBEGIN B\nCOMPOUNDEND E\nCOMPOUNDMIN 3\nPFX G Y 1\nPFX G 0 vor/B .\n",
+            "2\nsun/B\ngang/G\n",
+        );
+        let checker = without.load();
+        assert!(!checker.spell("sunvorgang"));
+    }
+
+    #[test]
+    fn zero_length_affix_stems_are_rejected() {
+        let files = TempAffDic::new(
+            "zerostem",
+            "SFX A Y 1\nSFX A 0 s .\nPFX B Y 1\nPFX B 0 un .\n",
+            "3\nword/A\nhappy/B\nx\n",
+        );
+        let checker = files.load();
+        assert!(!checker.spell("s"));
+        assert!(!checker.spell("un"));
+        assert!(checker.spell("unhappy"));
+    }
+
+    #[test]
+    fn prefix_condition_must_match_the_root_start() {
+        let files = TempAffDic::new(
+            "prefixcond",
+            "PFX Z Y 1\nPFX Z 0 ab [cd]\n",
+            "3\nfoo/Z\ncoo/Z\nx\n",
+        );
+        let checker = files.load();
+        assert!(!checker.spell("abfoo"));
+        assert!(checker.spell("abcoo"));
+    }
+
+    #[test]
+    fn forbidden_root_is_rejected_through_the_prefix() {
+        let files = TempAffDic::new(
+            "forbprefix",
+            "FORBIDDENWORD X\nPFX B Y 1\nPFX B 0 un .\n",
+            "2\nevil/BX\nword/B\n",
+        );
+        let checker = files.load();
+        assert!(!checker.spell("unevil"));
+        assert!(checker.spell("unword"));
+    }
 }

@@ -403,8 +403,9 @@ mod tests {
         let whitespace = AnalyzedTokenReadings::new(AnalyzedToken::new(" ", 0, 0));
         let multi_dot = AnalyzedTokenReadings::new(AnalyzedToken::new("e.g.", 0, 0));
         let digits = AnalyzedTokenReadings::new(AnalyzedToken::new("abc12", 0, 0));
+        let non_alpha = AnalyzedTokenReadings::new(AnalyzedToken::new("123", 0, 0));
         sentence.set_tokens(vec![
-            hello, sent_start, marker, immunized, ignored, whitespace, multi_dot, digits,
+            hello, sent_start, marker, immunized, ignored, whitespace, multi_dot, digits, non_alpha,
         ]);
         assert!(rule.match_sentence(&sentence).is_empty());
     }

@@ -2012,4 +2012,141 @@ mod tests {
         assert!(matches[0].message().contains("wrldx"));
         assert_eq!(matches[0].rule().id(), "DE_HUNSPELL_RULE");
     }
+
+    #[test]
+    fn schaf_special_cases_flag_the_plain_variants() {
+        let Some(s) = speller() else {
+            eprintln!("Skipping: German resources not present");
+            return;
+        };
+        for word in ["Bauernschaf", "Bauernschafts", "Bauernschafen"] {
+            assert!(s.is_misspelled(word), "'{word}' must stay flagged");
+        }
+        assert!(!s.is_misspelled("Wildschafs"));
+    }
+
+    #[test]
+    fn old_spelling_compound_parts_stay_flagged() {
+        let Some(s) = speller() else {
+            eprintln!("Skipping: German resources not present");
+            return;
+        };
+        assert!(s.is_misspelled("Abflußrohr"));
+    }
+
+    #[test]
+    fn gendered_forms_split_between_valid_and_invalid() {
+        let Some(s) = speller() else {
+            eprintln!("Skipping: German resources not present");
+            return;
+        };
+        assert!(!s.is_misspelled("Expert*in"));
+        assert!(s.is_misspelled("Fahrer/-innen"));
+        assert!(s.is_misspelled("Leser_in"));
+        assert!(s.is_misspelled("Leser:in"));
+    }
+
+    #[test]
+    fn hyphenated_and_three_part_families() {
+        let Some(s) = speller() else {
+            eprintln!("Skipping: German resources not present");
+            return;
+        };
+        assert!(s.is_misspelled("Bundes-Kanzler"));
+        for word in [
+            "Bundeskanzler",
+            "Bundeskanzlerin",
+            "Sonnenblumenöl",
+            "Griechenlandorchester",
+        ] {
+            assert!(!s.is_misspelled(word), "'{word}' must be accepted");
+        }
+    }
+
+    #[test]
+    fn filter_is_misspelled_mirrors_the_hunspell_rule() {
+        let Some(s) = speller() else {
+            eprintln!("Skipping: German resources not present");
+            return;
+        };
+        assert!(s.filter_is_misspelled("Hausx"));
+        assert!(!s.filter_is_misspelled("Haus"));
+        assert!(!s.filter_is_misspelled("--"));
+        assert!(!s.filter_is_misspelled("5"));
+    }
+
+    struct TempResourceDir {
+        dir: PathBuf,
+        core: PathBuf,
+    }
+
+    impl Drop for TempResourceDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.dir);
+            let _ = std::fs::remove_dir_all(&self.core);
+        }
+    }
+
+    #[test]
+    fn synthetic_resource_dir_drives_ignore_and_prohibit_sets() {
+        let base = std::env::temp_dir().join(format!("og-spell-de-res-{}", std::process::id()));
+        let dir = base.join("de");
+        let core = base.join("core");
+        std::fs::create_dir_all(dir.join("hunspell")).unwrap();
+        std::fs::create_dir_all(&core).unwrap();
+        std::fs::write(
+            dir.join("hunspell/ignore.txt"),
+            "Ignoriert\nGewiß\nWeißwort-*\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("hunspell/prohibit.txt"),
+            "Anfang.*\n.*ende\nVerboten\n",
+        )
+        .unwrap();
+        std::fs::write(core.join("spelling_global.txt"), "Globalignoriert\n").unwrap();
+        let resources = TempResourceDir {
+            dir: dir.clone(),
+            core: core.clone(),
+        };
+
+        let dict = Arc::new(Dictionary::new());
+        let de = GermanSpeller::new(
+            Arc::clone(&dict),
+            &resources.dir,
+            Some(&resources.core),
+            None,
+            "de-DE",
+        );
+        let ch = GermanSpeller::new(
+            Arc::clone(&dict),
+            &resources.dir,
+            Some(&resources.core),
+            None,
+            "de-CH",
+        );
+
+        assert!(!de.is_misspelled("Ignoriert"));
+        assert!(!de.is_misspelled("Globalignoriert"));
+        assert!(de.is_misspelled("Gewiss"));
+        assert!(!de.is_misspelled("Gewiß"));
+        assert!(!ch.is_misspelled("Gewiss"));
+        assert!(ch.is_misspelled("Gewiß"));
+
+        assert!(de.is_misspelled("Anfangswort"));
+        assert!(de.is_misspelled("Wortende"));
+        assert!(de.is_misspelled("Verboten"));
+        assert!(de.is_misspelled("Unverboten"));
+    }
+
+    #[test]
+    fn line_expansion_handles_malformed_lines() {
+        assert_eq!(expand_line("Foo_Bar_Baz"), vec!["Foo_Bar_Baz".to_string()]);
+        assert_eq!(expand_line("a/b/c"), vec!["a/b/c".to_string()]);
+        assert_eq!(
+            expand_line("Hauptstraße/T"),
+            vec!["Hauptstraße".to_string(), "Hauptstr.".to_string()]
+        );
+        assert_eq!(replace_first_binnen_i("Kunden"), "Kunden");
+    }
 }
