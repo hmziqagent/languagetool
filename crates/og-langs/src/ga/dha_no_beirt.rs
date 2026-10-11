@@ -197,3 +197,137 @@ impl Rule for DhaNoBeirtRule {
         rule_matches
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use og_core::{AnalyzedSentence, AnalyzedToken};
+
+    fn make_sentence(text: &str, lemmas: &[(&str, &str)]) -> AnalyzedSentence {
+        let mut sentence = AnalyzedSentence::new(text, 0, text.len());
+        let mut tokens = vec![AnalyzedTokenReadings::new(
+            AnalyzedToken::new("<S>", 0, 0).with_pos_tags(vec!["SENT_START".to_string()]),
+        )];
+        let mut pos = 0usize;
+        for word in text.split_whitespace() {
+            let start = pos + text[pos..].find(word).expect("word offset");
+            let end = start + word.len();
+            let lemma = lemmas
+                .iter()
+                .find(|(w, _)| *w == word)
+                .map(|(_, lemma)| *lemma);
+            let mut readings = AnalyzedTokenReadings::new(AnalyzedToken::new(word, start, end));
+            if let Some(lemma) = lemma {
+                readings = readings
+                    .with_readings(vec![AnalyzedToken::new(word, start, end).with_lemma(lemma)]);
+            }
+            tokens.push(readings);
+            pos = end;
+        }
+        sentence.set_tokens(tokens);
+        sentence
+    }
+
+    #[test]
+    fn java_pin_dha_no_beirt_battery() {
+        let rule = DhaNoBeirtRule::new();
+        let person = &[("dheartháireacha", "deartháir")];
+        assert_eq!(
+            rule.match_sentence(&make_sentence("Seo abairt bheag.", &[]))
+                .len(),
+            0
+        );
+        assert_eq!(
+            rule.match_sentence(&make_sentence("Tá beirt dheartháireacha agam.", person))
+                .len(),
+            0
+        );
+        assert_eq!(
+            rule.match_sentence(&make_sentence("Tá dhá dheartháireacha agam.", person))
+                .len(),
+            1
+        );
+        assert_eq!(
+            rule.match_sentence(&make_sentence("Seo dhá ab déag", &[]))
+                .len(),
+            2
+        );
+        assert_eq!(
+            rule.match_sentence(&make_sentence(
+                "Tá dhá dheartháireacha níos aosta déag agam.",
+                person
+            ))
+            .len(),
+            2
+        );
+    }
+
+    #[test]
+    fn suggests_the_personal_number_form_like_java() {
+        let text = "Tá dhá dheartháireacha agam.";
+        let matches = DhaNoBeirtRule::new()
+            .match_sentence(&make_sentence(text, &[("dheartháireacha", "deartháir")]));
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].offset(), text.find("dhá").unwrap());
+        assert_eq!(matches[0].length(), "dhá".len());
+        assert_eq!(
+            matches[0].message(),
+            "Ba chóir duit <suggestion>beirt dheartháireacha</suggestion> a scríobh"
+        );
+        assert_eq!(matches[0].short_message(), Some("Uimhir phearsanta"));
+    }
+
+    #[test]
+    fn deag_after_dha_flags_both_tokens() {
+        let text = "Seo dhá ab déag";
+        let matches = DhaNoBeirtRule::new().match_sentence(&make_sentence(text, &[]));
+        assert_eq!(matches.len(), 2);
+        assert_eq!(matches[0].offset(), text.find("dhá").unwrap());
+        assert_eq!(
+            matches[0].message(),
+            "Ba chóir duit <suggestion>dháréag</suggestion> a scríobh"
+        );
+        assert_eq!(matches[1].offset(), text.find("déag").unwrap());
+        assert_eq!(matches[1].message(), "Ba chóir duit \"déag\" a scriosadh.");
+    }
+
+    #[test]
+    fn person_is_recognized_from_token_text_and_lemma() {
+        let rule = DhaNoBeirtRule::new();
+        let via_text = make_sentence("Tá trí ab anseo.", &[]);
+        assert_eq!(rule.match_sentence(&via_text).len(), 1);
+        let via_lemma = make_sentence(
+            "Tá trí dheartháireacha agam.",
+            &[("dheartháireacha", "deartháir")],
+        );
+        assert_eq!(rule.match_sentence(&via_lemma).len(), 1);
+    }
+
+    #[test]
+    fn uppercase_number_falls_back_to_java_null_replacement() {
+        let text = "Tá DHÁ dheartháireacha agam.";
+        let matches = DhaNoBeirtRule::new()
+            .match_sentence(&make_sentence(text, &[("dheartháireacha", "deartháir")]));
+        assert_eq!(matches.len(), 1);
+        assert!(
+            matches[0]
+                .message()
+                .contains("<suggestion>null dheartháireacha</suggestion>")
+        );
+    }
+
+    #[test]
+    fn number_without_person_or_near_end_is_ignored() {
+        let rule = DhaNoBeirtRule::new();
+        assert_eq!(
+            rule.match_sentence(&make_sentence("Tá dhá chat agam.", &[]))
+                .len(),
+            0
+        );
+        assert_eq!(
+            rule.match_sentence(&make_sentence("Bhí ceathair ann.", &[]))
+                .len(),
+            0
+        );
+    }
+}
