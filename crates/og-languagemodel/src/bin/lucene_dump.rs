@@ -990,4 +990,265 @@ mod tests {
         let mut cur = cursor_over(vec![0x30, b'a']);
         assert_eq!(decompress_block(&mut cur, 3), None);
     }
+
+    const MAGIC: [u8; 4] = [0x3f, 0xd7, 0x6c, 0x17];
+
+    fn scratch_file(tag: &str, name: &str, bytes: &[u8]) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("lucene-dump-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(name);
+        std::fs::write(&path, bytes).unwrap();
+        path
+    }
+
+    fn cleanup_file(path: &PathBuf) {
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::remove_dir_all(parent);
+        }
+    }
+
+    fn codec_header_5x(codec: &str, version: u32) -> Vec<u8> {
+        let mut out = MAGIC.to_vec();
+        out.extend_from_slice(&vstr(codec));
+        out.extend_from_slice(&version.to_le_bytes());
+        out.extend_from_slice(&[0u8; 16]);
+        out.push(0);
+        out
+    }
+
+    fn codec_header_4x(codec: &str, chunk_size: u64) -> Vec<u8> {
+        let mut out = MAGIC.to_vec();
+        out.extend_from_slice(&vstr(codec));
+        out.extend_from_slice(&0u32.to_le_bytes());
+        out.extend_from_slice(&vint(chunk_size));
+        out.extend_from_slice(&vint(0));
+        out
+    }
+
+    fn fnm_5x(fields: &[(&str, u64)]) -> Vec<u8> {
+        let mut out = codec_header_5x("Lucene50", 1);
+        out.extend_from_slice(&vint(fields.len() as u64));
+        for (name, number) in fields {
+            out.extend_from_slice(&vstr(name));
+            out.extend_from_slice(&vint(*number));
+            out.push(0);
+            out.push(0);
+            out.extend_from_slice(&[0u8; 8]);
+            out.extend_from_slice(&vint(0));
+        }
+        out
+    }
+
+    fn fnm_4x(fields: &[(&str, u64)]) -> Vec<u8> {
+        let mut out = MAGIC.to_vec();
+        out.extend_from_slice(&vstr("Lucene41"));
+        out.extend_from_slice(&0u32.to_le_bytes());
+        out.extend_from_slice(&vint(fields.len() as u64));
+        for (name, number) in fields {
+            out.extend_from_slice(&vstr(name));
+            out.extend_from_slice(&vint(*number));
+            out.push(0);
+            out.push(0);
+            out.extend_from_slice(&[0u8; 8]);
+            out.extend_from_slice(&[0u8; 3]);
+            out.extend_from_slice(&vint(0));
+        }
+        out
+    }
+
+    #[test]
+    fn parse_fnm_accepts_a_5x_segment_with_the_gram_fields() {
+        let path = scratch_file("fnm5", "seg.fnm", &fnm_5x(&[("ngram", 0), ("count", 1)]));
+        let fields = parse_fnm(&path).unwrap();
+        assert_eq!(fields.len(), 2);
+        assert_eq!(fields["ngram"], 0);
+        assert_eq!(fields["count"], 1);
+        cleanup_file(&path);
+    }
+
+    #[test]
+    fn parse_fnm_falls_back_to_4x_when_5x_lacks_the_gram_fields() {
+        let path = scratch_file("fnm5miss", "seg.fnm", &fnm_5x(&[("foo", 3)]));
+        assert!(parse_fnm(&path).unwrap().is_empty());
+        cleanup_file(&path);
+
+        let path = scratch_file("fnm4", "seg.fnm", &fnm_4x(&[("ngram", 0), ("count", 1)]));
+        let fields = parse_fnm(&path).unwrap();
+        assert_eq!(fields["ngram"], 0);
+        assert_eq!(fields["count"], 1);
+        cleanup_file(&path);
+    }
+
+    #[test]
+    fn parse_fnm_returns_none_for_unreadable_and_broken_files() {
+        let missing = PathBuf::from("/nonexistent-lucene-dump-test/seg.fnm");
+        assert!(parse_fnm(&missing).is_none());
+
+        let path = scratch_file("fnmbad", "seg.fnm", &[0u8; 4]);
+        assert!(parse_fnm(&path).is_none());
+        cleanup_file(&path);
+    }
+
+    fn lz4_literals(payload: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        let mut rest = payload.len();
+        if rest >= 15 {
+            out.push(0xf0);
+            rest -= 15;
+            while rest >= 255 {
+                out.push(0xff);
+                rest -= 255;
+            }
+            out.push(rest as u8);
+        } else {
+            out.push((payload.len() as u8) << 4);
+        }
+        out.extend_from_slice(payload);
+        out
+    }
+
+    fn field_info(field: u64, bits: u64) -> Vec<u8> {
+        vint((field << 3) | bits)
+    }
+
+    #[test]
+    fn parse_fdt_reads_a_single_doc_5x_chunk_and_stops_at_the_footer() {
+        let mut file = codec_header_5x("Lucene50", 0);
+        file.extend_from_slice(&vint(0));
+        file.extend_from_slice(&vint(2));
+        file.extend_from_slice(&vint(1));
+        file.extend_from_slice(&vint(2));
+        file.extend_from_slice(&lz4_literals(
+            &[field_info(1, 2).as_slice(), &vint(84)].concat(),
+        ));
+        file.extend_from_slice(&[0xc0, 0x28, 0x93, 0xe8]);
+        file.extend_from_slice(&[0u8; 16]);
+        let path = scratch_file("fdt5single", "seg.fdt", &file);
+        let (counts, total) = parse_fdt(&path, 1, None).unwrap();
+        assert_eq!(counts, vec![42]);
+        assert_eq!(total, 0);
+        cleanup_file(&path);
+    }
+
+    #[test]
+    fn parse_fdt_reads_a_sliced_single_doc_5x_chunk() {
+        let mut file = codec_header_5x("Lucene50", 1);
+        file.extend_from_slice(&vint(0));
+        file.extend_from_slice(&vint(0));
+        file.extend_from_slice(&vint(0));
+        file.extend_from_slice(&vint(3));
+        file.extend_from_slice(&vint(1));
+        file.extend_from_slice(&vint(2));
+        file.extend_from_slice(&lz4_literals(
+            &[field_info(1, 2).as_slice(), &vint(84)].concat(),
+        ));
+        file.extend_from_slice(&[0u8; 16]);
+        let path = scratch_file("fdt5sliced", "seg.fdt", &file);
+        let (counts, total) = parse_fdt(&path, 1, None).unwrap();
+        assert_eq!(counts, vec![42]);
+        assert_eq!(total, 0);
+        cleanup_file(&path);
+    }
+
+    #[test]
+    fn parse_fdt_reads_a_packed_multi_doc_4x_chunk() {
+        let mut file = codec_header_4x("Lucene41", 1);
+        file.extend_from_slice(&vint(0));
+        file.extend_from_slice(&vint(2));
+        file.extend_from_slice(&vint(8));
+        file.extend_from_slice(&[1, 1]);
+        file.extend_from_slice(&vint(8));
+        file.extend_from_slice(&[2, 2]);
+        file.extend_from_slice(&lz4_literals(
+            &[
+                field_info(1, 2).as_slice(),
+                &vint(14),
+                field_info(1, 2).as_slice(),
+                &vint(18),
+            ]
+            .concat(),
+        ));
+        file.extend_from_slice(&[0u8; 16]);
+        let path = scratch_file("fdt4packed", "seg.fdt", &file);
+        let (counts, total) = parse_fdt(&path, 1, None).unwrap();
+        assert_eq!(counts, vec![7, 9]);
+        assert_eq!(total, 0);
+        cleanup_file(&path);
+    }
+
+    #[test]
+    fn parse_fdt_reads_a_fixed_length_multi_doc_5x_chunk() {
+        let mut file = codec_header_5x("Lucene50", 0);
+        file.extend_from_slice(&vint(0));
+        file.extend_from_slice(&vint(4));
+        file.extend_from_slice(&vint(0));
+        file.extend_from_slice(&vint(1));
+        file.extend_from_slice(&vint(0));
+        file.extend_from_slice(&vint(2));
+        file.extend_from_slice(&lz4_literals(
+            &[
+                field_info(1, 2).as_slice(),
+                &vint(14),
+                field_info(1, 2).as_slice(),
+                &vint(18),
+            ]
+            .concat(),
+        ));
+        file.extend_from_slice(&[0u8; 16]);
+        let path = scratch_file("fdt5fixed", "seg.fdt", &file);
+        let (counts, total) = parse_fdt(&path, 1, None).unwrap();
+        assert_eq!(counts, vec![7, 9]);
+        assert_eq!(total, 0);
+        cleanup_file(&path);
+    }
+
+    #[test]
+    fn parse_fdt_walks_every_stored_field_shape() {
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&field_info(1, 0));
+        payload.extend_from_slice(&vint(1));
+        payload.push(b'9');
+        payload.extend_from_slice(&field_info(1, 2));
+        payload.extend_from_slice(&vint(84));
+        payload.extend_from_slice(&field_info(2, 0));
+        payload.extend_from_slice(&vint(5));
+        payload.extend_from_slice(b"12345");
+        payload.extend_from_slice(&field_info(3, 1));
+        payload.extend_from_slice(&vint(3));
+        payload.extend_from_slice(b"xyz");
+        payload.extend_from_slice(&field_info(3, 3));
+        payload.extend_from_slice(&[0u8; 4]);
+        payload.extend_from_slice(&field_info(3, 4));
+        payload.extend_from_slice(&[0u8; 8]);
+        payload.extend_from_slice(&field_info(3, 5));
+        payload.extend_from_slice(&[0u8; 8]);
+        payload.extend_from_slice(&field_info(3, 6));
+        payload.extend_from_slice(&[0u8; 8]);
+        payload.extend_from_slice(&field_info(2, 0));
+        payload.extend_from_slice(&vint(3));
+        payload.extend_from_slice(b"abc");
+
+        let mut file = codec_header_5x("Lucene50", 0);
+        file.extend_from_slice(&vint(0));
+        file.extend_from_slice(&vint(2));
+        file.extend_from_slice(&vint(9));
+        file.extend_from_slice(&vint(payload.len() as u64));
+        file.extend_from_slice(&lz4_literals(&payload));
+        let path = scratch_file("fdtshapes", "seg.fdt", &file);
+        let (counts, total) = parse_fdt(&path, 1, Some(2)).unwrap();
+        assert_eq!(counts, vec![42]);
+        assert_eq!(total, 12345);
+        cleanup_file(&path);
+    }
+
+    #[test]
+    fn parse_fdt_returns_none_for_missing_and_magicless_files() {
+        let missing = PathBuf::from("/nonexistent-lucene-dump-test/seg.fdt");
+        assert!(parse_fdt(&missing, 1, None).is_none());
+
+        let path = scratch_file("fdtbad", "seg.fdt", &[0u8; 32]);
+        assert!(parse_fdt(&path, 1, None).is_none());
+        cleanup_file(&path);
+    }
 }
