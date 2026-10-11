@@ -8233,4 +8233,109 @@ mod unify_tests {
             "a skipped optional unify element is silently ignored, not a group failure"
         );
     }
+    #[test]
+    fn date_parsers_cover_english_and_german_months_and_weekdays() {
+        assert_eq!(parse_month("January"), 1);
+        assert_eq!(parse_month("dec"), 12);
+        assert_eq!(parse_month("09"), 9);
+        assert_eq!(parse_month("12"), 12);
+        assert_eq!(parse_month("xyz"), 0);
+        assert_eq!(parse_month_german("Januar"), 1);
+        assert_eq!(parse_month_german("Jänner"), 1);
+        assert_eq!(parse_month_german("März"), 3);
+        assert_eq!(parse_month_german("Mai"), 5);
+        assert_eq!(parse_month_german("Oktober"), 10);
+        assert_eq!(parse_month_german("Dezember"), 12);
+        assert_eq!(parse_month_german("Sonnabend"), 0);
+        assert_eq!(parse_weekday("Sunday"), 1);
+        assert_eq!(parse_weekday("mon"), 2);
+        assert_eq!(parse_weekday("Fri"), 6);
+        assert_eq!(parse_weekday("x"), 0);
+        assert_eq!(parse_weekday_german("Sonntag"), 1);
+        assert_eq!(parse_weekday_german("Sonnabend"), 7);
+        assert_eq!(parse_weekday_german("Dienstag"), 3);
+        assert_eq!(parse_weekday_german("Freitag"), 6);
+        assert_eq!(parse_weekday_german("xx"), 0);
+    }
+
+    #[test]
+    fn month_lengths_and_day_zero_rollback_match_the_calendar() {
+        assert_eq!(days_in_month(2024, 2), 29);
+        assert_eq!(days_in_month(2023, 2), 28);
+        assert_eq!(days_in_month(1900, 2), 28);
+        assert_eq!(days_in_month(2000, 2), 29);
+        assert_eq!(days_in_month(2026, 10), 31);
+        assert_eq!(days_in_month(2026, 4), 30);
+        assert_eq!(days_in_month(2026, 13), 0);
+        assert_eq!(day_zero_rolls_back(2026, 10, 0), (2026, 9, 30));
+        assert_eq!(day_zero_rolls_back(2026, 3, 0), (2026, 2, 28));
+        assert_eq!(day_zero_rolls_back(2024, 1, 0), (2023, 12, 31));
+        assert_eq!(day_zero_rolls_back(2026, 10, 11), (2026, 10, 11));
+        assert_eq!(compute_weekday(2024, 2, 29), 5);
+        assert_eq!(compute_weekday(2000, 1, 1), 7);
+        assert_eq!(compute_weekday(1999, 12, 31), 6);
+        assert_eq!(compute_weekday(2026, 10, 11), 1);
+    }
+
+    #[test]
+    fn inn_checksum_validates_ten_and_twelve_digit_numbers() {
+        assert!(inn_is_valid("7830023695"));
+        assert!(inn_is_valid("500100732570"));
+        assert!(!inn_is_valid("7830023690"));
+        assert!(!inn_is_valid("500100732571"));
+        assert!(inn_is_valid("1234"));
+        assert!(inn_is_valid("783002369a"));
+    }
+
+    #[test]
+    fn test_date_hack_pins_current_date() {
+        set_test_date_hack(true);
+        assert_eq!(current_date(), (2014, 1, 1));
+        set_test_date_hack(false);
+        let (y, m, d) = current_date();
+        assert!((2020..=2100).contains(&y) && (1..=12).contains(&m) && (1..=31).contains(&d));
+    }
+
+    #[test]
+    fn russian_partial_tag_check_uses_the_shared_tagger() {
+        let matched = vec!["стол".to_string()];
+        fn make<'a>(args: &'a str) -> HashMap<&'a str, String> {
+            args.split_whitespace()
+                .filter_map(|part| part.split_once(':'))
+                .map(|(k, v)| (k, v.to_string()))
+                .collect()
+        }
+        let base = "no:1 regexp:(.+) postag_regexp:NN.*";
+        assert!(russian_partial_tag_satisfies(&make(base), &matched));
+        let negated = "no:1 regexp:(.+) postag_regexp:VB.* negate_pos:true";
+        assert!(russian_partial_tag_satisfies(&make(negated), &matched));
+        let wrong = "no:1 regexp:(.+) postag_regexp:VB.*";
+        assert!(!russian_partial_tag_satisfies(&make(wrong), &matched));
+        assert!(!russian_partial_tag_satisfies(
+            &make("regexp:(.+)"),
+            &matched
+        ));
+        assert!(!russian_partial_tag_satisfies(
+            &make("no:1 regexp:(.+)"),
+            &matched
+        ));
+        assert!(!russian_partial_tag_satisfies(
+            &make("no:9 regexp:(.+) postag_regexp:NOUN"),
+            &matched
+        ));
+        assert!(!russian_partial_tag_satisfies(
+            &make("no:1 regexp:zzz( postag_regexp:NOUN"),
+            &matched
+        ));
+        let two = "no:1 regexp:(с)(\\p{L}+) postag_regexp:NN.* two_groups_regexp:true";
+        assert!(russian_partial_tag_satisfies(&make(two), &matched));
+    }
+
+    #[test]
+    fn trim_special_chars_keeps_words_and_punctuation() {
+        assert_eq!(trim_special_chars("слово"), "слово");
+        assert_eq!(trim_special_chars("<слово>"), "слово");
+        assert_eq!(trim_special_chars("«слово»"), "«слово»");
+        assert_eq!(trim_special_chars("➊слово➊"), "слово");
+    }
 }
