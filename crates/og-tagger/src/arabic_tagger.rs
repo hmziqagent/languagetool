@@ -814,3 +814,459 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod java_parity_tests {
+    use super::*;
+
+    fn ar_dir() -> std::path::PathBuf {
+        [
+            "/home/agent/opengrammar-rs/languagetool/languagetool-language-modules/ar/src/main/resources/org/languagetool/resource/ar",
+            "languagetool/languagetool-language-modules/ar/src/main/resources/org/languagetool/resource/ar",
+        ]
+        .iter()
+        .map(std::path::PathBuf::from)
+        .find(|p| p.join("arabic.dict").exists())
+        .expect("arabic resources")
+    }
+
+    fn readings(word: &str) -> Vec<(String, String)> {
+        let tagger = ArabicTagger::from_resource_dir(&ar_dir());
+        let out = crate::Tagger::tag(&tagger, &[word]);
+        let mut pairs: Vec<(String, String)> = out[0]
+            .readings()
+            .iter()
+            .map(|r| {
+                (
+                    r.lemma().unwrap_or_default().to_string(),
+                    r.pos_tags().first().cloned().unwrap_or_default(),
+                )
+            })
+            .collect();
+        pairs.sort();
+        pairs
+    }
+
+    fn expect(word: &str, expected: &[(&str, &str)]) {
+        let mut wanted: Vec<(String, String)> = expected
+            .iter()
+            .map(|(l, t)| (l.to_string(), t.to_string()))
+            .collect();
+        wanted.sort();
+        assert_eq!(readings(word), wanted, "word {word}");
+    }
+
+    #[test]
+    fn java_tagger_dictionary_words() {
+        expect(
+            "الخياريتان",
+            &[
+                ("خيار", "NA-;F3--;--L"),
+                ("خيار", "NJ-;F2--;--L"),
+                ("خيار", "NJ-;F3--;--L"),
+            ],
+        );
+
+        expect(
+            "والبلاد",
+            &[
+                ("بلاد", "NJ-;F3--;W-L"),
+                ("بلاد", "NJ-;F3A-;W-L"),
+                ("بلاد", "NJ-;F3I-;W-L"),
+                ("بلاد", "NJ-;F3U-;W-L"),
+                ("بلاد", "NJ-;M1--;W-L"),
+                ("بلاد", "NJ-;M1A-;W-L"),
+                ("بلاد", "NJ-;M1I-;W-L"),
+                ("بلاد", "NJ-;M1U-;W-L"),
+            ],
+        );
+
+        expect(
+            "بلادهما",
+            &[
+                ("بلاد", "NJ-;F3--;--H"),
+                ("بلاد", "NJ-;F3A-;--H"),
+                ("بلاد", "NJ-;F3I-;--H"),
+                ("بلاد", "NJ-;F3U-;--H"),
+                ("بلاد", "NJ-;M1--;--H"),
+                ("بلاد", "NJ-;M1A-;--H"),
+                ("بلاد", "NJ-;M1I-;--H"),
+                ("بلاد", "NJ-;M1U-;--H"),
+            ],
+        );
+
+        expect(
+            "كبلاد",
+            &[
+                ("بلاد", "NJ-;F3--;-K-"),
+                ("بلاد", "NJ-;F3I-;-K-"),
+                ("بلاد", "NJ-;M1--;-K-"),
+                ("بلاد", "NJ-;M1I-;-K-"),
+            ],
+        );
+
+        expect(
+            "للبلاد",
+            &[
+                ("بلاد", "NJ-;F3--;-LL"),
+                ("بلاد", "NJ-;F3I-;-LL"),
+                ("بلاد", "NJ-;M1--;-LL"),
+                ("بلاد", "NJ-;M1I-;-LL"),
+            ],
+        );
+
+        expect(
+            "ببلاد",
+            &[
+                ("بلاد", "NJ-;F3--;-B-"),
+                ("بلاد", "NJ-;F3I-;-B-"),
+                ("بلاد", "NJ-;M1--;-B-"),
+                ("بلاد", "NJ-;M1I-;-B-"),
+            ],
+        );
+    }
+
+    #[test]
+    fn java_tagger_sentences_and_verbs() {
+        expect(
+            "السماء",
+            &[
+                ("سماء", "NJ-;F1--;--L"),
+                ("سماء", "NJ-;F1A-;--L"),
+                ("سماء", "NJ-;F1I-;--L"),
+                ("سماء", "NJ-;F1U-;--L"),
+            ],
+        );
+        expect(
+            "زرقاء",
+            &[
+                ("زرقاء", "NA-;F1--;---"),
+                ("زرقاء", "NA-;F1A-;---"),
+                ("زرقاء", "NA-;F1I-;---"),
+                ("زرقاء", "NA-;F1U-;---"),
+            ],
+        );
+
+        expect(
+            "فاستعملها",
+            &[("اِسْتَعْمَلَ", "V61;M1H-pa-;W-H"), ("اِسْتَعْمَلَ", "V61;M1Y-i--;W-H")],
+        );
+
+        expect(
+            "سيعملون",
+            &[
+                ("أَعْمَلَ", "V41;M3H-faU;-S-"),
+                ("أَعْمَلَ", "V41;M3H-fpU;-S-"),
+                ("عَمِلَ", "V31;M3H-faU;-S-"),
+                ("عَمِلَ", "V31;M3H-fpU;-S-"),
+                ("ع\u{64e}م\u{651}\u{64e}ل\u{64e}", "V41;M3H-faU;-S-"),
+                ("ع\u{64e}م\u{651}\u{64e}ل\u{64e}", "V41;M3H-fpU;-S-"),
+            ],
+        );
+
+        expect(
+            "فسيعملون",
+            &[
+                ("أَعْمَلَ", "V41;M3H-faU;WS-"),
+                ("أَعْمَلَ", "V41;M3H-fpU;WS-"),
+                ("عَمِلَ", "V31;M3H-faU;WS-"),
+                ("عَمِلَ", "V31;M3H-fpU;WS-"),
+                ("ع\u{64e}م\u{651}\u{64e}ل\u{64e}", "V41;M3H-faU;WS-"),
+                ("ع\u{64e}م\u{651}\u{64e}ل\u{64e}", "V41;M3H-fpU;WS-"),
+            ],
+        );
+
+        let mut kitab: Vec<(String, String)> = Vec::new();
+        for cat in ["NA-", "NJ-", "NM-"] {
+            for infl in ["--", "A-", "I-", "U-"] {
+                let number = if cat == "NA-" { "-3" } else { "M1" };
+                kitab.push(("كتاب".to_string(), format!("{cat};{number}{infl};---")));
+            }
+        }
+        let mut pairs = readings("كتاب");
+        pairs.sort();
+        kitab.sort();
+        assert_eq!(pairs, kitab);
+    }
+
+    #[test]
+    fn unknown_word_stays_untagged() {
+        let tagger = ArabicTagger::from_resource_dir(&ar_dir());
+        let out = crate::Tagger::tag(&tagger, &["العباره"]);
+        assert_eq!(out[0].readings().len(), 1);
+        assert!(out[0].readings()[0].pos_tags().is_empty());
+    }
+
+    #[test]
+    fn has_dictionary_and_new_style_flag_round_trip() {
+        let tagger = ArabicTagger::from_resource_dir(&ar_dir());
+        assert!(tagger.has_dictionary());
+        let styled = ArabicTagger::from_resource_dir(&ar_dir()).with_new_style_pronoun_tag();
+        let out = crate::Tagger::tag(&styled, &["كتاب"]);
+        assert!(!out[0].readings().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod flag_tests {
+    use super::*;
+
+    const NOUN: &str = "NJ-;F3--;---";
+    const MAJROUR: &str = "NJ-;F3I-;---";
+    const VERB: &str = "V41;M3H-paU;---";
+    const PART: &str = "PART;---;---";
+
+    #[test]
+    fn get_flag_reads_declared_positions() {
+        assert_eq!(get_flag(NOUN, "CATEGORY"), 'J');
+        assert_eq!(get_flag(NOUN, "GENDER"), 'F');
+        assert_eq!(get_flag(NOUN, "NUMBER"), '3');
+        assert_eq!(get_flag(NOUN, "CASE"), '-');
+        assert_eq!(get_flag(NOUN, "CONJ"), '-');
+        assert_eq!(get_flag(VERB, "TRANS"), '1');
+        assert_eq!(get_flag(VERB, "TENSE"), 'p');
+        assert_eq!(get_flag(VERB, "VOICE"), 'a');
+        assert_eq!(get_flag(VERB, "ISTIQBAL"), '-');
+        assert_eq!(get_flag(PART, "OPTION"), 'R');
+        assert_eq!(get_flag("QAB", "CASE"), 'Q');
+        assert_eq!(get_flag("", "CASE"), '-');
+        assert_eq!(get_flag(NOUN, "UNKNOWN"), 'N');
+    }
+
+    #[test]
+    fn set_flag_writes_only_in_range_positions() {
+        assert_eq!(set_flag(NOUN, "PRONOUN", 'H'), "NJ-;F3--;--H");
+        assert_eq!(set_flag(NOUN, "CONJ", 'W'), "NJ-;F3--;W--");
+        assert_eq!(set_flag(NOUN, "JAR", 'K'), "NJ-;F3--;-K-");
+        assert_eq!(set_flag(VERB, "CONJ", 'W'), "V41;M3H-paU;W--");
+        assert_eq!(set_flag(VERB, "ISTIQBAL", 'L'), "V41;M3H-paU;-L-");
+        assert_eq!(set_flag(PART, "PRONOUN", 'H'), "PART;---;-H-");
+        assert_eq!(set_flag("Q", "CASE", 'I'), "I");
+    }
+
+    #[test]
+    fn category_predicates_follow_the_first_char() {
+        assert!(is_noun(NOUN));
+        assert!(!is_noun(VERB));
+        assert!(is_verb(VERB));
+        assert!(is_stopword_tag(PART));
+        assert!(is_future_tense("V41;M3H-faU;---"));
+        assert!(!is_future_tense(VERB));
+        assert!(!is_future_tense(NOUN));
+        assert!(is_unattached_noun(NOUN));
+        assert!(!is_unattached_noun("NJ-;F3--;--H"));
+        assert!(!is_unattached_noun("NJ-;F3--;--X"));
+    }
+
+    #[test]
+    fn majrour_accepts_i_or_missing_case() {
+        assert!(is_majrour(MAJROUR));
+        assert!(is_majrour(NOUN));
+        assert!(!is_majrour("NJ-;F3U-;---"));
+        assert!(is_majrour("N"));
+    }
+
+    #[test]
+    fn attached_definite_jar_pronoun_conjunction_predicates() {
+        assert!(is_attached("NJ-;F3--;--H"));
+        assert!(!is_attached(NOUN));
+        assert!(!is_attached(PART));
+
+        assert!(is_definite("NJ-;F3--;--L"));
+        assert!(!is_definite(NOUN));
+        assert!(!is_definite(VERB));
+
+        assert!(has_jar("NJ-;F3--;-K-"));
+        assert!(!has_jar(NOUN));
+        assert!(!has_jar(PART));
+
+        assert!(has_pronoun("NJ-;F3--;--H"));
+        assert!(!has_pronoun(NOUN));
+
+        assert!(has_conjunction("NJ-;F3--;W--"));
+        assert!(!has_conjunction(NOUN));
+        assert!(has_conjunction("V41;M3H-paU;W--"));
+        assert!(has_conjunction("PART;---F---"));
+        assert!(has_conjunction(PART));
+        assert!(!has_conjunction("PART;---W---"));
+    }
+
+    #[test]
+    fn prefixes_and_suffixes_decode_from_flags() {
+        assert_eq!(get_definite_prefix(""), "");
+        assert_eq!(get_definite_prefix("NJ-;F3I-;-LL"), "ل");
+        assert_eq!(get_definite_prefix("NJ-;F3I-;--L"), "ال");
+        assert_eq!(get_definite_prefix(VERB), "");
+
+        assert_eq!(get_jar_prefix(""), "");
+        assert_eq!(get_jar_prefix("NJ-;F3I-;-L-"), "ل");
+        assert_eq!(get_jar_prefix("NJ-;F3I-;-K-"), "ك");
+        assert_eq!(get_jar_prefix("NJ-;F3I-;-B-"), "ب");
+        assert_eq!(get_jar_prefix(NOUN), "");
+        assert_eq!(get_jar_prefix(PART), "");
+
+        assert_eq!(get_conjunction_prefix("NJ-;F3--;F--"), "ف");
+        assert_eq!(get_conjunction_prefix("NJ-;F3--;W--"), "و");
+        assert_eq!(get_conjunction_prefix(NOUN), "");
+    }
+
+    #[test]
+    fn pronoun_suffix_map_matches_java_letters() {
+        assert_eq!(get_pronoun_suffix(""), "");
+        assert_eq!(get_pronoun_suffix("NJ-;F3--;--b"), "ني");
+        assert_eq!(get_pronoun_suffix("NJ-;F3--;--c"), "نا");
+        assert_eq!(get_pronoun_suffix("NJ-;F3--;--d"), "ك");
+        assert_eq!(get_pronoun_suffix("NJ-;F3--;--e"), "كما");
+        assert_eq!(get_pronoun_suffix("NJ-;F3--;--f"), "كم");
+        assert_eq!(get_pronoun_suffix("NJ-;F3--;--g"), "كن");
+        assert_eq!(get_pronoun_suffix("NJ-;F3--;--H"), "ه");
+        assert_eq!(get_pronoun_suffix("NJ-;F3--;--i"), "ها");
+        assert_eq!(get_pronoun_suffix("NJ-;F3--;--j"), "هما");
+        assert_eq!(get_pronoun_suffix("NJ-;F3--;--k"), "هم");
+        assert_eq!(get_pronoun_suffix("NJ-;F3--;--n"), "هن");
+        assert_eq!(get_pronoun_suffix(NOUN), "");
+    }
+
+    #[test]
+    fn unify_pronoun_tag_normalizes_attached_readings() {
+        assert_eq!(
+            unify_pronoun_tag("NJ-;F3--;--d".to_string()),
+            "NJ-;F3--;--d"
+        );
+        assert_eq!(
+            unify_pronoun_tag("NJ-;F3--;--H".to_string()),
+            "NJ-;F3--;--H"
+        );
+        assert_eq!(unify_pronoun_tag(NOUN.to_string()), NOUN);
+    }
+
+    #[test]
+    fn set_conjunction_accepts_waw_faa_and_dashes() {
+        assert_eq!(set_conjunction(NOUN, "و"), "NJ-;F3--;W--");
+        assert_eq!(set_conjunction(NOUN, "W"), "NJ-;F3--;W--");
+        assert_eq!(set_conjunction(NOUN, "ف"), "NJ-;F3--;W--");
+        assert_eq!(set_conjunction(NOUN, "F"), "NJ-;F3--;W--");
+        assert_eq!(set_conjunction("NJ-;F3--;W--", "-"), NOUN);
+        assert_eq!(set_conjunction("NJ-;F3--;W--", ""), NOUN);
+        assert_eq!(set_conjunction(NOUN, "Q"), NOUN);
+        assert_eq!(set_conjunction(PART, "و"), PART);
+    }
+
+    #[test]
+    fn set_procletic_flags_clears_prefix_markers_per_category() {
+        assert_eq!(set_procletic_flags(""), "");
+        assert_eq!(set_procletic_flags("V41;M3H-paU;WS-"), "V41;M3H-paU;---");
+        assert_eq!(set_procletic_flags("NJ-;F3--;WLL"), NOUN);
+        assert_eq!(set_procletic_flags("NJ-;F3--;WK-"), NOUN);
+        assert_eq!(set_procletic_flags("NJ-;F3--;--L"), "NJ-;F3--;---");
+        assert_eq!(set_procletic_flags("PART;---W---"), "PART;-------");
+        assert_eq!(set_procletic_flags("XYZ"), "XYZ");
+    }
+
+    #[test]
+    fn merge_pos_tag_combines_same_category_flags() {
+        assert_eq!(merge_pos_tag("", NOUN), NOUN);
+        assert_eq!(merge_pos_tag(NOUN, ""), NOUN);
+        assert_eq!(merge_pos_tag(NOUN, NOUN), NOUN);
+        assert_eq!(merge_pos_tag(NOUN, "NP-;F3--;---"), "NP-;F3--;---");
+        assert_eq!(merge_pos_tag("NN", NOUN), "NN");
+        assert_eq!(merge_pos_tag(VERB, "VBT;M3H-paU;---"), "VBT;M3H-paU;---");
+        assert_eq!(merge_pos_tag("VB", "VBT;M3H-paU;---"), "VB");
+        assert_eq!(merge_pos_tag(PART, "PBRT;---;---"), "PBRT;---;---");
+        assert_eq!(merge_pos_tag("PA", "PBRT;---;---"), "PA");
+        assert_eq!(merge_pos_tag(PART, NOUN), NOUN);
+        assert_eq!(merge_pos_tag("PART;---;-H-", NOUN), "NJ-;F3--;--H");
+        assert_eq!(merge_pos_tag(VERB, NOUN), NOUN);
+        assert_eq!(merge_pos_tag("V41;M3H-paU;W-H", NOUN), "NJ-;F3--;W-H");
+        assert_eq!(merge_pos_tag(NOUN, VERB), VERB);
+    }
+
+    #[test]
+    fn modify_pos_tag_applies_and_rejects_arabic_clitics() {
+        assert_eq!(
+            modify_pos_tag(NOUN, &["W".to_string()]).expect("conj"),
+            "NJ-;F3--;W--"
+        );
+        assert_eq!(
+            modify_pos_tag(MAJROUR, &["K".to_string()]).expect("jar k"),
+            "NJ-;F3I-;-K-"
+        );
+        assert!(modify_pos_tag("NJ-;F3U-;---", &["K".to_string()]).is_none());
+        assert_eq!(
+            modify_pos_tag(MAJROUR, &["B".to_string()]).expect("jar b"),
+            "NJ-;F3I-;-B-"
+        );
+        assert!(modify_pos_tag("NJ-;F3U-;---", &["B".to_string()]).is_none());
+        assert_eq!(
+            modify_pos_tag(MAJROUR, &["L".to_string()]).expect("jar l"),
+            "NJ-;F3I-;-L-"
+        );
+        assert!(modify_pos_tag("NJ-;F3U-;---", &["L".to_string()]).is_none());
+        assert_eq!(
+            modify_pos_tag(VERB, &["L".to_string()]).expect("istiqbal"),
+            "V41;M3H-paU;-L-"
+        );
+        assert_eq!(
+            modify_pos_tag(NOUN, &["D".to_string()]).expect("definite"),
+            "NJ-;F3--;--L"
+        );
+        assert!(modify_pos_tag("NJ-;F3--;--H", &["D".to_string()]).is_none());
+        assert_eq!(
+            modify_pos_tag("V41;M3H-faU;---", &["S".to_string()]).expect("future"),
+            "V41;M3H-faU;-S-"
+        );
+        assert!(modify_pos_tag(VERB, &["S".to_string()]).is_none());
+        assert_eq!(
+            modify_pos_tag(NOUN, &["PRONOUN;H".to_string()]).expect("pronoun"),
+            "NJ-;F3--;--H"
+        );
+        assert_eq!(
+            modify_pos_tag(NOUN, &["X".to_string()]).expect("noop"),
+            NOUN
+        );
+        assert!(modify_pos_tag(NOUN, &["W".to_string(), "K".to_string()]).is_some());
+    }
+
+    #[test]
+    fn proclitic_and_enclitic_slice_the_surface() {
+        let tagger = ArabicTagger::from_resource_dir(std::path::Path::new("/nonexistent"));
+        let token = |word: &str, tag: &str| {
+            AnalyzedToken::new(word, 0, word.len()).with_pos_tags(vec![tag.to_string()])
+        };
+
+        let bare = token("كتاب", NOUN);
+        assert_eq!(tagger.get_proclitic(&bare), "");
+
+        let definite = token("الكتاب", "NJ-;F3--;--L");
+        assert_eq!(tagger.get_proclitic(&definite), "ال");
+
+        let jarred = token("للكتاب", "NJ-;F3I;-LL");
+        assert_eq!(tagger.get_proclitic(&jarred), "لل");
+
+        let conjugated = token("وكتاب", "NJ-;F3--;W--");
+        assert_eq!(tagger.get_proclitic(&conjugated), "و");
+
+        let future = token("سيكتب", "V41;M3H-faU;WS-");
+        assert_eq!(tagger.get_proclitic(&future), "سي");
+
+        let plain_verb = token("يكتب", VERB);
+        assert_eq!(tagger.get_proclitic(&plain_verb), "");
+
+        let untagged = token("كتاب", "");
+        assert_eq!(tagger.get_proclitic(&untagged), "");
+        let particle = token("ثم", PART);
+        assert_eq!(tagger.get_proclitic(&particle), "");
+
+        let with_suffix = token("كتابهم", "NJ-;F3--;--H");
+        assert_eq!(tagger.get_enclitic(&with_suffix), "هم");
+        let with_ha = token("كتابها", "NJ-;F3--;--H");
+        assert_eq!(tagger.get_enclitic(&with_ha), "ها");
+        let with_k = token("كتابك", "NJ-;F3--;--H");
+        assert_eq!(tagger.get_enclitic(&with_k), "ك");
+        let no_suffix = token("كتاب", "NJ-;F3--;--H");
+        assert_eq!(tagger.get_enclitic(&no_suffix), "");
+        let unflagged = token("كتابه", NOUN);
+        assert_eq!(tagger.get_enclitic(&unflagged), "");
+        assert_eq!(tagger.get_enclitic(&untagged), "");
+    }
+}
