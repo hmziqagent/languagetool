@@ -82,9 +82,10 @@ impl SimpleReplaceRule {
                         .or_insert(words);
                     self.full_space.insert(key, entry);
                 } else {
+                    let key = wrong.to_lowercase();
                     self.start_no_space
-                        .insert(wrong.chars().next().unwrap_or(' '), true);
-                    self.full_no_space.insert(wrong.to_lowercase(), entry);
+                        .insert(key.chars().next().unwrap_or(' '), true);
+                    self.full_no_space.insert(key, entry);
                 }
             }
         }
@@ -326,11 +327,88 @@ impl Rule for SimpleReplaceRule {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_util::sentence;
 
     #[test]
     fn loads_entries() {
         let rule = SimpleReplaceRule::new();
         assert!(!rule.full_space.is_empty());
         assert!(rule.full_space.contains_key("conversation rate"));
+    }
+
+    fn matches_for(text: &str) -> Vec<RuleMatch> {
+        SimpleReplaceRule::new().match_sentence(&sentence(text))
+    }
+
+    #[test]
+    fn multiword_phrase_from_replace_txt_is_flagged_mid_sentence() {
+        let matches = matches_for("Ein Oscar Wild Beispiel.");
+        assert_eq!(matches.len(), 1);
+        let m = &matches[0];
+        assert_eq!(m.rule().id(), "DE_SIMPLE_REPLACE_OSCAR_WILD");
+        assert_eq!(m.offset(), 4);
+        assert_eq!(m.length(), "Oscar Wild".len());
+        assert_eq!(
+            m.message(),
+            "Meinten Sie vielleicht <suggestion>Oscar Wilde</suggestion>?"
+        );
+        assert_eq!(m.replacements()[0].value(), "Oscar Wilde");
+    }
+
+    #[test]
+    fn all_uppercase_input_uppercases_the_suggestion() {
+        let matches = matches_for("Im OSCAR WILD Kontext.");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].replacements()[0].value(), "OSCAR WILDE");
+    }
+
+    #[test]
+    fn tab_message_entries_carry_their_custom_message() {
+        let matches = matches_for("Der Inglorious Bastards Film.");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(
+            matches[0].message(),
+            "Der Titel dieses Films von 2009 ist absichtlich falsch geschrieben."
+        );
+        assert_eq!(matches[0].replacements()[0].value(), "Inglourious Basterds");
+    }
+
+    #[test]
+    fn single_word_and_hyphen_glued_entries_match() {
+        let artwort = matches_for("Die Artwort stimmt.");
+        assert_eq!(artwort.len(), 1);
+        assert_eq!(artwort[0].replacements()[0].value(), "Antwort");
+        assert_eq!(artwort[0].rule().id(), "DE_SIMPLE_REPLACE_ARTWORT");
+
+        let hyphenated = matches_for("Nach Île-de-France fahren.");
+        assert!(hyphenated.is_empty(), "{hyphenated:?}");
+        let wrong = matches_for("Nach Ile-de-France fahren.");
+        assert_eq!(wrong.len(), 1);
+        assert_eq!(wrong[0].replacements()[0].value(), "Île-de-France");
+    }
+
+    #[test]
+    fn correct_words_and_immunized_tokens_stay_silent() {
+        assert!(matches_for("Die Antwort stimmt.").is_empty());
+        assert!(matches_for("Ein kurzer Satz.").is_empty());
+
+        let mut analyzed = sentence("Die Artwort stimmt.");
+        for token in analyzed.tokens_mut() {
+            if token.token().token() == "Artwort" {
+                token.immunize();
+            }
+        }
+        assert!(
+            SimpleReplaceRule::new()
+                .match_sentence(&analyzed)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn rule_id_normalization_follows_the_java_transliteration() {
+        assert_eq!(to_rule_id("äÖß"), "AEOESS");
+        assert_eq!(to_rule_id("d'art"), "D_Q_ART");
+        assert_eq!(to_rule_id("Thomas Müller"), "THOMAS_MUELLER");
     }
 }
