@@ -19,7 +19,10 @@ fn es_speller_oracle() -> Option<Arc<EsSpellerOracle>> {
     og_core::releasable::shared_get_or_build(&CACHE, || {
         let resource_dir = crate::es::es_resource_dir()?;
         let dictionary = og_tagger::generic_tagger::shared_dictionary(&resource_dir, "spanish")?;
-        let mut surfaces: Vec<String> = dictionary.keys().map(str::to_string).collect();
+        let mut surfaces: Vec<String> = match dictionary.fsa_word_list() {
+            Some(words) => words,
+            None => dictionary.keys().map(str::to_string).collect(),
+        };
         surfaces.sort_unstable();
         let mut char_offsets: Vec<u32> = Vec::with_capacity(surfaces.len() + 1);
         let mut chars: Vec<char> = Vec::new();
