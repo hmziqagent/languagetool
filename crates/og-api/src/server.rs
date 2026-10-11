@@ -25,10 +25,10 @@ impl EngineCache {
     }
 
     fn insert(&mut self, code: String, engine: Arc<LanguageEngine>) {
-        if self.entries.insert(code.clone(), engine).is_some() {
-            if let Some(pos) = self.order.iter().position(|c| *c == code) {
-                self.order.remove(pos);
-            }
+        if self.entries.insert(code.clone(), engine).is_some()
+            && let Some(pos) = self.order.iter().position(|c| *c == code)
+        {
+            self.order.remove(pos);
         }
         self.order.push_front(code);
         while self.order.len() > self.capacity
@@ -62,7 +62,8 @@ impl AppState {
     }
 
     pub fn engine_for(&self, code: &str) -> Option<Arc<LanguageEngine>> {
-        let canonical = canonical_engine_key(code)?;
+        let source = engine_source(code)?;
+        let canonical = canonical_key(source);
         {
             let mut cache = self.engines.lock().unwrap();
             if let Some(engine) = cache.entries.get(&canonical).cloned() {
@@ -77,8 +78,8 @@ impl AppState {
                 .or_insert_with(|| Arc::new(OnceLock::new()))
                 .clone()
         };
-        let built = slot.get_or_init(|| build_engine_for(&canonical)).clone();
-        if let Some(mut cache) = self.engines.lock().ok() {
+        let built = slot.get_or_init(|| build_engine(source)).clone();
+        if let Ok(mut cache) = self.engines.lock() {
             cache.insert(canonical.clone(), built.clone());
         }
         if let Ok(mut building) = self.building.lock()
@@ -104,6 +105,7 @@ pub const ENGINE_CODES: &[&str] = &[
     "ro", "sk", "sl", "sr", "sv", "ta", "tl", "uk", "zh",
 ];
 
+#[derive(Clone, Copy)]
 enum EngineSource {
     EnglishBase,
     EnglishVariant(&'static str),
@@ -164,32 +166,32 @@ fn engine_source(code: &str) -> Option<EngineSource> {
     }
 }
 
-fn canonical_engine_key(code: &str) -> Option<String> {
-    match engine_source(code)? {
-        EngineSource::EnglishBase => Some("en".to_string()),
-        EngineSource::EnglishVariant(code) => Some(code.to_string()),
-        EngineSource::German => Some("de".to_string()),
-        EngineSource::GermanVariant(code) => Some(code.to_string()),
-        EngineSource::PortugueseVariant(code) => Some(code.to_string()),
-        EngineSource::Generic(short) => Some(short.to_string()),
+fn canonical_key(source: EngineSource) -> String {
+    match source {
+        EngineSource::EnglishBase => "en".to_string(),
+        EngineSource::EnglishVariant(code) => code.to_string(),
+        EngineSource::German => "de".to_string(),
+        EngineSource::GermanVariant(code) => code.to_string(),
+        EngineSource::PortugueseVariant(code) => code.to_string(),
+        EngineSource::Generic(short) => short.to_string(),
     }
 }
 
-fn build_engine_for(code: &str) -> Arc<LanguageEngine> {
-    match engine_source(code) {
-        Some(EngineSource::EnglishBase) => {
+fn build_engine(source: EngineSource) -> Arc<LanguageEngine> {
+    match source {
+        EngineSource::EnglishBase => {
             info!("Loading English language engine...");
             let engine = Arc::new(LanguageEngine::english());
             info!("English engine loaded with {} rules", engine.rule_count());
             engine
         }
-        Some(EngineSource::EnglishVariant(code)) => {
+        EngineSource::EnglishVariant(code) => {
             info!("Loading {code} engine...");
             let variant = LanguageEngine::english().variant(code);
             info!("Loaded {code} engine with {} rules", variant.rule_count());
             Arc::new(variant)
         }
-        Some(EngineSource::Generic(short)) => {
+        EngineSource::Generic(short) => {
             info!("Loading {short} engine...");
             let engine = Arc::new(LanguageEngine::for_code(short).unwrap_or_else(|| {
                 LanguageEngine::new(
@@ -199,7 +201,7 @@ fn build_engine_for(code: &str) -> Arc<LanguageEngine> {
             info!("Loaded {short} engine with {} rules", engine.rule_count());
             engine
         }
-        Some(EngineSource::PortugueseVariant(code)) => {
+        EngineSource::PortugueseVariant(code) => {
             info!("Loading {code} engine...");
             let base = LanguageEngine::for_code("pt").unwrap_or_else(|| {
                 LanguageEngine::new(
@@ -210,13 +212,13 @@ fn build_engine_for(code: &str) -> Arc<LanguageEngine> {
             info!("Loaded {code} engine with {} rules", engine.rule_count());
             engine
         }
-        Some(EngineSource::GermanVariant(code)) => {
+        EngineSource::GermanVariant(code) => {
             info!("Loading {code} engine...");
             let variant = LanguageEngine::german().german_variant(code);
             info!("Loaded {code} engine with {} rules", variant.rule_count());
             Arc::new(variant)
         }
-        Some(EngineSource::German) | None => {
+        EngineSource::German => {
             info!("Loading German language engine...");
             let engine = Arc::new(LanguageEngine::german());
             info!("German engine loaded with {} rules", engine.rule_count());
@@ -304,19 +306,16 @@ mod tests {
     fn unknown_codes_have_no_engine_source_or_canonical_key() {
         for code in ["", "xx", "en-IN", "de-DE ", "PT"] {
             assert!(engine_source(code).is_none(), "{code}");
-            assert!(canonical_engine_key(code).is_none(), "{code}");
         }
     }
 
     #[test]
     fn canonical_keys_collapse_families_and_keep_variants_apart() {
-        let mut canonical: Vec<String> = ENGINE_CODES
-            .iter()
-            .filter_map(|code| canonical_engine_key(code))
-            .collect();
-        assert_eq!(canonical_engine_key("en"), canonical_engine_key("en-US"));
-        assert_eq!(canonical_engine_key("de"), canonical_engine_key("de-DE"));
-        assert_eq!(canonical_engine_key("pt"), canonical_engine_key("pt-PT"));
+        let key = |code: &str| engine_source(code).map(canonical_key);
+        let mut canonical: Vec<String> = ENGINE_CODES.iter().filter_map(|code| key(code)).collect();
+        assert_eq!(key("en"), key("en-US"));
+        assert_eq!(key("de"), key("de-DE"));
+        assert_eq!(key("pt"), key("pt-PT"));
         canonical.sort_unstable();
         canonical.dedup();
         for unique in ["en", "en-GB", "de", "de-CH", "pt-BR", "pt-MZ", "fr", "zh"] {
@@ -397,5 +396,112 @@ mod tests {
             ["fr".to_string(), "de".to_string(), "en".to_string()],
             "reinserting a present code must not duplicate its order entry"
         );
+    }
+
+    #[test]
+    fn engine_for_rejects_codes_without_a_source_before_building() {
+        let state = AppState::new();
+        for code in ["", "xx", "en-IN", "auto", "de-DE-x-simple-language"] {
+            assert!(state.engine_for(code).is_none(), "{code}");
+        }
+        assert!(state.engines.lock().unwrap().entries.is_empty());
+    }
+
+    #[test]
+    fn default_state_matches_new() {
+        let state = AppState::default();
+        assert_eq!(
+            state.engines.lock().unwrap().capacity,
+            DEFAULT_ENGINE_CACHE_CAPACITY
+        );
+        assert!(state.engines.lock().unwrap().entries.is_empty());
+        assert_eq!(state.language_codes().len(), ENGINE_CODES.len());
+    }
+
+    #[test]
+    fn cache_capacity_reads_the_env_override() {
+        unsafe { std::env::set_var("OG_ENGINE_CACHE_CAPACITY", "7") };
+        let state = AppState::new();
+        unsafe { std::env::remove_var("OG_ENGINE_CACHE_CAPACITY") };
+        assert_eq!(state.engines.lock().unwrap().capacity, 7);
+    }
+
+    #[test]
+    fn invalid_cache_capacity_values_fall_back_to_the_default() {
+        for value in ["0", "abc", "-1", ""] {
+            unsafe { std::env::set_var("OG_ENGINE_CACHE_CAPACITY", value) };
+            let state = AppState::new();
+            unsafe { std::env::remove_var("OG_ENGINE_CACHE_CAPACITY") };
+            assert_eq!(
+                state.engines.lock().unwrap().capacity,
+                DEFAULT_ENGINE_CACHE_CAPACITY,
+                "OG_ENGINE_CACHE_CAPACITY={value}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_language_the_api_parses_resolves_to_an_engine() {
+        for code in [
+            "en",
+            "en-US",
+            "en-GB",
+            "en-AU",
+            "en-CA",
+            "en-NZ",
+            "en-ZA",
+            "de",
+            "de-DE",
+            "de-AT",
+            "de-CH",
+            "de-DE-x-simple-language",
+            "fr",
+            "es",
+            "pt",
+            "pt-BR",
+            "pt-PT",
+            "pt-AO",
+            "pt-MZ",
+            "nl",
+            "nl-BE",
+            "nl-NL",
+            "pl",
+            "uk",
+            "ar",
+            "ru",
+            "it",
+            "ca",
+            "zh",
+            "ja",
+            "da",
+            "ast",
+            "be",
+            "br",
+            "eo",
+            "gl",
+            "el",
+            "is",
+            "km",
+            "lt",
+            "ml",
+            "ro",
+            "sk",
+            "sl",
+            "sr",
+            "sv",
+            "ta",
+            "tl",
+            "crh",
+            "ga",
+            "fa",
+        ] {
+            let language = og_core::Language::from_code(code)
+                .unwrap_or_else(|| panic!("the API accepts {code} but og-core cannot parse it"));
+            assert!(
+                engine_source(language.code()).is_some()
+                    || engine_source(language.short_code()).is_some(),
+                "{code} parses but no engine backs it"
+            );
+        }
     }
 }
