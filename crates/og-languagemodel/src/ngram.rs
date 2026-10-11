@@ -65,11 +65,7 @@ pub fn get_pseudo_probability_from_ref(model: &dyn LanguageModel, context: &[&st
     }
     Probability {
         prob: p,
-        coverage: if max_coverage == 0 {
-            0.0
-        } else {
-            coverage as f32 / max_coverage as f32
-        },
+        coverage: coverage as f32 / max_coverage as f32,
         total_count,
     }
 }
@@ -161,9 +157,6 @@ impl SortedTsvLookup {
                 break;
             }
             let ls = self.line_start_of(mid);
-            if ls >= hi {
-                break;
-            }
             let line = self.line_at(ls, &mut buf)?;
             if line.is_empty() {
                 break;
@@ -181,9 +174,6 @@ impl SortedTsvLookup {
     }
 
     fn line_start_of(&self, pos: u64) -> u64 {
-        if pos == 0 {
-            return 0;
-        }
         let window = 512u64;
         let base = pos.saturating_sub(window);
         let mut buf = vec![0u8; (pos - base) as usize];
@@ -462,5 +452,183 @@ mod tests {
         let p = model.get_probability(&["zebra"]);
         assert!((p.prob - 1.0 / 101.0).abs() < 1e-12);
         assert_eq!(p.coverage, 0.0);
+    }
+
+    #[test]
+    fn arc_dyn_model_delegates_to_the_inner_model() {
+        let shared: Arc<dyn LanguageModel> = Arc::new(DiskLanguageModel::from_pairs(&[
+            (vec!["the"], 100),
+            (vec!["the", "cat"], 10),
+        ]));
+        assert_eq!(shared.get_total_token_count(), 100);
+        assert_eq!(shared.get_count(&["the", "cat"]), 10);
+        let p = shared.get_probability(&["the", "cat"]);
+        assert!((p.prob - 1.0 * (11.0 / 101.0)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn empty_context_returns_zeroed_probability() {
+        let model = DiskLanguageModel::from_pairs(&[(vec!["the"], 100)]);
+        let p = model.get_probability(&[]);
+        assert_eq!(
+            p,
+            Probability {
+                prob: 0.0,
+                coverage: 0.0,
+                total_count: 0
+            }
+        );
+    }
+
+    #[test]
+    fn from_pairs_skips_empty_entries_and_bounds_get_count() {
+        let model = DiskLanguageModel::from_pairs(&[(vec![], 7), (vec!["x"], 3)]);
+        assert_eq!(model.get_total_token_count(), 3);
+        assert_eq!(model.get_count(&[]), 0);
+        assert_eq!(model.get_count(&["a", "b", "c", "d", "e"]), 0);
+    }
+
+    #[test]
+    fn tsv_lookup_answers_from_the_first_line_and_before_it() {
+        let dir = scratch_dir("first-line");
+        fs::write(dir.join("1grams.tsv"), "b\t2\nc\t3\n").unwrap();
+        let model = DiskLanguageModel::from_dir(&dir).unwrap();
+        assert_eq!(model.get_count(&["b"]), 2);
+        assert_eq!(model.get_count(&["a"]), 0);
+        cleanup_dir(&dir);
+    }
+
+    #[test]
+    fn tsv_lookup_strips_carriage_returns() {
+        let dir = scratch_dir("crlf");
+        fs::write(dir.join("1grams.tsv"), "alpha\t10\r\nbeta\t20\r\n").unwrap();
+        let model = DiskLanguageModel::from_dir(&dir).unwrap();
+        assert_eq!(model.get_count(&["alpha"]), 10);
+        assert_eq!(model.get_count(&["beta"]), 20);
+        assert_eq!(model.get_count(&["alphabet"]), 0);
+        cleanup_dir(&dir);
+    }
+
+    #[test]
+    fn tsv_lookup_breaks_off_the_search_on_a_malformed_line() {
+        let dir = scratch_dir("malformed");
+        fs::write(dir.join("1grams.tsv"), "aa\t1\nbb\t2\nno_tab_line\nzz\t9\n").unwrap();
+        let model = DiskLanguageModel::from_dir(&dir).unwrap();
+        assert_eq!(model.get_count(&["aa"]), 1);
+        assert_eq!(model.get_count(&["bb"]), 0);
+        assert_eq!(model.get_count(&["m"]), 0);
+        cleanup_dir(&dir);
+    }
+
+    #[test]
+    fn tsv_lookup_stops_when_the_tail_is_all_carriage_returns() {
+        let dir = scratch_dir("cr-tail");
+        fs::write(dir.join("1grams.tsv"), "a\t1\nb\t2\n\r").unwrap();
+        let model = DiskLanguageModel::from_dir(&dir).unwrap();
+        assert_eq!(model.get_count(&["b"]), 2);
+        assert_eq!(model.get_count(&["c"]), 0);
+        cleanup_dir(&dir);
+    }
+
+    #[test]
+    fn tsv_lookup_ends_the_search_on_a_run_of_empty_lines() {
+        let dir = scratch_dir("empty-run");
+        fs::write(dir.join("1grams.tsv"), "aa\t1\nbb\t2\n\r\r\r\r\r\r\r\r").unwrap();
+        let model = DiskLanguageModel::from_dir(&dir).unwrap();
+        assert_eq!(model.get_count(&["aa"]), 1);
+        assert_eq!(model.get_count(&["z"]), 0);
+        cleanup_dir(&dir);
+
+        let dir = scratch_dir("newline-run");
+        fs::write(dir.join("1grams.tsv"), "aa\t1\n\n\n").unwrap();
+        let model = DiskLanguageModel::from_dir(&dir).unwrap();
+        assert_eq!(model.get_count(&["aa"]), 1);
+        assert_eq!(model.get_count(&["zz"]), 0);
+        cleanup_dir(&dir);
+    }
+
+    #[test]
+    fn tsv_lookup_grows_its_buffer_for_lines_longer_than_512_bytes() {
+        let long_a = format!("a{}\t1\n", "x".repeat(700));
+        let long_z = format!("z{}\t2\n", "y".repeat(700));
+        let dir = scratch_dir("long-lines");
+        fs::write(dir.join("1grams.tsv"), format!("{long_a}{long_z}")).unwrap();
+        let model = DiskLanguageModel::from_dir(&dir).unwrap();
+        assert_eq!(model.get_count(&[&format!("a{}", "x".repeat(700))]), 1);
+        assert_eq!(model.get_count(&[&format!("z{}", "y".repeat(700))]), 2);
+        assert_eq!(model.get_count(&["m"]), 0);
+        cleanup_dir(&dir);
+    }
+
+    #[test]
+    fn tsv_lookup_recurses_past_a_1500_byte_line_to_find_its_start() {
+        let long_first = format!("a{}\t1\n", "x".repeat(1498));
+        let dir = scratch_dir("recurse");
+        fs::write(dir.join("1grams.tsv"), format!("{long_first}zz\t9\n")).unwrap();
+        let model = DiskLanguageModel::from_dir(&dir).unwrap();
+        assert_eq!(model.get_count(&[&format!("a{}", "x".repeat(1498))]), 1);
+        assert_eq!(model.get_count(&["zz"]), 9);
+        assert_eq!(model.get_count(&["m"]), 0);
+        cleanup_dir(&dir);
+    }
+
+    #[test]
+    fn tsv_lookup_rejects_a_file_whose_first_line_is_blank() {
+        let dir = scratch_dir("blank-first");
+        fs::write(dir.join("1grams.tsv"), "\n\r\nb\t2\n").unwrap();
+        let model = DiskLanguageModel::from_dir(&dir).unwrap();
+        assert_eq!(model.get_count(&["b"]), 0);
+        cleanup_dir(&dir);
+    }
+
+    #[test]
+    fn from_dir_rejects_dirs_without_usable_grams() {
+        let empty = scratch_dir("no-grams");
+        assert!(DiskLanguageModel::from_dir(&empty).is_none());
+        cleanup_dir(&empty);
+
+        let blank = scratch_dir("blank-gram");
+        fs::write(blank.join("1grams.tsv"), "").unwrap();
+        assert!(DiskLanguageModel::from_dir(&blank).is_none());
+        cleanup_dir(&blank);
+    }
+
+    #[test]
+    fn from_dir_reads_the_meta_total_and_defaults_to_one() {
+        let with_meta = scratch_dir("meta");
+        fs::write(with_meta.join("1grams.tsv"), "a\t1\nb\t2\n").unwrap();
+        fs::write(
+            with_meta.join("1grams.meta"),
+            "junk line\ntotal_token_count\t12345\n",
+        )
+        .unwrap();
+        let model = DiskLanguageModel::from_dir(&with_meta).unwrap();
+        assert_eq!(model.get_total_token_count(), 12345);
+        cleanup_dir(&with_meta);
+
+        let without_meta = scratch_dir("no-meta");
+        fs::write(without_meta.join("1grams.tsv"), "a\t1\nb\t2\n").unwrap();
+        let model = DiskLanguageModel::from_dir(&without_meta).unwrap();
+        assert_eq!(model.get_total_token_count(), 1);
+        let p = model.get_probability(&["a"]);
+        assert!((p.prob - 2.0 / 2.0).abs() < 1e-12);
+        cleanup_dir(&without_meta);
+    }
+
+    #[test]
+    fn shared_model_caches_unresolvable_languages() {
+        assert!(DiskLanguageModel::shared_for_language("zz").is_none());
+        assert!(DiskLanguageModel::shared_for_language("zz").is_none());
+    }
+
+    fn scratch_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("oglm-{tag}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn cleanup_dir(dir: &Path) {
+        let _ = fs::remove_dir_all(dir);
     }
 }
