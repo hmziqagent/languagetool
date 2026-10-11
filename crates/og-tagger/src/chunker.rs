@@ -545,11 +545,6 @@ fn is_negation(word: &str) -> bool {
     matches!(word.to_lowercase().as_str(), "not" | "n't" | "nt" | "never")
 }
 
-#[allow(dead_code)]
-fn is_auxiliary(tag: &str) -> bool {
-    tag == "MD" || tag == "EX"
-}
-
 fn is_verb_tag(tag: &str) -> bool {
     matches!(tag, "VB" | "VBD" | "VBG" | "VBN" | "VBP" | "VBZ")
 }
@@ -662,6 +657,199 @@ mod tests {
         assert_eq!(chunks[1], Some("B-NP-plural".to_string()));
         assert_eq!(chunks[2], Some("E-NP-plural".to_string()));
     }
+
+    #[test]
+    fn chunk_tag_as_str_round_trips_every_variant() {
+        assert_eq!(ChunkTag::None.as_str(), None);
+        assert_eq!(ChunkTag::BNP("x".into()).as_str(), Some("x"));
+        assert_eq!(ChunkTag::INP("y".into()).as_str(), Some("y"));
+        assert_eq!(ChunkTag::ENP("z".into()).as_str(), Some("z"));
+        assert_eq!(ChunkTag::BVP.as_str(), Some("B-VP"));
+        assert_eq!(ChunkTag::IVP.as_str(), Some("I-VP"));
+        assert_eq!(ChunkTag::EVP.as_str(), Some("E-VP"));
+        assert_eq!(ChunkTag::BPP.as_str(), Some("B-PP"));
+        assert_eq!(ChunkTag::IPP.as_str(), Some("I-PP"));
+        assert_eq!(ChunkTag::EPP.as_str(), Some("E-PP"));
+        assert_eq!(ChunkTag::BADVP.as_str(), Some("B-ADVP"));
+        assert_eq!(ChunkTag::IADVP.as_str(), Some("I-ADVP"));
+        assert_eq!(ChunkTag::EADVP.as_str(), Some("E-ADVP"));
+        assert_eq!(ChunkTag::BADJP.as_str(), Some("B-ADJP"));
+        assert_eq!(ChunkTag::IADJP.as_str(), Some("I-ADJP"));
+        assert_eq!(ChunkTag::EADJP.as_str(), Some("E-ADJP"));
+        assert_eq!(ChunkTag::BSBAR.as_str(), Some("B-SBAR"));
+        assert_eq!(ChunkTag::ISBAR.as_str(), Some("I-SBAR"));
+        assert_eq!(ChunkTag::ESBAR.as_str(), Some("E-SBAR"));
+        assert_eq!(ChunkTag::BPRT.as_str(), Some("B-PRT"));
+    }
+
+    #[test]
+    fn empty_tag_list_chunks_to_nothing() {
+        assert_eq!(chunk_tokens(&["DT"], &["the"]), vec![None]);
+    }
+
+    #[test]
+    fn punctuation_tags_are_skipped_without_consuming_chunks() {
+        let pos_tags = ["SENT_START", "NN", ",", "VBZ"];
+        let tokens = ["<S>", "cat", ",", "sleeps"];
+        let chunks = chunk_tokens(&pos_tags, &tokens);
+        assert_eq!(chunks[2], None);
+        assert_eq!(chunks[1].as_deref(), Some("E-NP-singular"));
+        assert_eq!(chunks[3].as_deref(), Some("B-VP"));
+    }
+
+    #[test]
+    fn predeterminer_and_determiner_join_the_np() {
+        let pos_tags = ["SENT_START", "NN", "DT", "NNS"];
+        let tokens = ["<S>", "all", "the", "dogs"];
+        let chunks = chunk_tokens(&pos_tags, &tokens);
+        assert_eq!(chunks[1].as_deref(), Some("B-NP-plural"));
+        assert_eq!(chunks[2].as_deref(), Some("I-NP-plural"));
+        assert_eq!(chunks[3].as_deref(), Some("E-NP-plural"));
+    }
+
+    #[test]
+    fn adverb_before_adjective_stays_inside_np() {
+        let pos_tags = ["SENT_START", "DT", "RB", "JJ", "NN"];
+        let tokens = ["<S>", "a", "very", "quick", "fox"];
+        let chunks = chunk_tokens(&pos_tags, &tokens);
+        assert_eq!(chunks[1].as_deref(), Some("B-NP-singular"));
+        assert_eq!(chunks[2].as_deref(), Some("I-NP-singular"));
+        assert_eq!(chunks[3].as_deref(), Some("I-NP-singular"));
+        assert_eq!(chunks[4].as_deref(), Some("E-NP-singular"));
+    }
+
+    #[test]
+    fn possessive_pronoun_is_a_singular_np() {
+        let pos_tags = ["SENT_START", "PRP$", "JJ", "NNS"];
+        let tokens = ["<S>", "their", "big", "dogs"];
+        let chunks = chunk_tokens(&pos_tags, &tokens);
+        assert_eq!(chunks[1].as_deref(), Some("B-NP-plural"));
+        assert_eq!(chunks[2].as_deref(), Some("I-NP-plural"));
+        assert_eq!(chunks[3].as_deref(), Some("E-NP-plural"));
+    }
+
+    #[test]
+    fn possessive_marker_after_pronoun_ends_the_np() {
+        let pos_tags = ["SENT_START", "PRP", "POS", "VBZ"];
+        let tokens = ["<S>", "it", "'s", "rains"];
+        let chunks = chunk_tokens(&pos_tags, &tokens);
+        assert_eq!(chunks[1].as_deref(), Some("B-NP-singular"));
+        assert_eq!(chunks[2].as_deref(), Some("E-NP-singular"));
+    }
+
+    #[test]
+    fn lone_pronoun_is_a_one_token_np() {
+        let pos_tags = ["SENT_START", "PRP", "VBZ"];
+        let tokens = ["<S>", "he", "runs"];
+        let chunks = chunk_tokens(&pos_tags, &tokens);
+        assert_eq!(chunks[1].as_deref(), Some("B-NP-singular"));
+        assert_eq!(chunks[2].as_deref(), Some("B-VP"));
+    }
+
+    #[test]
+    fn possessive_marker_after_noun_joins_the_np() {
+        let pos_tags = ["SENT_START", "NN", "POS", "NN"];
+        let tokens = ["<S>", "dog", "'s", "bone"];
+        let chunks = chunk_tokens(&pos_tags, &tokens);
+        assert_eq!(chunks[1].as_deref(), Some("B-NP-singular"));
+        assert_eq!(chunks[2].as_deref(), Some("E-NP-singular"));
+        assert_eq!(chunks[3].as_deref(), Some("E-NP-singular"));
+    }
+
+    #[test]
+    fn negation_between_aux_and_verb_stays_in_vp() {
+        let pos_tags = ["SENT_START", "PRP", "VBZ", "RB", "VBP"];
+        let tokens = ["<S>", "he", "has", "not", "run"];
+        let chunks = chunk_tokens(&pos_tags, &tokens);
+        assert_eq!(chunks[2].as_deref(), Some("B-VP"));
+        assert_eq!(chunks[3].as_deref(), Some("I-VP"));
+        assert_eq!(chunks[4].as_deref(), Some("I-VP"));
+    }
+
+    #[test]
+    fn modal_then_adverb_then_verb_forms_one_vp() {
+        let pos_tags = ["SENT_START", "PRP", "MD", "RB", "VB"];
+        let tokens = ["<S>", "he", "can", "not", "go"];
+        let chunks = chunk_tokens(&pos_tags, &tokens);
+        assert_eq!(chunks[2].as_deref(), Some("B-VP"));
+        assert_eq!(chunks[3].as_deref(), Some("I-VP"));
+        assert_eq!(chunks[4].as_deref(), Some("I-VP"));
+    }
+
+    #[test]
+    fn to_infinitive_marker_is_a_pp() {
+        let pos_tags = ["SENT_START", "VB", "TO", "VB"];
+        let tokens = ["<S>", "want", "to", "sleep"];
+        let chunks = chunk_tokens(&pos_tags, &tokens);
+        assert_eq!(chunks[1].as_deref(), Some("B-VP"));
+        assert_eq!(chunks[2].as_deref(), Some("B-PP"));
+        assert_eq!(chunks[3].as_deref(), Some("B-VP"));
+    }
+
+    #[test]
+    fn consecutive_adverbs_chunk_into_one_advp() {
+        let pos_tags = ["SENT_START", "VBD", "RB", "RB"];
+        let tokens = ["<S>", "ran", "very", "fast"];
+        let chunks = chunk_tokens(&pos_tags, &tokens);
+        assert_eq!(chunks[1].as_deref(), Some("B-VP"));
+        assert_eq!(chunks[2].as_deref(), Some("B-ADVP"));
+        assert_eq!(chunks[3].as_deref(), Some("I-ADVP"));
+    }
+
+    #[test]
+    fn stranded_adjective_chunks_into_adjp() {
+        let pos_tags = ["SENT_START", "VBP", "JJ"];
+        let tokens = ["<S>", "look", "great"];
+        let chunks = chunk_tokens(&pos_tags, &tokens);
+        assert_eq!(chunks[2].as_deref(), Some("B-ADJP"));
+    }
+
+    #[test]
+    fn unknown_tag_falls_through_without_a_chunk() {
+        let pos_tags = ["SENT_START", "UH", "NN"];
+        let tokens = ["<S>", "oh", "cat"];
+        let chunks = chunk_tokens(&pos_tags, &tokens);
+        assert_eq!(chunks[1], None);
+        assert_eq!(chunks[2].as_deref(), Some("E-NP-singular"));
+    }
+
+    #[test]
+    fn heuristic_chunk_tags_skip_whitespace_and_sentence_markers() {
+        use og_core::{AnalyzedSentence, AnalyzedToken, AnalyzedTokenReadings};
+
+        let parts: [(&str, &[&str]); 7] = [
+            ("<S>", &[]),
+            ("The", &["DT"]),
+            (" ", &[]),
+            ("quick", &["JJ"]),
+            ("fox", &["NN"]),
+            ("jumps", &["VBZ"]),
+            (".", &["."]),
+        ];
+        let mut pos = 0usize;
+        let mut tokens = Vec::new();
+        for (text, tags) in parts {
+            let mut at = AnalyzedToken::new(text, pos, pos + text.len());
+            if !tags.is_empty() {
+                at = at.with_pos_tags(tags.iter().map(|t| t.to_string()).collect());
+            }
+            tokens.push(AnalyzedTokenReadings::new(at));
+            pos += text.len();
+        }
+        let mut sentence = AnalyzedSentence::new("<S>The quick fox jumps.", 0, pos);
+        sentence.set_tokens(tokens);
+
+        apply_heuristic_chunk_tags(&mut sentence);
+
+        let chunks: Vec<&[String]> = sentence.tokens().iter().map(|t| t.chunks()).collect();
+        assert!(chunks[0].is_empty(), "<S> marker: {chunks:?}");
+        assert!(chunks[2].is_empty(), "whitespace: {chunks:?}");
+        assert_eq!(chunks[1], &["B-NP-singular".to_string()]);
+        assert_eq!(chunks[3], &["I-NP-singular".to_string()]);
+        assert_eq!(chunks[4], &["E-NP-singular".to_string()]);
+        assert_eq!(chunks[5], &["B-VP".to_string()]);
+        assert!(chunks[6].is_empty(), "punct: {chunks:?}");
+    }
 }
 
 #[cfg(test)]
@@ -710,5 +898,103 @@ mod selection_tests {
         let all = tags(&[&["NN"], &["NN", "CC"], &["NN", "VB"], &["NN"]]);
         let texts = ["salt", "and", "pepper", "area"];
         assert_eq!(select_chunker_tags(&all, &texts)[2], "NN");
+    }
+
+    #[test]
+    fn empty_candidate_tags_select_the_empty_string() {
+        assert_eq!(select_chunker_tag(&[vec![]], &["x"], &[], 0), "");
+    }
+
+    #[test]
+    fn verb_selected_after_modal_adverb_and_to() {
+        let all = tags(&[&["MD"], &["VB", "NN"]]);
+        assert_eq!(select_chunker_tag(&all, &["can", "go"], &["MD"], 1), "VB");
+
+        let all = tags(&[&["MD"], &["RB"], &["VB", "NN"]]);
+        assert_eq!(
+            select_chunker_tag(&all, &["can", "not", "go"], &["MD", "RB"], 2),
+            "VB"
+        );
+
+        let all = tags(&[&["TO"], &["VB", "NN"]]);
+        assert_eq!(select_chunker_tag(&all, &["to", "go"], &["TO"], 1), "VB");
+    }
+
+    #[test]
+    fn adjective_or_noun_selected_after_have_aux() {
+        let all = tags(&[&["VBZ"], &["JJ", "NN"]]);
+        assert_eq!(
+            select_chunker_tag(&all, &["has", "gone"], &["VBZ"], 1),
+            "JJ"
+        );
+
+        let all = tags(&[&["VBZ"], &["NN", "VB"]]);
+        assert_eq!(
+            select_chunker_tag(&all, &["has", "rest"], &["VBZ"], 1),
+            "NN"
+        );
+    }
+
+    #[test]
+    fn noun_selected_after_determiner() {
+        let all = tags(&[&["DT"], &["NN", "VB"]]);
+        assert_eq!(
+            select_chunker_tag(&all, &["the", "plant"], &["DT"], 1),
+            "NN"
+        );
+
+        let all = tags(&[&["PRP$"], &["NN", "VB"]]);
+        assert_eq!(
+            select_chunker_tag(&all, &["my", "plant"], &["PRP$"], 1),
+            "NN"
+        );
+
+        let all = tags(&[&["CD"], &["NN", "VB"]]);
+        assert_eq!(
+            select_chunker_tag(&all, &["two", "plant"], &["CD"], 1),
+            "NN"
+        );
+    }
+
+    #[test]
+    fn verb_selected_after_plain_verb() {
+        let all = tags(&[&["VBP"], &["VB", "NN"]]);
+        assert_eq!(select_chunker_tag(&all, &["see", "go"], &["VBP"], 1), "VB");
+
+        let all = tags(&[&["VBP"], &["VB", "JJ"]]);
+        assert_eq!(select_chunker_tag(&all, &["see", "go"], &["VBP"], 1), "VB");
+    }
+
+    #[test]
+    fn verb_or_modal_selected_after_pronoun() {
+        let all = tags(&[&["PRP"], &["VB", "NN"]]);
+        assert_eq!(
+            select_chunker_tag(&all, &["they", "plant"], &["PRP"], 1),
+            "VB"
+        );
+
+        let all = tags(&[&["PRP"], &["MD", "NN"]]);
+        assert_eq!(
+            select_chunker_tag(&all, &["they", "must"], &["PRP"], 1),
+            "MD"
+        );
+    }
+
+    #[test]
+    fn be_verb_surface_picks_the_verb_reading() {
+        let all = tags(&[&["EX"], &["VB", "NN"]]);
+        assert_eq!(
+            select_chunker_tag(&all, &["There", "been"], &["EX"], 1),
+            "VB"
+        );
+    }
+
+    #[test]
+    fn multi_reading_word_without_context_keeps_first_tag() {
+        let all = tags(&[&["DT"], &["NN", "VB"]]);
+        assert_eq!(
+            select_chunker_tag(&all, &["the", "plant"], &["NN"], 1),
+            "NN"
+        );
     }
 }
