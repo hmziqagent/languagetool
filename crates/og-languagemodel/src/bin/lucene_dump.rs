@@ -719,9 +719,6 @@ fn dump_dir(dir: &Path, only: Option<usize>) {
         if only.is_some_and(|o| o != n) {
             continue;
         }
-        if only.is_some_and(|o| o != n) {
-            continue;
-        }
         let grams_dir = dir.join(format!("{n}grams"));
         let entries: Vec<PathBuf> = std::fs::read_dir(&grams_dir)
             .ok()
@@ -1014,7 +1011,7 @@ mod tests {
         path
     }
 
-    fn cleanup_file(path: &PathBuf) {
+    fn cleanup_file(path: &Path) {
         if let Some(parent) = path.parent() {
             let _ = std::fs::remove_dir_all(parent);
         }
@@ -1047,7 +1044,9 @@ mod tests {
             out.push(0);
             out.push(0);
             out.extend_from_slice(&[0u8; 8]);
-            out.extend_from_slice(&vint(0));
+            out.extend_from_slice(&vint(1));
+            out.extend_from_slice(&vstr("key"));
+            out.extend_from_slice(&vstr("value"));
         }
         out
     }
@@ -1309,6 +1308,7 @@ mod tests {
         doc_count: u64,
         longs_size: u64,
         four_x: bool,
+        docs_only: bool,
     ) -> Vec<u8> {
         let mut out = vint(1);
         out.extend_from_slice(&vint(0));
@@ -1316,6 +1316,9 @@ mod tests {
         let root_code = vint(root_fp << 2);
         out.extend_from_slice(&vint(root_code.len() as u64));
         out.extend_from_slice(&root_code);
+        if !docs_only {
+            out.extend_from_slice(&vint(sum_doc_freq));
+        }
         out.extend_from_slice(&vint(sum_doc_freq));
         out.extend_from_slice(&vint(doc_count));
         out.extend_from_slice(&vint(longs_size));
@@ -1347,7 +1350,7 @@ mod tests {
             &singleton_meta(&[0, 1], 1),
         ));
         let dir_offset = file.len() as u64;
-        file.extend_from_slice(&field_dir(root_fp, 2, 2, 2, 1, false));
+        file.extend_from_slice(&field_dir(root_fp, 2, 2, 2, 1, false, true));
         let path = scratch_file("timleaf", "seg.tim", &finish_tim(file, dir_offset));
         let out = path.parent().unwrap().join("terms.tsv");
         let (terms, sum_doc_freq) = dump_terms(&path, &[10, 20], true, &out).unwrap();
@@ -1378,7 +1381,7 @@ mod tests {
         suffix.extend_from_slice(&vint(sub_code));
         file.extend_from_slice(&block_bytes(1, true, false, &suffix, &[], &[]));
         let dir_offset = file.len() as u64;
-        file.extend_from_slice(&field_dir(root_fp, 1, 1, 1, 1, false));
+        file.extend_from_slice(&field_dir(root_fp, 1, 1, 1, 1, false, true));
         let path = scratch_file("timsub", "seg.tim", &finish_tim(file, dir_offset));
         let out = path.parent().unwrap().join("terms.tsv");
         let (terms, _) = dump_terms(&path, &[33], true, &out).unwrap();
@@ -1410,7 +1413,7 @@ mod tests {
             &singleton_meta(&[1], 1),
         ));
         let dir_offset = file.len() as u64;
-        file.extend_from_slice(&field_dir(first_fp, 2, 2, 2, 1, false));
+        file.extend_from_slice(&field_dir(first_fp, 2, 2, 2, 1, false, true));
         let path = scratch_file("timfloor", "seg.tim", &finish_tim(file, dir_offset));
         let out = path.parent().unwrap().join("terms.tsv");
         let (terms, _) = dump_terms(&path, &[1, 2], true, &out).unwrap();
@@ -1437,7 +1440,7 @@ mod tests {
             &singleton_meta(&[0], 1),
         ));
         let dir_offset = file.len() as u64;
-        file.extend_from_slice(&field_dir(root_fp, 1, 1, 1, 1, true));
+        file.extend_from_slice(&field_dir(root_fp, 1, 1, 1, 1, true, true));
         let path = scratch_file("tim4x", "seg.tim", &finish_tim(file, dir_offset));
         let out = path.parent().unwrap().join("terms.tsv");
         let (terms, _) = dump_terms(&path, &[5], true, &out).unwrap();
@@ -1461,12 +1464,108 @@ mod tests {
             &vint(0),
         ));
         let dir_offset = file.len() as u64;
-        file.extend_from_slice(&field_dir(root_fp, 1, 3, 3, 1, false));
+        file.extend_from_slice(&field_dir(root_fp, 1, 3, 3, 1, false, true));
         let path = scratch_file("timmulti", "seg.tim", &finish_tim(file, dir_offset));
         let out = path.parent().unwrap().join("terms.tsv");
         let (terms, _) = dump_terms(&path, &[5], true, &out).unwrap();
         assert_eq!(terms, 0);
         assert_eq!(std::fs::read_to_string(&out).unwrap(), "");
+        cleanup_file(&path);
+    }
+
+    #[test]
+    fn dump_terms_reads_terms_and_floor_entries_from_a_non_leaf_5x_block() {
+        let mut file = codec_header_5x("Lucene50", 0);
+        file.extend_from_slice(&codec_header_5x("Lucene50", 0));
+        file.extend_from_slice(&vint(0));
+        let root_fp = file.len() as u64;
+        let mut suffix = vint(2 << 2);
+        suffix.extend_from_slice(b"hi");
+        suffix.extend_from_slice(&vint((1 << 2) | 2));
+        suffix.push(b'z');
+        suffix.push(0xab);
+        file.extend_from_slice(&block_bytes(
+            2,
+            true,
+            false,
+            &suffix,
+            &[vint(1), vint(1)].concat(),
+            &singleton_meta(&[0, 1], 1),
+        ));
+        let dir_offset = file.len() as u64;
+        file.extend_from_slice(&field_dir(root_fp, 2, 2, 2, 1, false, true));
+        let path = scratch_file("timnonleaf5", "seg.tim", &finish_tim(file, dir_offset));
+        let out = path.parent().unwrap().join("terms.tsv");
+        let (terms, _) = dump_terms(&path, &[11, 22], true, &out).unwrap();
+        assert_eq!(terms, 1);
+        assert_eq!(std::fs::read_to_string(&out).unwrap(), "hi\t11\n");
+        cleanup_file(&path);
+    }
+
+    #[test]
+    fn dump_terms_reads_non_leaf_entries_from_a_4x_index() {
+        let mut header = MAGIC.to_vec();
+        header.extend_from_slice(&vstr("Dict"));
+        header.extend_from_slice(&0u32.to_le_bytes());
+        let mut file = header.clone();
+        file.extend_from_slice(&header);
+        file.extend_from_slice(&vint(0));
+        let child_fp = file.len() as u64;
+        file.extend_from_slice(&block_bytes(
+            1,
+            true,
+            true,
+            &leaf_suffix(&["c"]),
+            &vint(1),
+            &singleton_meta(&[1], 1),
+        ));
+        let root_fp = file.len() as u64;
+        let sub_code = root_fp - child_fp;
+        let mut suffix = vint(1 << 1);
+        suffix.extend_from_slice(b"a");
+        suffix.extend_from_slice(&vint((1 << 1) | 1));
+        suffix.extend_from_slice(b"b");
+        suffix.extend_from_slice(&vint(sub_code));
+        file.extend_from_slice(&block_bytes(
+            2,
+            true,
+            false,
+            &suffix,
+            &vint(1),
+            &singleton_meta(&[0], 1),
+        ));
+        let dir_offset = file.len() as u64;
+        file.extend_from_slice(&field_dir(root_fp, 2, 2, 2, 1, true, true));
+        let path = scratch_file("timnonleaf4", "seg.tim", &finish_tim(file, dir_offset));
+        let out = path.parent().unwrap().join("terms.tsv");
+        let (terms, _) = dump_terms(&path, &[4, 6], true, &out).unwrap();
+        assert_eq!(terms, 2);
+        assert_eq!(std::fs::read_to_string(&out).unwrap(), "a\t4\nbc\t6\n");
+        cleanup_file(&path);
+    }
+
+    #[test]
+    fn dump_terms_parses_the_doc_freq_long_when_docs_are_indexed() {
+        let mut file = codec_header_5x("Lucene50", 0);
+        file.extend_from_slice(&codec_header_5x("Lucene50", 0));
+        file.extend_from_slice(&vint(0));
+        let root_fp = file.len() as u64;
+        file.extend_from_slice(&block_bytes(
+            1,
+            true,
+            true,
+            &leaf_suffix(&["qq"]),
+            &vint(1),
+            &singleton_meta(&[0], 1),
+        ));
+        let dir_offset = file.len() as u64;
+        file.extend_from_slice(&field_dir(root_fp, 1, 1, 1, 1, false, false));
+        let path = scratch_file("timdocfreq", "seg.tim", &finish_tim(file, dir_offset));
+        let out = path.parent().unwrap().join("terms.tsv");
+        let (terms, sum_doc_freq) = dump_terms(&path, &[5], false, &out).unwrap();
+        assert_eq!(terms, 1);
+        assert_eq!(sum_doc_freq, 1);
+        assert_eq!(std::fs::read_to_string(&out).unwrap(), "qq\t5\n");
         cleanup_file(&path);
     }
 
@@ -1503,7 +1602,7 @@ mod tests {
             &singleton_meta(&[0], 1),
         ));
         let dir_offset = file.len() as u64;
-        file.extend_from_slice(&field_dir(root_fp, 1, 1, 1, 1, false));
+        file.extend_from_slice(&field_dir(root_fp, 1, 1, 1, 1, false, true));
         std::fs::write(
             grams.join(format!("{seg}.tim")),
             finish_tim(file, dir_offset),
@@ -1544,6 +1643,26 @@ mod tests {
             "total_token_count\t0\n"
         );
         assert!(!dir.join("2grams.tsv").exists());
+        std::fs::write(dir.join("1grams.meta"), "total_token_count\t777\n").unwrap();
+        dump_dir(&dir, Some(1));
+        assert_eq!(
+            std::fs::read_to_string(dir.join("1grams.meta")).unwrap(),
+            "total_token_count\t777\n"
+        );
+        cleanup_file(&dir.join("1grams.tsv"));
+    }
+
+    #[test]
+    fn dump_dir_skips_term_dumping_when_the_output_cannot_be_created() {
+        let dir = scratch_dir("e2erofd");
+        write_segment(&dir, "seg_Lucene50_0", "abc", 42);
+        std::fs::create_dir(dir.join("1grams.tsv")).unwrap();
+        dump_dir(&dir, Some(1));
+        assert!(dir.join("1grams.tsv").is_dir());
+        assert_eq!(
+            std::fs::read_to_string(dir.join("1grams.meta")).unwrap(),
+            "total_token_count\t0\n"
+        );
         cleanup_file(&dir.join("1grams.tsv"));
     }
 
