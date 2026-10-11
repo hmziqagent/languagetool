@@ -264,3 +264,110 @@ pub fn cast_words_rule() -> GalicianSimpleReplaceRule {
     rule.load_data(SPANISH_TXT);
     rule
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use og_core::{AnalyzedSentence, AnalyzedToken, AnalyzedTokenReadings};
+
+    fn make_sentence(text: &str) -> AnalyzedSentence {
+        let mut sentence = AnalyzedSentence::new(text, 0, text.len());
+        let mut tokens = vec![AnalyzedTokenReadings::new(
+            AnalyzedToken::new("<S>", 0, 0).with_pos_tags(vec!["SENT_START".to_string()]),
+        )];
+        let mut pos = 0usize;
+        for word in text.split_whitespace() {
+            let start = pos + text[pos..].find(word).expect("word offset");
+            let end = start + word.len();
+            tokens.push(AnalyzedTokenReadings::new(AnalyzedToken::new(
+                word, start, end,
+            )));
+            pos = end;
+        }
+        sentence.set_tokens(tokens);
+        sentence
+    }
+
+    fn make_lemma_sentence(token: &str, lemma: &str, tag: &str) -> AnalyzedSentence {
+        let text = format!("un {token} aquí.");
+        let start = text.find(token).expect("token offset");
+        let end = start + token.len();
+        let mut sentence = AnalyzedSentence::new(text.clone(), 0, text.len());
+        let reading = AnalyzedToken::new(token, start, end)
+            .with_lemma(lemma)
+            .with_pos_tags(vec![tag.to_string()]);
+        let atr = AnalyzedTokenReadings::new(AnalyzedToken::new(token, start, end))
+            .with_readings(vec![reading]);
+        sentence.set_tokens(vec![
+            AnalyzedTokenReadings::new(
+                AnalyzedToken::new("<S>", 0, 0).with_pos_tags(vec!["SENT_START".to_string()]),
+            ),
+            atr,
+        ]);
+        sentence
+    }
+
+    fn values(m: &og_core::RuleMatch) -> Vec<&str> {
+        m.replacements().iter().map(|r| r.value()).collect()
+    }
+
+    #[test]
+    fn parse_replace_data_skips_empty_replacements_and_comments() {
+        let map = parse_replace_data("# c\n\na|b=c|d\nbad\nempty=\n");
+        assert_eq!(map.get("a"), Some(&vec!["c".to_string(), "d".to_string()]));
+        assert_eq!(map.get("b"), Some(&vec!["c".to_string(), "d".to_string()]));
+        assert!(!map.contains_key("bad"));
+        assert!(!map.contains_key("empty"));
+    }
+
+    #[test]
+    fn simple_replace_rule_suggests_the_galician_form() {
+        let text = "un achádego recente.";
+        let matches = simple_replace_rule().match_sentence(&make_sentence(text));
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].offset(), text.find("achádego").unwrap());
+        assert_eq!(values(&matches[0]), vec!["achado"]);
+        assert_eq!(
+            matches[0].message(),
+            "'achádego' non existe en galego. Talvez quería vostede dicir: achado."
+        );
+        assert_eq!(matches[0].rule().id(), "GL_SIMPLE_REPLACE");
+    }
+
+    #[test]
+    fn cast_words_rule_flags_the_spanesian_loan() {
+        let matches = cast_words_rule().match_sentence(&make_sentence("na acera nova"));
+        assert_eq!(matches.len(), 1);
+        assert_eq!(values(&matches[0]), vec!["beirarrúa"]);
+        assert_eq!(
+            matches[0].message(),
+            "'acera' é un castelanismo. Empregue no seu sitio: beirarrúa."
+        );
+    }
+
+    #[test]
+    fn case_variants_adjust_the_suggestion() {
+        let rule = cast_words_rule();
+        let matches = rule.match_sentence(&make_sentence("na Acera nova"));
+        assert_eq!(values(&matches[0]), vec!["Beirarrúa"]);
+        let matches = rule.match_sentence(&make_sentence("na ACERA nova"));
+        assert_eq!(values(&matches[0]), vec!["BEIRARRÚA"]);
+    }
+
+    #[test]
+    fn lemma_lookup_synthesizes_the_inflected_form() {
+        let rule = cast_words_rule();
+        let matches = rule.match_sentence(&make_lemma_sentence("beirarrúas", "acera", "NCFS000"));
+        assert_eq!(matches.len(), 1);
+        assert_eq!(values(&matches[0]), vec!["beirarrúa"]);
+    }
+
+    #[test]
+    fn lemma_lookup_without_a_synthesizable_tag_yields_no_match() {
+        let rule = cast_words_rule();
+        assert_eq!(
+            rule.match_sentence(&make_lemma_sentence("beirarrúas", "acera", "VMIP3S0"))
+                .len(),
+            0
+        );
+    }
+}
