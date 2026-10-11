@@ -539,6 +539,7 @@ impl AgreementRule {
         let text = sentence.text();
         let text_base = sentence.start();
         let mut repl_map: HashMap<usize, ReplacementType> = HashMap::new();
+        let original_tokens = tokens;
         let replaced: Vec<AnalyzedTokenReadings> = tokens
             .iter()
             .enumerate()
@@ -661,7 +662,7 @@ impl AgreementRule {
                             },
                             check_compounds,
                             skipped_str.as_deref(),
-                            &tokens,
+                            original_tokens,
                         ) {
                             rule_matches.push(rm);
                         }
@@ -679,7 +680,7 @@ impl AgreementRule {
                             repl_map.get(&i).copied(),
                             skipped_str.as_deref(),
                             check_compounds,
-                            &tokens,
+                            original_tokens,
                         )
                     {
                         rule_matches.push(rm);
@@ -695,7 +696,7 @@ impl AgreementRule {
                         repl_map.get(&i).copied(),
                         skipped_str.as_deref(),
                         check_compounds,
-                        &tokens,
+                        original_tokens,
                     )
                 {
                     rule_matches.push(rm);
@@ -1369,7 +1370,9 @@ fn preposition_cases(prep: &str) -> Option<&'static [&'static str]> {
         | "unbeschadet" | "uneingedenk" | "ungeachtet" | "unterhalb" | "unweit" | "vermittels"
         | "vermittelst" | "vermöge" | "vorbehaltlich" | "wegen" | "weitab" | "während" | "zeit"
         | "zugunsten" | "zuungunsten" | "zuzüglich" => &["GEN"],
-        "an" | "auf" | "entlang" | "hinter" | "neben" | "unter" | "vor" => &["DAT", "AKK"],
+        "an" | "auf" | "entlang" | "hinter" | "neben" | "unter" | "vor" | "über" | "zwischen" => {
+            &["DAT", "AKK"]
+        }
         "ausgenommen" | "betreffend" | "bis" | "bis auf" | "durch" | "je" | "kontra" | "ohne"
         | "per" | "pro" | "um" | "versus" | "via" | "wider" => &["AKK"],
         "aus" | "außer" | "bei" | "binnen" | "entgegen" | "entsprechend" | "fern" | "gegenüber"
@@ -1547,10 +1550,11 @@ impl<'a> AgreementSuggestor<'a> {
     }
 
     fn noun_cases(&self) -> Vec<&'static str> {
-        if let Some(prep) = self.preposition
-            && let Some(cases) = preposition_cases(prep.token().token())
-        {
-            return cases.to_vec();
+        if let Some(prep) = self.preposition {
+            let lowered = prep.token().token().to_lowercase();
+            if let Some(cases) = preposition_cases(&lowered) {
+                return cases.to_vec();
+            }
         }
         vec!["NOM", "AKK", "DAT", "GEN"]
     }
@@ -1903,6 +1907,284 @@ impl Rule for AgreementRule {
 
 #[cfg(test)]
 mod tests {
+    use crate::engine::LanguageEngine;
+
+    fn agreement_family(text: &str) -> Vec<(String, usize, Vec<String>)> {
+        let engine = LanguageEngine::shared_for_code("de").expect("german engine");
+        engine
+            .check(text)
+            .matches
+            .iter()
+            .filter(|m| {
+                m.rule().id() == "DE_AGREEMENT" || m.rule().id().starts_with("SIMPLE_AGREEMENT")
+            })
+            .map(|m| {
+                (
+                    m.rule().id().to_string(),
+                    m.offset(),
+                    m.replacements()
+                        .iter()
+                        .map(|r| r.value().to_string())
+                        .collect(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn java_good_sentences_stay_clean() {
+        for text in [
+            "Bis zur Anfang Juni geplanten Eröffnung gebe es noch einiges zu tun.",
+            "Der fließend Französisch sprechende Präsident dankt stilvoll ab.",
+            "Spricht dieser fließend Französisch, muss er viel Geld verdienen.",
+            "Der letzte Woche beschlossene Etat ist unwirksam.",
+            "Die Einen sagen dies, die Anderen das.",
+            "So ist es in den USA.",
+            "Das ist der Tisch.",
+            "Das ist das Auto der Frau.",
+            "Das gehört dem Mann.",
+            "Das Auto eines Mannes.",
+            "Des großen Mannes.",
+            "Sie wiesen dieselben Verzierungen auf.",
+            "Die erwähnte Konferenz ist am Samstag.",
+            "Sie erreichten mehrere Prozent Zustimmung.",
+            "Ich tat für ihn, was dieser andere Autor für ihn tat.",
+            "Ich tat für ihn, was jedes andere Kind für ihn tat.",
+            "Klebe ein Preisschild auf jedes einzelne Produkt.",
+            "Mancher ausscheidende Politiker hinterlässt eine Lücke.",
+            "Kern einer jeden Tragödie ist es, ..",
+            "Das viele Geld wird ihr helfen.",
+            "Er verspricht jedem hohe Gewinne.",
+            "Sind das Eier aus Bodenhaltung?",
+            "Das Orange ist schön.",
+            "Dieses rötliche Orange gefällt mir am besten.",
+            "Das ist ein super Tipp.",
+            "Sie kann einem Angst einjagen.",
+            "Nichts ist mit dieser einen Nacht zu vergleichen.",
+            "Das Dach von meinem Auto.",
+            "Das Dach von meinen Autos.",
+            "Das Dach meines Autos.",
+            "Das Dach meiner großen Autos.",
+            "Es war Karl, dessen Leiche Donnerstag gefunden wurde.",
+            "Erst recht wir fleißigen Arbeiter.",
+            "Aller Kommunikation liegt dies zugrunde.",
+            "Der eine große Polizist rief dem anderen zu...",
+            "Das erfordert Können.",
+            "Ist das Kunst oder Abfall?",
+            "In den 80er Jahren.",
+            "Wir machen das Januar.",
+            "Wir teilen das Morgen mit.",
+            "Können Sie das nächsten Monat erledigen?",
+            "War das Absicht?",
+            "Alles Große und Edle ist einfacher Art.",
+            "Es gibt ein Sprichwort, dem zufolge der tägliche Genuss einer Mandel dem Gedächtnis förderlich sei.",
+            "Dieses Bild stammt von einem lange Zeit unbekannten Maler.",
+            "Das Staatsoberhaupt ist der Verfassung zufolge der König.",
+            "Der Mitte 2001 umgestaltete Garten ist schön.",
+            "Das Wahlrecht, das Frauen damals zugesprochen bekamen.",
+            "Es birgt für mich ein zu hohes juristisches Risiko.",
+            "Die Beibehaltung des Art. 1 ist geplant.",
+            "Picassos Kunstwerke werden häufiger gestohlen als die anderer Künstler.",
+            "Er war müde vom vielen Laufen.",
+            "Sind das echte Diamanten?",
+        ] {
+            let matches = agreement_family(text);
+            assert!(matches.is_empty(), "{text}: got {matches:?}");
+        }
+    }
+
+    #[test]
+    fn java_bad_sentences_flag_the_nominal_phrase() {
+        for text in [
+            "Ein Buch mit einem ganz ähnlichem Titel.",
+            "Meiner Chef raucht.",
+            "Die Galerie zu den Bilder findet sich hier.",
+            "Die erwähnt Konferenz ist am Samstag.",
+            "Die erwähntes Konferenz ist am Samstag.",
+            "Die erwähnten Konferenz ist am Samstag.",
+            "Die erwähnter Konferenz ist am Samstag.",
+            "Die erwähntem Konferenz ist am Samstag.",
+            "In diesen Viertel bin ich aufgewachsen.",
+            "Im November wurde auf den Gelände der Wettbewerb ausgetragen.",
+            "Sie hatte das kleinen Kaninchen.",
+            "Frau Müller hat das wichtigen Dokument gefunden.",
+            "Es birgt für mich ein zu hohes juristische Risiko.",
+        ] {
+            let matches = agreement_family(text);
+            assert!(!matches.is_empty(), "{text}: expected a DE_AGREEMENT match");
+        }
+    }
+
+    #[test]
+    fn java_bad_sentences_pin_the_suggestion_lists() {
+        for (text, expected) in [
+            (
+                "Es sind die Tisch.",
+                vec!["die Tische", "der Tisch", "den Tisch", "dem Tisch"],
+            ),
+            (
+                "Es sind das Tisch.",
+                vec!["der Tisch", "den Tisch", "dem Tisch"],
+            ),
+            (
+                "Es sind die Haus.",
+                vec!["das Haus", "dem Haus", "die Häuser"],
+            ),
+            (
+                "Es sind der Haus.",
+                vec!["dem Haus", "das Haus", "der Häuser"],
+            ),
+            ("Es sind das Frau.", vec!["die Frau", "der Frau"]),
+            (
+                "Das Auto des Mann.",
+                vec![
+                    "der Mann",
+                    "den Mann",
+                    "dem Mann",
+                    "des Manns",
+                    "des Mannes",
+                ],
+            ),
+            (
+                "Das interessiert das Mann.",
+                vec!["der Mann", "den Mann", "dem Mann"],
+            ),
+            (
+                "Das interessiert die Mann.",
+                vec!["der Mann", "den Mann", "dem Mann", "die Männer"],
+            ),
+            ("Das Auto ein Mannes.", vec!["ein Mann", "eines Mannes"]),
+            ("Das Auto einer Mannes.", vec!["eines Mannes"]),
+            ("Das Auto einen Mannes.", vec!["eines Mannes", "einen Mann"]),
+            (
+                "Ich habe einen Feder gefunden.",
+                vec!["eine Feder", "einer Feder"],
+            ),
+            (
+                "Das Dach mein Autos.",
+                vec![
+                    "mein Auto",
+                    "meine Autos",
+                    "meines Autos",
+                    "meinen Autos",
+                    "meiner Autos",
+                ],
+            ),
+        ] {
+            let matches = agreement_family(text);
+            let de_matches: Vec<&(String, usize, Vec<String>)> = matches
+                .iter()
+                .filter(|(id, _, _)| id == "DE_AGREEMENT")
+                .collect();
+            assert_eq!(
+                de_matches.len(),
+                1,
+                "{text}: expected exactly one DE_AGREEMENT match, got {matches:?}"
+            );
+            assert_eq!(
+                de_matches[0].2, expected,
+                "{text}: suggestion list diverges from Java"
+            );
+        }
+    }
+
+    #[test]
+    fn java_compound_matches_suggest_the_closed_forms() {
+        for (text, expected) in [
+            (
+                "Wir gehen ins Fitness Studio",
+                vec!["ins Fitnessstudio", "ins Fitness-Studio"],
+            ),
+            (
+                "Mit seinem Konkurrent Alistair Müller",
+                vec!["seinem Konkurrenten"],
+            ),
+        ] {
+            let matches = agreement_family(text);
+            let de_matches: Vec<&(String, usize, Vec<String>)> = matches
+                .iter()
+                .filter(|(id, _, _)| id == "DE_AGREEMENT")
+                .collect();
+            assert_eq!(
+                de_matches.len(),
+                1,
+                "{text}: expected exactly one DE_AGREEMENT match, got {matches:?}"
+            );
+            assert_eq!(
+                de_matches[0].2, expected,
+                "{text}: compound suggestion list diverges from Java"
+            );
+        }
+    }
+
+    #[test]
+    fn java_divergences_pin_the_current_residue() {
+        let matches = agreement_family("Der Ende der 1960er Jahre umgestaltete Garten ist schön.");
+        assert_eq!(
+            matches,
+            vec![("DE_AGREEMENT".to_string(), 0, vec!["Der Ende".to_string()])],
+            "Java CaseRuleTest/AgreementRuleTest accept 'Der Ende der <year> …'; the Rust tagger \
+             keeps the masculine article reading where Java's disambiguator drops it"
+        );
+        let matches = agreement_family("Das ist die Original Mail");
+        assert_eq!(
+            matches,
+            vec![(
+                "DE_AGREEMENT".to_string(),
+                8,
+                vec![
+                    "die Originale".to_string(),
+                    "das Original".to_string(),
+                    "dem Original".to_string()
+                ]
+            )],
+            "Java's CompoundAwareHunspellRule accepts 'die Originalmail' so the compound match \
+             fires; is_known_word has no compound-aware lookup, so the regular suggestor answers"
+        );
+        let matches = agreement_family("Er hat eine 34-jährigen Sohn.");
+        assert!(
+            matches.is_empty(),
+            "Java flags the hyphenated adjective; the generic tokenizer keeps '34-jährigen' \
+             unsplit so no det-adj-noun triple forms"
+        );
+        let matches = agreement_family("Das Auto einem Mannes.");
+        assert_eq!(
+            matches,
+            vec![(
+                "DE_AGREEMENT".to_string(),
+                9,
+                vec![
+                    "einem Manne".to_string(),
+                    "eines Mannes".to_string(),
+                    "einem Mann".to_string()
+                ]
+            )],
+            "the synth dictionary offers the archaic dative 'Manne', which Java's \
+             AgreementSuggestor2 filter drops"
+        );
+        let matches = agreement_family("Was für eine schöner Sonnenuntergang!");
+        assert_eq!(
+            matches,
+            vec![(
+                "DE_AGREEMENT".to_string(),
+                9,
+                vec![
+                    "einen schönen Sonnenuntergang".to_string(),
+                    "einem schönen Sonnenuntergang".to_string()
+                ]
+            )],
+            "Java offers 'ein schöner Sonnenuntergang' (mixed NOM inflection); the Rust adj \
+             synthesis only produces the weak endings here"
+        );
+        for text in ["Das Dach von meine Auto.", "Das Dach von meinen Auto."] {
+            let matches = agreement_family(text);
+            assert!(
+                matches.is_empty(),
+                "{text}: Java flags 'meinem Auto'/'meinen Autos' after 'von'; the Rust \
+                 possessive-after-von path stays silent"
+            );
+        }
+    }
 
     #[test]
     fn fires_on_der_haus() {
