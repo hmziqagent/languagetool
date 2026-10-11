@@ -322,6 +322,7 @@ pub fn inflect(lemma: &str, from: &str, to: &str, surface: &str) -> Option<Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+    use og_core::{AnalyzedToken, AnalyzedTokenReadings};
     use og_languagemodel::DiskLanguageModel;
 
     #[test]
@@ -331,5 +332,113 @@ mod tests {
         let sentence = AnalyzedSentence::new("We run fast today.", 0, 19);
         let matches = rule.match_sentence(&sentence);
         assert!(matches.len() <= 1);
+    }
+
+    fn tagged_sentence(text: &str, tags: &[(&str, &str, &str)]) -> AnalyzedSentence {
+        let mut sentence = AnalyzedSentence::new(text, 0, text.len());
+        let mut tokens = Vec::new();
+        let mut offset = 0usize;
+        for word in text.split_whitespace() {
+            let start = offset + text[offset..].find(word).unwrap_or(0);
+            let end = start + word.len();
+            offset = end;
+            let mut token = AnalyzedToken::new(word, start, end);
+            if let Some((_, lemma, tag)) = tags.iter().find(|(w, _, _)| *w == word) {
+                token = token
+                    .with_lemma(*lemma)
+                    .with_pos_tags(vec![tag.to_string()]);
+            }
+            tokens.push(AnalyzedTokenReadings::new(token));
+        }
+        sentence.set_tokens(tokens);
+        sentence
+    }
+
+    #[test]
+    fn rare_trigram_with_inflectable_verb_is_flagged_with_phrase_suggestions() {
+        let model = DiskLanguageModel::from_pairs(&[(vec!["We"], 100_000_000)]);
+        let rule = EnglishNgramProbabilityRule::new(Arc::new(model));
+        let text = "We runs fast today.";
+        let sentence = tagged_sentence(text, &[("runs", "run", "VBZ")]);
+        let matches = rule.match_sentence(&sentence);
+        assert_eq!(matches.len(), 1, "{:?}", matches);
+        let m = &matches[0];
+        assert_eq!(m.rule().id(), "EN_NGRAM_RULE");
+        assert_eq!(
+            m.message(),
+            "The phrase 'We runs fast' rarely occurs in the reference corpus (0 times)"
+        );
+        assert_eq!(m.offset(), 0);
+        assert_eq!(m.length(), text.find("fast").unwrap() + "fast".len());
+        let values: Vec<&str> = m.replacements().iter().map(|r| r.value()).collect();
+        assert_eq!(values, ["We run fast", "We run fast"]);
+    }
+
+    #[test]
+    fn attested_trigrams_are_never_flagged() {
+        let model = DiskLanguageModel::from_pairs(&[(vec!["We", "runs", "fast"], 7)]);
+        let rule = EnglishNgramProbabilityRule::new(Arc::new(model));
+        let sentence = tagged_sentence("We runs fast today.", &[("runs", "run", "VBZ")]);
+        assert!(rule.match_sentence(&sentence).is_empty());
+    }
+
+    #[test]
+    fn identical_inflection_and_foreign_pos_tags_stay_silent() {
+        let model = DiskLanguageModel::from_pairs(&[(vec!["The"], 100_000_000)]);
+        let rule = EnglishNgramProbabilityRule::new(Arc::new(model));
+        let cats = tagged_sentence("The cats sleep now.", &[("cats", "cat", "NN")]);
+        assert!(rule.match_sentence(&cats).is_empty());
+        let adjectives = tagged_sentence("The quick runs now.", &[("quick", "quick", "JJ")]);
+        assert!(rule.match_sentence(&adjectives).is_empty());
+    }
+
+    #[test]
+    fn sentences_shorter_than_four_words_return_no_matches() {
+        let model = DiskLanguageModel::from_pairs(&[(vec!["We"], 100_000_000)]);
+        let rule = EnglishNgramProbabilityRule::new(Arc::new(model));
+        let sentence = tagged_sentence("We runs fast.", &[("runs", "run", "VBZ")]);
+        assert!(rule.match_sentence(&sentence).is_empty());
+    }
+
+    #[test]
+    fn inflect_matrix_pins_the_simplified_inflector() {
+        assert_eq!(inflect("run", "VBZ", "VB", "runs").as_deref(), Some("run"));
+        assert_eq!(
+            inflect("walk", "VBG", "VB", "walking").as_deref(),
+            Some("walk")
+        );
+        assert_eq!(
+            inflect("make", "VB", "VBG", "make").as_deref(),
+            Some("making")
+        );
+        assert_eq!(
+            inflect("walk", "VB", "VBN", "walk").as_deref(),
+            Some("walked")
+        );
+        assert_eq!(inflect("run", "VB", "VBZ", "run").as_deref(), Some("runs"));
+        assert_eq!(inflect("cat", "NN", "NNS", "cat").as_deref(), Some("cats"));
+        assert_eq!(inflect("box", "NN", "NNS", "box").as_deref(), Some("boxes"));
+        assert_eq!(
+            inflect("city", "NN", "NNS", "city").as_deref(),
+            Some("cities")
+        );
+        assert_eq!(inflect("cat", "NNS", "NN", "cats").as_deref(), Some("cat"));
+        assert_eq!(inflect("cat", "NN", "CD", "cat"), None);
+    }
+
+    #[test]
+    fn google_words_maps_the_typographic_apostrophe_and_skips_extra_spaces() {
+        let words = google_words("we  don’t  ’  go");
+        let spans: Vec<(&str, usize, usize)> =
+            words.iter().map(|(w, s, e)| (w.as_str(), *s, *e)).collect();
+        assert_eq!(
+            spans,
+            [
+                ("we", 0, 2),
+                ("don’t", 4, 11),
+                ("'", 13, 16),
+                ("go", 18, 20),
+            ]
+        );
     }
 }
