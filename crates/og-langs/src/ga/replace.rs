@@ -293,3 +293,150 @@ pub fn spaces_rule() -> GaSimpleReplaceRule {
     rule.load_data(SPACES_TXT);
     rule
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use og_core::{AnalyzedSentence, AnalyzedToken, AnalyzedTokenReadings};
+
+    fn make_sentence(text: &str) -> AnalyzedSentence {
+        let mut sentence = AnalyzedSentence::new(text, 0, text.len());
+        let mut tokens = vec![AnalyzedTokenReadings::new(
+            AnalyzedToken::new("<S>", 0, 0).with_pos_tags(vec!["SENT_START".to_string()]),
+        )];
+        let mut pos = 0usize;
+        for word in text.split_whitespace() {
+            let start = pos + text[pos..].find(word).expect("word offset");
+            let end = start + word.len();
+            tokens.push(AnalyzedTokenReadings::new(AnalyzedToken::new(
+                word, start, end,
+            )));
+            pos = end;
+        }
+        sentence.set_tokens(tokens);
+        sentence
+    }
+
+    fn make_tagged_sentence(text: &str, tag: &str) -> AnalyzedSentence {
+        let mut sentence = make_sentence(text);
+        let tokens = sentence.tokens_mut();
+        for atr in tokens.iter_mut().skip(1) {
+            let tagged =
+                AnalyzedToken::new(atr.token().token(), atr.token().start(), atr.token().end())
+                    .with_pos_tags(vec![tag.to_string()]);
+            *atr.readings_mut() = vec![tagged];
+        }
+        sentence
+    }
+
+    #[test]
+    fn parse_replace_data_splits_alternatives_and_skips_comments() {
+        let map = parse_replace_data("# comment\n\nwrong1|wrong2=right1|right2\nmalformed\nx=y\n");
+        assert_eq!(
+            map.get("wrong1"),
+            Some(&vec!["right1".to_string(), "right2".to_string()])
+        );
+        assert_eq!(
+            map.get("wrong2"),
+            Some(&vec!["right1".to_string(), "right2".to_string()])
+        );
+        assert_eq!(map.get("x"), Some(&vec!["y".to_string()]));
+        assert!(!map.contains_key("malformed"));
+    }
+
+    #[test]
+    fn irish_replace_rule_suggests_the_unhyphenated_spelling() {
+        let text = "i Baile-Átha-Cliath atá cónaí orm.";
+        let matches = irish_replace_rule().match_sentence(&make_sentence(text));
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].offset(), text.find("Baile-Átha-Cliath").unwrap());
+        assert_eq!(matches[0].length(), "Baile-Átha-Cliath".len());
+        assert_eq!(matches[0].replacements()[0].value(), "Baile Átha Cliath");
+        assert_eq!(
+            matches[0].message(),
+            "Litriú mícheart: \"Baile Átha Cliath\"."
+        );
+        assert_eq!(matches[0].rule().id(), "GA_REPLACE");
+    }
+
+    #[test]
+    fn irish_replace_rule_flags_the_misspelling_from_the_java_example() {
+        let text = "ar bhúr gcuid cainte.";
+        let matches = irish_replace_rule().match_sentence(&make_sentence(text));
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].replacements()[0].value(), "bhur");
+        assert_eq!(matches[0].offset(), text.find("bhúr").unwrap());
+    }
+
+    #[test]
+    fn logainm_rule_translates_the_english_placename() {
+        let text = "Tá Dublin go hálainn.";
+        let matches = logainm_rule().match_sentence(&make_sentence(text));
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].replacements()[0].value(), "Baile Átha Cliath");
+        assert_eq!(
+            matches[0].message(),
+            "Is logainm Béarla é \"Dublin\" ar \"Baile Átha Cliath\"."
+        );
+    }
+
+    #[test]
+    fn all_uppercase_input_uppercases_the_suggestion() {
+        let rule = GaSimpleReplaceRule::new("T", "d", "s", "m").with_map(HashMap::from([(
+            "dublin".to_string(),
+            vec!["Baile Átha Cliath".to_string()],
+        )]));
+        let matches = rule.match_sentence(&make_sentence("Tá DUBLIN go hálainn."));
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].replacements()[0].value(), "BAILE ÁTHA CLIATH");
+    }
+
+    #[test]
+    fn all_uppercase_token_not_in_the_map_is_skipped_like_java() {
+        let matches = logainm_rule().match_sentence(&make_sentence("Tá DUBLIN go hálainn."));
+        assert_eq!(matches.len(), 0);
+    }
+
+    #[test]
+    fn capitalized_input_capitalizes_the_suggestion() {
+        let rule = spaces_rule();
+        let matches = rule.match_sentence(&make_sentence("An bhfuil abhfuil eile ann."));
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].replacements()[0].value(), "a bhfuil");
+        let matches = rule.match_sentence(&make_sentence("An bhfuil Abhfuil eile ann."));
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].replacements()[0].value(), "A bhfuil");
+    }
+
+    #[test]
+    fn ignore_tagged_words_skips_tagged_tokens() {
+        let rule = logainm_rule();
+        assert_eq!(
+            rule.match_sentence(&make_sentence("Tá Dublin go hálainn."))
+                .len(),
+            1
+        );
+        assert_eq!(
+            rule.match_sentence(&make_tagged_sentence("Tá Dublin go hálainn.", "Noun-Prop"))
+                .len(),
+            0
+        );
+    }
+
+    #[test]
+    fn immunized_and_speller_ignored_tokens_are_skipped() {
+        let mut immunized = make_sentence("Tá Dublin go hálainn.");
+        immunized.tokens_mut()[2].immunize();
+        assert_eq!(logainm_rule().match_sentence(&immunized).len(), 0);
+        let mut ignored = make_sentence("Tá Dublin go hálainn.");
+        ignored.tokens_mut()[2].ignore_spelling();
+        assert_eq!(logainm_rule().match_sentence(&ignored).len(), 0);
+    }
+
+    #[test]
+    fn untagged_rule_still_matches_tagged_tokens() {
+        let matches = irish_replace_rule()
+            .match_sentence(&make_tagged_sentence("ar bhúr gcuid cainte.", "Noun"));
+        assert_eq!(matches.len(), 1);
+    }
+}
