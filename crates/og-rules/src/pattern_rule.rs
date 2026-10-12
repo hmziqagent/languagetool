@@ -10554,7 +10554,7 @@ mod unify_tests {
                     <token regexp="yes">w0rd</token>
                 </pattern>
                 <message>m</message>
-                <filter class="org.languagetool.rules.en.EnglishNumberInWordFilter" args="word:\2"/>
+                <filter class="org.languagetool.rules.en.EnglishNumberInWordFilter" args="word:\1"/>
             </rule>
         </rules>"#;
         let matches = compile_and_match_with_dict(xml, "the w0rd here", &["word"]);
