@@ -516,4 +516,270 @@ mod tests {
         let rule = ConfusionRule::new_german(Arc::new(m));
         assert!(rule.pair_count() >= 70, "german confusion sets must load");
     }
+
+    struct TableModel {
+        table: HashMap<String, (f64, f32)>,
+    }
+
+    impl LanguageModel for TableModel {
+        fn get_count(&self, _tokens: &[&str]) -> u64 {
+            0
+        }
+        fn get_total_token_count(&self) -> u64 {
+            0
+        }
+        fn get_probability(&self, context: &[&str]) -> og_languagemodel::Probability {
+            match self.table.get(&context.join(" ")) {
+                Some((prob, coverage)) => og_languagemodel::Probability {
+                    prob: *prob,
+                    coverage: *coverage,
+                    total_count: 0,
+                },
+                None => og_languagemodel::Probability {
+                    prob: 0.0,
+                    coverage: 1.0,
+                    total_count: 0,
+                },
+            }
+        }
+    }
+
+    fn table(entries: &[(&str, f64, f32)]) -> Arc<TableModel> {
+        Arc::new(TableModel {
+            table: entries
+                .iter()
+                .map(|(k, p, c)| ((*k).to_string(), (*p, *c)))
+                .collect(),
+        })
+    }
+
+    fn rule_from(data: &str, model: Arc<dyn LanguageModel>) -> ConfusionRule {
+        ConfusionRule {
+            id_prefix: "TEST_CONFUSION".to_string(),
+            word_to_pairs: load_confusion_pairs(data),
+            model,
+        }
+    }
+
+    fn except_accept_model() -> Arc<TableModel> {
+        table(&[
+            ("except money. _END_", 0.01, 1.0),
+            ("I except money.", 0.01, 1.0),
+            ("_START_ I except", 0.01, 1.0),
+            ("accept money. _END_", 0.9, 1.0),
+            ("I accept money.", 0.9, 1.0),
+            ("_START_ I accept", 0.9, 1.0),
+        ])
+    }
+
+    fn sentence(text: &str) -> AnalyzedSentence {
+        AnalyzedSentence::new(text, 0, text.len())
+    }
+
+    #[test]
+    fn parses_directions_descriptions_and_factors() {
+        let data = "one; two; 3\nuni -> uno; 10\ndesc|first; other|second; 2\n\
+                    skipme\nbad; factor\na; b; x\none; two; three; 4\ncomma; separated; 1,000\n";
+        let map = load_confusion_pairs(data);
+        assert_eq!(map["one"].len(), 1);
+        let pair = &map["one"][0];
+        assert_eq!(pair.factor, 3);
+        assert!(pair.bidirectional);
+        assert_eq!(pair.terms[0].string, "one");
+        assert_eq!(pair.terms[0].description, None);
+        assert_eq!(pair.uppercase_first_char_terms[0].string, "One");
+
+        assert_eq!(map["uni"].len(), 1);
+        assert!(!map["uni"][0].bidirectional);
+        assert_eq!(map["uni"][0].factor, 10);
+        assert_eq!(map["uno"][0].terms[1].string, "uno");
+
+        let described = &map["desc"][0];
+        assert_eq!(described.terms[0].description.as_deref(), Some("first"));
+        assert_eq!(described.terms[1].description.as_deref(), Some("second"));
+
+        assert_eq!(map["comma"][0].factor, 1000);
+        for missing in ["skipme", "bad", "a", "b", "x"] {
+            assert!(!map.contains_key(missing), "{missing} must be skipped");
+        }
+    }
+
+    #[test]
+    fn suggests_the_statistically_preferred_term() {
+        let rule = rule_from("except; accept; 10\n", except_accept_model());
+        let matches = rule.match_sentence(&sentence("I except money."));
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].offset(), 2);
+        assert_eq!(matches[0].length(), 6);
+        assert_eq!(
+            matches[0].message(),
+            "Statistics suggest 'accept', not 'except'."
+        );
+        assert_eq!(matches[0].replacements()[0].value(), "accept");
+        assert_eq!(matches[0].rule().id(), "TEST_CONFUSION_EXCEPT_ACCEPT");
+        assert_eq!(matches[0].rule().description(), "except vs. accept");
+        assert_eq!(matches[0].rule().category().id().as_str(), "TYPOS");
+    }
+
+    #[test]
+    fn messages_carry_available_descriptions() {
+        for (data, expected) in [
+            (
+                "except|preposition; accept; 10\n",
+                "Statistics suggest 'accept', not 'except' (preposition).",
+            ),
+            (
+                "except; accept|verb; 10\n",
+                "Statistics suggest 'accept' (verb), not 'except'.",
+            ),
+            (
+                "except|preposition; accept|verb; 10\n",
+                "Statistics suggest 'accept' (verb), not 'except' (preposition).",
+            ),
+        ] {
+            let rule = rule_from(data, except_accept_model());
+            let matches = rule.match_sentence(&sentence("I except money."));
+            assert_eq!(matches.len(), 1, "data: {data}");
+            assert_eq!(matches[0].message(), expected);
+        }
+    }
+
+    #[test]
+    fn unidirectional_pairs_only_flag_the_left_side() {
+        let model = table(&[
+            ("foo the bar.", 0.001, 1.0),
+            ("We foo the", 0.001, 1.0),
+            ("_START_ We foo", 0.001, 1.0),
+            ("bar the bar.", 0.9, 1.0),
+            ("We bar the", 0.9, 1.0),
+            ("_START_ We bar", 0.9, 1.0),
+        ]);
+        let rule = rule_from("foo -> bar; 2\n", model);
+        let matches = rule.match_sentence(&sentence("We foo the bar."));
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].replacements()[0].value(), "bar");
+        assert!(matches[0].message().contains("'bar', not 'foo'"));
+
+        let reversed = rule.match_sentence(&sentence("We bar the foo."));
+        assert!(reversed.is_empty(), "the right side never points back");
+    }
+
+    #[test]
+    fn sentence_start_uppercase_uses_the_capitalized_set() {
+        let model = table(&[
+            ("Except , money.", 0.01, 1.0),
+            ("_START_ Except ,", 0.01, 1.0),
+            ("Except", 0.01, 1.0),
+            ("Accept , money.", 0.9, 1.0),
+            ("_START_ Accept ,", 0.9, 1.0),
+            ("Accept", 0.9, 1.0),
+        ]);
+        let rule = rule_from("except; accept; 10\n", model);
+        let matches = rule.match_sentence(&sentence("Except , money."));
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].offset(), 0);
+        assert_eq!(matches[0].length(), 6);
+        assert_eq!(matches[0].replacements()[0].value(), "Accept");
+    }
+
+    #[test]
+    fn sentence_start_guard_skips_words_followed_by_real_words() {
+        let rule = rule_from("except; accept; 10\n", except_accept_model());
+        let matches = rule.match_sentence(&sentence("Except money."));
+        assert!(matches.is_empty());
+    }
+
+    #[test]
+    fn uncovered_contexts_yield_zero_probability() {
+        let model = table(&[
+            ("aaa it .", 0.5, 0.3),
+            ("We aaa it", 0.5, 0.3),
+            ("_START_ We aaa", 0.5, 0.3),
+            ("bbb it .", 0.9, 0.3),
+            ("We bbb it", 0.9, 0.3),
+            ("_START_ We bbb", 0.9, 0.3),
+        ]);
+        let rule = rule_from("aaa; bbb; 5\n", model);
+        assert!(rule.match_sentence(&sentence("We aaa it.")).is_empty());
+    }
+
+    #[test]
+    fn single_word_sentences_return_early() {
+        let rule = rule_from("hello; hi; 10\n", table(&[]));
+        assert!(rule.match_sentence(&sentence("hello")).is_empty());
+    }
+
+    #[test]
+    fn curly_apostrophe_is_normalized_to_the_ascii_quote() {
+        let model = table(&[
+            ("' s _END_", 0.01, 1.0),
+            ("it ' s", 0.01, 1.0),
+            ("_START_ it '", 0.01, 1.0),
+            ("re s _END_", 0.9, 1.0),
+            ("it re s", 0.9, 1.0),
+            ("_START_ it re", 0.9, 1.0),
+        ]);
+        let rule = rule_from("'; re; 10\n", model);
+        let matches = rule.match_sentence(&sentence("it ’ s"));
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].offset(), 3);
+        assert_eq!(matches[0].length(), 3);
+        assert_eq!(matches[0].replacements()[0].value(), "re");
+    }
+
+    #[test]
+    fn helpers_fold_case_and_clean_umlaubt_ids() {
+        assert_eq!(uppercase_first("über"), "Über");
+        assert_eq!(uppercase_first(""), "");
+        assert_eq!(lowercase_first("ÜBER"), "üBER");
+        assert_eq!(lowercase_first(""), "");
+        assert_eq!(clean_id("äöü"), "AEOEUE");
+        assert!(is_real_word("über"));
+        assert!(!is_real_word("über."));
+    }
+
+    #[test]
+    fn language_constructors_load_their_confusion_sets() {
+        let model: Arc<dyn LanguageModel> = table(&[]);
+        let en = ConfusionRule::new_english(model.clone());
+        assert!(en.pair_count() > 100);
+        assert_eq!(en.id(), "EN_CONFUSION_RULE");
+        assert_eq!(en.category().id().as_str(), "TYPOS");
+        assert_eq!(en.issue_type(), IssueType::Misspelling);
+        assert!(en.is_default_on());
+
+        let de = ConfusionRule::new_german(model.clone());
+        assert!(de.pair_count() >= 70);
+        assert_eq!(de.id(), "DE_CONFUSION_RULE");
+
+        let es = ConfusionRule::new_spanish(model.clone());
+        assert!(es.pair_count() >= 1);
+        assert_eq!(es.id(), "ES_CONFUSION_RULE");
+
+        let ru = ConfusionRule::new_russian(model.clone());
+        assert!(ru.pair_count() >= 1);
+        assert_eq!(ru.id(), "CONFUSION_RULE");
+
+        assert_eq!(ConfusionRule::new_italian(model.clone()).pair_count(), 0);
+        assert_eq!(ConfusionRule::new_arabic(model.clone()).pair_count(), 0);
+
+        let l2 = ConfusionRule::new_english_for_l2(model, "de");
+        assert!(l2.pair_count() > 0);
+        assert_eq!(l2.id(), "EN_FOR_DE_SPEAKERS_FALSE_FRIENDS");
+    }
+
+    #[test]
+    fn term_pairs_expose_deduplicated_tuple_descriptions() {
+        let pairs = confusion_term_pairs("en", &["confusion_sets.txt"]);
+        assert!(!pairs.is_empty());
+        for (a, da, b, db) in &pairs {
+            assert!(!a.is_empty() && !b.is_empty());
+            assert_ne!(a, b);
+            let _ = (da, db);
+        }
+        let mut sorted = pairs.clone();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(sorted.len(), pairs.len(), "pairs must be deduplicated");
+    }
 }
