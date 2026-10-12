@@ -2763,4 +2763,113 @@ mod tests {
         let second = shared_german_dictionary(&dir).expect("shared dict again");
         assert!(std::sync::Arc::ptr_eq(&first, &second));
     }
+
+    #[test]
+    fn generic_compound_walk_derives_partizip_ii_readings() {
+        let tagger = tagger();
+        let umsägt = Tagger::tag(&tagger, &["umsägt"]);
+        let tags = tags_of(&umsägt[0]);
+        assert!(
+            tags.iter()
+                .any(|(l, t)| l == "umsägen" && t == "VER:PA2:SFT"),
+            "{tags:?}"
+        );
+        assert!(
+            tags.iter()
+                .any(|(l, t)| l == "umsägt" && t == "PA2:PRD:GRU:VER"),
+            "{tags:?}"
+        );
+
+        let besägt = Tagger::tag(&tagger, &["besägt"]);
+        let tags = tags_of(&besägt[0]);
+        assert!(
+            tags.iter()
+                .any(|(l, t)| l == "besägen" && t == "VER:PA2:SFT"),
+            "{tags:?}"
+        );
+        assert!(
+            tags.iter()
+                .any(|(l, t)| l == "besägt" && t == "PA2:PRD:GRU:VER"),
+            "{tags:?}"
+        );
+        assert!(
+            tags.iter().all(|(_, t)| !t.ends_with(":NEB")),
+            "non-separable prefixes keep their finite readings without the subordinate-clause marker: {tags:?}"
+        );
+
+        let umsägt_capitalized = Tagger::tag(&tagger, &["Umsägt"]);
+        let tags = tags_of(&umsägt_capitalized[0]);
+        assert!(
+            tags.iter()
+                .any(|(l, t)| l == "Umsägen" && t == "VER:1:SIN:PRÄ:SFT:NEB"),
+            "{tags:?}"
+        );
+        assert!(
+            tags.iter()
+                .all(|(_, t)| !t.starts_with("VER:PA2") && t != "PA2:PRD:GRU:VER"),
+            "{tags:?}"
+        );
+    }
+
+    #[test]
+    fn generic_compound_walk_substantivizes_and_splits_zu_infinitives() {
+        let tagger = tagger();
+        let aufessen = Tagger::tag(&tagger, &["Aufessen"]);
+        let tags = tags_of(&aufessen[0]);
+        for tag in [
+            "SUB:NOM:SIN:NEU:INF",
+            "SUB:AKK:SIN:NEU:INF",
+            "SUB:DAT:SIN:NEU:INF",
+        ] {
+            assert!(
+                tags.iter().any(|(l, t)| l == "Aufessen" && t == tag),
+                "Aufessen misses {tag}: {tags:?}"
+            );
+        }
+        assert!(
+            tags.iter()
+                .any(|(l, t)| l == "aufessen" && t == "VER:INF:NON"),
+            "{tags:?}"
+        );
+
+        let lowercase = Tagger::tag(&tagger, &["aufessen"]);
+        let tags = tags_of(&lowercase[0]);
+        assert!(
+            tags.iter()
+                .any(|(l, t)| l == "aufessen" && t == "VER:INF:NON"),
+            "{tags:?}"
+        );
+        assert!(
+            !tags
+                .iter()
+                .any(|(_, t)| t.starts_with("SUB:") && t.ends_with(":INF")),
+            "a lowercase infinitive compound is not substantivized: {tags:?}"
+        );
+
+        let anzuessen = Tagger::tag(&tagger, &["anzuessen"]);
+        let tags = tags_of(&anzuessen[0]);
+        assert!(
+            tags.iter()
+                .any(|(l, t)| l == "anessen" && t == "VER:EIZ:NON"),
+            "{tags:?}"
+        );
+
+        let abfiedeln = Tagger::tag(&tagger, &["Abfiedeln"]);
+        let tags = tags_of(&abfiedeln[0]);
+        for tag in [
+            "SUB:NOM:SIN:NEU:INF",
+            "SUB:AKK:SIN:NEU:INF",
+            "SUB:DAT:SIN:NEU:INF",
+        ] {
+            assert!(
+                tags.iter().any(|(l, t)| l == "Abfiedeln" && t == tag),
+                "Abfiedeln misses {tag}: {tags:?}"
+            );
+        }
+        assert!(
+            tags.iter()
+                .any(|(l, t)| l == "abfiedeln" && t == "VER:INF:SFT"),
+            "{tags:?}"
+        );
+    }
 }
