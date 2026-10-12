@@ -110,7 +110,8 @@ fn domain_chars_re() -> &'static Regex {
 
 fn url_chars_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"^[a-zA-ZÄÖÜäöü0-9/%$\-_.+!*'(),?#~]+$").unwrap())
+    // Java's "[a-zA-ZÄÖÜäöü0-9/%$-_.+!*'(),?#~]" reads $-_. as the range 0x24..='_' (so ':' '=' '&' '@' match)
+    RE.get_or_init(|| Regex::new(r"^[a-zA-ZÄÖÜäöü0-9/%$-_.+!*'(),?#~]+$").unwrap())
 }
 
 fn is_java_whitespace_token(token: &str) -> bool {
@@ -345,6 +346,29 @@ mod tests {
         assert_eq!(
             tokenized("Vezi www.example.com acum."),
             vec!["Vezi", " ", "www.example.com", " ", "acum", "."]
+        );
+    }
+
+    #[test]
+    fn urls_keep_ports_and_query_characters() {
+        assert_eq!(
+            tokenized("foo http://localhost:32000/?ch=1 bar"),
+            vec!["foo", " ", "http://localhost:32000/?ch=1", " ", "bar"],
+            "WordTokenizerTest.testUrlTokenize pins the port and query as part of the URL"
+        );
+        assert_eq!(
+            tokenized("foo https://joe:passwd@example.net:8080/index.html?action=x bar"),
+            vec![
+                "foo",
+                " ",
+                "https://joe:passwd@example.net:8080/index.html?action=x",
+                " ",
+                "bar"
+            ]
+        );
+        assert_eq!(
+            tokenized("foo languagetool.org/wiki, bar"),
+            vec!["foo", " ", "languagetool.org/wiki", ",", " ", "bar"]
         );
     }
 
