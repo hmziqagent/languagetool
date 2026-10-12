@@ -60,10 +60,12 @@ impl SuggestionEngine {
                     w.to_uppercase()
                 } else if is_capitalized {
                     let mut chars = w.chars();
-                    match chars.next() {
-                        Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
-                        None => w,
-                    }
+                    chars
+                        .next()
+                        .unwrap_or_default()
+                        .to_uppercase()
+                        .collect::<String>()
+                        + chars.as_str()
                 } else {
                     w
                 }

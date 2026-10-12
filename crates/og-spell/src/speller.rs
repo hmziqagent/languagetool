@@ -160,10 +160,6 @@ impl Rule for SpellingCheckRule {
                 let mut context_end = std::cmp::min(rel_end + 40, full_text.len());
                 while context_end > context_start && !full_text.is_char_boundary(context_end) {
                     context_end += 1;
-                    if context_end > full_text.len() {
-                        context_end = full_text.len();
-                        break;
-                    }
                 }
                 let context_text = full_text[context_start..context_end].to_string();
 
