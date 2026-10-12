@@ -22,7 +22,6 @@ struct CondClass {
 #[derive(Clone, Debug)]
 struct AffixLine {
     name: char,
-    is_prefix: bool,
     cross: bool,
     strip: String,
     add: String,
@@ -255,7 +254,6 @@ impl HunspellChecker {
                     }
                     checker.affixes.push(AffixLine {
                         name,
-                        is_prefix,
                         cross,
                         strip: strip.to_string(),
                         add: add.to_string(),
@@ -615,9 +613,6 @@ impl HunspellChecker {
         cross: bool,
     ) -> Option<RootHit> {
         let line = &self.affixes[idx];
-        if line.is_prefix {
-            return None;
-        }
         if cross && !line.cross {
             return None;
         }
@@ -682,9 +677,6 @@ impl HunspellChecker {
         in_compound: InCompound,
     ) -> Option<RootHit> {
         let line = &self.affixes[idx];
-        if !line.is_prefix {
-            return None;
-        }
         let add_chars: Vec<char> = line.add.chars().collect();
         if word.len() < add_chars.len() || !word.starts_with(&add_chars[..]) {
             return None;
@@ -1293,5 +1285,138 @@ mod tests {
         let checker = files.load();
         assert!(!checker.spell("unevil"));
         assert!(checker.spell("unword"));
+    }
+
+    #[test]
+    fn condition_longer_than_the_stem_rejects_the_affix() {
+        let files = TempAffDic::new("longcond", "SFX A Y 1\nSFX A 0 s abcd\n", "2\nab/A\nx\n");
+        let checker = files.load();
+        assert!(checker.spell("ab"));
+        assert!(!checker.spell("abs"), "stem shorter than the condition");
+    }
+
+    #[test]
+    fn repeated_separators_are_not_number_like() {
+        let files = TempAffDic::new("numbers", "", "2\nhaus\nx\n");
+        let checker = files.load();
+        assert!(!checker.spell("1..2"));
+        assert!(!checker.spell(",5"));
+        assert!(checker.spell("1.5"));
+    }
+
+    #[test]
+    fn init_capital_forms_hit_exact_then_lower_lookups() {
+        let files = TempAffDic::new("initcap", "FORBIDDENWORD F\n", "3\nHaus\nBöse/F\nhaus/F\n");
+        let checker = files.load();
+        assert!(checker.spell("Haus"), "exact init-cap form found");
+        assert!(!checker.spell("Böse"), "exact forbidden init-cap form");
+        assert!(!checker.spell("Hausx"));
+        let lower_forbidden = TempAffDic::new("initcaplow", "FORBIDDENWORD F\n", "2\nhaus/F\nx\n");
+        let checker = lower_forbidden.load();
+        assert!(
+            !checker.spell("Haus"),
+            "init-cap falls through to the forbidden lowercase form"
+        );
+    }
+
+    #[test]
+    fn abbreviation_falls_back_to_the_capitalized_dotted_form() {
+        let files = TempAffDic::new("abbvinit", "", "3\nStr.\nhaus\nx\n");
+        let checker = files.load();
+        assert!(checker.spell("Str."));
+        assert!(!checker.spell("Wrz."));
+    }
+
+    #[test]
+    fn sharps_all_cap_walks_small_then_init_cap_forms() {
+        let init_only = TempAffDic::new("sharpsinitword", "CHECKSHARPS\n", "2\nGröße\nx\n");
+        let checker = init_only.load();
+        assert!(
+            checker.spell("GRÖSSE"),
+            "small form fails, init-cap ß-form matches"
+        );
+
+        let small_dot = TempAffDic::new("sharpssmalldot", "CHECKSHARPS\n", "2\ngröße.\nx\n");
+        let checker = small_dot.load();
+        assert!(checker.spell("GRÖSSE."), "dotted small form matches");
+
+        let init_dot = TempAffDic::new("sharpsinitdot", "CHECKSHARPS\n", "2\nGröße.\nx\n");
+        let checker = init_dot.load();
+        assert!(checker.spell("GRÖSSE."), "dotted init-cap form matches");
+    }
+
+    #[test]
+    fn sharps_recursion_can_skip_an_ss_pair() {
+        let files = TempAffDic::new("sharpsskip", "CHECKSHARPS\n", "2\ngrossstraße\nx\n");
+        let checker = files.load();
+        assert!(
+            checker.spell("GROSSSTRASSE"),
+            "the first SS stays literal, the second becomes ß"
+        );
+    }
+
+    #[test]
+    fn sharps_recursion_cap_stops_with_pairs_left() {
+        let files = TempAffDic::new("sharpscap2", "CHECKSHARPS\n", "2\nx\ny\n");
+        let checker = files.load();
+        assert!(!checker.spell(&"S".repeat(12)));
+    }
+
+    #[test]
+    fn onlyincompound_root_rejects_affixed_lookups_too() {
+        let files = TempAffDic::new(
+            "oicaffix",
+            "ONLYINCOMPOUND O\nSFX A Y 1\nSFX A 0 e .\n",
+            "2\nteil/OA\nhaus\n",
+        );
+        let checker = files.load();
+        assert!(!checker.spell("teil"));
+        assert!(
+            !checker.spell("teile"),
+            "affixed root is only valid in compounds"
+        );
+        assert!(checker.spell("haus"));
+    }
+
+    #[test]
+    fn compound_first_part_can_match_through_a_prefix() {
+        let files = TempAffDic::new(
+            "comppfx",
+            "COMPOUNDMIN 3\nCOMPOUNDBEGIN B\nCOMPOUNDEND E\nPFX U Y 1\nPFX U 0 un/B .\n",
+            "2\nwalk/U\nway/E\n",
+        );
+        let checker = files.load();
+        assert!(checker.spell("unwalkway"));
+        assert!(!checker.spell("unwalkwayx"));
+    }
+
+    #[test]
+    fn compound_second_part_skips_needaffix_and_unflagged_entries() {
+        let files = TempAffDic::new(
+            "compsecond",
+            "COMPOUNDMIN 3\nCOMPOUNDBEGIN B\nCOMPOUNDEND E\nNEEDAFFIX Z\nSFX S Y 1\nSFX S 0 s/E .\n",
+            "5\nsun/B\nway/EZ\nway/E\nway/S\nways/A\n",
+        );
+        let checker = files.load();
+        assert!(checker.spell("sunway"), "needaffix homonym is skipped");
+        assert!(
+            checker.spell("sunways"),
+            "unflagged entry falls through to the affix"
+        );
+    }
+
+    #[test]
+    fn compound_second_part_rejects_forbidden_affix_roots() {
+        let files = TempAffDic::new(
+            "compsecondforb",
+            "COMPOUNDMIN 3\nCOMPOUNDBEGIN B\nCOMPOUNDEND E\nFORBIDDENWORD F\nSFX S Y 1\nSFX S 0 s .\n",
+            "3\nsun/B\nevil/FS\nway/E\n",
+        );
+        let checker = files.load();
+        assert!(
+            !checker.spell("sunevils"),
+            "forbidden root poisons the split"
+        );
+        assert!(checker.spell("sunway"));
     }
 }
