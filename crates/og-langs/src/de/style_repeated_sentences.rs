@@ -328,4 +328,252 @@ mod tests {
             3
         );
     }
+
+    use super::{StyleRepeatedSentenceBeginning, StyleRepeatedVeryShortSentences};
+    use crate::test_util::sentences_split_after;
+    use og_core::rule::TextLevelRule as _;
+    use og_core::{AnalyzedSentence, AnalyzedToken, AnalyzedTokenReadings, IssueType};
+
+    fn tagged_sentence(text: &str, start: usize, tags: &[(&str, &str)]) -> AnalyzedSentence {
+        let mut sentence = AnalyzedSentence::new(text, start, start + text.len());
+        let mut tokens = vec![AnalyzedTokenReadings::new(
+            AnalyzedToken::new("<S>", start, start).with_pos_tags(vec!["SENT_START".to_string()]),
+        )];
+        let mut pos = 0usize;
+        for word in text.split_whitespace() {
+            let token_start = start + pos + text[pos..].find(word).expect("ordered words");
+            let token_end = token_start + word.len();
+            let tag = tags
+                .iter()
+                .find(|(w, _)| *w == word)
+                .map(|(_, t)| (*t).to_string());
+            let mut reading = AnalyzedToken::new(word, token_start, token_end);
+            if let Some(tag) = tag {
+                reading = reading.with_pos_tags(vec![tag]);
+            }
+            tokens.push(AnalyzedTokenReadings::new(reading));
+            pos = token_end - start;
+        }
+        sentence.set_tokens(tokens);
+        sentence
+    }
+
+    #[test]
+    fn fewer_than_three_sentences_return_early() {
+        let short = StyleRepeatedVeryShortSentences::default();
+        let beginning = StyleRepeatedSentenceBeginning::default();
+        let sentences = sentences_split_after("Das Auto kam. Der Hund schlief.", &["."]);
+        assert!(short.match_text("", &sentences).is_empty());
+        assert!(beginning.match_text("", &sentences).is_empty());
+    }
+
+    #[test]
+    fn flags_each_sentence_of_a_staccato_run() {
+        let rule = StyleRepeatedVeryShortSentences::new();
+        let text = "Das Auto kam näher. Der Hund schlief. Die Reifen quietschten.";
+        let sentences = sentences_split_after(text, &[".", "."]);
+        let matches = rule.match_text(text, &sentences);
+        assert_eq!(matches.len(), 3);
+        assert_eq!(matches[0].offset(), text.find("näher").unwrap());
+        assert_eq!(matches[0].length(), "näher.".len());
+        assert_eq!(matches[1].offset(), text.find("schlief").unwrap());
+        assert_eq!(matches[2].offset(), text.find("quietschten").unwrap());
+        assert_eq!(matches[0].rule().id(), "STYLE_REPEATED_SHORT_SENTENCES");
+        assert_eq!(matches[0].message(), "Stakkato-Sätze");
+    }
+
+    #[test]
+    fn a_long_sentence_breaks_the_run() {
+        let rule = StyleRepeatedVeryShortSentences::default();
+        let text = "Das Auto kam näher. Der Hund schlief. Die Reifen quietschten. Die ganz langsamen und sehr lauten Reifen quietschten laut im Regen. Der Wagen hielt. Die Tür öffnete. Der Motor starb.";
+        let sentences = sentences_split_after(text, &[".", ".", ".", ".", ".", "."]);
+        let matches = rule.match_text(text, &sentences);
+        assert_eq!(matches.len(), 6);
+        assert_eq!(matches[0].offset(), text.find("näher").unwrap());
+        assert_eq!(matches[2].offset(), text.find("quietschten").unwrap());
+        assert_eq!(matches[3].offset(), text.rfind("hielt").unwrap());
+        assert_eq!(matches[5].offset(), text.rfind("starb").unwrap());
+    }
+
+    #[test]
+    fn paragraph_breaks_reset_the_run() {
+        let rule = StyleRepeatedVeryShortSentences::default();
+        let text = "Das Auto kam.\n\nDer Hund schlief. Die Reifen quietschten.";
+        let sentences = sentences_split_after(text, &[".\n\n", "."]);
+        assert!(rule.match_text(text, &sentences).is_empty());
+    }
+
+    #[test]
+    fn sentences_inside_direct_speech_do_not_count() {
+        let rule = StyleRepeatedVeryShortSentences::default();
+        let mut speech = AnalyzedSentence::new("\u{201E}Hallo.\u{201C}", 0, 12);
+        speech.set_tokens(vec![
+            AnalyzedTokenReadings::new(
+                AnalyzedToken::new("<S>", 0, 0).with_pos_tags(vec!["SENT_START".to_string()]),
+            ),
+            AnalyzedTokenReadings::new(AnalyzedToken::new("\u{201E}", 0, 3)),
+            AnalyzedTokenReadings::new(AnalyzedToken::new("Hallo", 3, 8)),
+            AnalyzedTokenReadings::new(AnalyzedToken::new("\u{201C}", 8, 11)),
+            AnalyzedTokenReadings::new(AnalyzedToken::new(".", 11, 12)),
+        ]);
+        let rest = sentences_split_after(
+            "Der Hund schlief. Die Reifen quietschten. Der Motor starb.",
+            &[".", "."],
+        );
+        let sentences = vec![speech, rest[0].clone(), rest[1].clone(), rest[2].clone()];
+        let matches = rule.match_text("", &sentences);
+        assert_eq!(
+            matches.len(),
+            3,
+            "the quoted sentence must not join the staccato run"
+        );
+    }
+
+    #[test]
+    fn flags_repeated_article_and_pronoun_beginnings() {
+        let rule = StyleRepeatedSentenceBeginning::new();
+        let text = "Der Hund lief. Er schnupperte. Die Katze schrie.";
+        let sentences = vec![
+            tagged_sentence(
+                "Der Hund lief.",
+                0,
+                &[
+                    ("Der", "ART:DEF:NOM:SIN:MAS"),
+                    ("Hund", "SUB:NOM:SIN:MAS"),
+                    ("lief", "VER:3:SIN:PRA"),
+                ],
+            ),
+            tagged_sentence(
+                "Er schnupperte.",
+                15,
+                &[
+                    ("Er", "PRO:PER:NOM:SIN:3"),
+                    ("schnupperte", "VER:3:SIN:PRA"),
+                ],
+            ),
+            tagged_sentence(
+                "Die Katze schrie.",
+                31,
+                &[
+                    ("Die", "ART:DEF:NOM:SIN:FEM"),
+                    ("Katze", "SUB:NOM:SIN:FEM"),
+                    ("schrie", "VER:3:SIN:PRA"),
+                ],
+            ),
+        ];
+        let matches = rule.match_text(text, &sentences);
+        assert_eq!(matches.len(), 3);
+        assert_eq!(matches[0].offset(), 0);
+        assert_eq!(matches[0].length(), "Der Hund".len());
+        assert_eq!(matches[1].offset(), 15);
+        assert_eq!(matches[1].length(), 2);
+        assert_eq!(matches[2].offset(), 31);
+        assert_eq!(matches[2].length(), "Die Katze".len());
+        assert_eq!(matches[0].rule().id(), "STYLE_REPEATED_SENTENCE_BEGINNING");
+        assert_eq!(matches[0].message(), "Subjekt als wiederholter Satzanfang");
+    }
+
+    #[test]
+    fn articles_without_a_noun_end_at_the_article() {
+        let rule = StyleRepeatedSentenceBeginning::default();
+        let sentences = vec![
+            tagged_sentence(
+                "Die läuft.",
+                0,
+                &[("Die", "ART:DEF:NOM:SIN:FEM"), ("läuft", "VER:3:SIN:PRA")],
+            ),
+            tagged_sentence(
+                "Die rennt.",
+                10,
+                &[("Die", "ART:DEF:NOM:SIN:FEM"), ("rennt", "VER:3:SIN:PRA")],
+            ),
+            tagged_sentence(
+                "Die fliegt.",
+                20,
+                &[("Die", "ART:DEF:NOM:SIN:FEM"), ("fliegt", "VER:3:SIN:PRA")],
+            ),
+        ];
+        let matches = rule.match_text("", &sentences);
+        assert_eq!(matches.len(), 3);
+        for m in &matches {
+            assert_eq!(m.length(), "Die".len());
+        }
+    }
+
+    #[test]
+    fn other_beginnings_and_single_tokens_reset_the_run() {
+        let rule = StyleRepeatedSentenceBeginning::default();
+        let mixed = vec![
+            tagged_sentence(
+                "Der Hund lief.",
+                0,
+                &[
+                    ("Der", "ART:DEF:NOM:SIN:MAS"),
+                    ("Hund", "SUB:NOM:SIN:MAS"),
+                    ("lief", "VER:3:SIN:PRA"),
+                ],
+            ),
+            tagged_sentence(
+                "Schnell war er.",
+                15,
+                &[("Schnell", "ADJ:PRD:GRU"), ("war", "VER:3:SIN:PRA")],
+            ),
+            tagged_sentence(
+                "Der Hund schlief.",
+                31,
+                &[
+                    ("Der", "ART:DEF:NOM:SIN:MAS"),
+                    ("Hund", "SUB:NOM:SIN:MAS"),
+                    ("schlief", "VER:3:SIN:PRA"),
+                ],
+            ),
+        ];
+        assert!(rule.match_text("", &mixed).is_empty());
+
+        let interrupted = vec![
+            tagged_sentence(
+                "Der Hund lief.",
+                0,
+                &[
+                    ("Der", "ART:DEF:NOM:SIN:MAS"),
+                    ("Hund", "SUB:NOM:SIN:MAS"),
+                    ("lief", "VER:3:SIN:PRA"),
+                ],
+            ),
+            tagged_sentence("!", 15, &[]),
+            tagged_sentence(
+                "Er schnupperte.",
+                17,
+                &[
+                    ("Er", "PRO:PER:NOM:SIN:3"),
+                    ("schnupperte", "VER:3:SIN:PRA"),
+                ],
+            ),
+            tagged_sentence(
+                "Die Katze schrie.",
+                33,
+                &[
+                    ("Die", "ART:DEF:NOM:SIN:FEM"),
+                    ("Katze", "SUB:NOM:SIN:FEM"),
+                    ("schrie", "VER:3:SIN:PRA"),
+                ],
+            ),
+        ];
+        assert!(rule.match_text("", &interrupted).is_empty());
+    }
+
+    #[test]
+    fn metadata_is_creative_writing_style_off_by_default() {
+        for id in [
+            StyleRepeatedVeryShortSentences::default().id(),
+            StyleRepeatedSentenceBeginning::default().id(),
+        ] {
+            assert!(id.starts_with("STYLE_REPEATED_"));
+        }
+        let short = StyleRepeatedVeryShortSentences::default();
+        assert_eq!(short.description(), "Stakkato-Sätze");
+        assert!(!short.is_default_on());
+        assert_eq!(short.category().id().as_str(), "CREATIVE_WRITING");
+        assert_eq!(short.issue_type(), IssueType::Style);
+    }
 }
