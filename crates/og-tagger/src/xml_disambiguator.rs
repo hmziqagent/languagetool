@@ -4822,6 +4822,56 @@ mod tests {
     }
 
     #[test]
+    fn match_postag_lookahead_falls_back_to_fancy_regex() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<rules lang="eo">
+    <rule id="VIVI_FANCY" name="lookahead postag">
+        <pattern>
+            <marker><token>vivis</token></marker>
+        </pattern>
+        <disambig action="replace"><match no="1" postag_regexp="yes" postag="V nt 3 p(?=)" postag_replace="V tr"/></disambig>
+    </rule>
+</rules>"#;
+        let disambig = XmlDisambiguator::from_xml(xml).unwrap();
+        let mut sentence = make_sentence_with_lemmas(vec![("vivis", "vivi", vec!["V nt 3 p"])]);
+        disambig.disambiguate(&mut sentence);
+        let vivis = &sentence.tokens()[0];
+        let rewritten: Vec<String> = vivis
+            .readings()
+            .iter()
+            .map(|r| r.pos_tags().join("+"))
+            .collect();
+        assert_eq!(
+            rewritten,
+            vec!["V tr".to_string()],
+            "the empty lookahead postag must match and rewrite through the fancy-regex fallback"
+        );
+    }
+
+    #[test]
+    fn match_postag_on_a_readingless_token_changes_nothing() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<rules lang="eo">
+    <rule id="VIVI_EMPTY" name="empty readings">
+        <pattern>
+            <marker><token>vivis</token></marker>
+        </pattern>
+        <disambig action="replace"><match no="1" postag_regexp="yes" postag="V nt" postag_replace="V tr"/></disambig>
+    </rule>
+</rules>"#;
+        let disambig = XmlDisambiguator::from_xml(xml).unwrap();
+        let mut sentence = AnalyzedSentence::new("vivis", 0, 5);
+        sentence.set_tokens(vec![
+            AnalyzedTokenReadings::new(AnalyzedToken::new("vivis", 0, 5)).with_readings(vec![]),
+        ]);
+        disambig.disambiguate(&mut sentence);
+        assert!(
+            sentence.tokens()[0].readings().is_empty(),
+            "a token without readings must pass through untouched"
+        );
+    }
+
+    #[test]
     fn remove_wd_restores_sentence_end_and_keeps_chunks() {
         let xml = r#"<?xml version="1.0" encoding="utf-8"?>
 <rules lang="en">
