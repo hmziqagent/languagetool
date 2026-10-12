@@ -580,3 +580,74 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod synthetic_evaluator_tests {
+    use super::*;
+
+    fn synthetic_rules() -> String {
+        [
+            "<rules lang=\"pl\">",
+            "<rule id=\"SYN_MATCH\" name=\"syn match\">",
+            "<pattern><token>gronz</token></pattern>",
+            "<message>s\u{142}owo z\u{142}e</message>",
+            "<example type=\"incorrect\">To jest <marker>gronz</marker> tutaj.</example>",
+            "<example type=\"correct\">To jest dobrze.</example>",
+            "</rule>",
+            "<rule id=\"SYN_NOMATCH\" name=\"syn nomatch\">",
+            "<pattern><token>zzzqqq</token></pattern>",
+            "<message>s\u{142}owo z\u{142}e</message>",
+            "<example type=\"incorrect\">Nic tu nie ma.</example>",
+            "</rule>",
+            "<rule id=\"SYN_FP\" name=\"syn fp\">",
+            "<pattern><token>To</token></pattern>",
+            "<message>s\u{142}owo z\u{142}e</message>",
+            "<example type=\"correct\">To jest dobrze.</example>",
+            "</rule>",
+            "<rule id=\"SYN_MARKER_MISS\" name=\"syn marker miss\">",
+            "<pattern><token>przypadek</token></pattern>",
+            "<message>s\u{142}owo z\u{142}e</message>",
+            "<example type=\"incorrect\">To jest <marker>gronz</marker> przypadek.</example>",
+            "</rule>",
+            "<!-- <example type=\"correct\">commented</example> -->",
+            "</rules>",
+        ]
+        .join("\n")
+    }
+
+    #[test]
+    fn evaluate_examples_file_classifies_synthetic_outcomes_into_the_artifact() {
+        let path = std::env::temp_dir().join(format!(
+            "og_pl_synthetic_grammar_{}.xml",
+            std::process::id()
+        ));
+        std::fs::write(&path, synthetic_rules()).expect("write synthetic rules");
+        let artifact_path = std::env::temp_dir().join(format!(
+            "og_pl_synthetic_artifact_{}.txt",
+            std::process::id()
+        ));
+        evaluate_examples_file(&path, "synthetic", artifact_path.to_str().unwrap());
+        let artifact = std::fs::read_to_string(&artifact_path).unwrap_or_default();
+
+        assert!(
+            artifact
+                .contains("FAIL: [SYN_NOMATCH] Expected match on incorrect example but got none"),
+            "the unmatched incorrect example must be recorded as a NoMatch failure: {artifact}"
+        );
+        assert!(
+            artifact.contains("FAIL: [SYN_FP] Expected no match on correct example but got"),
+            "the firing rule on a correct example must be recorded as a false positive: {artifact}"
+        );
+        assert!(
+            artifact.contains("does not contain marker"),
+            "a match outside the marker span must be recorded as a marker failure: {artifact}"
+        );
+        assert!(
+            !artifact.contains("SYN_MATCH"),
+            "the rule whose match covers the marker and whose correct example stays clean must pass: {artifact}"
+        );
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&artifact_path);
+    }
+}
