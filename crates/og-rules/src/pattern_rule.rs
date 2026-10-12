@@ -7181,6 +7181,234 @@ mod tests {
     }
 
     #[test]
+    fn insert_comma_filter_ports_the_java_test_battery() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="de">
+            <rule id="KOMMA_ZWISCHEN" name="Komma zwischen Haupt- und Nebensatz">
+                <pattern>
+                    <marker>
+                        <token>steht</token>
+                        <token>parkt</token>
+                    </marker>
+                </pattern>
+                <filter class="org.languagetool.rules.de.InsertCommaFilter" args="fake:1"/>
+                <message>Komma fehlt.</message>
+                <suggestion><match no="1"/> <match no="2"/></suggestion>
+            </rule>
+        </rules>"#;
+        let matches = compile_and_match(
+            xml,
+            "Das Auto, das am Straßenrand steht parkt im Halteverbot.",
+        );
+        assert_eq!(matches.len(), 1);
+        let reps: Vec<&str> = matches[0]
+            .replacements()
+            .iter()
+            .map(|r| r.value())
+            .collect();
+        assert_eq!(reps, vec!["steht, parkt"]);
+    }
+
+    #[test]
+    fn insert_comma_filter_hoffe_bei_euch_matches_java() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="de">
+            <rule id="KOMMA_HOFFE" name="Komma nach Hoffe">
+                <pattern>
+                    <marker>
+                        <token>bei</token>
+                        <token>euch</token>
+                        <token>ist</token>
+                    </marker>
+                </pattern>
+                <filter class="org.languagetool.rules.de.InsertCommaFilter" args="fake:1"/>
+                <message>Komma fehlt.</message>
+                <suggestion>Hoffe <match no="1"/> <match no="2"/> <match no="3"/></suggestion>
+            </rule>
+        </rules>"#;
+        let matches = compile_and_match(xml, "Hoffe bei euch ist alles gut.");
+        assert_eq!(matches.len(), 1);
+        let reps: Vec<&str> = matches[0]
+            .replacements()
+            .iter()
+            .map(|r| r.value())
+            .collect();
+        assert_eq!(reps, vec!["Hoffe, bei euch ist"]);
+    }
+
+    #[test]
+    fn insert_comma_filter_covers_the_tagger_gates() {
+        let cases = [
+            (
+                r#"<pattern><marker><token>hoffe</token><token>es</token><token>geht</token></marker></pattern>
+                   <suggestion><match no="1"/> <match no="2"/> <match no="3"/></suggestion>"#,
+                "Ich hoffe es geht Ihnen gut.",
+                "hoffe, es geht",
+            ),
+            (
+                r#"<pattern><marker><token>Sag</token><token>mal</token><token>hast</token></marker></pattern>
+                   <suggestion><match no="1"/> <match no="2"/> <match no="3"/></suggestion>"#,
+                "Sag mal hast du das gewusst.",
+                "Sag mal, hast",
+            ),
+            (
+                r#"<pattern><marker><token>denke</token><token>hier</token><token>kann</token></marker></pattern>
+                   <suggestion><match no="1"/> <match no="2"/> <match no="3"/></suggestion>"#,
+                "Ich denke hier kann aber auch mehr stehen.",
+                "denke, hier kann",
+            ),
+            (
+                r#"<pattern><marker><token>glaube</token><token>eure</token><token>Accounts</token><token>sind</token></marker></pattern>
+                   <suggestion><match no="1"/> <match no="2"/> <match no="3"/> <match no="4"/></suggestion>"#,
+                "Ich glaube eure Accounts sind noch aktiv.",
+                "glaube, eure Accounts sind",
+            ),
+            (
+                r#"<pattern><marker><token>glaube</token><token>eure</token><token>roten</token><token>Autos</token></marker></pattern>
+                   <suggestion><match no="1"/> <match no="2"/> <match no="3"/> <match no="4"/></suggestion>"#,
+                "Ich glaube eure roten Autos sind schnell.",
+                "glaube, eure roten Autos",
+            ),
+            (
+                r#"<pattern><marker><token>schätze</token><token>diese</token><token>Krawatte</token><token>passt</token></marker></pattern>
+                   <suggestion><match no="1"/> <match no="2"/> <match no="3"/> <match no="4"/></suggestion>"#,
+                "Ich schätze diese Krawatte passt gut.",
+                "schätze, diese Krawatte passt",
+            ),
+            (
+                r#"<pattern><marker><token>weißt</token><token>du</token><token>warum</token><token>das</token></marker></pattern>
+                   <suggestion><match no="1"/> <match no="2"/> <match no="3"/> <match no="4"/></suggestion>"#,
+                "Weißt du warum das so ist.",
+                "Weißt du, warum das",
+            ),
+            (
+                r#"<pattern><marker><token>Ist</token><token>der</token><token>Kunde</token><token>Verbraucher</token><token>gilt</token></marker></pattern>
+                   <suggestion><match no="1"/> <match no="2"/> <match no="3"/> <match no="4"/> <match no="5"/></suggestion>"#,
+                "Ist der Kunde Verbraucher gilt eine Frist.",
+                "Ist der Kunde Verbraucher,",
+            ),
+        ];
+        for (pattern, text, expected) in cases {
+            let xml = format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+                <rules lang="de">
+                    <rule id="KOMMA_CASE" name="Komma">
+                        {pattern}
+                        <filter class="org.languagetool.rules.de.InsertCommaFilter" args="fake:1"/>
+                        <message>Komma fehlt.</message>
+                    </rule>
+                </rules>"#
+            );
+            let matches = compile_and_match(&xml, text);
+            assert_eq!(matches.len(), 1, "no match for {text} with {pattern}");
+            let reps: Vec<&str> = matches[0]
+                .replacements()
+                .iter()
+                .map(|r| r.value())
+                .collect();
+            assert_eq!(reps, vec![expected], "case {text}");
+        }
+    }
+
+    #[test]
+    fn insert_comma_filter_drops_unsupported_replacements() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="de">
+            <rule id="KOMMA_DROP" name="Komma drop">
+                <pattern>
+                    <marker>
+                        <token>steht</token>
+                        <token>im</token>
+                        <token>Halteverbot</token>
+                    </marker>
+                </pattern>
+                <filter class="org.languagetool.rules.de.InsertCommaFilter" args="fake:1"/>
+                <message>Komma fehlt.</message>
+                <suggestion><match no="1"/> <match no="2"/> <match no="3"/></suggestion>
+            </rule>
+        </rules>"#;
+        let matches = compile_and_match(xml, "Das Auto steht im Halteverbot.");
+        assert_eq!(matches.len(), 1);
+        assert!(
+            matches[0].replacements().is_empty(),
+            "no gate fires for VER+PRP+SUB"
+        );
+    }
+
+    #[test]
+    fn german_helper_predicates_match_the_java_patterns() {
+        assert!(is_sagt("sagt"));
+        assert!(is_sagt("Sagt"));
+        assert!(is_sagt("sag"));
+        assert!(is_sagt("Sag"));
+        assert!(!is_sagt("sagen"));
+        assert!(is_denke_etc("denke"));
+        assert!(is_denke_etc("dachte"));
+        assert!(is_denke_etc("glaube"));
+        assert!(is_denke_etc("schätze"));
+        assert!(is_denke_etc("vermute"));
+        assert!(is_denke_etc("behaupte"));
+        assert!(!is_denke_etc("denkst"));
+        assert!(is_bei_fuer_mit("bei"));
+        assert!(is_bei_fuer_mit("für"));
+        assert!(is_bei_fuer_mit("mit"));
+        assert!(!is_bei_fuer_mit("ohne"));
+        assert!(is_dir_etc("dir"));
+        assert!(is_dir_etc("Dir"));
+        assert!(is_dir_etc("dich"));
+        assert!(is_dir_etc("Dich"));
+        assert!(is_dir_etc("euer"));
+        assert!(is_dir_etc("Euch"));
+        assert!(!is_dir_etc("eucheln"));
+        let der_sentence = make_analyzed_sentence("meint die Karten");
+        let refs: Vec<&AnalyzedTokenReadings> = der_sentence.tokens().iter().collect();
+        assert!(is_der_etc(&refs));
+        let folgender = make_analyzed_sentence("x folgender y");
+        let refs: Vec<&AnalyzedTokenReadings> = folgender.tokens().iter().collect();
+        assert!(is_der_etc(&refs));
+        let keine = make_analyzed_sentence("nur ein Wort");
+        let refs: Vec<&AnalyzedTokenReadings> = keine.tokens().iter().collect();
+        assert!(!is_der_etc(&refs));
+        assert!(!is_der_etc(&[]));
+    }
+
+    #[test]
+    fn skipped_suffix_appends_tokens_between_pattern_matches() {
+        let sentence = make_analyzed_sentence("steht da drüben parkt");
+        let refs: Vec<&AnalyzedTokenReadings> = sentence.tokens().iter().collect();
+        assert_eq!(skipped_suffix(&refs, &[0, 3], 0, true), "da drüben");
+        assert_eq!(skipped_suffix(&refs, &[0, 3], 0, false), " da drüben");
+        assert_eq!(skipped_suffix(&refs, &[0, 3], 1, true), "");
+        assert_eq!(skipped_suffix(&refs, &[0], 5, true), "");
+        assert_eq!(skipped_suffix(&refs, &[0, 99], 0, true), "da drüben parkt");
+    }
+
+    #[test]
+    fn case_conversions_cover_the_java_set() {
+        assert_eq!(apply_case_conversion("Berlin", "startlower"), "berlin");
+        assert_eq!(apply_case_conversion("", "startlower"), "");
+        assert_eq!(apply_case_conversion("berlin", "startupper"), "Berlin");
+        assert_eq!(apply_case_conversion("", "startupper"), "");
+        assert_eq!(apply_case_conversion("BerLin", "alllower"), "berlin");
+        assert_eq!(apply_case_conversion("berlin", "allupper"), "BERLIN");
+        assert_eq!(apply_case_conversion("berlin", "unknownmode"), "berlin");
+        assert_eq!(apply_case_conversion("über", "startupper"), "Über");
+    }
+
+    #[test]
+    fn diacritic_insensitive_equality_folds_accents_like_java() {
+        assert!(equal_without_diacritics("café", "cafe"));
+        assert!(equal_without_diacritics(
+            "ÀÉÎÕ",
+            "aeio".to_uppercase().as_str()
+        ));
+        assert!(equal_without_diacritics("señor", "senor"));
+        assert!(equal_without_diacritics("ça", "ca"));
+        assert!(!equal_without_diacritics("cafe", "cane"));
+        assert!(!equal_without_diacritics("straße", "strase"));
+    }
+
+    #[test]
     fn test_simple_match() {
         let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
         <rules lang="en">
