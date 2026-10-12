@@ -443,4 +443,244 @@ mod tests {
                 .any(|m| m.rule().id() == "STYLE_REPEATED_WORD_RULE_DE")
         );
     }
+
+    use super::GermanStyleRepeatedWordRule;
+    use og_core::rule::TextLevelRule as _;
+    use og_core::{AnalyzedSentence, AnalyzedToken, AnalyzedTokenReadings, IssueType};
+
+    fn de_sentence(words: &[(&str, &str, &str)]) -> AnalyzedSentence {
+        let parts: Vec<&str> = words.iter().map(|(w, _, _)| *w).collect();
+        let text = parts.join(" ");
+        let mut sentence = AnalyzedSentence::new(&text, 0, text.len());
+        let mut tokens = Vec::new();
+        tokens.push(AnalyzedTokenReadings::new(
+            AnalyzedToken::new("<S>", 0, 0).with_pos_tags(vec!["SENT_START".to_string()]),
+        ));
+        let mut pos = 0usize;
+        for (word, lemma, tag) in words {
+            let start = pos + text[pos..].find(*word).expect("ordered words");
+            let end = start + word.len();
+            let mut reading = AnalyzedToken::new(*word, start, end);
+            if !lemma.is_empty() {
+                reading = reading.with_lemma((*lemma).to_string());
+            }
+            if !tag.is_empty() {
+                reading = reading.with_pos_tags(vec![tag.to_string()]);
+            }
+            tokens.push(AnalyzedTokenReadings::new(reading));
+            pos = end;
+        }
+        sentence.set_tokens(tokens);
+        sentence
+    }
+
+    #[test]
+    fn flags_repetition_inside_one_sentence() {
+        let rule = GermanStyleRepeatedWordRule::default();
+        let s = de_sentence(&[
+            ("Ich", "ich", "PRO:PER:NOM:SIN:1"),
+            ("gehe", "gehen", "VER:1:SIN:PRA"),
+            ("einkaufen", "einkaufen", "VER:INF"),
+            ("und", "", ""),
+            ("gehe", "gehen", "VER:1:SIN:PRA"),
+            ("danach", "", ""),
+        ]);
+        let text = s.text().to_string();
+        let matches = rule.match_text(&text, &[s]);
+        assert_eq!(matches.len(), 2);
+        assert_eq!(matches[0].offset(), 4);
+        assert_eq!(matches[1].offset(), 23);
+        for m in &matches {
+            assert_eq!(m.length(), 4);
+            assert!(m.message().contains("im selben Satz"));
+            assert_eq!(m.rule().id(), "STYLE_REPEATED_WORD_RULE_DE");
+        }
+    }
+
+    #[test]
+    fn links_repetition_across_adjacent_sentences() {
+        let rule = GermanStyleRepeatedWordRule::new();
+        let s1 = de_sentence(&[
+            ("Der", "der", "ART:DEF:NOM:SIN:MAS"),
+            ("Hund", "Hund", "SUB:NOM:SIN:MAS"),
+            ("läuft", "laufen", "VER:3:SIN:PRA"),
+            ("schnell", "schnell", "ADJ:PRD:GRU"),
+        ]);
+        let s2 = de_sentence(&[
+            ("Der", "der", "ART:DEF:NOM:SIN:MAS"),
+            ("Hund", "Hund", "SUB:NOM:SIN:MAS"),
+            ("schläft", "schlafen", "VER:3:SIN:PRA"),
+        ]);
+        let first = s1.text().find("Hund").unwrap();
+        let second = s2.text().find("Hund").unwrap();
+        let matches = rule.match_text("", &[s1, s2]);
+        assert_eq!(matches.len(), 2);
+        assert!(matches[0].message().contains("nachfolgenden Satz"));
+        assert_eq!(matches[0].offset(), first);
+        assert!(matches[1].message().contains("vorhergehenden Satz"));
+        assert_eq!(matches[1].offset(), second);
+        let url = serde_json::to_value(&matches[0]).unwrap();
+        assert!(
+            url["rule"]["urls"][0]["value"]
+                .as_str()
+                .unwrap()
+                .ends_with("/synonyme/Hund")
+        );
+    }
+
+    #[test]
+    fn skips_beyond_the_maximum_sentence_distance() {
+        let rule = GermanStyleRepeatedWordRule::new();
+        let s1 = de_sentence(&[
+            ("Der", "der", "ART:DEF:NOM:SIN:MAS"),
+            ("Hund", "Hund", "SUB:NOM:SIN:MAS"),
+            ("läuft", "laufen", "VER:3:SIN:PRA"),
+        ]);
+        let s2 = de_sentence(&[
+            ("Katzen", "Katze", "SUB:NOM:PLU:FEM"),
+            ("schlafen", "schlafen", "VER:3:PLU:PRA"),
+        ]);
+        let s3 = de_sentence(&[
+            ("Der", "der", "ART:DEF:NOM:SIN:MAS"),
+            ("Hund", "Hund", "SUB:NOM:SIN:MAS"),
+            ("ruht", "ruhen", "VER:3:SIN:PRA"),
+        ]);
+        assert!(rule.match_text("", &[s1, s2, s3]).is_empty());
+    }
+
+    #[test]
+    fn quoted_words_do_not_count_as_repetition() {
+        let rule = GermanStyleRepeatedWordRule::new();
+        let s1 = de_sentence(&[
+            ("\u{201E}", "", ""),
+            ("Hunde", "Hund", "SUB:NOM:PLU:FEM"),
+            ("\u{201C}", "", ""),
+            ("laufen", "laufen", "VER:3:PLU:PRA"),
+        ]);
+        let s2 = de_sentence(&[
+            ("Hunde", "Hund", "SUB:NOM:PLU:FEM"),
+            ("bellen", "bellen", "VER:3:PLU:PRA"),
+        ]);
+        assert!(rule.match_text("", &[s1, s2]).is_empty());
+    }
+
+    #[test]
+    fn question_and_answer_sentences_are_not_linked() {
+        let rule = GermanStyleRepeatedWordRule::new();
+        let s1 = de_sentence(&[
+            ("Läuft", "laufen", "VER:3:SIN:PRA"),
+            ("der", "der", "ART:DEF:NOM:SIN:MAS"),
+            ("Hund", "Hund", "SUB:NOM:SIN:MAS"),
+            ("?", "", ""),
+        ]);
+        let s2 = de_sentence(&[
+            ("Der", "der", "ART:DEF:NOM:SIN:MAS"),
+            ("Hund", "Hund", "SUB:NOM:SIN:MAS"),
+            ("schläft", "schlafen", "VER:3:SIN:PRA"),
+        ]);
+        assert!(rule.match_text("", &[s1, s2]).is_empty());
+    }
+
+    #[test]
+    fn hart_auf_hart_pairs_are_ignored() {
+        let rule = GermanStyleRepeatedWordRule::new();
+        let s = de_sentence(&[
+            ("Er", "er", "PRO:PER:NOM:SIN:3"),
+            ("ist", "sein", "VER:3:SIN:PRA"),
+            ("hart", "hart", "ADJ:PRD:GRU"),
+            ("auf", "auf", "APPR"),
+            ("hart", "hart", "ADJ:PRD:GRU"),
+            ("gestimmt", "stimmen", "VER:PAP"),
+        ]);
+        let text = s.text().to_string();
+        assert!(rule.match_text(&text, &[s]).is_empty());
+    }
+
+    #[test]
+    fn gut_against_best_is_an_exception_but_gut_gute_is_not() {
+        let rule = GermanStyleRepeatedWordRule::new();
+        let exceptional = de_sentence(&[
+            ("Das", "der", "ART:DEF:NOM:SIN:NEU"),
+            ("gut", "gut", "ADJ:PRD:GRU"),
+            ("Beste", "gut", "ADJ:PRD:SUP"),
+            ("gewählt", "wählen", "VER:PAP"),
+        ]);
+        let text = exceptional.text().to_string();
+        assert!(rule.match_text(&text, &[exceptional]).is_empty());
+
+        let flagged = de_sentence(&[
+            ("Das", "der", "ART:DEF:NOM:SIN:NEU"),
+            ("gut", "gut", "ADJ:PRD:GRU"),
+            ("gute", "gut", "ADJ:PRD:GRU"),
+            ("Ergebnis", "Ergebnis", "SUB:NOM:SIN:NEU"),
+        ]);
+        let text = flagged.text().to_string();
+        assert_eq!(rule.match_text(&text, &[flagged]).len(), 2);
+    }
+
+    #[test]
+    fn frau_before_a_name_is_not_checked_but_the_name_is() {
+        let rule = GermanStyleRepeatedWordRule::new();
+        let s1 = de_sentence(&[
+            ("Frau", "Frau", "SUB:NOM:SIN:FEM"),
+            ("Müller", "Müller", "EIG:NOG:SIN"),
+            ("arbeitet", "arbeiten", "VER:3:SIN:PRA"),
+        ]);
+        let s2 = de_sentence(&[
+            ("Frau", "Frau", "SUB:NOM:SIN:FEM"),
+            ("Müller", "Müller", "EIG:NOG:SIN"),
+            ("schläft", "schlafen", "VER:3:SIN:PRA"),
+        ]);
+        let first = s1.text().find("Müller").unwrap();
+        let second = s2.text().find("Müller").unwrap();
+        let matches = rule.match_text("", &[s1, s2]);
+        assert_eq!(matches.len(), 2);
+        assert_eq!(matches[0].offset(), first);
+        assert_eq!(matches[1].offset(), second);
+        for m in &matches {
+            assert_eq!(m.length(), "Müller".len());
+        }
+    }
+
+    #[test]
+    fn break_tokens_stop_the_sentence_walk_but_not_the_link() {
+        let rule = GermanStyleRepeatedWordRule::new();
+        let s1 = de_sentence(&[
+            ("Ein", "ein", "ART:IND:NOM:SIN:NEU"),
+            ("-", "", ""),
+            ("Hund", "Hund", "SUB:NOM:SIN:MAS"),
+            ("läuft", "laufen", "VER:3:SIN:PRA"),
+        ]);
+        let s2 = de_sentence(&[
+            ("Der", "der", "ART:DEF:NOM:SIN:MAS"),
+            ("Hund", "Hund", "SUB:NOM:SIN:MAS"),
+            ("ruht", "ruhen", "VER:3:SIN:PRA"),
+        ]);
+        let second = s2.text().find("Hund").unwrap();
+        let matches = rule.match_text("", &[s1, s2]);
+        assert_eq!(matches.len(), 1);
+        assert!(matches[0].message().contains("vorhergehenden Satz"));
+        assert_eq!(matches[0].offset(), second);
+    }
+
+    #[test]
+    fn untagged_words_without_lemmas_never_repeat() {
+        let rule = GermanStyleRepeatedWordRule::new();
+        let s1 = de_sentence(&[("Hausxyz", "", ""), ("steht", "stehen", "VER:3:SIN:PRA")]);
+        let s2 = de_sentence(&[("Hausxyz", "", ""), ("fällt", "fallen", "VER:3:SIN:PRA")]);
+        assert!(rule.match_text("", &[s1, s2]).is_empty());
+    }
+
+    #[test]
+    fn metadata_is_style_and_off_by_default() {
+        let rule = GermanStyleRepeatedWordRule::new();
+        assert_eq!(rule.id(), "STYLE_REPEATED_WORD_RULE_DE");
+        assert_eq!(
+            rule.description(),
+            "Wiederholte Worte in aufeinanderfolgenden Sätzen"
+        );
+        assert!(!rule.is_default_on());
+        assert_eq!(rule.category().id().as_str(), "STYLE");
+        assert_eq!(rule.issue_type(), IssueType::Style);
+    }
 }
