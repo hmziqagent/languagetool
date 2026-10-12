@@ -954,11 +954,35 @@ impl DisambigXmlParser {
         xml.to_string()
     }
 
+    fn strip_comments(xml: &str) -> String {
+        let mut result = String::with_capacity(xml.len());
+        let mut rest = xml;
+        while let Some(start) = rest.find("<!--") {
+            result.push_str(&rest[..start]);
+            match rest[start + 4..].find("-->") {
+                Some(end) => {
+                    for ch in rest[start..start + 4 + end + 3].chars() {
+                        if ch == '\n' {
+                            result.push('\n');
+                        }
+                    }
+                    rest = &rest[start + 4 + end + 3..];
+                }
+                None => {
+                    rest = "";
+                }
+            }
+        }
+        result.push_str(rest);
+        result
+    }
+
     fn expand_entities(xml: &str) -> String {
         let mut result = xml.to_string();
 
+        let uncommented = Self::strip_comments(xml);
         let entity_pattern = regex::Regex::new(r#"<!ENTITY\s+(\w+)\s+"([^"]*)">"#).unwrap();
-        for cap in entity_pattern.captures_iter(xml) {
+        for cap in entity_pattern.captures_iter(&uncommented) {
             let name = &cap[1];
             let value = &cap[2];
             result = result.replace(&format!("&{};", name), value);
@@ -1012,6 +1036,30 @@ mod tests {
         let plain_anti = &result.rules[1].antipatterns[0];
         assert_eq!(plain_anti.marker_elem_start, None);
         assert_eq!(plain_anti.marker_elem_end, None);
+    }
+
+    #[test]
+    fn test_commented_out_entity_definition_is_ignored() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE rules [
+    <!--<!ENTITY verb_forms "ran|runs">-->
+    <!ENTITY verb_forms "go|went">
+]>
+<rules lang="en">
+    <rule id="ENTITY_COMMENT" name="Commented entity">
+        <pattern>
+            <token regexp="yes">&verb_forms;</token>
+        </pattern>
+        <disambig postag="VB"/>
+    </rule>
+</rules>"#;
+
+        let parser = DisambigXmlParser::new();
+        let result = parser.parse(xml).unwrap();
+
+        assert_eq!(result.rules.len(), 1);
+        let token_text = &result.rules[0].pattern.tokens[0].text;
+        assert_eq!(token_text.as_deref(), Some("go|went"));
     }
 
     #[test]

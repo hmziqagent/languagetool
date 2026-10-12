@@ -1568,10 +1568,7 @@ mod tests {
     #[test]
     #[ignore]
     fn test_real_english_grammar_examples() {
-        const PINNED_EN_RESIDUE: &[(&str, &str)] = &[(
-            "A_NNS",
-            "Expected no match on correct example but got 1: 'I have a feeling private minions won’t be able to be configured to use authenticated proxy connections.'",
-        )];
+        const PINNED_EN_RESIDUE: &[(&str, &str)] = &[];
 
         if !test_support::grammar_available() {
             eprintln!("Skipping: English grammar.xml not found");
@@ -1754,14 +1751,12 @@ mod tests {
             .collect();
         assert_eq!(
             residue, expected,
-            "the English residue must stay pinned byte-exact: A_NNS traces to 'a feeling \
-             private minions' chunking as one plural NP where Java breaks the NP after \
-             'feeling' (OpenNLP chunker inference on byte-identical models); this round fixed \
-             ONE_PLURAL, VERB_APOSTROPHE_S and I_LOWERCASE via the scope=next reading-0 arm \
-             plus the morfologik SUFFIX-encoder reading order, and TYPO_OR_OF + REPEATED_VERBS \
-             via the inflected <match> lemma comparison and the in-token match marker \\N with \
-             literal text; shrink the list deliberately and update this pin, but any new or \
-             changed failure is an engine regression"
+            "the English residue must stay pinned byte-exact: the last entry (A_NNS on 'a \
+             feeling private minions') was fixed by teaching the disambiguation XML parser to \
+             ignore <!ENTITY> definitions inside comments, so en's live \
+             &abbreviated_negated_verbs; (wo|would|...) — not the commented-out fused forms \
+             (won|wouldn|...) — feeds DT_JJ_NNJJ_NN_VB_APOSTROPHE, which strips the JJ reading \
+             from 'private' exactly like Java; any new or changed failure is an engine regression"
         );
     }
 
