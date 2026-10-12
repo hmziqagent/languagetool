@@ -6813,6 +6813,488 @@ mod tests {
         *atr = og_core::AnalyzedTokenReadings::new(token).with_readings(vec![reading]);
     }
 
+    struct TableTagger;
+
+    impl og_tagger::Tagger for TableTagger {
+        fn tag(&self, tokens: &[&str]) -> Vec<AnalyzedTokenReadings> {
+            tokens
+                .iter()
+                .map(|&word| {
+                    let tags: &[&str] = match word.to_lowercase().as_str() {
+                        "good" => &["JJ"],
+                        "gold" => &["NN", "JJ"],
+                        "god" => &["NN"],
+                        "well" => &["RB"],
+                        "cafe" => &["RB"],
+                        "café" => &["JJ"],
+                        _ => &[],
+                    };
+                    let readings = tags
+                        .iter()
+                        .map(|t| {
+                            og_core::AnalyzedToken::new(word, 0, word.len())
+                                .with_lemma(word)
+                                .with_pos_tags(vec![t.to_string()])
+                        })
+                        .collect();
+                    AnalyzedTokenReadings::new(og_core::AnalyzedToken::new(word, 0, word.len()))
+                        .with_readings(readings)
+                })
+                .collect()
+        }
+    }
+
+    fn engine_with_words(words: &[&str], multitoken: &str) -> PatternRuleEngine {
+        use crate::spelling_support::SpellingSupport;
+        let mut dict = og_spell::Dictionary::new();
+        for w in words {
+            dict.add_word(w);
+        }
+        let support =
+            SpellingSupport::new(dict, multitoken).with_tagger(std::sync::Arc::new(TableTagger));
+        PatternRuleEngine::new().with_spelling_support(std::sync::Arc::new(support))
+    }
+
+    fn match_with_engine(
+        engine: &PatternRuleEngine,
+        xml: &str,
+        sentence_text: &str,
+    ) -> Vec<RuleMatch> {
+        let compiler = XmlCompiler::new();
+        let rule_set = compiler.compile_file(xml).unwrap();
+        let sentence = make_analyzed_sentence(sentence_text);
+        let mut matches = Vec::new();
+        for rule in &rule_set.rules {
+            matches.extend(engine.match_rule(rule, &sentence));
+        }
+        matches
+    }
+
+    #[test]
+    fn find_suggestions_filter_fills_the_suggestion_placeholder() {
+        let engine = engine_with_words(&["good", "gold", "god"], "");
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <rule id="FIND_SUGG" name="find suggestions">
+                <pattern>
+                    <token>the</token>
+                    <marker><token regexp="yes">[a-z]+</token></marker>
+                </pattern>
+                <filter class="org.languagetool.rules.en.FindSuggestionsFilter" args="wordFrom:marker desiredPostag:JJ"/>
+                <message>m</message>
+                <suggestion>{suggestion}</suggestion>
+            </rule>
+        </rules>"#;
+        let matches = match_with_engine(&engine, xml, "I like the gokd one.");
+        assert_eq!(matches.len(), 1);
+        let mut reps: Vec<&str> = matches[0]
+            .replacements()
+            .iter()
+            .map(|r| r.value())
+            .collect();
+        reps.sort_unstable();
+        assert_eq!(reps, vec!["gold", "good"]);
+    }
+
+    #[test]
+    fn find_suggestions_filter_priority_postag_moves_matches_first() {
+        let engine = engine_with_words(&["good", "gold", "god"], "");
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <rule id="FIND_SUGG_PRIO" name="find suggestions priority">
+                <pattern>
+                    <token>the</token>
+                    <marker><token regexp="yes">[a-z]+</token></marker>
+                </pattern>
+                <filter class="org.languagetool.rules.en.FindSuggestionsFilter" args="wordFrom:marker desiredPostag:JJ priorityPostag:NN"/>
+                <message>m</message>
+                <suggestion>{suggestion}</suggestion>
+            </rule>
+        </rules>"#;
+        let matches = match_with_engine(&engine, xml, "I like the gokd one.");
+        let reps: Vec<&str> = matches[0]
+            .replacements()
+            .iter()
+            .map(|r| r.value())
+            .collect();
+        assert_eq!(reps, vec!["gold", "good"]);
+    }
+
+    #[test]
+    fn find_suggestions_filter_preserves_capitalization_and_filters_regexp() {
+        let engine = engine_with_words(&["good", "gold", "god"], "");
+        let base = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <rule id="FIND_SUGG_CAP" name="find suggestions capitalization">
+                <pattern>
+                    <token>the</token>
+                    <marker><token regexp="yes">[a-z]+</token></marker>
+                </pattern>
+                <filter class="org.languagetool.rules.en.FindSuggestionsFilter" args="{args}"/>
+                <message>m</message>
+                <suggestion>{SUGGESTION}</suggestion>
+            </rule>
+        </rules>"#;
+        let xml = base.replace("{args}", "wordFrom:marker desiredPostag:JJ");
+        let matches = match_with_engine(&engine, &xml, "I like the Gokd one.");
+        let mut reps: Vec<&str> = matches[0]
+            .replacements()
+            .iter()
+            .map(|r| r.value())
+            .collect();
+        reps.sort_unstable();
+        assert_eq!(reps, vec!["GOLD", "GOOD"]);
+
+        let base = base.replace("{SUGGESTION}", "{Suggestion}");
+        let xml = base.replace(
+            "{args}",
+            "wordFrom:marker desiredPostag:JJ removeSuggestionsRegexp:gold",
+        );
+        let matches = match_with_engine(&engine, &xml, "I like the gokd one.");
+        let reps: Vec<&str> = matches[0]
+            .replacements()
+            .iter()
+            .map(|r| r.value())
+            .collect();
+        assert_eq!(reps, vec!["Good"]);
+    }
+
+    #[test]
+    fn find_suggestions_filter_diacritics_mode_suppresses_or_suggests() {
+        let engine = engine_with_words(&["cafe", "gold"], "");
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <rule id="FIND_SUGG_DIA" name="find suggestions diacritics">
+                <pattern>
+                    <token>the</token>
+                    <marker><token regexp="yes">[A-Za-zà-ÿ]+</token></marker>
+                </pattern>
+                <filter class="org.languagetool.rules.en.FindSuggestionsFilter" args="wordFrom:marker desiredPostag:RB Mode:diacritics"/>
+                <message>m</message>
+                <suggestion>{suggestion}</suggestion>
+            </rule>
+        </rules>"#;
+        let matches = match_with_engine(&engine, xml, "The café tastes good.");
+        assert_eq!(matches.len(), 1);
+        let reps: Vec<&str> = matches[0]
+            .replacements()
+            .iter()
+            .map(|r| r.value())
+            .collect();
+        assert_eq!(reps, vec!["cafe"]);
+        assert_eq!(
+            match_with_engine(&engine, xml, "The caffe tastes good.").len(),
+            0,
+            "no diacritics-only suggestion removes the match"
+        );
+
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <rule id="FIND_SUGG_DIA_OK" name="find suggestions diacritics ok">
+                <pattern>
+                    <token>the</token>
+                    <marker><token regexp="yes">[A-Za-zà-ÿ]+</token></marker>
+                </pattern>
+                <filter class="org.languagetool.rules.en.FindSuggestionsFilter" args="wordFrom:marker desiredPostag:JJ Mode:diacritics"/>
+                <message>m</message>
+                <suggestion>{suggestion}</suggestion>
+            </rule>
+        </rules>"#;
+        assert_eq!(
+            match_with_engine(&engine, xml, "The café tastes good.").len(),
+            0,
+            "word already has the desired postag, diacritics mode removes the match"
+        );
+
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <rule id="FIND_SUGG_SUP" name="find suggestions suppress">
+                <pattern>
+                    <token>the</token>
+                    <marker><token regexp="yes">[a-z]+</token></marker>
+                </pattern>
+                <filter class="org.languagetool.rules.en.FindSuggestionsFilter" args="wordFrom:marker desiredPostag:VB suppressMatch:true"/>
+                <message>m</message>
+                <suggestion>{suggestion}</suggestion>
+            </rule>
+        </rules>"#;
+        assert_eq!(
+            match_with_engine(&engine, xml, "I like the gokd one.").len(),
+            0,
+            "no verb suggestions and suppressMatch drops the match"
+        );
+    }
+
+    #[test]
+    fn find_suggestions_filter_keeps_match_without_required_args() {
+        let engine = engine_with_words(&["good"], "");
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <rule id="FIND_SUGG_ARGS" name="find suggestions args">
+                <pattern>
+                    <token>the</token>
+                    <marker><token regexp="yes">[a-z]+</token></marker>
+                </pattern>
+                <filter class="org.languagetool.rules.en.FindSuggestionsFilter" args="desiredPostag:JJ"/>
+                <message>m</message>
+                <suggestion>{suggestion}</suggestion>
+            </rule>
+        </rules>"#;
+        let matches = match_with_engine(&engine, xml, "I like the gokd one.");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].replacements()[0].value(), "{suggestion}");
+    }
+
+    #[test]
+    fn number_in_word_filter_suggests_zero_o_and_digit_free_forms() {
+        let engine = engine_with_words(&["good", "god", "well"], "");
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <rule id="NUM_IN_WORD" name="number in word">
+                <pattern>
+                    <token>the</token>
+                    <marker><token regexp="yes">[A-Za-z0-9]+</token></marker>
+                </pattern>
+                <filter class="org.languagetool.rules.en.EnglishNumberInWordFilter" args="word:\2"/>
+                <message>m</message>
+            </rule>
+        </rules>"#;
+        let matches = match_with_engine(&engine, xml, "the go0d morning!");
+        let reps: Vec<&str> = matches[0]
+            .replacements()
+            .iter()
+            .map(|r| r.value())
+            .collect();
+        assert_eq!(reps, vec!["good", "god"]);
+
+        assert!(
+            match_with_engine(&engine, xml, "the q9z morning.").is_empty(),
+            "no replacements and no nearby words drops the match"
+        );
+    }
+
+    #[test]
+    fn multitoken_speller_filter_suggests_the_known_phrase() {
+        let engine = engine_with_words(
+            &[
+                "good", "god", "the", "dark", "knight", "rises", "rocky", "mountain",
+            ],
+            "The Dark Knight Rises\nRocky Mountain National Park # comment\n",
+        );
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <rule id="MULTITOKEN" name="multitoken">
+                <pattern>
+                    <marker>
+                        <token>Thé</token>
+                        <token>Dákk</token>
+                        <token>Kínght</token>
+                        <token>Ríses</token>
+                    </marker>
+                </pattern>
+                <filter class="org.languagetool.rules.spelling.multitoken.MultitokenSpellerFilter"/>
+                <message>m</message>
+            </rule>
+        </rules>"#;
+        let text = "I said , Thé Dákk Kínght Ríses .";
+        let matches = match_with_engine(&engine, xml, text);
+        assert_eq!(matches.len(), 1);
+        let reps: Vec<&str> = matches[0]
+            .replacements()
+            .iter()
+            .map(|r| r.value())
+            .collect();
+        assert_eq!(reps, vec!["The Dark Knight Rises"]);
+        let from = matches[0].offset();
+        let to = from + matches[0].length();
+        assert_eq!(&text[from..to], "Thé Dákk Kínght Ríses");
+    }
+
+    #[test]
+    fn ordinal_suffix_filter_builds_the_english_ordinals() {
+        let engine = PatternRuleEngine::new();
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <rule id="ORDINAL" name="ordinal">
+                <pattern>
+                    <marker><token regexp="yes">\d+</token></marker>
+                </pattern>
+                <filter class="org.languagetool.rules.en.OrdinalSuffixFilter"/>
+                <message>m</message>
+                <suggestion>\1th</suggestion>
+            </rule>
+        </rules>"#;
+        for (text, expected) in [
+            ("Place 1.", "1st"),
+            ("Place 2.", "2nd"),
+            ("Place 3.", "3rd"),
+            ("Place 4.", "4th"),
+            ("Place 11.", "11th"),
+            ("Place 12.", "12th"),
+            ("Place 13.", "13th"),
+            ("Place 21.", "21st"),
+            ("Place 111.", "111th"),
+        ] {
+            let matches = match_with_engine(&engine, xml, text);
+            assert_eq!(matches.len(), 1, "{text}");
+            assert_eq!(matches[0].replacements()[0].value(), expected, "{text}");
+        }
+    }
+
+    #[test]
+    fn adverb_filter_swaps_the_adverb_for_the_adjective() {
+        let engine = PatternRuleEngine::new();
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <rule id="ADVERB" name="adverb">
+                <pattern>
+                    <marker>
+                        <token>well</token>
+                        <token>performance</token>
+                    </marker>
+                </pattern>
+                <filter class="org.languagetool.rules.en.AdverbFilter" args="adverb:\1 noun:\2"/>
+                <message>m</message>
+            </rule>
+        </rules>"#;
+        let matches = match_with_engine(&engine, xml, "a well performance");
+        assert_eq!(matches.len(), 1);
+        let reps: Vec<&str> = matches[0]
+            .replacements()
+            .iter()
+            .map(|r| r.value())
+            .collect();
+        assert_eq!(reps, vec!["good performance"]);
+
+        let unchanged = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <rule id="ADVERB_FAST" name="adverb fast">
+                <pattern>
+                    <marker>
+                        <token>fast</token>
+                        <token>car</token>
+                    </marker>
+                </pattern>
+                <filter class="org.languagetool.rules.en.AdverbFilter" args="adverb:\1 noun:\2"/>
+                <message>m</message>
+                <suggestion>fast car</suggestion>
+            </rule>
+        </rules>"#;
+        let matches = match_with_engine(&engine, unchanged, "a fast car");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(
+            matches[0].replacements()[0].value(),
+            "fast car",
+            "'fast' is its own adjective, the suggestion stays"
+        );
+    }
+
+    #[test]
+    fn underline_spaces_filter_extends_the_match_around_whitespace() {
+        let engine = PatternRuleEngine::new();
+        let base = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <rule id="UNDERLINE" name="underline">
+                <pattern>
+                    <marker><token regexp="yes">_+</token></marker>
+                </pattern>
+                <filter class="org.languagetool.rules.UnderlineSpacesFilter" args="underlineSpaces:{mode}"/>
+                <message>m</message>
+            </rule>
+        </rules>"#;
+        let text = "a _ b";
+        for (mode, from, len) in [
+            ("both", 1, " _ ".len()),
+            ("before", 1, " _".len()),
+            ("after", 2, "_ ".len()),
+        ] {
+            let xml = base.replace("{mode}", mode);
+            let matches = match_with_engine(&engine, &xml, text);
+            assert_eq!(matches.len(), 1, "{mode}");
+            assert_eq!(matches[0].offset(), from, "{mode}");
+            assert_eq!(matches[0].length(), len, "{mode}");
+        }
+        let no_args = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <rule id="UNDERLINE_DEFAULT" name="underline default">
+                <pattern>
+                    <marker><token regexp="yes">_+</token></marker>
+                </pattern>
+                <filter class="org.languagetool.rules.UnderlineSpacesFilter"/>
+                <message>m</message>
+            </rule>
+        </rules>"#;
+        let matches = match_with_engine(&engine, no_args, text);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].offset(), 1);
+        assert_eq!(matches[0].length(), " _ ".len());
+    }
+
+    #[test]
+    fn suppress_misspelled_suggestions_filter_keeps_only_spellable_ones() {
+        let engine = engine_with_words(&["good", "well"], "");
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <rule id="SUPPRESS_MISSPELLED" name="suppress">
+                <pattern>
+                    <token>the</token>
+                    <marker><token regexp="yes">[a-z]+</token></marker>
+                </pattern>
+                <filter class="org.languagetool.rules.en.EnglishSuppressMisspelledSuggestionsFilter"/>
+                <message>m</message>
+                <suggestion>godd</suggestion>
+                <suggestion>good</suggestion>
+            </rule>
+        </rules>"#;
+        let matches = match_with_engine(&engine, xml, "the godd one");
+        assert_eq!(matches.len(), 1);
+        let reps: Vec<&str> = matches[0]
+            .replacements()
+            .iter()
+            .map(|r| r.value())
+            .collect();
+        assert_eq!(reps, vec!["good"]);
+
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <rule id="SUPPRESS_ALL" name="suppress all">
+                <pattern>
+                    <token>the</token>
+                    <marker><token regexp="yes">[a-z]+</token></marker>
+                </pattern>
+                <filter class="org.languagetool.rules.en.EnglishSuppressMisspelledSuggestionsFilter"/>
+                <message>m</message>
+                <suggestion>godd</suggestion>
+            </rule>
+        </rules>"#;
+        assert!(
+            match_with_engine(&engine, xml, "the godd one").is_empty(),
+            "all suggestions misspelled drops the match by default"
+        );
+
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <rule id="SUPPRESS_TAG" name="suppress by tag">
+                <pattern>
+                    <token>the</token>
+                    <marker><token regexp="yes">[a-z]+</token></marker>
+                </pattern>
+                <filter class="org.languagetool.rules.en.EnglishSuppressMisspelledSuggestionsFilter" args="suppressMatch:false FilterPostag:RB"/>
+                <message>m</message>
+                <suggestion>good</suggestion>
+                <suggestion>well</suggestion>
+            </rule>
+        </rules>"#;
+        let matches = match_with_engine(&engine, xml, "the good one");
+        assert_eq!(matches.len(), 1);
+        let reps: Vec<&str> = matches[0]
+            .replacements()
+            .iter()
+            .map(|r| r.value())
+            .collect();
+        assert_eq!(reps, vec!["well"]);
+    }
+
     pub(super) fn make_analyzed_sentence(text: &str) -> og_core::AnalyzedSentence {
         use og_core::{AnalyzedToken, AnalyzedTokenReadings};
         let mut sentence = og_core::AnalyzedSentence::new(text, 0, text.len());
@@ -9381,7 +9863,7 @@ mod unify_tests {
                     <token regexp="yes">w0rd</token>
                 </pattern>
                 <message>m</message>
-                <filter class="org.languagetool.rules.en.EnglishNumberInWordFilter" args="word:\1"/>
+                <filter class="org.languagetool.rules.en.EnglishNumberInWordFilter" args="word:\2"/>
             </rule>
         </rules>"#;
         let matches = compile_and_match_with_dict(xml, "the w0rd here", &["word"]);
