@@ -2097,4 +2097,275 @@ mod tests {
             "tail is appended: {forms:?}"
         );
     }
+
+    #[test]
+    fn es_concordance_walk_counts_determiners_and_common_nouns() {
+        let dir = lang_dir("es");
+        let Some(synth) = LangSynthesizer::for_language(&dir, "es") else {
+            return;
+        };
+        let cases: Vec<(Vec<AnalyzedTokenReadings>, usize, Option<Vec<&str>>)> = vec![
+            (
+                vec![
+                    tagged("un", "uno", &["DD0CS0"]),
+                    tagged("libro", "libro", &["NCMS000"]),
+                    tagged("blanca", "blanco", &["AQ0FS0"]),
+                ],
+                2,
+                Some(vec!["blanco"]),
+            ),
+            (
+                vec![
+                    tagged("la", "el", &["DD0CS0"]),
+                    tagged("casa", "casa", &["NCFS000"]),
+                    tagged("blanco", "blanco", &["AQ0MS0"]),
+                ],
+                2,
+                Some(vec!["blanca"]),
+            ),
+            (
+                vec![
+                    tagged("los", "el", &["DD0MP0"]),
+                    tagged("libros", "libro", &["NCMP000"]),
+                    tagged("blanca", "blanco", &["AQ0FS0"]),
+                ],
+                2,
+                Some(vec!["blancos"]),
+            ),
+            (
+                vec![
+                    tagged("las", "el", &["DD0FP0"]),
+                    tagged("casas", "casa", &["NCFP000"]),
+                    tagged("blanco", "blanco", &["AQ0MS0"]),
+                ],
+                2,
+                Some(vec!["blancas"]),
+            ),
+            (
+                vec![
+                    tagged("el", "el", &["UNKNOWN"]),
+                    tagged("agua", "agua", &["NCMN000"]),
+                    tagged("blanca", "blanco", &["AQ0FS0"]),
+                ],
+                2,
+                Some(vec!["blanco", "blancos"]),
+            ),
+            (
+                vec![
+                    tagged("el", "el", &["UNKNOWN"]),
+                    tagged("arte", "arte", &["NCCS000"]),
+                    tagged("blancos", "blanco", &["AQ0MP0"]),
+                ],
+                2,
+                Some(vec!["blanco", "blanca"]),
+            ),
+            (
+                vec![
+                    tagged("el", "el", &["UNKNOWN"]),
+                    tagged("meta", "meta", &["NCCP000"]),
+                    tagged("blanco", "blanco", &["AQ0MS0"]),
+                ],
+                2,
+                Some(vec!["blancos", "blancas"]),
+            ),
+            (
+                vec![
+                    tagged("x", "x", &["UNKNOWN"]),
+                    tagged("casas", "casa", &["NCFP000"]),
+                    tagged("de", "de", &["SPS00"]),
+                    tagged("libro", "libro", &["NCMS000"]),
+                    tagged("blanca", "blanco", &["AQ0FS0"]),
+                ],
+                4,
+                Some(vec!["blanco", "blancas"]),
+            ),
+        ];
+        for (tokens, adj_pos, expected) in cases {
+            let refs: Vec<&AnalyzedTokenReadings> = tokens.iter().collect();
+            let out = accept_es(Some(&synth), "key:value", &[adj_pos], &refs, rm_for("x"));
+            match (out, expected) {
+                (Some(rm), Some(want)) => assert_eq!(values_of(&rm), want),
+                (None, None) => {}
+                (got, want) => panic!("mismatch: got {got:?} want {want:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn es_concordance_rejects_agreeing_and_empty_contexts() {
+        let dir = lang_dir("es");
+        let Some(synth) = LangSynthesizer::for_language(&dir, "es") else {
+            return;
+        };
+        let cases: Vec<Vec<AnalyzedTokenReadings>> = vec![
+            vec![
+                tagged("x", "x", &["UNKNOWN"]),
+                tagged("libro", "libro", &["NCMS000"]),
+                tagged("la", "el", &["DA0FS0"]),
+                tagged("mesa", "mesa", &["NCFS000"]),
+                tagged("blancos", "blanco", &["AQ0MP0"]),
+            ],
+            vec![
+                tagged("x", "x", &["UNKNOWN"]),
+                tagged("mesa", "mesa", &["NCFS000"]),
+                tagged("la", "el", &["DA0FS0"]),
+                tagged("mesa", "mesa", &["NCFS000"]),
+                tagged("blancas", "blanco", &["AQ0FP0"]),
+            ],
+            vec![
+                tagged("corre", "correr", &["VMIP3S0"]),
+                tagged("blanca", "blanco", &["AQ0FS0"]),
+            ],
+            vec![
+                tagged("casa", "casa", &["NCFS000"]),
+                tagged("blanca", "blanco", &["AQ0FS0"]),
+            ],
+        ];
+        for tokens in cases {
+            let refs: Vec<&AnalyzedTokenReadings> = tokens.iter().collect();
+            let adj = refs.len() - 1;
+            match accept_es(Some(&synth), "key:value", &[adj], &refs, rm_for("x")) {
+                None => {}
+                Some(rm) => panic!(
+                    "expected rejection for {:?} got {:?}",
+                    refs.iter().map(|t| t.token().token()).collect::<Vec<_>>(),
+                    values_of(&rm)
+                ),
+            }
+        }
+    }
+
+    #[test]
+    fn es_concordance_uses_comma_adverbs_and_coordination() {
+        let dir = lang_dir("es");
+        let Some(synth) = LangSynthesizer::for_language(&dir, "es") else {
+            return;
+        };
+        let comma_run = vec![
+            tagged("cosa", "cosa", &["NCFS000"]),
+            tagged(",", ",", &["_PUNCT"]),
+            tagged("libros", "libro", &["NCMP000"]),
+            tagged("blancas", "blanco", &["AQ0FP0"]),
+        ];
+        let refs: Vec<&AnalyzedTokenReadings> = comma_run.iter().collect();
+        match accept_es(Some(&synth), "key:value", &[3], &refs, rm_for("x")) {
+            Some(rm) => assert_eq!(values_of(&rm), vec!["blancos".to_string()]),
+            None => panic!(
+                "comma case rejected: {:?}",
+                refs.iter().map(|t| t.token().token()).collect::<Vec<_>>()
+            ),
+        }
+
+        let adverbial = vec![
+            tagged("x", "x", &["UNKNOWN"]),
+            tagged("libro", "libro", &["NCMS000"]),
+            tagged("muy", "muy", &["RG_before"]),
+            tagged("blancas", "blanco", &["AQ0FS0"]),
+        ];
+        let refs: Vec<&AnalyzedTokenReadings> = adverbial.iter().collect();
+        let out = accept_es(Some(&synth), "key:value", &[3], &refs, rm_for("x")).expect("kept");
+        assert_eq!(values_of(&out), vec!["blanco".to_string()]);
+
+        let locative = vec![
+            tagged("x", "x", &["UNKNOWN"]),
+            tagged("libro", "libro", &["NCMS000"]),
+            tagged("muy", "muy", &["RG_LOC_ADV"]),
+            tagged("bien", "bien", &["RG_LOC_ADV"]),
+            tagged("negra", "negro", &["AQ0FS0"]),
+        ];
+        let refs: Vec<&AnalyzedTokenReadings> = locative.iter().collect();
+        let out = accept_es(Some(&synth), "key:value", &[4], &refs, rm_for("x")).expect("kept");
+        assert_eq!(values_of(&out), vec!["negro".to_string()]);
+
+        let stop = vec![
+            tagged("x", "x", &["UNKNOWN"]),
+            tagged("libro", "libro", &["NCMS000"]),
+            tagged("y", "y", &["CC"]),
+            tagged(",", ",", &["_PUNCT"]),
+            tagged("muy", "muy", &["RG"]),
+            tagged("blanca", "blanco", &["AQ0FS0"]),
+        ];
+        let refs: Vec<&AnalyzedTokenReadings> = stop.iter().collect();
+        assert!(accept_es(Some(&synth), "key:value", &[5], &refs, rm_for("x")).is_none());
+
+        let jump = vec![
+            tagged("casa", "casa", &["NCFS000"]),
+            tagged("de", "de", &["SPS00"]),
+            tagged("libro", "libro", &["NCMS000"]),
+            tagged("y", "y", &["CC"]),
+            tagged("muy", "muy", &["RG"]),
+            tagged("de", "de", &["SPS00"]),
+            tagged("piso", "piso", &["NCMS000"]),
+            tagged("blanca", "blanco", &["AQ0FS0"]),
+        ];
+        let refs: Vec<&AnalyzedTokenReadings> = jump.iter().collect();
+        let out = accept_es(Some(&synth), "key:value", &[7], &refs, rm_for("x")).expect("kept");
+        assert_eq!(
+            values_of(&out),
+            vec!["blanco".to_string()],
+            "the coordination jump skips the coordinated phrase"
+        );
+    }
+
+    #[test]
+    fn fr_concordance_walk_counts_determiners_and_levels() {
+        let dir = lang_dir("fr");
+        let Some(synth) = LangSynthesizer::for_language(&dir, "fr") else {
+            return;
+        };
+        let cases: Vec<(Vec<AnalyzedTokenReadings>, usize, Option<Vec<&str>>)> = vec![
+            (
+                vec![
+                    tagged("un", "un", &["D e s"]),
+                    tagged("ami", "ami", &["N m s"]),
+                    tagged("bleue", "bleu", &["J f s"]),
+                ],
+                2,
+                Some(vec!["bleu"]),
+            ),
+            (
+                vec![
+                    tagged("la", "le", &["D f s"]),
+                    tagged("maison", "maison", &["N f s"]),
+                    tagged("de", "de", &["P"]),
+                    tagged("la", "le", &["D f s"]),
+                    tagged("porte", "porte", &["N f s"]),
+                    tagged("bleu", "bleu", &["J m s"]),
+                ],
+                5,
+                Some(vec!["bleue"]),
+            ),
+        ];
+        for (tokens, adj_pos, expected) in cases {
+            let refs: Vec<&AnalyzedTokenReadings> = tokens.iter().collect();
+            let out = accept_fr(Some(&synth), "key:value", &[adj_pos], &refs, rm_for("x"));
+            match (out, expected) {
+                (Some(rm), Some(want)) => assert_eq!(values_of(&rm), want),
+                (None, None) => {}
+                (got, want) => panic!("mismatch: got {got:?} want {want:?}"),
+            }
+        }
+
+        let rejects = vec![
+            vec![
+                tagged("x", "x", &["UNKNOWN"]),
+                tagged("ami", "ami", &["N m s"]),
+                tagged("le", "le", &["D m s"]),
+                tagged("table", "table", &["N f s"]),
+                tagged("bleus", "bleu", &["J m p"]),
+            ],
+            vec![
+                tagged("court", "courir", &["V ind pres 3s"]),
+                tagged("bleue", "bleu", &["J f s"]),
+            ],
+        ];
+        for tokens in rejects {
+            let refs: Vec<&AnalyzedTokenReadings> = tokens.iter().collect();
+            let adj = refs.len() - 1;
+            assert!(
+                accept_fr(Some(&synth), "key:value", &[adj], &refs, rm_for("x")).is_none(),
+                "expected rejection"
+            );
+        }
+    }
 }
