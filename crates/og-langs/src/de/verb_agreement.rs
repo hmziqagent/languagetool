@@ -671,4 +671,89 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn flags_du_with_wrong_verb_form() {
+        let matches = va_matches("Du ist heute da.");
+        assert!(
+            matches
+                .iter()
+                .any(|(msg, _, repl)| msg.contains("Subjekt (Du)")
+                    && msg.contains("(ist)")
+                    && !repl.is_empty()),
+            "got {matches:?}"
+        );
+    }
+
+    #[test]
+    fn flags_er_with_wrong_verb_form() {
+        let matches = va_matches("Er bist müde.");
+        assert!(
+            matches
+                .iter()
+                .any(|(msg, _, repl)| msg.contains("Subjekt (Er)")
+                    && repl.iter().any(|r| r.contains("ist"))),
+            "got {matches:?}"
+        );
+    }
+
+    #[test]
+    fn flags_wir_with_wrong_verb_form() {
+        let matches = va_matches("Wir ist müde.");
+        assert!(
+            matches
+                .iter()
+                .any(|(msg, _, repl)| msg.contains("Subjekt (Wir)")
+                    && repl.iter().any(|r| r.contains("sind"))),
+            "got {matches:?}"
+        );
+    }
+
+    #[test]
+    fn checks_partial_sentences_after_subordinating_conjunctions() {
+        for text in [
+            "Ich bin froh, weil du bist müde.",
+            "Ich bin froh, obwohl er ist müde.",
+            "Wir sind sicher, dass ich bin müde.",
+        ] {
+            assert!(
+                va_matches(text).is_empty(),
+                "{text}: got {:?}",
+                va_matches(text)
+            );
+        }
+        let matches = va_matches("Ich bin froh, weil du ist müde.");
+        assert!(
+            matches
+                .iter()
+                .any(|(msg, _, _)| msg.contains("Subjekt (du)")),
+            "got {matches:?}"
+        );
+    }
+
+    #[test]
+    fn bin_after_ignored_names_and_laden_is_not_flagged() {
+        for text in [
+            "Abdullah bin Laden war reich.",
+            "Tim bin Laden war reich.",
+            "Suleiman bin Abdul war König.",
+        ] {
+            assert!(
+                va_matches(text).is_empty(),
+                "{text}: got {:?}",
+                va_matches(text)
+            );
+        }
+    }
+
+    #[test]
+    fn metadata_is_default_on_grammar() {
+        use og_core::rule::TextLevelRule as _;
+        let rule = super::VerbAgreementRule::new(None);
+        assert_eq!(rule.id(), "DE_VERBAGREEMENT");
+        assert!(rule.is_default_on());
+        assert_eq!(rule.category().id().as_str(), "GRAMMAR");
+        assert_eq!(rule.issue_type(), og_core::IssueType::Grammar);
+        assert!(rule.description().contains("Kongruenz"));
+    }
 }
