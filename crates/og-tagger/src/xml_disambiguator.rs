@@ -309,7 +309,12 @@ impl XmlDisambiguator {
                 }
                 DisambigAction::Match(m) => {
                     let Some(postag) = m.postag.as_deref() else {
-                        return DisambigActionRegex::None;
+                        return DisambigActionRegex::Match {
+                            anchored: None,
+                            anchored_fancy: None,
+                            raw: None,
+                            raw_fancy: None,
+                        };
                     };
                     let anchored = format!("^(?:{postag})$");
                     DisambigActionRegex::Match {
@@ -384,10 +389,10 @@ impl XmlDisambiguator {
             .collect();
 
         let english_tagger = if english_tagger.is_none()
-            && compiled_rules
-                .iter()
-                .any(|rule| rule.filter_class.as_deref() == Some(EN_PARTIAL_POSTAG_FILTER_CLASS))
-        {
+            && compiled_rules.iter().any(|rule| {
+                rule.filter_class.as_deref() == Some(EN_PARTIAL_POSTAG_FILTER_CLASS)
+                    || rule.filter_class.as_deref() == Some(ENGLISH_WORD_FILTER_CLASS)
+            }) {
             crate::english_tagger::shared_english_tagger()
         } else {
             english_tagger
@@ -793,8 +798,7 @@ impl XmlDisambiguator {
                             continue;
                         }
 
-                        if rule.filter_class.as_deref()
-                            == Some("org.languagetool.rules.IsEnglishWordFilter")
+                        if rule.filter_class.as_deref() == Some(ENGLISH_WORD_FILTER_CLASS)
                             && !self.passes_english_word_filter(rule, &tokens, &match_result)
                         {
                             continue;
@@ -2223,16 +2227,29 @@ impl XmlDisambiguator {
         let Some(args) = rule.filter_args.as_deref() else {
             return false;
         };
-        let Some(form_positions) = args.split(',').find_map(|kv| {
-            let (k, v) = kv.split_once(':')?;
-            (k.trim() == "formPositions").then_some(v.to_string())
-        }) else {
+        let arg_value = |key: &str| -> Option<String> {
+            args.split_whitespace().find_map(|kv| {
+                let (k, v) = kv.split_once(':')?;
+                (k == key).then(|| v.to_string())
+            })
+        };
+        let Some(form_positions) = arg_value("formPositions") else {
             return false;
         };
-        for pos_str in form_positions.split(',') {
-            let Ok(one_based) = pos_str.trim().parse::<usize>() else {
-                return false;
-            };
+        let forms: Vec<usize> = form_positions
+            .split(',')
+            .filter_map(|p| p.trim().parse::<usize>().ok())
+            .collect();
+        if forms.is_empty() {
+            return false;
+        }
+        let postags: Vec<String> = arg_value("postags")
+            .map(|v| v.split(',').map(|p| p.trim().to_string()).collect())
+            .unwrap_or_default();
+        if !postags.is_empty() && postags.len() != forms.len() {
+            return false;
+        }
+        for (i, one_based) in forms.iter().enumerate() {
             let slot = match_result
                 .element_counts
                 .iter()
@@ -2247,6 +2264,17 @@ impl XmlDisambiguator {
             let readings = tagger.tag_word(token.token().token(), 0, 0);
             if readings.is_empty() {
                 return false;
+            }
+            if let Some(expected) = postags.get(i) {
+                let Ok(re) = regex::Regex::new(&format!("^(?:{expected})$")) else {
+                    return false;
+                };
+                if !readings
+                    .iter()
+                    .any(|r| r.pos_tags().iter().any(|t| re.is_match(t)))
+                {
+                    return false;
+                }
             }
         }
         true
@@ -2312,6 +2340,8 @@ impl XmlDisambiguator {
 
 const EN_PARTIAL_POSTAG_FILTER_CLASS: &str =
     "org.languagetool.rules.en.NoDisambiguationEnglishPartialPosTagFilter";
+
+const ENGLISH_WORD_FILTER_CLASS: &str = "org.languagetool.rules.IsEnglishWordFilter";
 
 fn compile_partial_postag_filter(args: &str) -> Option<PartialPosTagFilterSpec> {
     let mut no: Option<usize> = None;
@@ -2848,7 +2878,7 @@ fn apply_disambiguation(
                     .readings()
                     .iter()
                     .filter(|r| {
-                        let lemma_ok = r.lemma().is_none_or(|l| l == lemma);
+                        let lemma_ok = r.lemma() == Some(lemma);
                         let pos_ok = match spec.postag.as_deref() {
                             Some(probe_pos) => r.pos_tags().first().is_some_and(|t| t == probe_pos),
                             None => true,
@@ -4624,6 +4654,267 @@ mod tests {
             sentence.tokens()[0].has_pos_tag("JJ"),
             "from_xml resolves the shared English tagger for the filter like NoDisambiguationEnglishPartialPosTagFilter's constructor"
         );
+    }
+
+    fn english_word_filter_xml(args: &str) -> String {
+        format!(
+            r#"<?xml version="1.0" encoding="utf-8"?>
+<rules lang="ca">
+    <rule id="ANGLICISME" name="english words keep an unknown reading">
+        <pattern>
+            <token>for</token>
+            <marker><token regexp="yes">[a-z]+</token></marker>
+        </pattern>
+        <filter class="org.languagetool.rules.IsEnglishWordFilter" args="{args}"/>
+        <disambig action="add"><wd pos="EN"/></disambig>
+    </rule>
+</rules>"#
+        )
+    }
+
+    #[test]
+    fn english_word_filter_admits_tagged_english_forms_and_loads_own_tagger() {
+        if en_resource_dir().is_none() {
+            return;
+        }
+        let disambig = XmlDisambiguator::from_xml(&english_word_filter_xml("formPositions:2"))
+            .expect("compile IsEnglishWordFilter rule");
+        let mut english = make_sentence(vec![("for", vec!["SP"]), ("example", vec!["NC"])]);
+        disambig.disambiguate(&mut english);
+        assert!(
+            english.tokens()[1].has_pos_tag("EN"),
+            "an English-dictionary word at form position 2 passes IsEnglishWordFilter"
+        );
+        let mut foreign = make_sentence(vec![("for", vec!["SP"]), ("qzxvbk", vec!["NC"])]);
+        disambig.disambiguate(&mut foreign);
+        assert!(
+            !foreign.tokens()[1].has_pos_tag("EN"),
+            "a word the English tagger cannot tag must block the rule like Java's wordIsTagged"
+        );
+    }
+
+    #[test]
+    fn english_word_filter_postags_requires_full_tag_match_per_form() {
+        if en_resource_dir().is_none() {
+            return;
+        }
+        let disambig =
+            XmlDisambiguator::from_xml(&english_word_filter_xml("formPositions:2 postags:VB"))
+                .unwrap();
+        let mut verb = make_sentence(vec![("for", vec!["SP"]), ("run", vec!["NC"])]);
+        disambig.disambiguate(&mut verb);
+        assert!(
+            verb.tokens()[1].has_pos_tag("EN"),
+            "'run' tags VB so it passes the postags:VB constraint"
+        );
+        let mut noun = make_sentence(vec![("for", vec!["SP"]), ("furniture", vec!["NC"])]);
+        disambig.disambiguate(&mut noun);
+        assert!(
+            !noun.tokens()[1].has_pos_tag("EN"),
+            "'furniture' tags NN:U only, so postags:VB must reject the match like matchesPosTagRegex"
+        );
+    }
+
+    #[test]
+    fn match_lemma_filter_keeps_only_readings_with_that_lemma() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<rules lang="pl">
+    <rule id="MAJA_MAIC" name="mają to nie maić">
+        <pattern>
+            <token>mają</token>
+        </pattern>
+        <disambig action="filter"><match no="1">mieć</match></disambig>
+    </rule>
+</rules>"#;
+        let disambig = XmlDisambiguator::from_xml(xml).unwrap();
+        let mut sentence = AnalyzedSentence::new("mają", 0, "mają".len());
+        let readings = vec![
+            AnalyzedToken::new("mają", 0, 4)
+                .with_pos_tags(vec!["verb:fin:pl:ter:imperf:refl.nonrefl".to_string()])
+                .with_lemma("maić"),
+            AnalyzedToken::new("mają", 0, 4)
+                .with_pos_tags(vec!["subst:sg:inst:f".to_string()])
+                .with_lemma("maja"),
+            AnalyzedToken::new("mają", 0, 4)
+                .with_pos_tags(vec!["verb:fin:pl:ter:imperf:refl.nonrefl".to_string()])
+                .with_lemma("mieć"),
+        ];
+        let maja =
+            AnalyzedTokenReadings::new(AnalyzedToken::new("mają", 0, 4)).with_readings(readings);
+        sentence.set_tokens(vec![maja]);
+        disambig.disambiguate(&mut sentence);
+        let maja = &sentence.tokens()[0];
+        let kept: Vec<String> = maja
+            .readings()
+            .iter()
+            .map(|r| format!("{}/{}", r.lemma().unwrap_or("-"), r.pos_tags().join("+")))
+            .collect();
+        assert_eq!(
+            kept,
+            vec!["mieć/verb:fin:pl:ter:imperf:refl.nonrefl".to_string()],
+            "the MAJA_MAIC example outputform keeps only the mieć reading"
+        );
+    }
+
+    #[test]
+    fn match_lemma_filter_falls_back_to_a_tagless_token_when_nothing_survives() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<rules lang="pl">
+    <rule id="MAJA_MAIC" name="mają to nie maić">
+        <pattern>
+            <token>mają</token>
+        </pattern>
+        <disambig action="filter"><match no="1">nie_ma_takiego_lematu</match></disambig>
+    </rule>
+</rules>"#;
+        let disambig = XmlDisambiguator::from_xml(xml).unwrap();
+        let mut sentence = make_sentence(vec![("mają", vec!["subst:sg:inst:f"])]);
+        disambig.disambiguate(&mut sentence);
+        let maja = &sentence.tokens()[0];
+        assert_eq!(
+            maja.readings().len(),
+            1,
+            "the drained token keeps exactly one reading"
+        );
+        assert!(
+            maja.readings()[0].pos_tags().is_empty(),
+            "the surviving reading carries no POS tag"
+        );
+        assert_eq!(maja.token().token(), "mają");
+    }
+
+    #[test]
+    fn match_postag_regexp_replace_rewrites_each_matching_reading() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<rules lang="eo">
+    <rule id="VIVI" name="vivi vivon">
+        <pattern>
+            <marker><token inflected="yes" regexp="yes">viv(?:e[tg])?i</token></marker>
+            <token regexp="yes">viv(?:e[gt])?on</token>
+        </pattern>
+        <disambig action="replace"><match no="1" postag_regexp="yes" postag="V nt (.*)" postag_replace="V tr $1"/></disambig>
+    </rule>
+</rules>"#;
+        let disambig = XmlDisambiguator::from_xml(xml).unwrap();
+        let mut sentence = make_sentence_with_lemmas(vec![
+            ("vivis", "vivi", vec!["V nt 3 p", "V nt 1 s"]),
+            ("vivon", "vivon", vec!["N akz"]),
+        ]);
+        disambig.disambiguate(&mut sentence);
+        let vivis = &sentence.tokens()[0];
+        let rewritten: Vec<String> = vivis
+            .readings()
+            .iter()
+            .map(|r| format!("{}/{}", r.lemma().unwrap_or("-"), r.pos_tags().join("+")))
+            .collect();
+        assert_eq!(
+            rewritten,
+            vec!["vivi/V tr 3 p".to_string(), "vivi/V tr 1 s".to_string()],
+            "each V nt reading is rewritten to V tr with its group kept and lemma preserved"
+        );
+        let vivon = &sentence.tokens()[1];
+        assert_eq!(
+            vivon.readings().len(),
+            1,
+            "the action must only touch the marked token"
+        );
+        assert!(vivon.has_pos_tag("N akz"));
+    }
+
+    #[test]
+    fn remove_wd_restores_sentence_end_and_keeps_chunks() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<rules lang="en">
+    <rule id="TRAILING_JJ" name="drop trailing JJ">
+        <pattern>
+            <marker><token postag="JJ"/></marker>
+        </pattern>
+        <disambig action="remove"><wd pos="JJ"/></disambig>
+    </rule>
+</rules>"#;
+        let disambig = XmlDisambiguator::from_xml(xml).unwrap();
+        let mut sentence = make_sentence(vec![("quick", vec!["JJ", "NN"])]);
+        {
+            let last = sentence.tokens_mut().last_mut().unwrap();
+            last.set_chunks(vec!["B-NP".to_string()]);
+            last.add_sent_end();
+        }
+        disambig.disambiguate(&mut sentence);
+        let quick = &sentence.tokens()[0];
+        assert!(quick.has_pos_tag("NN"));
+        assert!(!quick.has_pos_tag("JJ"));
+        assert!(
+            quick.has_pos_tag("SENT_END"),
+            "removing the JJ reading must not drop the sentence-end marker"
+        );
+        assert_eq!(
+            quick.chunks().to_vec(),
+            vec!["B-NP".to_string()],
+            "the rewrite must carry over chunk tags"
+        );
+    }
+
+    #[test]
+    fn replace_wd_keeps_the_ignored_by_speller_flag() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<rules lang="br">
+    <rule id="DA_E" name="da as verb particle">
+        <pattern>
+            <marker><token>da</token></marker>
+            <token>gonnad</token>
+        </pattern>
+        <disambig action="replace"><wd pos="L e"/></disambig>
+    </rule>
+</rules>"#;
+        let disambig = XmlDisambiguator::from_xml(xml).unwrap();
+        let mut sentence = AnalyzedSentence::new("da gonnad", 0, 9);
+        let da_readings = vec![
+            AnalyzedToken::new("da", 0, 2).with_pos_tags(vec!["P".to_string()]),
+            AnalyzedToken::new("da", 0, 2).with_pos_tags(vec!["D e sp".to_string()]),
+        ];
+        let gonnad_readings =
+            vec![AnalyzedToken::new("gonnad", 3, 9).with_pos_tags(vec!["V ng".to_string()])];
+        sentence.set_tokens(vec![
+            AnalyzedTokenReadings::new(AnalyzedToken::new("da", 0, 2)).with_readings(da_readings),
+            AnalyzedTokenReadings::new(AnalyzedToken::new("gonnad", 3, 9))
+                .with_readings(gonnad_readings),
+        ]);
+        sentence.tokens_mut().first_mut().unwrap().ignore_spelling();
+        disambig.disambiguate(&mut sentence);
+        let da = &sentence.tokens()[0];
+        assert!(da.has_pos_tag("L e"));
+        assert!(!da.has_pos_tag("P"));
+        assert!(
+            da.is_ignored_by_speller(),
+            "replaced readings keep the ignored-by-speller flag"
+        );
+    }
+
+    #[test]
+    fn add_wd_skips_reading_that_already_exists() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<rules lang="en">
+    <rule id="PCT_AGAIN" name="add PCT again">
+        <pattern>
+            <token>.</token>
+        </pattern>
+        <disambig action="add"><wd pos="PCT"/></disambig>
+    </rule>
+</rules>"#;
+        let disambig = XmlDisambiguator::from_xml(xml).unwrap();
+        let mut sentence = make_sentence_with_lemmas(vec![(".", ".", vec![".", "PCT"])]);
+        disambig.disambiguate(&mut sentence);
+        let dot = &sentence.tokens()[0];
+        let pct_count = dot
+            .readings()
+            .iter()
+            .filter(|r| r.pos_tags().first() == Some(&"PCT".to_string()))
+            .count();
+        assert_eq!(
+            pct_count, 1,
+            "the already-present PCT reading must not be duplicated"
+        );
+        assert!(dot.has_pos_tag("."));
     }
 
     fn spaced_dots_sentence() -> AnalyzedSentence {
