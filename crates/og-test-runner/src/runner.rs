@@ -2247,6 +2247,52 @@ mod tests {
             check(&runner, word, &["JJ"]);
         }
     }
+
+    #[test]
+    fn ukrainian_runner_tokenizes_and_checks_examples() {
+        let runner = TestRunner::for_language("uk");
+        let sentence = runner.debug_sentence("Це тестове речення.");
+        let words: Vec<&str> = sentence
+            .non_whitespace_tokens()
+            .iter()
+            .map(|t| t.token().token())
+            .collect();
+        assert!(words.len() >= 3, "tokens: {words:?}");
+
+        let xml = simple_xml(
+            r#"
+            <rule id="UK_TEST" name="Ukrainian test">
+                <pattern>
+                    <token>тестове</token>
+                </pattern>
+                <message>Test</message>
+                <example type="incorrect">Це <marker>тестове</marker> речення.</example>
+            </rule>
+        "#,
+        );
+        let summary = runner.run_xml_example_tests(&xml);
+        assert_eq!(summary.total, 1);
+        assert!(summary.is_all_passed(), "{:?}", summary.results);
+    }
+
+    #[test]
+    fn sentence_offsets_shift_matches_across_sentences() {
+        let runner = test_support::shared_runner();
+        let xml = simple_xml(
+            r#"
+            <rule id="TWO_SENT" name="Two sentences">
+                <pattern>
+                    <token>teh</token>
+                </pattern>
+                <message>Did you mean <suggestion>the</suggestion>?</message>
+                <example type="incorrect">First one. <marker>Teh</marker> second.</example>
+            </rule>
+        "#,
+        );
+        let summary = runner.run_xml_example_tests(&xml);
+        assert_eq!(summary.total, 1);
+        assert!(summary.is_all_passed(), "{:?}", summary.results);
+    }
 }
 
 #[test]
