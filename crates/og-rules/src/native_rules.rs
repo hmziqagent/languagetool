@@ -1245,4 +1245,141 @@ mod tests {
             "custom comma pair flagged"
         );
     }
+
+    #[test]
+    fn native_rules_expose_java_metadata() {
+        let repeat = WordRepeatRule::default();
+        assert_eq!(repeat.id(), "WORD_REPEAT_RULE");
+        assert_eq!(repeat.description(), "Word repetition");
+        assert_eq!(repeat.category().id().as_str(), "MISC");
+        assert_eq!(repeat.issue_type().as_str(), "redundancy");
+
+        let double = DoublePunctuationRule::default();
+        assert_eq!(double.id(), "DOUBLE_PUNCTUATION");
+        assert_eq!(double.category().id().as_str(), "PUNCTUATION");
+        assert_eq!(double.issue_type().as_str(), "typographical");
+
+        let upper = UppercaseSentenceStartRule::default();
+        assert_eq!(upper.id(), "UPPERCASE_SENTENCE_START");
+        assert_eq!(upper.category().id().as_str(), "CASING");
+        assert_eq!(upper.issue_type().as_str(), "capitalization");
+
+        let comma = CommaWhitespaceRule::default();
+        assert_eq!(comma.id(), "COMMA_PARENTHESIS_WHITESPACE");
+        assert_eq!(comma.description(), "Whitespace around comma/parenthesis");
+        assert_eq!(comma.category().id().as_str(), "TYPOGRAPHY");
+        assert_eq!(comma.issue_type().as_str(), "whitespace");
+
+        let before = WhitespaceBeforePunctuationRule::default();
+        assert_eq!(before.id(), "WHITESPACE_PUNCTUATION");
+        assert_eq!(before.description(), "Whitespace before punctuation");
+        assert_eq!(before.category().id().as_str(), "TYPOGRAPHY");
+        assert_eq!(before.issue_type().as_str(), "whitespace");
+    }
+
+    #[test]
+    fn word_repeat_rule_skips_ignored_words_and_multibyte_context() {
+        let rule = WordRepeatRule::new().with_ignored_words(&["very", "so"]);
+        let sentence = make_sentence("very very good");
+        assert!(rule.match_sentence(&sentence).is_empty());
+
+        let prefix = "é".repeat(30);
+        let text = format!("{prefix} word word {prefix}");
+        let sentence = make_sentence(&text);
+        let matches = WordRepeatRule::new().match_sentence(&sentence);
+        assert_eq!(matches.len(), 1);
+        assert!(matches[0].context().text().starts_with('é'));
+    }
+
+    #[test]
+    fn uppercase_sentence_start_rule_skips_protected_starts() {
+        let rule = UppercaseSentenceStartRule::new();
+        assert!(
+            rule.match_sentence(&make_sentence_with_start("a fine day it is ."))
+                .len()
+                > 0,
+            "lowercase sentence start is flagged"
+        );
+        for text in [
+            "\u{201e}alles gut hier .",
+            "http://example.org is down .",
+            "www.example.org is down .",
+            "john@example.org writes .",
+            "iPhone sales rise .",
+        ] {
+            let sentence = make_sentence_with_start(text);
+            assert!(
+                rule.match_sentence(&sentence).is_empty(),
+                "{text} should not be flagged"
+            );
+        }
+
+        let mut numeral = make_punct_sentence("iii. something .");
+        numeral.tokens_mut().insert(
+            0,
+            og_core::AnalyzedTokenReadings::new(
+                og_core::AnalyzedToken::new("<S>", 0, 0)
+                    .with_pos_tags(vec!["SENT_START".to_string()]),
+            ),
+        );
+        assert!(
+            rule.match_sentence(&numeral).is_empty(),
+            "roman numeral with period is fine"
+        );
+
+        let mut immunized = make_sentence_with_start("a fine day .");
+        immunized.tokens_mut()[1].immunize();
+        assert!(rule.match_sentence(&immunized).is_empty());
+    }
+
+    #[test]
+    fn comma_whitespace_rule_skips_domains_and_double_commas() {
+        let rule = CommaWhitespaceRule::new().with_domain_after_dot_exception();
+        let sentence = make_punct_sentence("word .my-Domains more");
+        assert!(
+            rule.match_sentence(&sentence).is_empty(),
+            "'. Domains' is an accepted abbreviation pattern"
+        );
+
+        let sentence = make_punct_sentence("word ,, more");
+        assert!(
+            rule.match_sentence(&sentence).is_empty(),
+            "adjacent commas are handled by DoublePunctuation, not here"
+        );
+
+        let sentence = make_punct_sentence("word ./tree more");
+        assert!(
+            rule.match_sentence(&sentence).is_empty(),
+            "a period directly before a slash path keeps the spacing"
+        );
+    }
+
+    #[test]
+    fn whitespace_before_punctuation_rule_flags_colon_semicolon_percent() {
+        let rule = WhitespaceBeforePunctuationRule::new();
+        let sentence = make_punct_sentence("word : more");
+        let matches = rule.match_sentence(&sentence);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].message(), "No space before colon.");
+
+        let sentence = make_punct_sentence("word ; more");
+        let matches = rule.match_sentence(&sentence);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].message(), "No space before semicolon.");
+
+        let sentence = make_punct_sentence("50 % more");
+        let matches = rule.match_sentence(&sentence);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].message(), "No space before percentage sign.");
+
+        assert!(
+            rule.match_sentence(&make_punct_sentence("word: more"))
+                .is_empty()
+        );
+        let ratio = make_punct_sentence("word : 4 more");
+        assert!(
+            rule.match_sentence(&ratio).is_empty(),
+            "colon before a ratio number is fine"
+        );
+    }
 }
