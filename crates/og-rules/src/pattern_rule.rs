@@ -6971,6 +6971,216 @@ mod tests {
     }
 
     #[test]
+    fn rule_level_regexp_missing_mark_group_falls_back_to_whole_match() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <rule id="ALT_GROUPS" name="alternation">
+                <regexp mark="1">(zebra)|(cat)s</regexp>
+                <message>m</message>
+            </rule>
+        </rules>"#;
+        let matches = compile_and_match(xml, "The cats sleep.");
+        assert_eq!(matches.len(), 1);
+        let m = &matches[0];
+        assert_eq!(
+            &"The cats sleep."[m.offset()..m.offset() + m.length()],
+            "cats"
+        );
+    }
+
+    #[test]
+    fn rule_level_regexp_anti_pattern_filter_blocks_overlapping_matches() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <rule id="CURRENCY" name="Position of currency symbols">
+                <regexp>([0-9.,]{0,10}[0-9]{1,10})\s?([$€£])</regexp>
+                <filter class="org.languagetool.rules.patterns.RegexAntiPatternFilter" args="antipatterns:[0-9][-–—][0-9]{1,10}[$€£]"/>
+                <message>Put the currency mark first.</message>
+                <suggestion>$\1</suggestion>
+            </rule>
+        </rules>"#;
+        assert_eq!(
+            compile_and_match(xml, "You owe me 7.25$ today.").len(),
+            1,
+            "plain amount matches"
+        );
+        assert_eq!(
+            compile_and_match(xml, "Ranges like 1-10$ are fine.").len(),
+            0,
+            "the antipattern covers the match and suppresses it"
+        );
+        assert_eq!(
+            compile_and_match(xml, "The range 1-10 to 20$ is odd.").len(),
+            1,
+            "non-overlapping antipattern keeps the match"
+        );
+    }
+
+    #[test]
+    fn rule_level_regexp_suggestion_match_transforms_group_text() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <rule id="MATCH_TRANSFORM" name="match transforms">
+                <regexp case_sensitive="yes">(profa|srta)\.</regexp>
+                <message>Use <suggestion><match no="1" regexp_match="(profa|srta)" regexp_replace="Dra. "/><match no="1" case_conversion="startupper"/></suggestion>.</message>
+            </rule>
+        </rules>"#;
+        let matches = compile_and_match(xml, "A profa. spoke.");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(
+            matches[0]
+                .replacements()
+                .iter()
+                .map(|r| r.value())
+                .collect::<Vec<_>>(),
+            vec!["Dra. Profa"]
+        );
+    }
+
+    #[test]
+    fn rule_level_regexp_context_snaps_to_char_boundaries() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <rule id="BOUNDARY" name="boundary">
+                <regexp>cat</regexp>
+                <message>m</message>
+            </rule>
+        </rules>"#;
+        let prefix = "é".repeat(30);
+        let suffix = "é".repeat(30);
+        let text = format!("{prefix} cat {suffix}");
+        let matches = compile_and_match(&xml, &text);
+        assert_eq!(matches.len(), 1);
+        let context = matches[0].context();
+        assert!(context.text().starts_with('é'), "{}", context.text());
+        assert!(context.text().ends_with('é'), "{}", context.text());
+        assert_eq!(context.offset() % 2, 0, "context start is on an é boundary");
+    }
+
+    #[test]
+    fn rule_level_regexp_rule_metadata_reaches_the_match() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <category id="TYPOGRAPHY" name="Typography">
+                <rulegroup id="META_REGEXP" name="Metadata">
+                    <rule id="META_REGEXP_FIRST">
+                        <regexp>b+C</regexp>
+                        <short>short msg</short>
+                        <url>https://example.org/rule</url>
+                        <message>m</message>
+                    </rule>
+                </rulegroup>
+            </category>
+        </rules>"#;
+        let matches = compile_and_match(xml, "abBc");
+        assert_eq!(matches.len(), 1);
+        let m = &matches[0];
+        assert_eq!(m.rule().id(), "META_REGEXP_FIRST");
+        assert_eq!(m.short_message(), Some("short msg"));
+        assert_eq!(m.rule().category().id().as_str(), "TYPOGRAPHY");
+        assert_eq!(m.rule().category().name(), "Typography");
+    }
+
+    #[test]
+    fn pt_toponym_filter_runs_on_regexp_rules() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="pt">
+            <rule id="TOPONYM_REGEXP" name="meia-risca">
+                <regexp case_sensitive="yes" mark="2">(\p{Lu}\p{Ll}*)(\s?\((RJ)\))</regexp>
+                <filter class="org.languagetool.rules.pt.BrazilianToponymFilter" args="foo:bar"/>
+                <message>Use a meia-risca.</message>
+                <suggestion>{suggestion}</suggestion>
+            </rule>
+        </rules>"#;
+        let text = "Nasceu em Niterói (RJ) e morreu lá.";
+        let matches = compile_and_match(xml, text);
+        assert_eq!(matches.len(), 1);
+        let m = &matches[0];
+        assert_eq!(&text[m.offset()..m.offset() + m.length()], " (RJ)");
+        let reps: Vec<&str> = m.replacements().iter().map(|r| r.value()).collect();
+        assert_eq!(reps, vec!["–RJ"]);
+    }
+
+    #[test]
+    fn match_rules_builds_and_uses_the_word_index() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <rule id="INDEXED" name="indexed">
+                <pattern>
+                    <token>hello</token>
+                    <token>world</token>
+                </pattern>
+                <message>m</message>
+            </rule>
+            <rule id="CATCH_ALL" name="catch all">
+                <pattern>
+                    <token regexp="yes">he[l]{2}o</token>
+                    <token>world</token>
+                </pattern>
+                <message>m2</message>
+            </rule>
+        </rules>"#;
+        let compiler = XmlCompiler::new();
+        let rule_set = compiler.compile_file(xml).unwrap();
+        let rules: Vec<&CompiledRule> = rule_set.rules.iter().collect();
+        let engine = PatternRuleEngine::new();
+        let sentence = make_analyzed_sentence("Hello World");
+        let matches = engine.match_rules(&rules, &sentence);
+        assert_eq!(
+            matches.len(),
+            2,
+            "both the indexed and the catch-all rule fire"
+        );
+        let empty = engine.match_rules(&rules, &make_analyzed_sentence("nothing here"));
+        assert!(empty.is_empty());
+    }
+
+    #[test]
+    fn inflected_first_token_scans_positions_by_lemma() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="de">
+            <rule id="INFLECTED_FIRST" name="inflected first">
+                <pattern>
+                    <token inflected="yes">groß</token>
+                    <token>Haus</token>
+                </pattern>
+                <message>m</message>
+            </rule>
+        </rules>"#;
+        let compiler = XmlCompiler::new();
+        let rule_set = compiler.compile_file(xml).unwrap();
+        let engine = PatternRuleEngine::new();
+
+        let mut sentence = make_analyzed_sentence("ein großes Haus");
+        set_reading(&mut sentence, 1, "groß", "ADJ");
+        let matches: Vec<_> = rule_set
+            .rules
+            .iter()
+            .flat_map(|r| engine.match_rule(r, &sentence))
+            .collect();
+        assert_eq!(
+            matches.len(),
+            1,
+            "lemma 'groß' matches the inflected 'großes': {:?}",
+            matches
+                .iter()
+                .map(|m| m.rule().id().to_string())
+                .collect::<Vec<_>>()
+        );
+
+        let mut bare = make_analyzed_sentence("ein großes Haus");
+        let none: Vec<_> = rule_set
+            .rules
+            .iter()
+            .flat_map(|r| engine.match_rule(r, &bare))
+            .collect();
+        assert!(
+            none.is_empty(),
+            "without readings the lemma cannot be found"
+        );
+    }
+
+    #[test]
     fn test_simple_match() {
         let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
         <rules lang="en">
