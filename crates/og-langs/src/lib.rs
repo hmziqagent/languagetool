@@ -6,6 +6,25 @@ pub use en::*;
 pub use engine::*;
 pub use registry::*;
 
+#[cfg(all(test, target_os = "linux"))]
+#[unsafe(link_section = ".init_array")]
+#[used]
+static BOUND_TEST_ALLOCATOR: extern "C" fn() = {
+    // glibc's dynamic mmap threshold funnels freed multi-MB dictionaries back into
+    // per-thread arenas; malloc_trim cannot return those pages and long runs OOM.
+    extern "C" fn bound() {
+        unsafe {
+            libc::mallopt(libc::M_ARENA_MAX, 2);
+            libc::mallopt(libc::M_MMAP_THRESHOLD, 2 * 1024 * 1024);
+            libc::mallopt(libc::M_TRIM_THRESHOLD, 4 * 1024 * 1024);
+        }
+        let _ = rayon::ThreadPoolBuilder::new()
+            .num_threads(2)
+            .build_global();
+    }
+    bound
+};
+
 #[cfg(test)]
 pub(crate) fn release_guard() -> impl Drop {
     struct ReleaseOnDrop {

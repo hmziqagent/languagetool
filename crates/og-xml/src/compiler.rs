@@ -40,20 +40,47 @@ fn plain_fancy(pattern: &str) -> Option<fancy_regex::Regex> {
 
 pub fn shared_cached_regex(pattern: &str) -> Option<SharedRegex> {
     static PLAIN: std::sync::OnceLock<Vec<RegexCacheShard>> = std::sync::OnceLock::new();
-    let shards = PLAIN.get_or_init(shard_vec);
+    let shards = PLAIN.get_or_init(|| {
+        register_regex_releaser(&PLAIN, || {
+            PLAIN
+                .get()
+                .map(|v| v.iter().for_each(|s| s.lock().unwrap().clear()));
+        });
+        shard_vec()
+    });
     lookup_or_build(shards, pattern, plain_regex)
 }
 
 pub fn shared_cached_regex_ci(pattern: &str) -> Option<SharedRegex> {
     static CI: std::sync::OnceLock<Vec<RegexCacheShard>> = std::sync::OnceLock::new();
-    let shards = CI.get_or_init(shard_vec);
+    let shards = CI.get_or_init(|| {
+        register_regex_releaser(&CI, || {
+            CI.get()
+                .map(|v| v.iter().for_each(|s| s.lock().unwrap().clear()));
+        });
+        shard_vec()
+    });
     lookup_or_build(shards, pattern, crate::java_case_fold::compile_java_ci)
 }
 
 pub fn shared_cached_fancy_regex(pattern: &str) -> Option<SharedFancyRegex> {
     static FANCY: std::sync::OnceLock<Vec<FancyRegexCacheShard>> = std::sync::OnceLock::new();
-    let shards = FANCY.get_or_init(shard_vec);
+    let shards = FANCY.get_or_init(|| {
+        register_regex_releaser(&FANCY, || {
+            FANCY
+                .get()
+                .map(|v| v.iter().for_each(|s| s.lock().unwrap().clear()));
+        });
+        shard_vec()
+    });
     lookup_or_build(shards, pattern, plain_fancy)
+}
+
+fn register_regex_releaser<T>(cell: &'static std::sync::OnceLock<T>, clear: fn()) {
+    og_core::releasable::register_releaser(
+        cell as *const std::sync::OnceLock<T> as usize,
+        std::sync::Arc::new(move |_| clear()),
+    );
 }
 
 fn lookup_or_build<T>(

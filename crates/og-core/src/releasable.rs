@@ -30,11 +30,17 @@ impl<T> Default for Releasable<T> {
     }
 }
 
-type ReleaseFn = std::sync::Arc<dyn Fn(Option<Instant>) + Send + Sync>;
+pub type ReleaseFn = std::sync::Arc<dyn Fn(Option<Instant>) + Send + Sync>;
 
 fn registry() -> &'static Mutex<HashMap<usize, ReleaseFn>> {
     static REGISTRY: OnceLock<Mutex<HashMap<usize, ReleaseFn>>> = OnceLock::new();
     REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+pub fn register_releaser(key: usize, release: ReleaseFn) {
+    if let Ok(mut registry) = registry().lock() {
+        registry.entry(key).or_insert(release);
+    }
 }
 
 pub fn shared_get_or_build<T>(
