@@ -614,4 +614,196 @@ mod tests {
         assert!(is_misspelled("каждя"));
         assert!(!is_misspelled("123"));
     }
+
+    #[test]
+    fn advanced_synthesizer_handles_degenerate_and_marker_args() {
+        let Some(synth) = synth() else {
+            panic!("russian_synth.dict must load");
+        };
+        let readings = tagged(&["моему", "отношение"]);
+        let tokens: Vec<&AnalyzedTokenReadings> = readings.iter().collect();
+        let matched_texts: Vec<String> = vec!["моему".to_string(), "отношение".to_string()];
+        let rm = bare_rm(&["{suggestion} отношение"]);
+
+        assert!(
+            advanced_synthesizer_filter(
+                Some(synth.as_ref()),
+                unify_args(),
+                &matched_texts,
+                &[],
+                &tokens,
+                rm.clone()
+            )
+            .is_none(),
+            "no matched positions drops the match"
+        );
+
+        let out = advanced_synthesizer_filter(
+            Some(synth.as_ref()),
+            unify_args(),
+            &matched_texts,
+            &[0, 9],
+            &tokens,
+            rm.clone(),
+        )
+        .expect("kept unchanged");
+        assert_eq!(out.replacements()[0].value(), "{suggestion} отношение");
+
+        let out = advanced_synthesizer_filter(
+            Some(synth.as_ref()),
+            "lemmaFrom:1 lemmaSelect:ADJ:MPR:.*:.*",
+            &matched_texts,
+            &[0, 1],
+            &tokens,
+            rm.clone(),
+        )
+        .expect("kept without the required args");
+        assert_eq!(out.replacements()[0].value(), "{suggestion} отношение");
+
+        let underscore = format!("{} newLemma:_", unify_args());
+        assert!(
+            advanced_synthesizer_filter(
+                Some(synth.as_ref()),
+                &underscore,
+                &matched_texts,
+                &[0, 1],
+                &tokens,
+                rm.clone(),
+            )
+            .is_none(),
+            "newLemma:_ removes the lemma and the match"
+        );
+
+        let literal = format!("{} newLemma:наш", unify_args());
+        let out = advanced_synthesizer_filter(
+            Some(synth.as_ref()),
+            &literal,
+            &matched_texts,
+            &[0, 1],
+            &tokens,
+            rm.clone(),
+        )
+        .expect("kept with a literal lemma");
+        assert!(
+            out.replacements()[0].value().starts_with("наш"),
+            "{:?}",
+            out.replacements()[0].value()
+        );
+    }
+
+    #[test]
+    fn advanced_synthesizer_applies_marker_specs_and_case() {
+        let values = run_unify(
+            &["моему", "отношение"],
+            "lemmaFrom:marker lemmaSelect:ADJ:MPR:.*:.* postagFrom:2 postagSelect:NN:.*:(.*):.*:(.*) postagReplace:ADJ:MPR:\\b1:\\b2",
+            "{suggestion} отношение",
+        );
+        assert_eq!(values, vec!["моё отношение".to_string()]);
+
+        let readings = tagged(&["Моему", "отношение"]);
+        let tokens: Vec<&AnalyzedTokenReadings> = readings.iter().collect();
+        let matched_texts: Vec<String> = vec!["Моему".to_string(), "отношение".to_string()];
+        let text = "Моему отношение";
+        let mut rm = RuleMatch::new(
+            "",
+            0,
+            text.len(),
+            og_core::RuleMatchRule::new("X", "d"),
+            og_core::RuleMatchContext::new(text.to_string(), 0, text.len()),
+        );
+        rm.set_replacements(vec![SuggestedReplacement::new("{SUGGESTION} отношение")]);
+        let Some(synth) = synth() else {
+            panic!("russian_synth.dict must load");
+        };
+        let out = advanced_synthesizer_filter(
+            Some(synth.as_ref()),
+            unify_args(),
+            &matched_texts,
+            &[0, 1],
+            &tokens,
+            rm,
+        )
+        .expect("kept");
+        assert_eq!(
+            out.replacements()
+                .iter()
+                .map(|r| r.value().to_string())
+                .collect::<Vec<_>>(),
+            vec!["МОЁ отношение".to_string()],
+            "capitalized surface uppercases the SUGGESTION placeholder form"
+        );
+    }
+
+    #[test]
+    fn marker_or_index_resolves_specs() {
+        let readings = tagged(&["моему", "отношение"]);
+        let tokens: Vec<&AnalyzedTokenReadings> = readings.iter().collect();
+        assert_eq!(marker_or_index("2", &tokens, 0), Some(1));
+        assert_eq!(marker_or_index("0", &tokens, 0), None);
+        assert_eq!(marker_or_index("9", &tokens, 0), None);
+        assert_eq!(marker_or_index("marker", &tokens, 0), Some(0));
+        assert_eq!(
+            marker_or_index("marker", &tokens, readings[1].token().start()),
+            Some(1)
+        );
+        assert_eq!(marker_or_index("junk", &tokens, 0), None);
+    }
+
+    #[test]
+    fn select_reading_falls_back_to_the_first_reading() {
+        let untagged = AnalyzedTokenReadings::new(AnalyzedToken::new("слово", 0, 5));
+        assert_eq!(select_reading(&untagged, "NN:.*"), (None, "UNKNOWN"));
+
+        let readings = vec![
+            AnalyzedToken::new("слово", 0, 5).with_lemma("слово"),
+            AnalyzedToken::new("слово", 0, 5).with_lemma("иное"),
+        ];
+        let atr =
+            AnalyzedTokenReadings::new(AnalyzedToken::new("слово", 0, 5)).with_readings(readings);
+        assert_eq!(select_reading(&atr, "NN:.*"), (Some("слово"), "UNKNOWN"));
+    }
+
+    #[test]
+    fn tokenizer_merges_the_b_slash_abbreviations() {
+        assert_eq!(
+            tokenize_for_misspelling("б/у авто"),
+            vec!["б/у".to_string(), " ".to_string(), "авто".to_string()]
+        );
+        assert_eq!(
+            tokenize_for_misspelling("просто текст"),
+            vec!["просто".to_string(), " ".to_string(), "текст".to_string()]
+        );
+        assert!(!is_misspelled("авто"));
+    }
+
+    #[test]
+    fn suppress_producer_filters_by_postag() {
+        let out = accept_rule_match(bare_rm(&["красный"]), "SuppressPostag:ADJ.*", &[]);
+        assert!(
+            out.is_none(),
+            "adjective suggestion suppressed and the match drops"
+        );
+
+        let out =
+            accept_rule_match(bare_rm(&["стол", "быстро"]), "FilterPostag:NN.*", &[]).unwrap();
+        let values: Vec<String> = out
+            .replacements()
+            .iter()
+            .map(|r| r.value().to_string())
+            .collect();
+        assert_eq!(values, vec!["стол".to_string()]);
+    }
+
+    #[test]
+    fn synthesizer_rejects_unknown_lemmas_and_patterns() {
+        let Some(synth) = synth() else {
+            panic!("russian_synth.dict must load");
+        };
+        assert!(
+            synth
+                .synthesize_exact("несуществующееслово", "ADJ:MPR:Neut:Nom")
+                .is_empty()
+        );
+        assert!(synth.synthesize_exact("мой", "([").is_empty());
+    }
 }
