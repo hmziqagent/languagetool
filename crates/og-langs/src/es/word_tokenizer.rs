@@ -143,7 +143,27 @@ impl SpanishWordTokenizer {
 }
 
 fn is_protocol(token: &str) -> bool {
-    matches!(token, "http" | "https" | "ftp")
+    matches!(
+        token,
+        "http"
+            | "https"
+            | "ws"
+            | "wss"
+            | "ftp"
+            | "ftps"
+            | "sftp"
+            | "file"
+            | "mailto"
+            | "tel"
+            | "sms"
+            | "git"
+            | "ssh"
+            | "data"
+            | "magnet"
+            | "smb"
+            | "slack"
+            | "spotify"
+    )
 }
 
 fn join_emails(list: Vec<String>) -> Vec<String> {
@@ -204,7 +224,8 @@ fn url_starts_at(i: usize, list: &[String]) -> bool {
 
 fn url_chars_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"^[a-zA-ZÄÖÜäöü0-9/%$\-_.+!*'(),?#~]+$").unwrap())
+    // Java's "[a-zA-ZÄÖÜäöü0-9/%$-_.+!*'(),?#~]" reads $-_. as the range 0x24..='_' (so ':' '=' '&' '@' match)
+    RE.get_or_init(|| Regex::new(r"^[a-zA-ZÄÖÜäöü0-9/%$-_.+!*'(),?#~]+$").unwrap())
 }
 
 fn is_java_whitespace(token: &str) -> bool {
@@ -347,5 +368,240 @@ mod tests {
         let joined: String = tokens.iter().map(|t| t.text().to_string()).collect();
         assert_eq!(joined, text);
         assert_eq!(tokens.last().unwrap().end(), text.len());
+    }
+
+    #[test]
+    fn joins_e_mail_addresses_into_one_token() {
+        assert_eq!(
+            tokenized("dev.all@languagetool.org"),
+            vec!["dev.all@languagetool.org"]
+        );
+        assert_eq!(
+            tokenized("dev.all@languagetool.org."),
+            vec!["dev.all@languagetool.org", "."]
+        );
+        assert_eq!(
+            tokenized("dev.all@languagetool.org:"),
+            vec!["dev.all@languagetool.org", ":"]
+        );
+        assert_eq!(
+            tokenized("Schreiben Sie Hr. Meier (meier@mail.com)."),
+            vec![
+                "Schreiben",
+                " ",
+                "Sie",
+                " ",
+                "Hr",
+                ".",
+                " ",
+                "Meier",
+                " ",
+                "(",
+                "meier@mail.com",
+                ")",
+                "."
+            ]
+        );
+    }
+
+    #[test]
+    fn joins_protocol_urls_and_stops_at_trailing_punctuation() {
+        assert_eq!(
+            tokenized("This http://foo.org blah"),
+            vec!["This", " ", "http://foo.org", " ", "blah"]
+        );
+        assert_eq!(
+            tokenized("This http://foo.org."),
+            vec!["This", " ", "http://foo.org", "."]
+        );
+        assert_eq!(
+            tokenized("This http://foo.org..."),
+            vec!["This", " ", "http://foo.org", ".", ".", "."]
+        );
+        assert_eq!(
+            tokenized("This http://foo.org and ftp://bla.com blah"),
+            vec![
+                "This",
+                " ",
+                "http://foo.org",
+                " ",
+                "and",
+                " ",
+                "ftp://bla.com",
+                " ",
+                "blah"
+            ]
+        );
+    }
+
+    #[test]
+    fn keeps_ports_query_and_credentials_inside_the_url() {
+        assert_eq!(
+            tokenized("foo http://localhost:32000/?ch=1 bar"),
+            vec!["foo", " ", "http://localhost:32000/?ch=1", " ", "bar"]
+        );
+        assert_eq!(
+            tokenized("foo http://google.de/?aaa bar"),
+            vec!["foo", " ", "http://google.de/?aaa", " ", "bar"]
+        );
+        assert_eq!(
+            tokenized("foo http://www.youtube.com/watch?v=wDN_EYUvUq0 bar"),
+            vec![
+                "foo",
+                " ",
+                "http://www.youtube.com/watch?v=wDN_EYUvUq0",
+                " ",
+                "bar"
+            ]
+        );
+        assert_eq!(
+            tokenized(
+                "foo https://joe:passwd@example.net:8080/index.html?action=x&session=A54C6FE2#info bar"
+            ),
+            vec![
+                "foo",
+                " ",
+                "https://joe:passwd@example.net:8080/index.html?action=x&session=A54C6FE2#info",
+                " ",
+                "bar"
+            ]
+        );
+    }
+
+    #[test]
+    fn joins_urls_wrapped_in_quotes_or_brackets() {
+        assert_eq!(
+            tokenized("This 'http://foo.org' blah"),
+            vec!["This", " ", "'", "http://foo.org", "'", " ", "blah"]
+        );
+        assert_eq!(
+            tokenized("This \"http://foo.org\" blah"),
+            vec!["This", " ", "\"", "http://foo.org", "\"", " ", "blah"]
+        );
+        assert_eq!(
+            tokenized("This (\"http://foo.org\") blah"),
+            vec![
+                "This",
+                " ",
+                "(",
+                "\"",
+                "http://foo.org",
+                "\"",
+                ")",
+                " ",
+                "blah"
+            ]
+        );
+        assert_eq!(
+            tokenized("foo (http://ex.net/p?a=x#i) bar"),
+            vec!["foo", " ", "(", "http://ex.net/p?a=x#i", ")", " ", "bar"]
+        );
+        assert_eq!(
+            tokenized("foo http://ex.net/p?a=x#i, bar"),
+            vec!["foo", " ", "http://ex.net/p?a=x#i", ",", " ", "bar"]
+        );
+    }
+
+    #[test]
+    fn joins_bare_domains_only_when_a_slash_follows() {
+        assert_eq!(
+            tokenized("Get more at languagetool.org/foo, and via twitter"),
+            vec![
+                "Get",
+                " ",
+                "more",
+                " ",
+                "at",
+                " ",
+                "languagetool.org/foo",
+                ",",
+                " ",
+                "and",
+                " ",
+                "via",
+                " ",
+                "twitter"
+            ]
+        );
+        assert_eq!(
+            tokenized("Get more at languagetool.org and via twitter"),
+            vec![
+                "Get",
+                " ",
+                "more",
+                " ",
+                "at",
+                " ",
+                "languagetool",
+                ".",
+                "org",
+                " ",
+                "and",
+                " ",
+                "via",
+                " ",
+                "twitter"
+            ]
+        );
+        assert_eq!(
+            tokenized("Get more at sub.languagetool.org/foo, and via twitter"),
+            vec![
+                "Get",
+                " ",
+                "more",
+                " ",
+                "at",
+                " ",
+                "sub.languagetool.org/foo",
+                ",",
+                " ",
+                "and",
+                " ",
+                "via",
+                " ",
+                "twitter"
+            ]
+        );
+        assert_eq!(
+            tokenized("Visite www.example.org/hoy."),
+            vec!["Visite", " ", "www.example.org/hoy", "."]
+        );
+    }
+
+    #[test]
+    fn joins_every_protocol_the_java_tokenizer_knows() {
+        for protocol in [
+            "ws", "wss", "ftps", "sftp", "file", "git", "ssh", "data", "magnet", "smb", "slack",
+            "spotify",
+        ] {
+            let text = format!("foo {protocol}://example.net/x bar");
+            assert_eq!(
+                tokenized(&text),
+                vec![
+                    "foo".to_string(),
+                    " ".to_string(),
+                    format!("{protocol}://example.net/x"),
+                    " ".to_string(),
+                    "bar".to_string()
+                ],
+                "protocol {protocol}"
+            );
+        }
+    }
+
+    #[test]
+    fn variation_selectors_attach_to_the_previous_token() {
+        assert_eq!(
+            tokenized("1\u{FE0F}\u{20E3} de junio"),
+            vec!["1\u{FE0F}", "\u{20E3}", " ", "de", " ", "junio"]
+        );
+    }
+
+    #[test]
+    fn default_matches_new() {
+        assert_eq!(
+            SpanishWordTokenizer::default().tokenize_strings("e-mails"),
+            SpanishWordTokenizer::new().tokenize_strings("e-mails")
+        );
     }
 }
