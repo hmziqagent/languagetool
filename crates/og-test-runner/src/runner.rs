@@ -1557,10 +1557,14 @@ mod tests {
         assert_eq!(
             residue, expected,
             "the German residue must stay pinned: the one ZUSAMMENSCHREIBUNG_HINTER example \
-             dies in RemoveUnknownCompoundsFilter because no spelled form of the compound \
-             'hinterherspioniert' is accepted (hunspell 1.6.2 and 1.7.2 built from the vendored \
-             sources reject it on LT's exact aff+dic, and no de accept list carries it); new or \
-             changed failures mean an engine regression"
+             dies in RemoveUnknownCompoundsFilter exactly as it does in Java on this data — \
+             LT's own de_DE.dic carries 'hinterher' with no compound flags and only the bare \
+             lemma 'hinterherspionieren', so hunspell 1.7 (the libhunspell-1.7.so bundled by \
+             com.gitlab.dumonts:hunspell:2.1.2, verified: it flags 'hinterherspioniert' and \
+             even suggests splitting it) rejects the compound, it appears in no accept list \
+             (ignore.txt/spelling*.txt), so isMisspelled is true and the filter drops the \
+             match; making it pass would require engine behavior or data Java itself does \
+             not have; new or changed failures mean an engine regression"
         );
         eprintln!("Summary: {}/{} passed", summary.passed, summary.total);
     }
