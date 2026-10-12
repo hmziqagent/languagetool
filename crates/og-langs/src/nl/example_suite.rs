@@ -617,3 +617,120 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod synthetic_evaluator_tests {
+    use super::*;
+
+    fn write_temp(name: &str, xml: &str) -> PathBuf {
+        let path =
+            std::env::temp_dir().join(format!("og_nl_synthetic_{name}_{}.xml", std::process::id()));
+        std::fs::write(&path, xml).expect("write synthetic rules");
+        path
+    }
+
+    fn synthetic_grammar() -> String {
+        [
+            "<rules lang=\"nl\">",
+            "<rule id=\"SYN_MATCH\" name=\"syn match\">",
+            "<pattern><token>gronz</token></pattern>",
+            "<message>slecht</message>",
+            "<example type=\"incorrect\">Dit is een <marker>gronz</marker> hier.</example>",
+            "<example type=\"correct\">Dit is goed.</example>",
+            "</rule>",
+            "<rule id=\"SYN_NOMATCH\" name=\"syn nomatch\">",
+            "<pattern><token>zzzqqq</token></pattern>",
+            "<message>slecht</message>",
+            "<example type=\"incorrect\">Niets te zien.</example>",
+            "</rule>",
+            "<rule id=\"SYN_FP\" name=\"syn fp\">",
+            "<pattern><token>Dit</token></pattern>",
+            "<message>slecht</message>",
+            "<example type=\"correct\">Dit is goed.</example>",
+            "</rule>",
+            "<rule id=\"SYN_MARKER_MISS\" name=\"syn marker miss\">",
+            "<pattern><token>geval</token></pattern>",
+            "<message>slecht</message>",
+            "<example type=\"incorrect\">Dit is <marker>gronz</marker> een geval.</example>",
+            "</rule>",
+            "<rulegroup id=\"SYN_GROUP\">",
+            "<antipattern>",
+            "<example type=\"correct\">Groep blorp geval.</example>",
+            "</antipattern>",
+            "<rule name=\"g1\">",
+            "<antipattern>",
+            "<example type=\"correct\">Geen enkel woord hiervan.</example>",
+            "</antipattern>",
+            "<pattern><token>blorp</token></pattern>",
+            "<message>slecht</message>",
+            "<example type=\"incorrect\">Groep <marker>blorp</marker> geval.</example>",
+            "</rule>",
+            "</rulegroup>",
+            "<!-- <example type=\"correct\">commented</example> -->",
+            "</rules>",
+        ]
+        .join("\n")
+    }
+
+    #[test]
+    fn evaluate_examples_file_classifies_synthetic_outcomes_and_group_antipatterns() {
+        let path = write_temp("grammar", &synthetic_grammar());
+        let artifact_path = std::env::temp_dir().join(format!(
+            "og_nl_synthetic_grammar_{}.txt",
+            std::process::id()
+        ));
+        evaluate_examples_file(&path, "synthetic", artifact_path.to_str().unwrap());
+        let artifact = std::fs::read_to_string(&artifact_path).unwrap_or_default();
+
+        assert!(
+            artifact.contains(
+                "FAIL: [SYN_NOMATCH] Expected match on incorrect example but got none: 'Niets te zien.'"
+            ),
+            "the unmatched incorrect example must be recorded as a NoMatch failure: {artifact}"
+        );
+        assert!(
+            artifact.contains("FAIL: [SYN_FP] Expected no match on correct example but got"),
+            "the firing rule on a correct example must be recorded as a false positive: {artifact}"
+        );
+        assert!(
+            artifact.contains("does not contain marker"),
+            "a match outside the marker span must be recorded as a marker failure: {artifact}"
+        );
+        assert!(
+            artifact.contains(
+                "FAIL: [SYN_GROUP ANTIPATTERN]: Expected no match (group antipattern example) but got"
+            ),
+            "a group-level antipattern example on which a sub-rule still fires must be recorded: {artifact}"
+        );
+        assert!(
+            !artifact.contains("SYN_MATCH"),
+            "the rule whose match covers the marker and whose correct example stays clean must pass: {artifact}"
+        );
+        assert!(
+            !artifact.contains("SYN_GROUP/1 ANTIPATTERN"),
+            "the rule-level antipattern that stays clean must pass: {artifact}"
+        );
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&artifact_path);
+    }
+
+    #[test]
+    fn collect_antipattern_examples_splits_rule_and_group_levels() {
+        let nc = strip_xml_comments(&synthetic_grammar());
+        let antipattern = collect_antipattern_examples(&nc);
+        assert_eq!(
+            antipattern
+                .rule_level
+                .get(&("SYN_GROUP".to_string(), 1))
+                .map(Vec::len),
+            Some(1),
+            "the antipattern inside the sub-rule keys as (group id, position)"
+        );
+        assert_eq!(
+            antipattern.group_level.get("SYN_GROUP").map(Vec::len),
+            Some(1),
+            "the antipattern before any sub-rule keys as group-level"
+        );
+    }
+}
