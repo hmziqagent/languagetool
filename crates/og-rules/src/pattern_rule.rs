@@ -5980,6 +5980,458 @@ mod tests {
         );
     }
 
+    #[test]
+    fn french_date_filter_parsers_match_java() {
+        assert_eq!(parse_month_for(DateLang::Fr, "janvier"), 1);
+        assert_eq!(parse_month_for(DateLang::Fr, "Février"), 2);
+        assert_eq!(parse_month_for(DateLang::Fr, "fevr"), 2);
+        assert_eq!(parse_month_for(DateLang::Fr, "mars"), 3);
+        assert_eq!(parse_month_for(DateLang::Fr, "avril"), 4);
+        assert_eq!(parse_month_for(DateLang::Fr, "mai"), 5);
+        assert_eq!(parse_month_for(DateLang::Fr, "juin"), 6);
+        assert_eq!(parse_month_for(DateLang::Fr, "juillet"), 7);
+        assert_eq!(parse_month_for(DateLang::Fr, "aout"), 8);
+        assert_eq!(parse_month_for(DateLang::Fr, "août"), 8);
+        assert_eq!(parse_month_for(DateLang::Fr, "septembre"), 9);
+        assert_eq!(parse_month_for(DateLang::Fr, "octobre"), 10);
+        assert_eq!(parse_month_for(DateLang::Fr, "novembre"), 11);
+        assert_eq!(parse_month_for(DateLang::Fr, "décembre"), 12);
+        assert_eq!(parse_month_for(DateLang::Fr, "decembre"), 12);
+        assert_eq!(parse_month_for(DateLang::Fr, "jui"), 0);
+        assert_eq!(parse_month_french("juil"), 7);
+        assert_eq!(parse_month_french("xyz"), 0);
+
+        assert_eq!(parse_weekday_for(DateLang::Fr, "dimanche"), 1);
+        assert_eq!(parse_weekday_for(DateLang::Fr, "lundi"), 2);
+        assert_eq!(parse_weekday_for(DateLang::Fr, "mardi"), 3);
+        assert_eq!(parse_weekday_for(DateLang::Fr, "mercredi"), 4);
+        assert_eq!(parse_weekday_for(DateLang::Fr, "jeudi"), 5);
+        assert_eq!(parse_weekday_for(DateLang::Fr, "vendredi"), 6);
+        assert_eq!(parse_weekday_for(DateLang::Fr, "samedi"), 7);
+        assert_eq!(parse_weekday_french("octave"), 0);
+    }
+
+    #[test]
+    fn spanish_date_filter_parsers_match_java() {
+        assert_eq!(parse_month_for(DateLang::Es, "enero"), 1);
+        assert_eq!(parse_month_for(DateLang::Es, "febrero"), 2);
+        assert_eq!(parse_month_for(DateLang::Es, "marzo"), 3);
+        assert_eq!(parse_month_for(DateLang::Es, "mzo"), 3);
+        assert_eq!(parse_month_for(DateLang::Es, "abril"), 4);
+        assert_eq!(parse_month_for(DateLang::Es, "mayo"), 5);
+        assert_eq!(parse_month_for(DateLang::Es, "my"), 5);
+        assert_eq!(parse_month_for(DateLang::Es, "junio"), 6);
+        assert_eq!(parse_month_for(DateLang::Es, "jn"), 6);
+        assert_eq!(parse_month_for(DateLang::Es, "julio"), 7);
+        assert_eq!(parse_month_for(DateLang::Es, "jl"), 7);
+        assert_eq!(parse_month_for(DateLang::Es, "agosto"), 8);
+        assert_eq!(parse_month_for(DateLang::Es, "septiembre"), 9);
+        assert_eq!(parse_month_for(DateLang::Es, "octubre"), 10);
+        assert_eq!(parse_month_for(DateLang::Es, "noviembre"), 11);
+        assert_eq!(parse_month_for(DateLang::Es, "diciembre"), 12);
+        assert_eq!(parse_month_spanish("jun"), 6);
+        assert_eq!(parse_month_spanish("jul"), 7);
+        assert_eq!(parse_month_spanish("ju"), 0);
+
+        assert_eq!(parse_weekday_for(DateLang::Es, "do"), 1);
+        assert_eq!(parse_weekday_for(DateLang::Es, "domingo"), 1);
+        assert_eq!(parse_weekday_for(DateLang::Es, "lu"), 2);
+        assert_eq!(parse_weekday_for(DateLang::Es, "lunes"), 2);
+        assert_eq!(parse_weekday_for(DateLang::Es, "ma"), 3);
+        assert_eq!(parse_weekday_for(DateLang::Es, "martes"), 3);
+        assert_eq!(parse_weekday_for(DateLang::Es, "mi"), 4);
+        assert_eq!(parse_weekday_for(DateLang::Es, "miércoles"), 4);
+        assert_eq!(parse_weekday_for(DateLang::Es, "ju"), 5);
+        assert_eq!(parse_weekday_for(DateLang::Es, "jueves"), 5);
+        assert_eq!(parse_weekday_for(DateLang::Es, "vi"), 6);
+        assert_eq!(parse_weekday_for(DateLang::Es, "viernes"), 6);
+        assert_eq!(parse_weekday_for(DateLang::Es, "sa"), 7);
+        assert_eq!(parse_weekday_for(DateLang::Es, "sábado"), 7);
+        assert_eq!(parse_weekday_spanish("xd"), 0);
+    }
+
+    #[test]
+    fn portuguese_date_filter_parsers_match_java() {
+        assert_eq!(parse_month_for(DateLang::Pt, "janeiro"), 1);
+        assert_eq!(parse_month_for(DateLang::Pt, "fevereiro"), 2);
+        assert_eq!(parse_month_for(DateLang::Pt, "março"), 3);
+        assert_eq!(parse_month_for(DateLang::Pt, "abril"), 4);
+        assert_eq!(parse_month_for(DateLang::Pt, "maio"), 5);
+        assert_eq!(parse_month_for(DateLang::Pt, "junho"), 6);
+        assert_eq!(parse_month_for(DateLang::Pt, "julho"), 7);
+        assert_eq!(parse_month_for(DateLang::Pt, "agosto"), 8);
+        assert_eq!(parse_month_for(DateLang::Pt, "setembro"), 9);
+        assert_eq!(parse_month_for(DateLang::Pt, "outubro"), 10);
+        assert_eq!(parse_month_for(DateLang::Pt, "novembro"), 11);
+        assert_eq!(parse_month_for(DateLang::Pt, "dezembro"), 12);
+        assert_eq!(
+            parse_month_portuguese("x\u{AD}yz"),
+            0,
+            "soft hyphen trimmed"
+        );
+        assert_eq!(parse_month_portuguese("nada"), 0);
+
+        assert_eq!(parse_weekday_for(DateLang::Pt, "domingo"), 1);
+        assert_eq!(parse_weekday_for(DateLang::Pt, "segunda"), 2);
+        assert_eq!(parse_weekday_for(DateLang::Pt, "terça"), 3);
+        assert_eq!(parse_weekday_for(DateLang::Pt, "quarta"), 4);
+        assert_eq!(parse_weekday_for(DateLang::Pt, "quinta"), 5);
+        assert_eq!(parse_weekday_for(DateLang::Pt, "sexta"), 6);
+        assert_eq!(parse_weekday_for(DateLang::Pt, "sábado"), 7);
+        assert_eq!(parse_weekday_portuguese("folded"), 0);
+    }
+
+    #[test]
+    fn dutch_date_filter_parsers_match_java() {
+        assert_eq!(parse_month_for(DateLang::Nl, "januari"), 1);
+        assert_eq!(parse_month_for(DateLang::Nl, "februari"), 2);
+        assert_eq!(parse_month_for(DateLang::Nl, "maart"), 3);
+        assert_eq!(parse_month_for(DateLang::Nl, "mrt"), 3);
+        assert_eq!(parse_month_for(DateLang::Nl, "maa"), 3);
+        assert_eq!(parse_month_for(DateLang::Nl, "april"), 4);
+        assert_eq!(parse_month_for(DateLang::Nl, "mei"), 5);
+        assert_eq!(parse_month_for(DateLang::Nl, "juni"), 6);
+        assert_eq!(parse_month_for(DateLang::Nl, "juli"), 7);
+        assert_eq!(parse_month_for(DateLang::Nl, "augustus"), 8);
+        assert_eq!(parse_month_for(DateLang::Nl, "september"), 9);
+        assert_eq!(parse_month_for(DateLang::Nl, "oktober"), 10);
+        assert_eq!(parse_month_dutch("oct"), 10);
+        assert_eq!(parse_month_for(DateLang::Nl, "november"), 11);
+        assert_eq!(parse_month_for(DateLang::Nl, "december"), 12);
+        assert_eq!(parse_month_dutch("mrt"), 3);
+        assert_eq!(parse_month_dutch("geen"), 0);
+
+        assert_eq!(parse_weekday_for(DateLang::Nl, "zo"), 1);
+        assert_eq!(parse_weekday_for(DateLang::Nl, "zondag"), 1);
+        assert_eq!(parse_weekday_for(DateLang::Nl, "ma"), 2);
+        assert_eq!(parse_weekday_for(DateLang::Nl, "maandag"), 2);
+        assert_eq!(parse_weekday_for(DateLang::Nl, "di"), 3);
+        assert_eq!(parse_weekday_for(DateLang::Nl, "dinsdag"), 3);
+        assert_eq!(parse_weekday_for(DateLang::Nl, "wo"), 4);
+        assert_eq!(parse_weekday_for(DateLang::Nl, "woensdag"), 4);
+        assert_eq!(parse_weekday_for(DateLang::Nl, "do"), 5);
+        assert_eq!(parse_weekday_for(DateLang::Nl, "donderdag"), 5);
+        assert_eq!(parse_weekday_for(DateLang::Nl, "vr"), 6);
+        assert_eq!(parse_weekday_for(DateLang::Nl, "vrijdag"), 6);
+        assert_eq!(parse_weekday_for(DateLang::Nl, "za"), 7);
+        assert_eq!(parse_weekday_for(DateLang::Nl, "zaterdag"), 7);
+        assert_eq!(parse_weekday_dutch("zomaar"), 0);
+    }
+
+    #[test]
+    fn polish_date_filter_parsers_match_java() {
+        for (name, roman, num) in [
+            ("stycznia", "I", 1),
+            ("lutego", "II", 2),
+            ("marca", "III", 3),
+            ("kwietnia", "IV", 4),
+            ("maja", "V", 5),
+            ("czerwca", "VI", 6),
+            ("lipca", "VII", 7),
+            ("sierpnia", "VIII", 8),
+            ("września", "IX", 9),
+            ("października", "X", 10),
+            ("listopada", "XI", 11),
+            ("grudnia", "XII", 12),
+        ] {
+            assert_eq!(parse_month_for(DateLang::Pl, name), num);
+            assert_eq!(parse_month_for(DateLang::Pl, roman), num, "{roman}");
+        }
+        assert_eq!(parse_month_polish("STYCZNIA"), 1);
+        assert_eq!(parse_month_polish("v"), 0);
+        assert_eq!(parse_month_polish("nic"), 0);
+
+        assert_eq!(parse_weekday_for(DateLang::Pl, "poniedziałek"), 2);
+        assert_eq!(parse_weekday_for(DateLang::Pl, "wtorek"), 3);
+        assert_eq!(parse_weekday_for(DateLang::Pl, "środa"), 4);
+        assert_eq!(parse_weekday_for(DateLang::Pl, "czwartek"), 5);
+        assert_eq!(parse_weekday_for(DateLang::Pl, "piątek"), 6);
+        assert_eq!(parse_weekday_for(DateLang::Pl, "sobota"), 7);
+        assert_eq!(parse_weekday_for(DateLang::Pl, "niedziela"), 1);
+        assert_eq!(parse_weekday_polish("piątku"), 6);
+        assert_eq!(parse_weekday_polish("xd"), 0);
+    }
+
+    #[test]
+    fn russian_date_filter_parsers_match_java() {
+        for (name, num) in [
+            ("январь", 1),
+            ("января", 1),
+            ("февраль", 2),
+            ("февраля", 2),
+            ("март", 3),
+            ("марта", 3),
+            ("апрель", 4),
+            ("апреля", 4),
+            ("май", 5),
+            ("мая", 5),
+            ("июнь", 6),
+            ("июня", 6),
+            ("июль", 7),
+            ("июля", 7),
+            ("август", 8),
+            ("августа", 8),
+            ("сентябрь", 9),
+            ("сентября", 9),
+            ("октябрь", 10),
+            ("октября", 10),
+            ("ноябрь", 11),
+            ("ноября", 11),
+            ("декабрь", 12),
+            ("декабря", 12),
+        ] {
+            assert_eq!(parse_month_for(DateLang::Ru, name), num);
+        }
+        assert_eq!(parse_month_for(DateLang::Ru, "IX"), 9);
+        assert_eq!(parse_month_russian("январе"), 0);
+        assert_eq!(parse_month_russian("нет"), 0);
+
+        assert_eq!(parse_weekday_for(DateLang::Ru, "понедельник"), 2);
+        assert_eq!(parse_weekday_for(DateLang::Ru, "пн"), 2);
+        assert_eq!(parse_weekday_for(DateLang::Ru, "вт"), 3);
+        assert_eq!(parse_weekday_for(DateLang::Ru, "ср"), 4);
+        assert_eq!(parse_weekday_for(DateLang::Ru, "четверг"), 5);
+        assert_eq!(parse_weekday_for(DateLang::Ru, "чт"), 5);
+        assert_eq!(parse_weekday_for(DateLang::Ru, "пт"), 6);
+        assert_eq!(parse_weekday_for(DateLang::Ru, "пятница"), 6);
+        assert_eq!(parse_weekday_for(DateLang::Ru, "сб"), 7);
+        assert_eq!(parse_weekday_for(DateLang::Ru, "суббота"), 7);
+        assert_eq!(parse_weekday_for(DateLang::Ru, "вс"), 1);
+        assert_eq!(parse_weekday_for(DateLang::Ru, "воскресенье"), 1);
+        assert_eq!(parse_weekday_russian("нет"), 0);
+    }
+
+    #[test]
+    fn arabic_date_filter_parsers_match_java() {
+        for (name, num) in [
+            ("كانون الثاني", 1),
+            ("كانون ثاني", 1),
+            ("يناير", 1),
+            ("جانفي", 1),
+            ("جانفييه", 1),
+            ("شباط", 2),
+            ("فبراير", 2),
+            ("فيفري", 2),
+            ("آذار", 3),
+            ("مارس", 3),
+            ("نيسان", 4),
+            ("أبريل", 4),
+            ("أفريل", 4),
+            ("أيار", 5),
+            ("مايو", 5),
+            ("ماي", 5),
+            ("حزيران", 6),
+            ("يونيو", 6),
+            ("جوان", 6),
+            ("تموز", 7),
+            ("يوليو", 7),
+            ("جويلية", 7),
+            ("آب", 8),
+            ("أغسطس", 8),
+            ("أوت", 8),
+            ("أيلول", 9),
+            ("سبتمبر", 9),
+            ("تشرين الأول", 10),
+            ("أكتوبر", 10),
+            ("تشرين الثاني", 11),
+            ("تشرين ثاني", 11),
+            ("نوفمبر", 11),
+            ("كانون الأول", 12),
+            ("كانون أول", 12),
+            ("ديسمبر", 12),
+        ] {
+            assert_eq!(parse_month_for(DateLang::Ar, name), num);
+        }
+        assert_eq!(parse_month_arabic("ليس"), 0);
+
+        assert_eq!(parse_weekday_for(DateLang::Ar, "الأحد"), 1);
+        assert_eq!(parse_weekday_for(DateLang::Ar, "الإثنين"), 2);
+        assert_eq!(parse_weekday_for(DateLang::Ar, "الاثنين"), 2);
+        assert_eq!(parse_weekday_for(DateLang::Ar, "الثلاثاء"), 3);
+        assert_eq!(parse_weekday_for(DateLang::Ar, "الأربعاء"), 4);
+        assert_eq!(parse_weekday_for(DateLang::Ar, "الخميس"), 5);
+        assert_eq!(parse_weekday_for(DateLang::Ar, "الجمعة"), 6);
+        assert_eq!(parse_weekday_for(DateLang::Ar, "السبت"), 7);
+        assert_eq!(parse_weekday_arabic("لا"), 0);
+    }
+
+    #[test]
+    fn breton_date_filter_parsers_match_java() {
+        for (name, num) in [
+            ("genver", 1),
+            ("c’hwevrer", 2),
+            ("meurzh", 3),
+            ("ebrel", 4),
+            ("mae", 5),
+            ("mezheven", 6),
+            ("even", 6),
+            ("gouere", 7),
+            ("gouhere", 7),
+            ("eost", 8),
+            ("gwengolo", 9),
+            ("here", 10),
+            ("du", 11),
+            ("kerzu", 12),
+        ] {
+            assert_eq!(parse_month_for(DateLang::Br, name), num);
+        }
+        assert_eq!(parse_month_breton("ket"), 0);
+
+        assert_eq!(parse_weekday_for(DateLang::Br, "Sul"), 1);
+        assert_eq!(parse_weekday_for(DateLang::Br, "Disul"), 1);
+        assert_eq!(parse_weekday_for(DateLang::Br, "Lun"), 2);
+        assert_eq!(parse_weekday_for(DateLang::Br, "Dilun"), 2);
+        assert_eq!(parse_weekday_for(DateLang::Br, "Meurzh"), 3);
+        assert_eq!(parse_weekday_for(DateLang::Br, "Merc’her"), 4);
+        assert_eq!(parse_weekday_for(DateLang::Br, "Yaou"), 5);
+        assert_eq!(parse_weekday_for(DateLang::Br, "diriaou"), 5);
+        assert_eq!(parse_weekday_for(DateLang::Br, "Gwener"), 6);
+        assert_eq!(parse_weekday_for(DateLang::Br, "Sadorn"), 7);
+        assert_eq!(parse_weekday_breton("ket"), 0);
+
+        assert_eq!(parse_day_of_month_for(DateLang::Br, "7"), 7);
+        assert_eq!(parse_day_of_month_for(DateLang::Br, "unan"), 1);
+        assert_eq!(parse_day_of_month_for(DateLang::Br, "c’hentañ"), 1);
+        assert_eq!(parse_day_of_month_for(DateLang::Br, "eil"), 2);
+        assert_eq!(parse_day_of_month_for(DateLang::Br, "drede"), 3);
+        assert_eq!(parse_day_of_month_for(DateLang::Br, "tri"), 3);
+        assert_eq!(parse_day_of_month_for(DateLang::Br, "pevar"), 4);
+        assert_eq!(parse_day_of_month_for(DateLang::Br, "pemp"), 5);
+        assert_eq!(parse_day_of_month_for(DateLang::Br, "c’hwerc’h"), 6);
+        assert_eq!(parse_day_of_month_for(DateLang::Br, "seizh"), 7);
+        assert_eq!(parse_day_of_month_for(DateLang::Br, "eizh"), 8);
+        assert_eq!(parse_day_of_month_for(DateLang::Br, "nav"), 9);
+        assert_eq!(parse_day_of_month_for(DateLang::Br, "dek"), 10);
+        assert_eq!(parse_day_of_month_for(DateLang::Br, "unnek"), 11);
+        assert_eq!(parse_day_of_month_for(DateLang::Br, "daouzek"), 12);
+        assert_eq!(parse_day_of_month_for(DateLang::Br, "drizek"), 13);
+        assert_eq!(parse_day_of_month_for(DateLang::Br, "bevarzek"), 14);
+        assert_eq!(parse_day_of_month_for(DateLang::Br, "pemzek"), 15);
+        assert_eq!(parse_day_of_month_for(DateLang::Br, "c’hwezek"), 16);
+        assert_eq!(parse_day_of_month_for(DateLang::Br, "seitek"), 17);
+        assert_eq!(parse_day_of_month_for(DateLang::Br, "driwec’h"), 18);
+        assert_eq!(parse_day_of_month_for(DateLang::Br, "naontek"), 19);
+        assert_eq!(parse_day_of_month_for(DateLang::Br, "ugent"), 20);
+        assert_eq!(parse_day_of_month_for(DateLang::Br, "tregont"), 30);
+        assert_eq!(parse_day_of_month_for(DateLang::Br, "tregontvet"), 30);
+        assert_eq!(parse_day_of_month_for(DateLang::En, "x"), 0);
+        assert_eq!(parse_day_of_month_for(DateLang::De, "vier"), 0);
+    }
+
+    #[test]
+    fn english_german_and_italian_date_filter_parsers_match_java() {
+        assert_eq!(parse_month_for(DateLang::En, "September"), 9);
+        assert_eq!(parse_month_for(DateLang::En, "sep"), 9);
+        assert_eq!(parse_month_for(DateLang::En, "12"), 12);
+        assert_eq!(parse_month_for(DateLang::De, "September"), 9);
+        assert_eq!(parse_month_for(DateLang::De, "sep"), 9);
+        assert_eq!(parse_month_for(DateLang::It, "settembre"), 9);
+        assert_eq!(parse_month_for(DateLang::Eo, "aŭgusto"), 8);
+        assert_eq!(parse_month_for(DateLang::Ca, "octubre"), 10);
+
+        assert_eq!(parse_weekday_for(DateLang::En, "Sunday"), 1);
+        assert_eq!(parse_weekday_for(DateLang::En, "monday"), 2);
+        assert_eq!(parse_weekday_for(DateLang::De, "Sonntag"), 1);
+        assert_eq!(parse_weekday_for(DateLang::De, "Sonnabend"), 7);
+        assert_eq!(parse_weekday_for(DateLang::De, "Dienstag"), 3);
+        assert_eq!(parse_weekday_german("M"), 0);
+        assert_eq!(parse_weekday_for(DateLang::It, "domenica"), 1);
+        assert_eq!(parse_weekday_for(DateLang::Es, "lunes"), 2);
+        assert_eq!(parse_weekday_for(DateLang::Eo, "lundo"), 2);
+        assert_eq!(parse_weekday_for(DateLang::Ca, "dilluns"), 2);
+    }
+
+    #[test]
+    fn localized_day_names_and_wrong_year_messages_match_java() {
+        assert_eq!(localized_day_name(DateLang::En, 1), "Sunday");
+        assert_eq!(localized_day_name(DateLang::En, 7), "Saturday");
+        assert_eq!(localized_day_name(DateLang::De, 1), "Sonntag");
+        assert_eq!(localized_day_name(DateLang::De, 3), "Dienstag");
+        assert_eq!(localized_day_name(DateLang::It, 2), "lunedì");
+        assert_eq!(localized_day_name(DateLang::Fr, 4), "mercredi");
+        assert_eq!(localized_day_name(DateLang::Es, 5), "jueves");
+        assert_eq!(localized_day_name(DateLang::Pt, 6), "sexta-feira");
+        assert_eq!(localized_day_name(DateLang::Nl, 7), "zaterdag");
+        assert_eq!(localized_day_name(DateLang::Pl, 2), "poniedziałek");
+        assert_eq!(localized_day_name(DateLang::Ru, 3), "вторник");
+        assert_eq!(localized_day_name(DateLang::Ar, 4), "الأربعاء");
+        assert_eq!(localized_day_name(DateLang::Br, 5), "Yaou");
+        assert_eq!(localized_day_name(DateLang::Eo, 6), "vendredo");
+        assert_eq!(localized_day_name(DateLang::Ca, 7), "dissabte");
+        assert_eq!(localized_day_name(DateLang::En, 0), "");
+        assert_eq!(localized_day_name(DateLang::En, 8), "");
+
+        assert_eq!(
+            wrong_year_message(DateLang::En),
+            "This date is wrong. Did you mean \"{currentYear}\"?"
+        );
+        assert_eq!(
+            wrong_year_message(DateLang::De),
+            "Dieses Datum stimmt nicht mit dem Tag überein. Meinten Sie \"{currentYear}\"?"
+        );
+        assert_eq!(
+            wrong_year_message(DateLang::Fr),
+            "Cette date est incorrecte. Faites-vous référence à l'année \"{currentYear}\" ?"
+        );
+        assert_eq!(
+            wrong_year_message(DateLang::Es),
+            "Este fecha no es correcta. ¿Se refería al año \"{currentYear}\"?"
+        );
+        assert_eq!(
+            wrong_year_message(DateLang::Pt),
+            "Esta data está incorreta. Você está se referindo ao ano \"{currentYear}\"?"
+        );
+        assert_eq!(
+            wrong_year_message(DateLang::Nl),
+            "Deze datum is onjuist. Bedoelt u misschien \"{currentYear}\"?"
+        );
+        assert_eq!(wrong_year_message(DateLang::It), "");
+        assert_eq!(wrong_year_message(DateLang::Ru), "");
+    }
+
+    #[test]
+    fn suggestion_helpers_match_java_date_filter_behavior() {
+        assert_eq!(day_str_like_original(DateLang::En, "1", "1st"), "1st");
+        assert_eq!(day_str_like_original(DateLang::En, "2", "2nd"), "2nd");
+        assert_eq!(day_str_like_original(DateLang::En, "3", "3rd"), "3rd");
+        assert_eq!(day_str_like_original(DateLang::En, "4", "4th"), "4th");
+        assert_eq!(day_str_like_original(DateLang::En, "11", "11th"), "11th");
+        assert_eq!(day_str_like_original(DateLang::En, "12", "12th"), "12th");
+        assert_eq!(day_str_like_original(DateLang::En, "13", "13th"), "13th");
+        assert_eq!(day_str_like_original(DateLang::En, "21", "21st"), "21st");
+        assert_eq!(day_str_like_original(DateLang::En, "23", "23rd"), "23rd");
+        assert_eq!(day_str_like_original(DateLang::En, "5", "5"), "5");
+        assert_eq!(day_str_like_original(DateLang::En, "x", "5th"), "x");
+        assert_eq!(day_str_like_original(DateLang::De, "1", "ersten"), "1");
+        assert_eq!(day_str_like_original(DateLang::En, "7", "7"), "7");
+
+        assert_eq!(
+            adjust_suggestion(DateLang::De, "Mittwoch., 5"),
+            "Mittwoch, 5"
+        );
+        assert_eq!(adjust_suggestion(DateLang::De, "Di, 3"), "Di., 3");
+        assert_eq!(
+            adjust_suggestion(DateLang::De, "Mo 5., Oktober"),
+            "Mo 5., Oktober"
+        );
+        assert_eq!(
+            adjust_suggestion(DateLang::De, "Montag, 5. Oktober"),
+            "Montag, 5. Oktober"
+        );
+        assert_eq!(adjust_suggestion(DateLang::De, ",anfang"), ",anfang");
+        assert_eq!(
+            adjust_suggestion(DateLang::De, "no comma at all"),
+            "no comma at all"
+        );
+        assert_eq!(adjust_suggestion(DateLang::En, "Monday, 5."), "Monday, 5.");
+
+        assert_eq!(preserve_case("jeudi", "Vendredi"), "Jeudi");
+        assert_eq!(preserve_case("jeudi", "VENDREDI"), "JEUDI");
+        assert_eq!(preserve_case("jeudi", "vendredi"), "jeudi");
+        assert_eq!(preserve_case("jeudi", ""), "jeudi");
+        assert_eq!(preserve_case("van", "McVan"), "van");
+    }
+
     pub(super) fn compile_and_match(xml: &str, sentence_text: &str) -> Vec<RuleMatch> {
         let compiler = XmlCompiler::new();
         let rule_set = compiler.compile_file(xml).unwrap();
