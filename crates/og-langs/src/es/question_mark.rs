@@ -4,7 +4,7 @@ use og_core::{
 };
 
 fn is_punctuation_mark(token: &str) -> bool {
-    token.len() == 1
+    token.chars().count() == 1
         && token
             .chars()
             .all(|c| c.is_ascii_punctuation() || "…–—«»¿¡".contains(c))
@@ -225,5 +225,110 @@ mod tests {
         let sentences = analyze_spanish("¿Qué pasa?");
         let matches = rule.match_text("¿Qué pasa?", &sentences);
         assert!(matches.is_empty());
+    }
+
+    #[test]
+    fn flags_missing_inverted_exclamation_mark() {
+        let rule = QuestionMarkRule::default();
+        let sentences = analyze_spanish("Qué pasa!");
+        let matches = rule.match_text("Qué pasa!", &sentences);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].offset(), 0);
+        assert_eq!(matches[0].replacements()[0].value(), "¡Qué");
+        assert!(matches[0].message().contains("falta un '¡'"));
+    }
+
+    #[test]
+    fn accepts_paired_exclamations() {
+        let rule = QuestionMarkRule::new();
+        let sentences = analyze_spanish("¡Qué pasa!");
+        let matches = rule.match_text("¡Qué pasa!", &sentences);
+        assert!(matches.is_empty());
+    }
+
+    #[test]
+    fn skips_sentences_ending_in_both_marks() {
+        let rule = QuestionMarkRule::new();
+        let sentences = analyze_spanish("Nunca tienes clases o qué?!");
+        let matches = rule.match_text("Nunca tienes clases o qué?!", &sentences);
+        assert!(matches.is_empty());
+    }
+
+    #[test]
+    fn ignores_marks_joined_to_the_following_word() {
+        let rule = QuestionMarkRule::new();
+        let text = "see?no";
+        let mut sentence = AnalyzedSentence::new(text, 0, text.len());
+        let start = AnalyzedTokenReadings::new(
+            og_core::AnalyzedToken::new("<S>", 0, 0).with_pos_tags(vec!["SENT_START".into()]),
+        );
+        let question = AnalyzedTokenReadings::new(og_core::AnalyzedToken::new("?", 3, 4));
+        let joined = AnalyzedTokenReadings::new(og_core::AnalyzedToken::new("no", 4, 6));
+        sentence.set_tokens(vec![start, question, joined]);
+        let matches = rule.match_text(text, &[sentence]);
+        assert!(matches.is_empty());
+    }
+
+    #[test]
+    fn skips_whitespace_only_sentences() {
+        let rule = QuestionMarkRule::new();
+        let text = "Qué pasa?   ";
+        let sentences = analyze_spanish(text);
+        let mut whitespace_only = AnalyzedSentence::new("   ", 0, 3);
+        let start = AnalyzedTokenReadings::new(
+            og_core::AnalyzedToken::new("<S>", 0, 0).with_pos_tags(vec!["SENT_START".into()]),
+        );
+        whitespace_only.set_tokens(vec![
+            start,
+            AnalyzedTokenReadings::new(og_core::AnalyzedToken::new(" ", 0, 3)),
+        ]);
+        let matches = rule.match_text(text, &[whitespace_only, sentences[0].clone()]);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].offset(), 3);
+    }
+
+    #[test]
+    fn keeps_global_offsets_across_sentences() {
+        let rule = QuestionMarkRule::new();
+        let text = "Qué pasa? Qué tal?";
+        let sentences = analyze_spanish(text);
+        assert_eq!(sentences.len(), 2);
+        let matches = rule.match_text(text, &sentences);
+        assert_eq!(matches.len(), 2);
+        assert_eq!(matches[0].offset(), 0);
+        assert_eq!(matches[1].offset(), sentences[0].text().len());
+    }
+
+    #[test]
+    fn moves_the_mark_onto_the_conjunction_after_a_comma() {
+        let rule = QuestionMarkRule::new();
+        let text = "No sé aún, y de qué hablas?";
+        let sentences = analyze_spanish(text);
+        let matches = rule.match_text(text, &sentences);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].replacements()[0].value(), "¿y");
+        assert!(text[matches[0].offset()..].starts_with("y"));
+    }
+
+    #[test]
+    fn moves_the_mark_onto_no_after_a_comma() {
+        let rule = QuestionMarkRule::new();
+        let text = "Vendrás mañana, no?";
+        let sentences = analyze_spanish(text);
+        let matches = rule.match_text(text, &sentences);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].replacements()[0].value(), "¿no");
+        assert!(text[matches[0].offset()..].starts_with("no"));
+    }
+
+    #[test]
+    fn guillemets_are_not_treated_as_the_first_word() {
+        let rule = QuestionMarkRule::new();
+        let text = "«Qué pasa?»";
+        let sentences = analyze_spanish(text);
+        let matches = rule.match_text(text, &sentences);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].replacements()[0].value(), "¿Qué");
+        assert!(text[matches[0].offset()..].starts_with("Qué"));
     }
 }
