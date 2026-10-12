@@ -7890,6 +7890,209 @@ mod tests {
         assert!(!equal_without_diacritics("straße", "strase"));
     }
 
+    fn synth_engine(module: &str) -> Option<PatternRuleEngine> {
+        let dir = std::path::Path::new(
+            "/home/agent/opengrammar-rs/languagetool/languagetool-language-modules",
+        )
+        .join(module)
+        .join("src/main/resources/org/languagetool/resource")
+        .join(module);
+        let synth = std::sync::Arc::new(crate::postponed_adjective::LangSynthesizer::for_language(
+            &dir, module,
+        )?);
+        Some(
+            PatternRuleEngine::default()
+                .with_synthesizer(std::sync::Arc::clone(&synth))
+                .with_suggestion_synthesizer(synth),
+        )
+    }
+
+    #[test]
+    fn en_determiner_suggestion_synthesizes_articles() {
+        let Some(engine) = synth_engine("en") else {
+            return;
+        };
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <rule id="DT_MISSING" name="article missing">
+                <pattern>
+                    <token>is</token>
+                    <marker><token>friend</token></marker>
+                </pattern>
+                <message>The article might be missing before the noun.</message>
+                <suggestion><match no="2" postag="+DT"/></suggestion>
+            </rule>
+            <rule id="INDT_MISSING" name="indefinite article missing">
+                <pattern>
+                    <token>is</token>
+                    <marker><token>friend</token></marker>
+                </pattern>
+                <message>The article might be missing before the noun.</message>
+                <suggestion><match no="2" postag="+INDT"/></suggestion>
+            </rule>
+        </rules>"#;
+        let compiler = XmlCompiler::new();
+        let rule_set = compiler.compile_file(xml).unwrap();
+        let sentence = make_analyzed_sentence("He is friend .");
+        let matches: Vec<_> = rule_set
+            .rules
+            .iter()
+            .flat_map(|r| engine.match_rule(r, &sentence))
+            .collect();
+        assert_eq!(matches.len(), 2);
+        let dt: Vec<&str> = matches[0]
+            .replacements()
+            .iter()
+            .map(|r| r.value())
+            .collect();
+        assert_eq!(dt, vec!["a friend", "the friend"]);
+        let indt: Vec<&str> = matches[1]
+            .replacements()
+            .iter()
+            .map(|r| r.value())
+            .collect();
+        assert_eq!(indt, vec!["a friend"]);
+    }
+
+    #[test]
+    fn de_dative_suggestion_synthesizes_the_matching_pronoun() {
+        let Some(engine) = synth_engine("de") else {
+            return;
+        };
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="de">
+            <rule id="MIT_MICH" name="'mit mich'">
+                <pattern>
+                    <marker>
+                        <token postag="PRP:.+:DAT" postag_regexp="yes"/>
+                        <token postag="PRO:PER:AKK.*" postag_regexp="yes"/>
+                    </marker>
+                </pattern>
+                <message>Nach '\1' steht der Dativ.</message>
+                <suggestion>\1 <match no="2" postag="(.+)AKK(.*)" postag_regexp="yes" postag_replace="$1DAT$2"/></suggestion>
+            </rule>
+        </rules>"#;
+        let compiler = XmlCompiler::new();
+        let rule_set = compiler.compile_file(xml).unwrap();
+        let mut sentence = make_analyzed_sentence("Du kommst mit mich .");
+        set_reading(&mut sentence, 2, "mit", "PRP:VER:DAT");
+        set_reading(&mut sentence, 3, "ich", "PRO:PER:AKK:SIN:ALG");
+        let matches: Vec<_> = rule_set
+            .rules
+            .iter()
+            .flat_map(|r| engine.match_rule(r, &sentence))
+            .collect();
+        assert_eq!(matches.len(), 1, "pronoun after dative preposition matches");
+        let reps: Vec<&str> = matches[0]
+            .replacements()
+            .iter()
+            .map(|r| r.value())
+            .collect();
+        assert_eq!(reps, vec!["mit mir"]);
+    }
+
+    #[test]
+    fn de_comparative_suggestion_synthesizes_the_form() {
+        let Some(engine) = synth_engine("de") else {
+            return;
+        };
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="de">
+            <rule id="JE_GROSS" name="'Je groß'">
+                <pattern>
+                    <token>Je</token>
+                    <marker>
+                        <token postag="ADJ:PRD:GRU" postag_regexp="yes" skip="-1"/>
+                    </marker>
+                    <token>desto</token>
+                </pattern>
+                <message>Meinten Sie die Komparativform?</message>
+                <suggestion><match no="2" postag="ADJ:PRD:GRU" postag_replace="ADJ:PRD:KOM" postag_regexp="yes"/></suggestion>
+            </rule>
+        </rules>"#;
+        let compiler = XmlCompiler::new();
+        let rule_set = compiler.compile_file(xml).unwrap();
+        let mut sentence = make_analyzed_sentence("Je groß , desto besser .");
+        set_reading(&mut sentence, 1, "groß", "ADJ:PRD:GRU");
+        let matches: Vec<_> = rule_set
+            .rules
+            .iter()
+            .flat_map(|r| engine.match_rule(r, &sentence))
+            .collect();
+        assert_eq!(matches.len(), 1);
+        let reps: Vec<&str> = matches[0]
+            .replacements()
+            .iter()
+            .map(|r| r.value())
+            .collect();
+        assert_eq!(reps, vec!["größer"]);
+    }
+
+    #[test]
+    fn suggestion_match_can_include_skipped_tokens() {
+        let engine = PatternRuleEngine::default();
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="de">
+            <rule id="SKIPPED" name="skipped">
+                <pattern>
+                    <marker>
+                        <token skip="-1">steht</token>
+                        <token>parkt</token>
+                    </marker>
+                </pattern>
+                <message>m</message>
+                <suggestion><match include_skipped="all" no="1"/> <match no="2"/></suggestion>
+            </rule>
+            <rule id="SKIPPED_FOLLOWING" name="skipped following">
+                <pattern>
+                    <marker>
+                        <token skip="-1">steht</token>
+                        <token>parkt</token>
+                    </marker>
+                </pattern>
+                <message>m</message>
+                <suggestion><match include_skipped="following" no="1"/> <match no="2"/></suggestion>
+            </rule>
+            <rule id="SKIPPED_NONE" name="skipped none">
+                <pattern>
+                    <marker>
+                        <token skip="-1">steht</token>
+                        <token>parkt</token>
+                    </marker>
+                </pattern>
+                <message>m</message>
+                <suggestion><match include_skipped="none" no="1"/> <match no="2"/></suggestion>
+            </rule>
+        </rules>"#;
+        let compiler = XmlCompiler::new();
+        let rule_set = compiler.compile_file(xml).unwrap();
+        let sentence = make_analyzed_sentence("Das Auto steht da drüben parkt im Halteverbot .");
+        let matches: Vec<_> = rule_set
+            .rules
+            .iter()
+            .flat_map(|r| engine.match_rule(r, &sentence))
+            .collect();
+        assert_eq!(matches.len(), 3);
+        let all: Vec<&str> = matches[0]
+            .replacements()
+            .iter()
+            .map(|r| r.value())
+            .collect();
+        assert_eq!(all, vec!["steht da drüben parkt"]);
+        let following: Vec<&str> = matches[1]
+            .replacements()
+            .iter()
+            .map(|r| r.value())
+            .collect();
+        assert_eq!(following, vec!["stehtda drüben parkt"]);
+        let none: Vec<&str> = matches[2]
+            .replacements()
+            .iter()
+            .map(|r| r.value())
+            .collect();
+        assert_eq!(none, vec!["steht parkt"]);
+    }
+
     #[test]
     fn test_simple_match() {
         let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
