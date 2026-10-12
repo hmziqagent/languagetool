@@ -2388,6 +2388,7 @@ mod tests {
             "Leser/-in",
             "Professor/-innen",
             "Schwarz*weiß",
+            "Schwarz*weiss",
         ] {
             assert!(s.is_misspelled(word), "'{word}' must stay flagged");
         }
