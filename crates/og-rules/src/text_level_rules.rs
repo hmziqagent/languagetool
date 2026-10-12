@@ -738,65 +738,11 @@ impl TextLevelRule for WordRepeatBeginningRule {
     }
 }
 
-#[allow(dead_code)]
-fn is_normal_whitespace(token: &AnalyzedTokenReadings) -> bool {
-    token.is_whitespace() || token.token().token() == "\u{A0}"
-}
-
-#[allow(dead_code)]
-fn is_removable_whitespace(token: &AnalyzedTokenReadings) -> bool {
-    (token.is_whitespace() || token.token().token() == "\u{A0}")
-        && !is_linebreak(token)
-        && token.token().token() != "\t"
-        && !contains_invisible(token)
-}
-
-#[allow(dead_code)]
-fn is_linebreak(token: &AnalyzedTokenReadings) -> bool {
-    let t = token.token().token();
-    t.contains('\n') || t.contains('\r')
-}
-
-#[allow(dead_code)]
-fn contains_invisible(token: &AnalyzedTokenReadings) -> bool {
-    let t = token.token().token();
-    t.contains('\u{200B}') || t.contains('\u{FEFF}') || t.contains('\u{2060}')
-}
-
-#[allow(dead_code)]
-fn is_smiley_exception(
-    token_text: &str,
-    all_tokens: &[AnalyzedTokenReadings],
-    current: &AnalyzedTokenReadings,
-) -> bool {
-    let current_idx = match all_tokens.iter().position(|t| std::ptr::eq(t, current)) {
-        Some(idx) => idx,
-        None => return false,
-    };
-
-    if (token_text == ")" || token_text == "(") && current_idx >= 1 {
-        let prev = all_tokens[current_idx - 1].token().token();
-        if prev == ":" || prev == ";" {
-            return true;
-        }
-    }
-
-    if (token_text == ")" || token_text == "(") && current_idx >= 2 {
-        let prev = all_tokens[current_idx - 1].token().token();
-        let prev_prev = all_tokens[current_idx - 2].token().token();
-        if prev == "-" && (prev_prev == ":" || prev_prev == ";") {
-            return true;
-        }
-    }
-
-    false
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use og_core::rule::TextLevelRule;
-    use og_core::{AnalyzedToken, AnalyzedTokenReadings};
+    use og_core::{AnalyzedToken, AnalyzedTokenReadings, SuggestedReplacement};
 
     pub(super) fn make_sentence_with_whitespace(text: &str, offset: usize) -> AnalyzedSentence {
         let mut sentence = AnalyzedSentence::new(text, offset, offset + text.len());
@@ -1675,8 +1621,26 @@ impl og_core::rule::Rule for WhiteSpaceAtBeginOfParagraphRule {
 
 #[cfg(test)]
 mod paragraph_tests {
+    use super::tests::{make_sentence_with_whitespace, make_simple_sentence};
     use super::*;
     use og_core::rule::{Rule, TextLevelRule};
+    use og_core::{AnalyzedToken, AnalyzedTokenReadings};
+
+    fn sentence_with_pieces(text: &str, pieces: &[&str]) -> AnalyzedSentence {
+        let mut sentence = AnalyzedSentence::new(text, 0, text.len());
+        let mut tokens = Vec::new();
+        let mut pos = 0usize;
+        for piece in pieces {
+            let start = text[pos..].find(piece).map(|i| pos + i).unwrap_or(pos);
+            let end = start + piece.len();
+            tokens.push(AnalyzedTokenReadings::new(AnalyzedToken::new(
+                *piece, start, end,
+            )));
+            pos = end;
+        }
+        sentence.set_tokens(tokens);
+        sentence
+    }
 
     fn sentence_from_text(text: &str, offset: usize) -> AnalyzedSentence {
         let mut sentence = AnalyzedSentence::new(text, offset, offset + text.len());
@@ -1749,7 +1713,6 @@ mod paragraph_tests {
         let matches = rule.match_text("", &sentences);
         assert_eq!(matches.len(), 1, "{matches:?}");
     }
-    use super::tests::{make_sentence_with_whitespace, make_simple_sentence};
 
     #[test]
     fn unpaired_quotes_flag_a_lone_closing_quote() {
@@ -1793,5 +1756,263 @@ mod paragraph_tests {
             make_simple_sentence("next para.", 0),
         ];
         assert!(rule.match_text("", &paras).is_empty());
+    }
+
+    #[test]
+    fn text_level_rules_expose_java_metadata() {
+        let whitespace = MultipleWhitespaceRule::default();
+        assert_eq!(whitespace.id(), "WHITESPACE_RULE");
+        assert_eq!(whitespace.description(), "Whitespace repetition");
+        assert_eq!(whitespace.category().id().as_str(), "TYPOGRAPHY");
+        assert_eq!(whitespace.issue_type().as_str(), "whitespace");
+
+        let sentence_ws = SentenceWhitespaceRule::default();
+        assert_eq!(sentence_ws.id(), "SENTENCE_WHITESPACE");
+        assert_eq!(sentence_ws.description(), "Missing space between sentences");
+        assert_eq!(sentence_ws.category().id().as_str(), "TYPOGRAPHY");
+        assert_eq!(sentence_ws.issue_type().as_str(), "whitespace");
+        assert!(
+            sentence_ws
+                .match_text("one.", &[make_simple_sentence("one.", 0)])
+                .is_empty()
+        );
+
+        let brackets = GenericUnpairedBracketsRule::default();
+        assert_eq!(brackets.id(), "UNPAIRED_BRACKETS");
+        assert_eq!(brackets.description(), "Unpaired brackets");
+        assert_eq!(brackets.category().id().as_str(), "PUNCTUATION");
+        let custom = GenericUnpairedBracketsRule::new()
+            .with_id("DE_UNPAIRED_BRACKETS")
+            .with_symbols(vec!["["], vec!["]"]);
+        assert_eq!(custom.id(), "DE_UNPAIRED_BRACKETS");
+        assert_eq!(custom.match_text("a [ b", &[]).len(), 1);
+
+        let quotes = GenericUnpairedQuotesRule::default();
+        assert_eq!(quotes.id(), "UNPAIRED_QUOTES");
+        assert_eq!(quotes.description(), "Unpaired quotes");
+        assert_eq!(quotes.category().id().as_str(), "PUNCTUATION");
+        assert_eq!(
+            GenericUnpairedQuotesRule::english().id(),
+            "EN_UNPAIRED_QUOTES"
+        );
+
+        let long_sentence = LongSentenceRule::default();
+        assert_eq!(long_sentence.id(), "TOO_LONG_SENTENCE");
+        assert_eq!(long_sentence.description(), "Sentence is too long");
+        assert_eq!(long_sentence.category().id().as_str(), "STYLE");
+        assert_eq!(long_sentence.issue_type().as_str(), "style");
+        assert!(long_sentence.is_picky());
+        assert!(long_sentence.is_default_on());
+        assert!(
+            long_sentence
+                .match_text("short one.", &[make_simple_sentence("short one.", 0)])
+                .is_empty()
+        );
+
+        let repeat = WordRepeatBeginningRule::default();
+        assert_eq!(repeat.id(), "WORD_REPEAT_BEGINNING_RULE");
+        assert_eq!(
+            repeat.description(),
+            "Successive sentences start with the same word"
+        );
+        assert_eq!(repeat.category().id().as_str(), "STYLE");
+        assert_eq!(repeat.issue_type().as_str(), "style");
+
+        let paragraph = LongParagraphRule::default();
+        assert_eq!(paragraph.id(), "TOO_LONG_PARAGRAPH");
+        assert!(!paragraph.is_default_on());
+        assert!(paragraph.is_picky());
+        assert_eq!(paragraph.category().id().as_str(), "STYLE");
+        assert_eq!(paragraph.issue_type().as_str(), "style");
+        let customized = LongParagraphRule::new(5)
+            .with_description("d5")
+            .with_message("m5");
+        assert_eq!(customized.description(), "d5");
+
+        let punctuation = PunctuationMarkAtParagraphEnd2Rule::default();
+        assert_eq!(punctuation.id(), "PUNCTUATION_PARAGRAPH_END2");
+        assert_eq!(
+            punctuation.description(),
+            "No punctuation mark at the end of paragraph"
+        );
+        assert!(!punctuation.is_default_on());
+        assert_eq!(punctuation.category().id().as_str(), "PUNCTUATION");
+        assert_eq!(punctuation.issue_type().as_str(), "grammar");
+        let custom_msg = PunctuationMarkAtParagraphEnd2Rule::new().with_message("custom");
+        assert_eq!(custom_msg.id(), "PUNCTUATION_PARAGRAPH_END2");
+
+        let before_end = WhiteSpaceBeforeParagraphEndRule::default();
+        assert_eq!(before_end.id(), "WHITESPACE_PARAGRAPH");
+        assert_eq!(before_end.description(), "Whitespace before paragraph end");
+        assert!(!before_end.is_default_on());
+        assert_eq!(before_end.category().id().as_str(), "STYLE");
+        assert_eq!(before_end.issue_type().as_str(), "style");
+
+        assert_eq!(
+            WhiteSpaceAtBeginOfParagraphRule::default()
+                .category()
+                .id()
+                .as_str(),
+            "STYLE"
+        );
+
+        let empty_line = EmptyLineRule::default();
+        assert_eq!(empty_line.id(), "EMPTY_LINE");
+        assert_eq!(empty_line.description(), "Empty line");
+        assert!(!empty_line.is_default_on());
+        assert_eq!(empty_line.category().id().as_str(), "STYLE");
+        assert_eq!(empty_line.issue_type().as_str(), "style");
+    }
+
+    #[test]
+    fn whitespace_and_bracket_contexts_snap_to_char_boundaries() {
+        let prefix = "é".repeat(40);
+        let suffix = "é".repeat(40);
+        let text = format!("{prefix}  {suffix}");
+        let rule = MultipleWhitespaceRule::new();
+        let s1 = make_sentence_with_whitespace(&text, 0);
+        let matches = rule.match_text(&text, &[s1]);
+        assert_eq!(matches.len(), 1);
+        assert!(matches[0].context().text().starts_with('é'));
+        assert_eq!(matches[0].context().offset() % 2, 0);
+
+        let text = format!("{prefix}[{suffix}");
+        let rule = GenericUnpairedBracketsRule::new();
+        let matches = rule.match_text(&text, &[]);
+        assert_eq!(matches.len(), 1);
+        assert!(matches[0].context().text().starts_with('é'));
+        assert_eq!(matches[0].context().offset() % 2, 0);
+    }
+
+    #[test]
+    fn unpaired_brackets_skip_emoticon_faces() {
+        let rule = GenericUnpairedBracketsRule::new();
+        assert!(rule.match_text("feeling :)", &[]).is_empty());
+        assert!(rule.match_text("feeling ;-)", &[]).is_empty());
+        assert!(rule.match_text("feeling ;(", &[]).is_empty());
+        assert_eq!(rule.match_text("feeling )", &[]).len(), 1);
+        let mixed = rule.match_text("( a [ b ) c", &[]);
+        assert_eq!(mixed.len(), 1, "only the unclosed '[' remains on the stack");
+    }
+
+    #[test]
+    fn unpaired_quotes_flag_opening_and_closing() {
+        let rule = GenericUnpairedQuotesRule::new();
+        let paired = sentence_with_pieces("pair “ ok ” here", &["pair", "“", "ok", "”", "here"]);
+        assert!(rule.match_text("pair “ ok ” here", &[paired]).is_empty());
+        let open_sentence = sentence_with_pieces("starts “ here", &["starts", "“", "here"]);
+        let open = rule.match_text("starts “ here", &[open_sentence]);
+        assert_eq!(open.len(), 1);
+        assert_eq!(open[0].message(), "Unpaired opening quote '“'");
+        let close_sentence = sentence_with_pieces("ends ” here", &["ends", "”", "here"]);
+        let close = rule.match_text("ends ” here", &[close_sentence]);
+        assert_eq!(close.len(), 1);
+        assert_eq!(close[0].message(), "Unpaired closing quote '”'");
+
+        let english = GenericUnpairedQuotesRule::english();
+        assert!(english.match_text("apostrophe 'guard'", &[]).is_empty());
+        let mut s = make_simple_sentence("John 's apple", 0);
+        let atr = &mut s.tokens_mut()[1];
+        let surface = atr.token().clone();
+        let reading = AnalyzedToken::new(surface.token(), surface.start(), surface.end())
+            .with_pos_tags(vec!["_apostrophe_contraction_".to_string()]);
+        *atr = AnalyzedTokenReadings::new(surface).with_readings(vec![reading]);
+        let matches = english.match_text("John 's apple", &[s]);
+        assert!(
+            matches.is_empty(),
+            "apostrophes with possessive tags are ignored: {matches:?}"
+        );
+    }
+
+    #[test]
+    fn long_sentence_rule_flags_the_offending_span() {
+        let rule = LongSentenceRule::new(3);
+        let text = "one two three four five.";
+        let s = make_simple_sentence(text, 0);
+        let matches = rule.match_text(text, &[s]);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].offset(), 0);
+        assert_eq!(matches[0].length(), text.len());
+    }
+
+    #[test]
+    fn word_repeat_beginning_rule_flags_the_run() {
+        let rule = WordRepeatBeginningRule::default();
+        let sentences = vec![
+            make_simple_sentence("The first one.", 0),
+            make_simple_sentence("the second one.", 0),
+            make_simple_sentence("THE third one.", 0),
+        ];
+        let matches = rule.match_text("", &sentences);
+        assert_eq!(matches.len(), 3, "each sentence of the run is flagged");
+        assert!(matches[0].message().contains("'the'"));
+
+        let varied = vec![
+            make_simple_sentence("The first one.", 0),
+            make_simple_sentence("Another one.", 0),
+            make_simple_sentence("the third one.", 0),
+        ];
+        assert!(rule.match_text("", &varied).is_empty());
+    }
+
+    #[test]
+    fn punctuation_at_paragraph_end_suggests_the_period() {
+        let rule = PunctuationMarkAtParagraphEnd2Rule::default();
+        let words = "one two three four five six seven eight nine ten words";
+        let sentences = vec![sentence_with_pieces(
+            &format!("{words} end"),
+            &[
+                "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+                "words", "end",
+            ],
+        )];
+        let matches = rule.match_text("", &sentences);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(
+            matches[0].replacements()[0].value(),
+            "end.",
+            "the missing period is appended"
+        );
+
+        let punctuated = vec![sentence_with_pieces(
+            &format!("{words} end."),
+            &[
+                "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+                "words", "end", ".",
+            ],
+        )];
+        assert!(rule.match_text("", &punctuated).is_empty());
+
+        let too_short = vec![make_simple_sentence("short text", 0)];
+        assert!(rule.match_text("", &too_short).is_empty());
+    }
+
+    #[test]
+    fn whitespace_before_paragraph_end_is_removed() {
+        let rule = WhiteSpaceBeforeParagraphEndRule::default();
+        let sentence = sentence_with_pieces("word  \n\n", &["word", "  ", "\n", "\n"]);
+        let matches = rule.match_text("", &[sentence]);
+        assert_eq!(matches.len(), 1, "{matches:?}");
+        assert!(matches[0].replacements()[0].value().is_empty());
+
+        let clean = sentence_with_pieces("word\n\n", &["word", "\n", "\n"]);
+        assert!(rule.match_text("", &[clean]).is_empty());
+    }
+
+    #[test]
+    fn empty_line_rule_flags_four_line_breaks() {
+        let rule = EmptyLineRule::default();
+        let sentences = vec![
+            make_sentence_with_whitespace("word\n\n\n\n", 0),
+            make_sentence_with_whitespace("next", 0),
+        ];
+        let matches = rule.match_text("", &sentences);
+        assert_eq!(matches.len(), 1);
+
+        let normal = vec![
+            make_sentence_with_whitespace("word\n\n", 0),
+            make_sentence_with_whitespace("next", 0),
+        ];
+        assert!(rule.match_text("", &normal).is_empty());
     }
 }
