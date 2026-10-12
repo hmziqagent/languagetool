@@ -222,6 +222,12 @@ fn replace_first_gender_star(s: &str) -> String {
     }
 }
 
+fn has_binnen_i(s: &str) -> bool {
+    s.char_indices().any(|(idx, _)| {
+        s[idx..].starts_with("In") && s[..idx].chars().next_back().is_some_and(is_ascii_word_char)
+    })
+}
+
 fn replace_first_binnen_i(s: &str) -> String {
     for (idx, _) in s.char_indices() {
         if s[idx..].starts_with("In")
@@ -1072,7 +1078,7 @@ impl GermanSpeller {
             if to_check.starts_with('I') && start > 0 {
                 return false;
             }
-            if gender_star_find(to_check).is_some()
+            if has_binnen_i(to_check)
                 && (self.base_is_misspelled(&replace_first_binnen_i(to_check))
                     || (!to_check.ends_with("In") && !to_check.ends_with("Innen")))
             {
@@ -1555,10 +1561,6 @@ impl Rule for GermanSpellerRule {
             let mut context_end = std::cmp::min(rel_end + 40, full_text.len());
             while context_end > context_start && !full_text.is_char_boundary(context_end) {
                 context_end += 1;
-                if context_end > full_text.len() {
-                    context_end = full_text.len();
-                    break;
-                }
             }
             let context_text = full_text[context_start..context_end].to_string();
             let suggestions = self.speller.suggestions(text, 5);
@@ -1647,6 +1649,23 @@ mod tests {
                 None,
                 "de-CH",
             ))
+        });
+        SPELLER.as_ref()
+    }
+
+    fn hunspell_speller() -> Option<&'static GermanSpeller> {
+        static SPELLER: LazyLock<Option<GermanSpeller>> = LazyLock::new(|| {
+            let dir = resource_dir()?;
+            let hunspell_dir = dir.join("hunspell");
+            let checker = crate::hunspell::HunspellChecker::load(
+                &hunspell_dir.join("de_DE.aff"),
+                &hunspell_dir.join("de_DE.dic"),
+            )?;
+            Some(
+                speller_arc()?
+                    .with_extra_ignore_words(Vec::new())
+                    .with_hunspell_core(Arc::new(checker)),
+            )
         });
         SPELLER.as_ref()
     }
@@ -2148,5 +2167,470 @@ mod tests {
             vec!["Hauptstraße".to_string(), "Hauptstr.".to_string()]
         );
         assert_eq!(replace_first_binnen_i("Kunden"), "Kunden");
+        assert!(
+            expand_line("Wort/Q").is_empty(),
+            "unknown flag chars expand to nothing"
+        );
+    }
+
+    #[test]
+    fn direction_prefixed_lowercase_words_are_ignored_in_sentences() {
+        let Some(s) = speller() else {
+            eprintln!("Skipping: German resources not present");
+            return;
+        };
+        assert!(s.is_misspelled("ostbahn"), "unknown as a plain word");
+        assert!(s.ignore_word_in_sentence(&["ostbahn"], 0));
+        assert!(s.ignore_word_in_sentence(&["nordbahn"], 0));
+        assert!(!s.ignore_word_in_sentence(&["qxbahn"], 0));
+    }
+
+    #[test]
+    fn schaf_special_case_flags_when_the_schaft_form_is_valid() {
+        let Some(s) = speller() else {
+            eprintln!("Skipping: German resources not present");
+            return;
+        };
+        assert!(
+            s.is_misspelled("Mannschaf"),
+            "'Mannschaft' is valid, so the plain form is flagged"
+        );
+        assert!(!s.is_misspelled("Mannschaft"));
+        assert!(
+            !s.is_misspelled("Wildschaf"),
+            "listed Schaf compounds stay accepted"
+        );
+    }
+
+    #[test]
+    fn spielzug_special_case_flags_unknown_derivations() {
+        let Some(s) = speller() else {
+            eprintln!("Skipping: German resources not present");
+            return;
+        };
+        assert!(s.is_misspelled("Spielzugtorte"));
+        assert!(!s.is_misspelled("Spielzug"));
+    }
+
+    #[test]
+    fn hyphen_compound_with_ignored_middle_part_is_ignored() {
+        let Some(s) = speller() else {
+            eprintln!("Skipping: German resources not present");
+            return;
+        };
+        assert!(s.ignore_word_in_sentence(&["Haus-Hadamard-Haus"], 0));
+        assert!(!s.ignore_word_in_sentence(&["Haus-Qxadard-Haus"], 0));
+    }
+
+    #[test]
+    fn hanging_hyphen_covers_ignored_and_fugen_s_words() {
+        let Some(s) = speller() else {
+            eprintln!("Skipping: German resources not present");
+            return;
+        };
+        assert!(s.ignore_word_in_sentence(&["Hadamard-", "und", "Schwarz-Rot"], 0));
+        assert!(s.ignore_word_in_sentence(&["Bundes-", "und", "Schwarz-Rot-Gold"], 0));
+        assert!(!s.ignore_word_in_sentence(&["Qxschafts-", "und", "Schwarz-Rot"], 0));
+    }
+
+    #[test]
+    fn hyphen_gates_flag_misspelled_and_lowercase_parts() {
+        let Some(s) = speller() else {
+            eprintln!("Skipping: German resources not present");
+            return;
+        };
+        assert!(
+            s.is_misspelled("Bundes-kanzler"),
+            "lowercase part only spells as a noun when capitalized"
+        );
+        assert!(s.is_misspelled("Qxq-Analysis"));
+        assert!(s.is_misspelled("Bundes-qxqwort"));
+        assert!(
+            s.is_misspelled("Haus-Schwarz-Rot"),
+            "hyphen-keeping parts are split again before the compound walk"
+        );
+    }
+
+    #[test]
+    fn old_spelling_s_final_parts_stay_flagged() {
+        let Some(s) = speller() else {
+            eprintln!("Skipping: German resources not present");
+            return;
+        };
+        assert!(s.is_misspelled("Känguruhsherde"));
+        assert!(!s.is_misspelled("Kängurus"));
+    }
+
+    #[test]
+    fn wechsel_infix_families_accept_the_listed_second_parts() {
+        let Some(s) = speller() else {
+            eprintln!("Skipping: German resources not present");
+            return;
+        };
+        for word in [
+            "Verbandskasse",
+            "Linkportale",
+            "Rechtbank",
+            "Verbandraum",
+            "Dienstagvormittag",
+            "Dienstagsrunde",
+            "Linksverkehr",
+            "Arbeitnehmendem",
+        ] {
+            assert!(!s.is_misspelled(word), "'{word}' must be accepted");
+        }
+    }
+
+    #[test]
+    fn confused_prefix_families_split_between_bach_bad_and_wider() {
+        let Some(s) = speller() else {
+            eprintln!("Skipping: German resources not present");
+            return;
+        };
+        for word in [
+            "Badforelle",
+            "Badregal",
+            "Badezimmer",
+            "Widerglanz",
+            "Wiederecho",
+        ] {
+            assert!(!s.is_misspelled(word), "'{word}' must be accepted");
+        }
+    }
+
+    #[test]
+    fn wechsel_numerus_families_accept_the_matching_plural_forms() {
+        let Some(s) = speller() else {
+            eprintln!("Skipping: German resources not present");
+            return;
+        };
+        for word in ["Weltfrieden", "Weltenwende", "Wörterliste", "Wortschatz"] {
+            assert!(!s.is_misspelled(word), "'{word}' must be accepted");
+        }
+        assert!(s.is_misspelled("Wörterschatz"));
+    }
+
+    #[test]
+    fn fugen_s_arms_accept_schoenheits_and_kassen_compounds() {
+        let Some(s) = speller() else {
+            eprintln!("Skipping: German resources not present");
+            return;
+        };
+        for word in ["Schönheitswasser", "Schönheitsfarm", "Kassenbuch"] {
+            assert!(!s.is_misspelled(word), "'{word}' must be accepted");
+        }
+    }
+
+    #[test]
+    fn plural_lemma_arms_flag_singular_part_one_compounds() {
+        let Some(s) = speller() else {
+            eprintln!("Skipping: German resources not present");
+            return;
+        };
+        assert!(
+            s.is_misspelled("Häuserrauchen"),
+            "SUB:INF object keeps the plural gate"
+        );
+        assert!(s.is_misspelled("Häuserqasse"));
+    }
+
+    #[test]
+    fn three_part_verb_families_are_accepted_by_the_spell_rule() {
+        let Some(s) = speller() else {
+            eprintln!("Skipping: German resources not present");
+            return;
+        };
+        for word in ["Ausbiegemöglichkeit", "Kennenlernmöglichkeit"] {
+            assert!(!s.is_misspelled(word), "'{word}' must be accepted");
+        }
+    }
+
+    #[test]
+    fn missing_adj_gate_accepts_testable_noun_stems_with_hunspell() {
+        let Some(s) = hunspell_speller() else {
+            eprintln!("Skipping: German resources not present");
+            return;
+        };
+        for word in [
+            "mannschaftsrelevant",
+            "waldrelevant",
+            "dorfbedingt",
+            "handlungsartig",
+        ] {
+            assert!(
+                s.ignore_word_in_sentence(&[word], 0),
+                "'{word}' passes the missing-adjective gate"
+            );
+        }
+        assert!(!s.ignore_word_in_sentence(&["arbeitartig"], 0));
+    }
+
+    #[test]
+    fn mitarbeitende_gate_replaces_the_suffix_with_mitarbeiter() {
+        let Some(s) = hunspell_speller() else {
+            eprintln!("Skipping: German resources not present");
+            return;
+        };
+        assert!(!s.is_misspelled("Teammitarbeitende"));
+        assert!(s.ignore_word_in_sentence(&["Teammitarbeitende"], 0));
+    }
+
+    #[test]
+    fn gender_neutral_walk_covers_star_slash_and_binnen_i_forms() {
+        let Some(s) = hunspell_speller() else {
+            eprintln!("Skipping: German resources not present");
+            return;
+        };
+        for word in [
+            "Bundeskanzler*innen",
+            "Fahrer/-innen",
+            "Kund*innen",
+            "Leser/-in",
+            "Professor/-innen",
+            "Schwarz*weiß",
+        ] {
+            assert!(s.is_misspelled(word), "'{word}' must stay flagged");
+        }
+        assert!(
+            !s.is_misspelled("BundeskanzlerInnen"),
+            "spellable Binnen-I form passes the gender-neutral walk"
+        );
+    }
+
+    #[test]
+    fn oversized_and_single_char_words_skip_the_hunspell_gates() {
+        let Some(s) = speller() else {
+            eprintln!("Skipping: German resources not present");
+            return;
+        };
+        let oversized = "a".repeat(MAX_TOKEN_LENGTH + 10);
+        assert!(!s.filter_is_misspelled(&oversized));
+        assert!(!s.is_misspelled("a"));
+        assert!(!s.is_misspelled_strict("a"));
+    }
+
+    #[test]
+    fn compound_parts_spellable_falls_back_to_the_capitalized_form() {
+        let base = std::env::temp_dir().join(format!("og-spell-de-cap-{}", std::process::id()));
+        std::fs::create_dir_all(&base).unwrap();
+        struct TempDir(std::path::PathBuf);
+        impl Drop for TempDir {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let guard = TempDir(base.clone());
+
+        let mut dict = Dictionary::from_shared_words(Arc::new(
+            crate::morfologik_view::MorfologikView::new(Arc::new(
+                og_tagger::morfologik::MorfologikDictionary::from_decoded_text(
+                    "Kanzler\tKanzler\tSUB:NOM:SIN:MAS\n",
+                ),
+            )),
+        ));
+        dict.add_word("Bundes");
+        let s = GermanSpeller::new(Arc::new(dict), &guard.0, None, None, "de-DE");
+
+        assert!(
+            s.is_misspelled("Bundeskanzler"),
+            "the compound itself is unknown"
+        );
+        assert!(
+            !s.is_misspelled_strict("Bundeskanzler"),
+            "'kanzler' only becomes spellable through its capitalized form"
+        );
+    }
+
+    #[test]
+    fn match_sentence_snaps_the_context_to_char_boundaries() {
+        use og_core::AnalyzedTokenReadings;
+        let Some(s) = speller_arc() else {
+            eprintln!("Skipping: German resources not present");
+            return;
+        };
+        let rule = GermanSpellerRule::new(Arc::clone(s), "DE_HUNSPELL_RULE");
+
+        let prefix: String = "ä".repeat(21);
+        let suffix: String = "ä".repeat(30);
+        let text = format!("{prefix} wrldx {suffix}.");
+        let word_start = prefix.len() + 1;
+        let word_end = word_start + "wrldx".len();
+        let mut sentence = AnalyzedSentence::new(&text, 0, text.len());
+        sentence.set_tokens(vec![
+            AnalyzedTokenReadings::new(AnalyzedToken::new(&prefix, 0, prefix.len())),
+            AnalyzedTokenReadings::new(AnalyzedToken::new("wrldx", word_start, word_end)),
+        ]);
+
+        let matches = rule.match_sentence(&sentence);
+        let wrldx_match = matches
+            .iter()
+            .find(|m| m.message().contains("wrldx"))
+            .expect("wrldx is flagged");
+        let context = wrldx_match.context();
+        let context_start = context.offset();
+        let context_text = context.text();
+        assert!(
+            text.is_char_boundary(context_start),
+            "context start snapped to a char boundary"
+        );
+        assert!(
+            text.is_char_boundary(context_start + context_text.len()),
+            "context end snapped to a char boundary"
+        );
+        assert!(context_text.contains("wrldx"));
+    }
+
+    #[test]
+    fn short_words_and_ignored_prefixes_drive_the_compound_ignore_walk() {
+        let Some(s) = speller() else {
+            eprintln!("Skipping: German resources not present");
+            return;
+        };
+        assert!(
+            !s.ignore_word_in_sentence(&["Hau"], 0),
+            "short words return no prefix"
+        );
+        let extended = s.with_extra_ignore_words(vec!["Qxvw".to_string(), "Qxung".to_string()]);
+        assert!(extended.ignore_word_in_sentence(&["Qxvwort"], 0));
+        assert!(!extended.ignore_word_in_sentence(&["Qxungstadt"], 0));
+    }
+
+    #[test]
+    fn hanging_hyphen_next_word_compound_kinds() {
+        let Some(s) = speller() else {
+            eprintln!("Skipping: German resources not present");
+            return;
+        };
+        assert!(
+            s.ignore_word_in_sentence(&["Meinungs-", "und", "Kanzlei"], 0),
+            "Kanzlei counts as a compound via the -ei ending"
+        );
+        assert!(
+            !s.ignore_word_in_sentence(&["Stil-", "und", "Haus"], 0),
+            "a plain noun is not a compound continuation"
+        );
+    }
+
+    #[test]
+    fn lowercase_mitarbeitende_is_ignored_through_the_suffix_swap() {
+        let Some(s) = speller() else {
+            eprintln!("Skipping: German resources not present");
+            return;
+        };
+        assert!(s.ignore_word_in_sentence(&["mitarbeitende"], 0));
+    }
+
+    #[test]
+    fn binnen_i_gate_rejects_unspellable_capitalized_inner_forms() {
+        let Some(s) = speller() else {
+            eprintln!("Skipping: German resources not present");
+            return;
+        };
+        assert!(
+            s.is_misspelled("BundeskanzlerInnen"),
+            "'kanzlerinnen' alone is not spellable, so the Binnen-I form stays flagged"
+        );
+        assert!(
+            s.is_misspelled("Qxberg*stein"),
+            "star split stays consistent"
+        );
+        assert!(
+            s.is_misspelled("AktienIndex"),
+            "a part starting with the Binnen-I is rejected"
+        );
+    }
+
+    #[test]
+    fn invalid_compound_parts_and_lemma_retries_stay_flagged() {
+        let Some(s) = speller() else {
+            eprintln!("Skipping: German resources not present");
+            return;
+        };
+        assert!(
+            s.is_misspelled("Westenhimmel"),
+            "'westen' is an invalid first part"
+        );
+        assert!(
+            s.is_misspelled("Winterkamp"),
+            "'kamp' is an invalid second part"
+        );
+        assert!(
+            s.is_misspelled("Kassenxyz"),
+            "singular part one needs a plural"
+        );
+        assert!(
+            s.is_misspelled("Linksqxqworts"),
+            "unknown s-final second part retries the lemma without the s"
+        );
+    }
+
+    #[test]
+    fn verb_stem_and_uppercase_prefixes_accept_their_compounds() {
+        let Some(s) = speller() else {
+            eprintln!("Skipping: German resources not present");
+            return;
+        };
+        assert!(
+            !s.is_misspelled("Abblasmuster"),
+            "verb stem plus s joins a noun"
+        );
+        assert!(
+            !s.is_misspelled("DAX-Wert"),
+            "all-uppercase first part is known"
+        );
+    }
+
+    #[test]
+    fn three_part_families_cover_s_link_other_prefixes_and_verb_stems() {
+        let Some(s) = speller() else {
+            eprintln!("Skipping: German resources not present");
+            return;
+        };
+        for word in [
+            "Linksverkehrsregel",
+            "Rechtsprachgebrauch",
+            "Schwarz-Rot-Gold",
+            "Weltenwende",
+        ] {
+            assert!(!s.is_misspelled(word), "'{word}' must be accepted");
+        }
+        assert!(
+            s.is_misspelled("Bundesverkehrsamt"),
+            "s-linked three-part split still fails on the short tail"
+        );
+        assert!(s.is_misspelled("Wilhelmkamp"));
+        assert!(
+            s.is_misspelled("Bachforelle"),
+            "plain 'Bach' matches no confusion family"
+        );
+    }
+
+    #[test]
+    fn taggerless_speller_accepts_the_kennenlernen_family() {
+        let Some(s) = taggerless_speller() else {
+            eprintln!("Skipping: German resources not present");
+            return;
+        };
+        assert!(!s.is_misspelled("Sozialkennenlernen"));
+    }
+
+    #[test]
+    fn match_sentence_skips_ignored_and_non_word_tokens() {
+        use og_core::AnalyzedTokenReadings;
+        let Some(s) = speller_arc() else {
+            eprintln!("Skipping: German resources not present");
+            return;
+        };
+        let rule = GermanSpellerRule::new(Arc::clone(s), "DE_HUNSPELL_RULE");
+        let mut sentence = AnalyzedSentence::new("123 ostbahn", 0, "123 ostbahn".len());
+        sentence.set_tokens(vec![
+            AnalyzedTokenReadings::new(AnalyzedToken::new("123", 0, 3)),
+            AnalyzedTokenReadings::new(AnalyzedToken::new(" ", 3, 4)),
+            AnalyzedTokenReadings::new(AnalyzedToken::new("ostbahn", 4, 11)),
+        ]);
+        assert!(
+            rule.match_sentence(&sentence).is_empty(),
+            "digit tokens and sentence-ignored direction words produce no match"
+        );
     }
 }
