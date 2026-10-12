@@ -461,12 +461,11 @@ pub(crate) fn collect_style_antipattern_examples(nc: &str) -> StyleAntipatternEx
 #[ignore]
 fn portuguese_style_examples_with_pt_pipeline() {
     let _release_guard = crate::release_guard();
-    evaluate_style_examples_with_antipatterns();
+    evaluate_style_examples_with_antipatterns(&style_path(), "/tmp/test_failures_pt_style.txt");
 }
 
-fn evaluate_style_examples_with_antipatterns() {
-    let rules_path = style_path();
-    let xml = std::fs::read_to_string(&rules_path).expect("rules xml");
+fn evaluate_style_examples_with_antipatterns(rules_path: &Path, artifact: &str) {
+    let xml = std::fs::read_to_string(rules_path).expect("rules xml");
     let without_comments = strip_xml_comments(&xml);
     let antipattern = collect_style_antipattern_examples(&without_comments);
     let antipattern_example_count: usize = antipattern.by_key.values().map(Vec::len).sum();
@@ -612,10 +611,7 @@ fn evaluate_style_examples_with_antipatterns() {
         antipattern.skipped_targets,
         started.elapsed().as_secs_f64(),
     );
-    let _ = std::fs::write(
-        "/tmp/test_failures_pt_style.txt",
-        fail_lines.join("\n") + "\n",
-    );
+    let _ = std::fs::write(artifact, fail_lines.join("\n") + "\n");
     assert!(passed + failed > 0, "suite must evaluate examples");
 }
 
@@ -1098,5 +1094,211 @@ mod tests {
                 .any(|(start, len, _)| *start == 0 && *len == 13),
             "disambiguation-global.xml must add _IS_URL so URL_INICIAL fires on the sentence-initial URL: {matches:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod synthetic_evaluator_tests {
+    use super::*;
+
+    fn write_temp(name: &str, xml: &str) -> PathBuf {
+        let path =
+            std::env::temp_dir().join(format!("og_pt_synthetic_{name}_{}.xml", std::process::id()));
+        std::fs::write(&path, xml).expect("write synthetic rules");
+        path
+    }
+
+    fn synthetic_grammar() -> String {
+        [
+            "<rules lang=\"pt\">",
+            "<rule id=\"SYN_MATCH\" name=\"syn match\">",
+            "<pattern><token>gronz</token></pattern>",
+            "<message>palavra ruim</message>",
+            "<example type=\"incorrect\">Isto \u{e9} um <marker>gronz</marker> aqui.</example>",
+            "<example type=\"correct\">Isto \u{e9} correto.</example>",
+            "</rule>",
+            "<rule id=\"SYN_NOMATCH\" name=\"syn nomatch\">",
+            "<pattern><token>zzzqqq</token></pattern>",
+            "<message>palavra ruim</message>",
+            "<example type=\"incorrect\">Nada aqui.</example>",
+            "</rule>",
+            "<rule id=\"SYN_FP\" name=\"syn fp\">",
+            "<pattern><token>Isto</token></pattern>",
+            "<message>palavra ruim</message>",
+            "<example type=\"correct\">Isto \u{e9} correto.</example>",
+            "</rule>",
+            "<rule id=\"SYN_MARKER_MISS\" name=\"syn marker miss\">",
+            "<pattern><token>caso</token></pattern>",
+            "<message>palavra ruim</message>",
+            "<example type=\"incorrect\">Isto \u{e9} <marker>gronz</marker> um caso.</example>",
+            "</rule>",
+            "<!-- <example type=\"correct\">commented</example> -->",
+            "</rules>",
+        ]
+        .join("\n")
+    }
+
+    fn synthetic_style() -> String {
+        [
+            "<rules lang=\"pt\">",
+            "<rule id=\"SYN_STYLE_MATCH\" name=\"syn style match\">",
+            "<antipattern>",
+            "<example type=\"correct\">Palavra flurb proibida aqui.</example>",
+            "</antipattern>",
+            "<pattern><token>flurb</token></pattern>",
+            "<message>ruim</message>",
+            "<example type=\"incorrect\">Aqui vem <marker>flurb</marker> mesmo.</example>",
+            "</rule>",
+            "<rulegroup id=\"SYN_STYLE_GROUP\">",
+            "<antipattern>",
+            "<example type=\"correct\">Grupo blorp caso.</example>",
+            "</antipattern>",
+            "<rule name=\"g1\"><pattern><token>blorp</token></pattern><message>ruim</message>",
+            "<example type=\"incorrect\">Grupo <marker>blorp</marker> caso.</example></rule>",
+            "</rulegroup>",
+            "<rule id=\"SYN_STYLE_CLEAN\" name=\"syn style clean\">",
+            "<antipattern>",
+            "<example type=\"correct\">Este texto nenhuma palavra da regra tem.</example>",
+            "</antipattern>",
+            "<pattern><token>querqu</token></pattern>",
+            "<message>ruim</message>",
+            "<example type=\"incorrect\">Aqui vem <marker>querqu</marker>.</example>",
+            "</rule>",
+            "</rules>",
+        ]
+        .join("\n")
+    }
+
+    #[test]
+    fn evaluate_examples_file_classifies_synthetic_outcomes_into_the_artifact() {
+        let path = write_temp("grammar", &synthetic_grammar());
+        let artifact_path = std::env::temp_dir().join(format!(
+            "og_pt_synthetic_grammar_{}.txt",
+            std::process::id()
+        ));
+        evaluate_examples_file(
+            &path,
+            "synthetic-grammar",
+            Some(artifact_path.to_str().unwrap()),
+        );
+        let artifact = std::fs::read_to_string(&artifact_path).unwrap_or_default();
+
+        assert!(
+            artifact.contains(
+                "FAIL: [SYN_NOMATCH] Expected match on incorrect example but got none: 'Nada aqui.'"
+            ),
+            "the unmatched incorrect example must be recorded as a NoMatch failure: {artifact}"
+        );
+        assert!(
+            artifact.contains("FAIL: [SYN_FP] Expected no match on correct example but got"),
+            "the firing rule on a correct example must be recorded as a false positive: {artifact}"
+        );
+        assert!(
+            artifact.contains("does not contain marker"),
+            "a match outside the marker span must be recorded as a marker failure: {artifact}"
+        );
+        assert!(
+            !artifact.contains("SYN_MATCH"),
+            "the rule whose match covers the marker and whose correct example stays clean must pass: {artifact}"
+        );
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&artifact_path);
+    }
+
+    #[test]
+    fn evaluate_style_examples_reports_rule_and_group_antipattern_fires() {
+        let path = write_temp("style", &synthetic_style());
+        let artifact_path =
+            std::env::temp_dir().join(format!("og_pt_synthetic_style_{}.txt", std::process::id()));
+        evaluate_style_examples_with_antipatterns(&path, artifact_path.to_str().unwrap());
+        let artifact = std::fs::read_to_string(&artifact_path).unwrap_or_default();
+
+        assert!(
+            artifact.contains(
+                "FAIL: [SYN_STYLE_MATCH/- ANTIPATTERN]: Expected no match (antipattern example)"
+            ),
+            "a rule-level antipattern example that still fires must be recorded: {artifact}"
+        );
+        assert!(
+            artifact.contains(
+                "FAIL: [SYN_STYLE_GROUP/1 ANTIPATTERN]: Expected no match (antipattern example)"
+            ),
+            "group-level antipatterns expand to the (group id, sub id) keys of their sub-rules: {artifact}"
+        );
+        assert!(
+            !artifact.contains("SYN_STYLE_CLEAN"),
+            "a non-firing rule with correct examples and a clean antipattern must pass: {artifact}"
+        );
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&artifact_path);
+    }
+
+    #[test]
+    fn collect_style_antipattern_examples_keys_synthetic_rules_and_groups() {
+        let nc = strip_xml_comments(&synthetic_style());
+        let antipattern = collect_style_antipattern_examples(&nc);
+        assert_eq!(
+            antipattern
+                .by_key
+                .get(&("SYN_STYLE_MATCH".to_string(), None))
+                .map(Vec::len),
+            Some(1)
+        );
+        assert_eq!(
+            antipattern
+                .by_key
+                .get(&("SYN_STYLE_GROUP".to_string(), Some("1".to_string())))
+                .map(Vec::len),
+            Some(1),
+            "the group-level antipattern must attach to the anonymous sub-rule key (group id, position)"
+        );
+        assert_eq!(antipattern.rule_level_count, 2);
+        assert_eq!(antipattern.group_level_count, 1);
+    }
+
+    #[test]
+    fn decode_xml_entities_decodes_named_and_numeric_references() {
+        assert_eq!(decode_xml_entities("sem ampersand"), "sem ampersand");
+        assert_eq!(
+            decode_xml_entities("a &amp; b &lt;c&gt; &quot;d&quot; &apos;"),
+            "a & b <c> \"d\" '"
+        );
+        assert_eq!(decode_xml_entities("&#65;&#x42;"), "AB");
+        assert_eq!(decode_xml_entities("a &unknownent; b"), "a &unknownent; b");
+        assert_eq!(decode_xml_entities("a & unfinished"), "a & unfinished");
+        assert_eq!(
+            decode_xml_entities("&verylongentityname;"),
+            "&verylongentityname;"
+        );
+    }
+
+    #[test]
+    fn tag_name_and_attr_value_parse_single_quoted_and_missing_attributes() {
+        assert_eq!(tag_name("<rule id=\"x\">"), "rule");
+        assert_eq!(tag_name("</rule>"), "rule");
+        assert_eq!(tag_name("<rule/>"), "rule");
+        assert_eq!(tag_name("<token inflected='yes'>"), "token");
+        assert_eq!(
+            attr_value("<rule id=\"x\" off=\"yes\">", "id").as_deref(),
+            Some("x")
+        );
+        assert_eq!(
+            attr_value("<rule id='single'>", "id").as_deref(),
+            Some("single")
+        );
+        assert_eq!(attr_value("<rule>", "id"), None);
+        assert_eq!(
+            attr_value("<rule id=\"a&amp;b\">", "id").as_deref(),
+            Some("a&b")
+        );
+    }
+
+    #[test]
+    fn strip_xml_comments_drops_full_comments_and_an_unterminated_tail() {
+        assert_eq!(strip_xml_comments("a<!-- x -->b<!-- y -->c"), "abc");
+        assert_eq!(strip_xml_comments("x<!-- never closed"), "x");
+        assert_eq!(strip_xml_comments("plain"), "plain");
     }
 }
