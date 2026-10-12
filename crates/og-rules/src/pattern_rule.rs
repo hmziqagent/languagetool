@@ -7650,7 +7650,7 @@ mod tests {
                 .collect::<Vec<_>>()
         );
 
-        let mut bare = make_analyzed_sentence("ein großes Haus");
+        let bare = make_analyzed_sentence("ein großes Haus");
         let none: Vec<_> = rule_set
             .rules
             .iter()
@@ -8091,6 +8091,494 @@ mod tests {
             .map(|r| r.value())
             .collect();
         assert_eq!(none, vec!["steht parkt"]);
+    }
+
+    fn sentence_with_tokens(text: &str, pieces: &[&str]) -> og_core::AnalyzedSentence {
+        use og_core::{AnalyzedToken, AnalyzedTokenReadings};
+        let mut sentence = og_core::AnalyzedSentence::new(text, 0, text.len());
+        let mut tokens = Vec::new();
+        let mut pos = 0usize;
+        for piece in pieces {
+            let start = text[pos..].find(piece).map(|i| pos + i).unwrap_or(pos);
+            let end = start + piece.len();
+            tokens.push(AnalyzedTokenReadings::new(AnalyzedToken::new(
+                *piece, start, end,
+            )));
+            pos = end;
+        }
+        sentence.set_tokens(tokens);
+        sentence
+    }
+
+    fn match_tokens(xml: &str, text: &str, pieces: &[&str]) -> Vec<RuleMatch> {
+        let compiler = XmlCompiler::new();
+        let rule_set = compiler.compile_file(xml).unwrap();
+        let engine = PatternRuleEngine::new();
+        let sentence = sentence_with_tokens(text, pieces);
+        let mut matches = Vec::new();
+        for rule in &rule_set.rules {
+            matches.extend(engine.match_rule(rule, &sentence));
+        }
+        matches
+    }
+
+    #[test]
+    fn ymd_new_year_date_filter_suggests_the_next_year_date() {
+        set_test_date_hack(true);
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <rule id="YMD_NEWYEAR" name="new year ymd">
+                <pattern>
+                    <marker><token regexp="yes">\d\d\d\d-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])</token></marker>
+                </pattern>
+                <filter class="org.languagetool.rules.en.YMDNewYearDateFilter" args="date:\1"/>
+                <message>A new year has begun. Did you mean <suggestion>{realDate}</suggestion>?</message>
+            </rule>
+        </rules>"#;
+        let matches = match_tokens(
+            xml,
+            "IGD Convention 2014 - 2013-10-31.",
+            &["IGD", "Convention", "2014", "-", "2013-10-31", "."],
+        );
+        assert_eq!(matches.len(), 1);
+        let m = &matches[0];
+        assert_eq!(
+            m.message(),
+            "A new year has begun. Did you mean 2014-10-31?"
+        );
+        let reps: Vec<&str> = m.replacements().iter().map(|r| r.value()).collect();
+        assert_eq!(reps, vec!["2014-10-31"]);
+        assert_eq!(
+            match_tokens(
+                xml,
+                "IGD Convention 2014 - 2014-10-31.",
+                &["IGD", "Convention", "2014", "-", "2014-10-31", "."],
+            )
+            .len(),
+            0,
+            "same-year date is fine"
+        );
+        assert_eq!(
+            match_tokens(
+                xml,
+                "IGD Convention 2014 - 2012-12-31.",
+                &["IGD", "Convention", "2014", "-", "2012-12-31", "."],
+            )
+            .len(),
+            0,
+            "two years back is fine"
+        );
+    }
+
+    #[test]
+    fn en_date_check_filter_with_date_arg_uses_the_full_date_token() {
+        set_test_date_hack(true);
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <rule id="EN_DATE_YMD" name="weekday vs ymd date">
+                <pattern>
+                    <marker>
+                        <token regexp="yes">Monday|Friday</token>
+                        <token>,</token>
+                        <token regexp="yes">\d\d\d\d-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])</token>
+                    </marker>
+                </pattern>
+                <filter class="org.languagetool.rules.en.DateCheckFilter" args="date:3 weekDay:1"/>
+                <message>The date \3 (YYYY-MM-DD) is not a {day}, but a {realDay}.</message>
+            </rule>
+        </rules>"#;
+        let text = "IGD Convention 2014 - Monday, 2014-10-31.";
+        let matches = match_tokens(
+            xml,
+            text,
+            &[
+                "IGD",
+                "Convention",
+                "2014",
+                "-",
+                "Monday",
+                ",",
+                "2014-10-31",
+                ".",
+            ],
+        );
+        assert_eq!(matches.len(), 1);
+        let m = &matches[0];
+        assert_eq!(
+            m.message(),
+            "The date \\3 (YYYY-MM-DD) is not a Monday, but a Friday."
+        );
+        let reps: Vec<&str> = m.replacements().iter().map(|r| r.value()).collect();
+        assert_eq!(reps, vec!["Friday, 2014-10-31", "Monday, 2014-10-27"]);
+        assert_eq!(
+            &text[m.offset()..m.offset() + m.length()],
+            "Monday, 2014-10-31"
+        );
+
+        let text = "IGD Convention 2014 - Friday, 2014-10-31.";
+        assert_eq!(
+            match_tokens(
+                xml,
+                text,
+                &[
+                    "IGD",
+                    "Convention",
+                    "2014",
+                    "-",
+                    "Friday",
+                    ",",
+                    "2014-10-31",
+                    "."
+                ],
+            )
+            .len(),
+            0,
+            "consistent date"
+        );
+
+        let text = "Friday, 2013-08-15.";
+        let matches = match_tokens(xml, text, &["Friday", ",", "2013-08-15", "."]);
+        assert_eq!(matches.len(), 1);
+        let m = &matches[0];
+        assert_eq!(m.message(), "This date is wrong. Did you mean \"2014\"?");
+        let reps: Vec<&str> = m.replacements().iter().map(|r| r.value()).collect();
+        assert_eq!(reps, vec!["2014-08-15"]);
+        assert_eq!(&text[m.offset()..m.offset() + m.length()], "2013-08-15");
+    }
+
+    #[test]
+    fn pattern_backreferences_cover_regex_replace_inflection_and_negation() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <rule id="BACKREF_REGEX" name="regex transformed backref">
+                <pattern>
+                    <marker>
+                        <token regexp="yes">house7</token>
+                        <token><match no="0" regexp_match="(\w+)7" regexp_replace="$1x"/></token>
+                    </marker>
+                </pattern>
+                <message>m</message>
+            </rule>
+        </rules>"#;
+        assert_eq!(compile_and_match(xml, "the house7 house.").len(), 0);
+        assert_eq!(compile_and_match(xml, "the house7 housex.").len(), 1);
+
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <rule id="BACKREF_INFLECTED" name="inflected backref">
+                <pattern>
+                    <marker>
+                        <token>run</token>
+                        <token inflected="yes"><match no="0"/></token>
+                    </marker>
+                </pattern>
+                <message>m</message>
+            </rule>
+        </rules>"#;
+        let compiler = XmlCompiler::new();
+        let rule_set = compiler.compile_file(xml).unwrap();
+        let engine = PatternRuleEngine::new();
+        let mut sentence = make_analyzed_sentence("they run running .");
+        set_reading(&mut sentence, 2, "run", "VB");
+        let matches: Vec<_> = rule_set
+            .rules
+            .iter()
+            .flat_map(|r| engine.match_rule(r, &sentence))
+            .collect();
+        assert_eq!(
+            matches.len(),
+            1,
+            "lemma 'run' satisfies the inflected backreference"
+        );
+
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <rule id="BACKREF_NEGATE" name="negated backref">
+                <pattern>
+                    <marker>
+                        <token>foo</token>
+                        <token negate="yes"><match no="0"/></token>
+                    </marker>
+                </pattern>
+                <message>m</message>
+            </rule>
+        </rules>"#;
+        assert_eq!(compile_and_match(xml, "foo foo").len(), 0);
+        assert_eq!(compile_and_match(xml, "foo bar").len(), 1);
+
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <rule id="BACKREF_CASE" name="case sensitive regexp backref">
+                <pattern>
+                    <marker>
+                        <token regexp="yes">aa|bb</token>
+                        <token regexp="yes" case_sensitive="yes"><match no="0"/></token>
+                    </marker>
+                </pattern>
+                <message>m</message>
+            </rule>
+        </rules>"#;
+        assert_eq!(compile_and_match(xml, "aa aa").len(), 1);
+        assert_eq!(compile_and_match(xml, "aa AA").len(), 0);
+    }
+
+    #[test]
+    fn pattern_backreference_postag_uses_the_raw_text_without_a_synthesizer() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <rule id="BACKREF_POSTAG_RAW" name="postag backref raw">
+                <pattern>
+                    <marker>
+                        <token>Foo</token>
+                        <token><match no="0" postag="VB" case_conversion="alllower"/></token>
+                    </marker>
+                </pattern>
+                <message>m</message>
+            </rule>
+        </rules>"#;
+        assert_eq!(
+            compile_and_match(xml, "Foo foo").len(),
+            1,
+            "without a synthesizer the reference text is case-converted and compared raw"
+        );
+        assert_eq!(compile_and_match(xml, "Foo bar").len(), 0);
+    }
+
+    #[test]
+    fn pattern_backreference_postag_synthesizes_with_the_engine_synthesizer() {
+        let Some(engine) = synth_engine("en") else {
+            return;
+        };
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <rule id="BACKREF_POSTAG_SYNTH" name="postag backref synthesized">
+                <pattern>
+                    <marker>
+                        <token>goes</token>
+                        <token inflected="yes"><match no="1" postag="VB"/></token>
+                    </marker>
+                </pattern>
+                <message>m</message>
+            </rule>
+        </rules>"#;
+        let compiler = XmlCompiler::new();
+        let rule_set = compiler.compile_file(xml).unwrap();
+        let mut sentence = make_analyzed_sentence("goes went .");
+        set_reading(&mut sentence, 0, "go", "VBZ");
+        set_reading(&mut sentence, 1, "go", "VBD");
+        let matches: Vec<_> = rule_set
+            .rules
+            .iter()
+            .flat_map(|r| engine.match_rule(r, &sentence))
+            .collect();
+        assert_eq!(
+            matches.len(),
+            1,
+            "'went' is a VB form of the referenced lemma 'go'"
+        );
+    }
+
+    #[test]
+    fn pattern_trace_records_the_failure_causes() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <rule id="TRACE" name="trace">
+                <pattern>
+                    <token>hello</token>
+                    <token>world</token>
+                </pattern>
+                <message>m</message>
+            </rule>
+        </rules>"#;
+        let compiler = XmlCompiler::new();
+        let rule_set = compiler.compile_file(xml).unwrap();
+        let engine = PatternRuleEngine::new();
+        let sentence = make_analyzed_sentence("hello there friend");
+        crate::pattern_trace::set_enabled(true);
+        crate::pattern_trace::clear();
+        let matches: Vec<_> = rule_set
+            .rules
+            .iter()
+            .flat_map(|r| engine.match_rule(r, &sentence))
+            .collect();
+        let events = crate::pattern_trace::take();
+        crate::pattern_trace::set_enabled(false);
+        assert!(matches.is_empty());
+        assert!(
+            events
+                .iter()
+                .any(|e| e.cause == "surface!=\"world\"" && e.token == "there"),
+            "events: {events:?}"
+        );
+
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <rule id="TRACE_POSTAG" name="trace postag">
+                <pattern>
+                    <token postag="NN">hello</token>
+                </pattern>
+                <message>m</message>
+            </rule>
+        </rules>"#;
+        let rule_set = compiler.compile_file(xml).unwrap();
+        let sentence = make_analyzed_sentence("hello there");
+        crate::pattern_trace::set_enabled(true);
+        crate::pattern_trace::clear();
+        let _ = rule_set
+            .rules
+            .iter()
+            .flat_map(|r| engine.match_rule(r, &sentence))
+            .count();
+        let events = crate::pattern_trace::take();
+        crate::pattern_trace::set_enabled(false);
+        assert!(
+            events
+                .iter()
+                .any(|e| e.cause.starts_with("postag=\"NN\"") && e.token == "hello"),
+            "events: {events:?}"
+        );
+
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <rule id="TRACE_NEGATE" name="trace negate">
+                <pattern>
+                    <token negate="yes">hello</token>
+                </pattern>
+                <message>m</message>
+            </rule>
+        </rules>"#;
+        let rule_set = compiler.compile_file(xml).unwrap();
+        let sentence = make_analyzed_sentence("hello world");
+        crate::pattern_trace::set_enabled(true);
+        crate::pattern_trace::clear();
+        let _ = rule_set
+            .rules
+            .iter()
+            .flat_map(|r| engine.match_rule(r, &sentence))
+            .count();
+        let events = crate::pattern_trace::take();
+        crate::pattern_trace::set_enabled(false);
+        assert!(
+            events
+                .iter()
+                .any(|e| e.cause == "negated token matched surface \"hello\""),
+            "events: {events:?}"
+        );
+
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <rule id="TRACE_BACKREF" name="trace backref">
+                <pattern>
+                    <token>hello</token>
+                    <token><match no="0"/></token>
+                </pattern>
+                <message>m</message>
+            </rule>
+        </rules>"#;
+        let rule_set = compiler.compile_file(xml).unwrap();
+        let sentence = make_analyzed_sentence("hello world");
+        crate::pattern_trace::set_enabled(true);
+        crate::pattern_trace::clear();
+        let _ = rule_set
+            .rules
+            .iter()
+            .flat_map(|r| engine.match_rule(r, &sentence))
+            .count();
+        let events = crate::pattern_trace::take();
+        crate::pattern_trace::set_enabled(false);
+        assert!(
+            events
+                .iter()
+                .any(|e| e.cause == "backref-no=Some(0) mismatch"),
+            "events: {events:?}"
+        );
+
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <rule id="TRACE_IMMUNIZED" name="trace immunized">
+                <pattern>
+                    <token>hello</token>
+                </pattern>
+                <message>m</message>
+            </rule>
+        </rules>"#;
+        let rule_set = compiler.compile_file(xml).unwrap();
+        let mut sentence = make_analyzed_sentence("hello world");
+        sentence.tokens_mut()[0].immunize();
+        crate::pattern_trace::set_enabled(true);
+        crate::pattern_trace::clear();
+        let _ = rule_set
+            .rules
+            .iter()
+            .flat_map(|r| engine.match_rule(r, &sentence))
+            .count();
+        let events = crate::pattern_trace::take();
+        crate::pattern_trace::set_enabled(false);
+        assert!(
+            events.iter().any(|e| e.cause == "immunized"),
+            "events: {events:?}"
+        );
+    }
+
+    #[test]
+    fn pattern_trace_records_or_group_and_exception_failures() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <rule id="TRACE_OR" name="trace or">
+                <pattern>
+                    <or>
+                        <token>alpha</token>
+                        <token>beta</token>
+                    </or>
+                    <token>gamma</token>
+                </pattern>
+                <message>m</message>
+            </rule>
+        </rules>"#;
+        let compiler = XmlCompiler::new();
+        let rule_set = compiler.compile_file(xml).unwrap();
+        let engine = PatternRuleEngine::new();
+        let sentence = make_analyzed_sentence("alpha delta");
+        crate::pattern_trace::set_enabled(true);
+        crate::pattern_trace::clear();
+        let _ = rule_set
+            .rules
+            .iter()
+            .flat_map(|r| engine.match_rule(r, &sentence))
+            .count();
+        let events = crate::pattern_trace::take();
+        crate::pattern_trace::set_enabled(false);
+        assert!(
+            events.iter().any(|e| e.cause == "surface!=\"gamma\""),
+            "or-group then failing next token: {events:?}"
+        );
+
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <rule id="TRACE_EXC" name="trace exception">
+                <pattern>
+                    <token>foo<exception>foo</exception></token>
+                </pattern>
+                <message>m</message>
+            </rule>
+        </rules>"#;
+        let rule_set = compiler.compile_file(xml).unwrap();
+        let sentence = make_analyzed_sentence("foo bar");
+        crate::pattern_trace::set_enabled(true);
+        crate::pattern_trace::clear();
+        let _ = rule_set
+            .rules
+            .iter()
+            .flat_map(|r| engine.match_rule(r, &sentence))
+            .count();
+        let events = crate::pattern_trace::take();
+        crate::pattern_trace::set_enabled(false);
+        assert!(
+            events
+                .iter()
+                .any(|e| e.cause.starts_with("exception scope=")),
+            "events: {events:?}"
+        );
     }
 
     #[test]
