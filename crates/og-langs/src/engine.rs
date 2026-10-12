@@ -4617,4 +4617,25 @@ mod tests {
         );
         let _ = std::fs::remove_file(&path);
     }
+
+    #[test]
+    fn crimean_tatar_engine_registers_java_relevant_natives() {
+        let _release_guard = crate::release_guard();
+        let engine =
+            build_engine("crh").expect("Crimean Tatar engine must be registered via for_code");
+        for expected in ["UPPERCASE_SENTENCE_START", "WHITESPACE_PARAGRAPH_BEGIN"] {
+            assert!(
+                engine.rule_ids().contains(&expected),
+                "expected {expected} in Crimean Tatar rules (CrimeanTatar.java getRelevantRules), got {:?}",
+                engine.rule_ids()
+            );
+        }
+        assert!(
+            engine
+                .text_level_rule_ids()
+                .contains(&"WHITESPACE_PARAGRAPH"),
+            "the crh arm must add the text-level WhiteSpaceBeforeParagraphEndRule, got {:?}",
+            engine.text_level_rule_ids()
+        );
+    }
 }
