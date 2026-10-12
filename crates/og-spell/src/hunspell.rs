@@ -479,9 +479,6 @@ impl HunspellChecker {
     }
 
     fn check_result(&self, word: &[char]) -> CheckResult {
-        if word.is_empty() {
-            return CheckResult::NotFound;
-        }
         if let Some(homonyms) = self.lookup_flags(word) {
             if let Some(first) = homonyms.first()
                 && has_flag(first, self.forbiddenword)
@@ -1366,14 +1363,18 @@ mod tests {
     fn onlyincompound_root_rejects_affixed_lookups_too() {
         let files = TempAffDic::new(
             "oicaffix",
-            "ONLYINCOMPOUND O\nSFX A Y 1\nSFX A 0 e .\n",
-            "2\nteil/OA\nhaus\n",
+            "ONLYINCOMPOUND O\nSFX A Y 1\nSFX A 0 e .\nPFX U Y 1\nPFX U 0 un .\n",
+            "2\nteil/OAU\nhaus\n",
         );
         let checker = files.load();
         assert!(!checker.spell("teil"));
         assert!(
             !checker.spell("teile"),
-            "affixed root is only valid in compounds"
+            "suffixed root is only valid in compounds"
+        );
+        assert!(
+            !checker.spell("unteil"),
+            "prefixed root is only valid in compounds"
         );
         assert!(checker.spell("haus"));
     }
@@ -1409,7 +1410,7 @@ mod tests {
     fn compound_second_part_rejects_forbidden_affix_roots() {
         let files = TempAffDic::new(
             "compsecondforb",
-            "COMPOUNDMIN 3\nCOMPOUNDBEGIN B\nCOMPOUNDEND E\nFORBIDDENWORD F\nSFX S Y 1\nSFX S 0 s .\n",
+            "COMPOUNDMIN 3\nCOMPOUNDBEGIN B\nCOMPOUNDEND E\nFORBIDDENWORD F\nCOMPOUNDPERMITFLAG P\nSFX S Y 1\nSFX S 0 s/EP .\n",
             "3\nsun/B\nevil/FS\nway/E\n",
         );
         let checker = files.load();
@@ -1418,5 +1419,16 @@ mod tests {
             "forbidden root poisons the split"
         );
         assert!(checker.spell("sunway"));
+    }
+
+    #[test]
+    fn keepcase_words_reject_the_all_capital_fallthrough() {
+        let files = TempAffDic::new("keepcaseallcap", "KEEPCASE K\n", "2\nHaus/K\nx\n");
+        let checker = files.load();
+        assert!(checker.spell("Haus"));
+        assert!(
+            !checker.spell("HAUS"),
+            "KEEPCASE form rejects the all-cap walk"
+        );
     }
 }
