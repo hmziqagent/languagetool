@@ -277,4 +277,59 @@ mod tests {
             1
         );
     }
+
+    #[test]
+    fn flags_unmatched_closing_bracket() {
+        let matches = matches_for("Dit is een zin).");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].offset(), "Dit is een zin".len());
+        assert_eq!(matches[0].length(), 1);
+        assert!(matches[0].message().contains("(\" lijkt te ontbreken"));
+        assert_eq!(matches[0].replacements()[0].value(), ")");
+    }
+
+    #[test]
+    fn flags_unmatched_opening_bracket_mid_sentence() {
+        let matches = matches_for("Een ( zin zonder sluiting.");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].offset(), "Een ".len());
+        assert!(matches[0].message().contains(")\" lijkt te ontbreken"));
+    }
+
+    #[test]
+    fn keeps_global_offsets_across_sentences() {
+        let text = "Een ( zin zonder sluiting. Nog een zin.";
+        let matches = matches_for(text);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].offset(), "Een ".len());
+    }
+
+    #[test]
+    fn colon_dash_smileys_are_not_brackets() {
+        for text in ["Hij lachte :-) breed.", "Zij fronste :-( even."] {
+            assert!(matches_for(text).is_empty(), "{text}");
+        }
+    }
+
+    #[test]
+    fn colon_before_brackets_is_ignored() {
+        assert!(matches_for("Zie hier: (uitleg) voor details.").is_empty());
+    }
+
+    #[test]
+    fn flags_unmatched_single_guillemets() {
+        let matches = matches_for("Hij zeide ‹ hallo.");
+        assert_eq!(matches.len(), 1);
+        assert!(matches[0].message().contains("›"));
+    }
+
+    #[test]
+    fn metadata_pins_punctuation_typographical() {
+        use og_core::rule::TextLevelRule as _;
+        let rule = dutch_unpaired_brackets_rule();
+        assert_eq!(rule.id(), "UNPAIRED_BRACKETS");
+        assert_eq!(rule.category().id().as_str(), "PUNCTUATION");
+        assert_eq!(rule.issue_type(), IssueType::Typographical);
+        assert!(rule.description().contains("haakjes"));
+    }
 }

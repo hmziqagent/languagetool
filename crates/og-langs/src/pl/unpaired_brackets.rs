@@ -479,4 +479,65 @@ mod tests {
     fn text_pos(text: &str, c: char) -> usize {
         text.find(c).unwrap_or(usize::MAX)
     }
+
+    #[test]
+    fn unmatched_closing_paren_is_reported() {
+        let text = "To jest zdanie).";
+        let matches = run(text);
+        assert_eq!(matches.len(), 1, "{matches:?}");
+        assert_eq!(&text[matches[0].offset()..matches[0].offset() + 1], ")");
+        assert!(matches[0].message().contains('('));
+    }
+
+    #[test]
+    fn paired_parens_stay_silent() {
+        assert!(
+            run("To jest (cytat) w tekście.").is_empty(),
+            "Java pairs the round brackets"
+        );
+    }
+
+    #[test]
+    fn ordinal_paren_after_numeral_is_ignored() {
+        for text in [
+            "Zobacz rozdział 12) dalej.",
+            "Rozdział 12.5) wygląda inaczej.",
+        ] {
+            assert!(run(text).is_empty(), "{text}: {:?}", run(text));
+        }
+    }
+
+    #[test]
+    fn colon_dash_smileys_are_ignored() {
+        assert!(run("Uśmiechnął się :-) szeroko.").is_empty());
+    }
+
+    #[test]
+    fn list_item_paren_at_line_start_is_ignored() {
+        assert!(run("Punkt:\na) jest ważny.").is_empty());
+        assert!(!run("Punkt a) jest ważny.").is_empty());
+    }
+
+    #[test]
+    fn curly_lower_quotes_pair_with_upper_close() {
+        assert!(
+            run("To jest \u{201e}cytat\u{201d} w tekście.").is_empty(),
+            "Java pairs \u{201e} with \u{201d}"
+        );
+        let matches = run("To jest \u{201e}cytat w tekście.");
+        assert_eq!(matches.len(), 1, "{matches:?}");
+        assert!(matches[0].message().contains('\u{201d}'));
+    }
+
+    #[test]
+    fn metadata_pins_punctuation_category() {
+        let rule = PolishUnpairedBracketsRule::default();
+        assert_eq!(rule.id(), "PL_UNPAIRED_BRACKETS");
+        assert_eq!(rule.description(), "Niesparowane nawiasy i cudzysłowy");
+        assert_eq!(rule.category().id().as_str(), "PUNCTUATION");
+        assert_eq!(
+            rule.issue_type(),
+            og_core::IssueType::Other("other".to_string())
+        );
+    }
 }
