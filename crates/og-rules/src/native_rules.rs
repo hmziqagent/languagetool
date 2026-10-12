@@ -1347,7 +1347,20 @@ mod tests {
             "adjacent commas are handled by DoublePunctuation, not here"
         );
 
-        let sentence = make_punct_sentence("word ./tree more");
+        let text = "word ./tree more";
+        let mut sentence = AnalyzedSentence::new(text, 0, text.len());
+        sentence.set_tokens(
+            ["word", " ", ".", "/", "tree", " ", "more"]
+                .iter()
+                .scan(0usize, |pos, piece| {
+                    let start = *pos;
+                    *pos += piece.len();
+                    Some(og_core::AnalyzedTokenReadings::new(
+                        og_core::AnalyzedToken::new(*piece, start, *pos),
+                    ))
+                })
+                .collect(),
+        );
         assert!(
             rule.match_sentence(&sentence).is_empty(),
             "a period directly before a slash path keeps the spacing"

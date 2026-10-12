@@ -742,7 +742,7 @@ impl TextLevelRule for WordRepeatBeginningRule {
 mod tests {
     use super::*;
     use og_core::rule::TextLevelRule;
-    use og_core::{AnalyzedToken, AnalyzedTokenReadings, SuggestedReplacement};
+    use og_core::{AnalyzedToken, AnalyzedTokenReadings};
 
     pub(super) fn make_sentence_with_whitespace(text: &str, offset: usize) -> AnalyzedSentence {
         let mut sentence = AnalyzedSentence::new(text, offset, offset + text.len());
