@@ -2368,4 +2368,157 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn fr_concordance_walk_covers_the_remaining_gender_and_case_arms() {
+        let dir = lang_dir("fr");
+        let Some(synth) = LangSynthesizer::for_language(&dir, "fr") else {
+            return;
+        };
+        let cases: Vec<(Vec<AnalyzedTokenReadings>, Option<Vec<&str>>)> = vec![
+            (
+                vec![
+                    tagged("il", "il", &["PRO"]),
+                    tagged("ami", "ami", &["N m s", "_GN_MS"]),
+                    tagged("bleue", "bleu", &["J f s"]),
+                ],
+                Some(vec!["bleu"]),
+            ),
+            (
+                vec![
+                    tagged("il", "il", &["PRO"]),
+                    tagged("camarade", "camarade", &["N m sp"]),
+                    tagged("bleue", "bleu", &["J f s"]),
+                ],
+                Some(vec!["bleu", "bleus"]),
+            ),
+            (
+                vec![
+                    tagged("madame", "madame", &["N f s"]),
+                    tagged(",", ",", &["_PUNCT"]),
+                    tagged("enfant", "enfant", &["N e s"]),
+                    tagged("bleu", "bleu", &["J m s"]),
+                ],
+                None,
+            ),
+            (
+                vec![
+                    tagged("madame", "madame", &["N f s"]),
+                    tagged(",", ",", &["_PUNCT"]),
+                    tagged("enfants", "enfant", &["N e sp"]),
+                    tagged("bleu", "bleu", &["J m s"]),
+                ],
+                None,
+            ),
+            (
+                vec![
+                    tagged("il", "il", &["PRO"]),
+                    tagged("la", "le", &["D e s"]),
+                    tagged("porte", "porte", &["N f s"]),
+                    tagged("bleu", "bleu", &["J m s"]),
+                ],
+                Some(vec!["bleue"]),
+            ),
+            (
+                vec![
+                    tagged("il", "il", &["PRO"]),
+                    tagged("les", "le", &["D e p"]),
+                    tagged("amis", "ami", &["N m p"]),
+                    tagged("bleue", "bleu", &["J f s"]),
+                ],
+                Some(vec!["bleus"]),
+            ),
+            (
+                vec![
+                    tagged("il", "il", &["PRO"]),
+                    tagged("le", "le", &["D m s"]),
+                    tagged("garçon", "garçon", &["N m s"]),
+                    tagged("bleue", "bleu", &["J f s"]),
+                ],
+                Some(vec!["bleu"]),
+            ),
+            (
+                vec![
+                    tagged("il", "il", &["PRO"]),
+                    tagged("les", "le", &["D f p"]),
+                    tagged("maisons", "maison", &["N f p"]),
+                    tagged("bleu", "bleu", &["J m s"]),
+                ],
+                Some(vec!["bleues"]),
+            ),
+            (
+                vec![
+                    tagged("madame", "madame", &["N f s"]),
+                    tagged(",", ",", &["_PUNCT"]),
+                    tagged("amis", "ami", &["N m p"]),
+                    tagged("bleu", "bleu", &["J m s"]),
+                ],
+                Some(vec!["bleus"]),
+            ),
+        ];
+        for (tokens, expected) in cases {
+            let refs: Vec<&AnalyzedTokenReadings> = tokens.iter().collect();
+            let adj = refs.len() - 1;
+            let out = accept_fr(Some(&synth), "key:value", &[adj], &refs, rm_for("x"));
+            match (out, expected) {
+                (Some(rm), Some(want)) => assert_eq!(
+                    values_of(&rm),
+                    want,
+                    "tokens: {:?}",
+                    tokens.iter().map(|t| t.token().token()).collect::<Vec<_>>()
+                ),
+                (None, None) => {}
+                (got, want) => panic!(
+                    "mismatch: got {got:?} want {want:?} for {:?}",
+                    tokens.iter().map(|t| t.token().token()).collect::<Vec<_>>()
+                ),
+            }
+        }
+    }
+
+    #[test]
+    fn fr_concordance_level_preposition_and_coordination_jumps() {
+        let dir = lang_dir("fr");
+        let Some(synth) = LangSynthesizer::for_language(&dir, "fr") else {
+            return;
+        };
+        let d_environ = vec![
+            tagged("lit", "lit", &["N m s"]),
+            tagged("et", "et", &["C c"]),
+            tagged("d'", "de", &["P"]),
+            tagged("environ", "environ", &["N m s"]),
+            tagged("bleue", "bleu", &["J f s"]),
+        ];
+        let refs: Vec<&AnalyzedTokenReadings> = d_environ.iter().collect();
+        let out = accept_fr(Some(&synth), "key:value", &[4], &refs, rm_for("x")).expect("kept");
+        assert_eq!(
+            values_of(&out),
+            vec!["bleu".to_string()],
+            "the d'environ exception opens a new level even behind a coordination"
+        );
+
+        let deux_ou_plus = vec![
+            tagged("deux", "deux", &["D e p"]),
+            tagged("ou", "ou", &["C c"]),
+            tagged("plus", "plus", &["A"]),
+            tagged("bleue", "bleu", &["J f s"]),
+        ];
+        let refs: Vec<&AnalyzedTokenReadings> = deux_ou_plus.iter().collect();
+        assert!(
+            accept_fr(Some(&synth), "key:value", &[3], &refs, rm_for("x")).is_none(),
+            "'deux ou plus' must not count the numeral as a concordance determiner"
+        );
+
+        let sans_synth = vec![
+            tagged("il", "il", &["PRO"]),
+            tagged("maison", "maison", &["N f s"]),
+            tagged("bleu", "bleu", &["J m s"]),
+        ];
+        let refs: Vec<&AnalyzedTokenReadings> = sans_synth.iter().collect();
+        let kept = accept_fr(None, "key:value", &[2], &refs, rm_for("x")).expect("kept");
+        assert!(
+            kept.replacements().is_empty(),
+            "without a synthesizer the match passes through untouched"
+        );
+    }
 }
