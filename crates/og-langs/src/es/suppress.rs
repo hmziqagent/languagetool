@@ -321,4 +321,94 @@ mod tests {
             "'autorretrató' is known so the match must survive"
         );
     }
+
+    #[test]
+    fn unflagged_subrules_pass_matches_through_untouched() {
+        let matches = surviving_matches("NO_SEPARADO", "Son social demócratas.");
+        assert!(
+            matches.iter().any(|m| m
+                .replacements()
+                .iter()
+                .any(|r| r.value() == "socialdemócratas")),
+            "the social subrule carries no suppress flag so its suggestion must survive: {:?}",
+            matches.len()
+        );
+    }
+
+    #[test]
+    fn regexp_suggestion_survives_when_the_joined_word_is_known() {
+        let matches = surviving_matches("NO_SEPARADO", "La tele visión.");
+        assert!(
+            matches
+                .iter()
+                .any(|m| m.replacements().iter().any(|r| r.value() == "televisión")),
+            "'televisión' is a real word so the regexp-built suggestion must survive"
+        );
+    }
+
+    #[test]
+    fn regexp_suggestion_strips_unknown_joins_from_the_replacements() {
+        let matches = surviving_matches("NO_SEPARADO", "El tele pate.");
+        assert!(
+            !matches.is_empty(),
+            "the tele subrule must still flag 'tele pate'"
+        );
+        assert!(
+            matches
+                .iter()
+                .all(|m| !m.replacements().iter().any(|r| r.value() == "telepate")),
+            "'telepate' is unknown to the tagger so it must be stripped from every match"
+        );
+    }
+
+    #[test]
+    fn case_conversion_modes_follow_the_java_visitor() {
+        assert_eq!(apply_case_conversion("Berlin", "startlower"), "berlin");
+        assert_eq!(apply_case_conversion("", "startlower"), "");
+        assert_eq!(apply_case_conversion("berlín", "startupper"), "Berlín");
+        assert_eq!(apply_case_conversion("", "startupper"), "");
+        assert_eq!(apply_case_conversion("SociAL", "alllower"), "social");
+        assert_eq!(apply_case_conversion("demócrata", "allupper"), "DEMÓCRATA");
+        assert_eq!(apply_case_conversion("Igual", "unknownmode"), "Igual");
+    }
+
+    #[test]
+    fn java_replacement_quotes_group_refs_followed_by_name_chars() {
+        assert_eq!(java_replacement("tele$1").as_ref(), "tele$1");
+        assert_eq!(java_replacement("$1x").as_ref(), "${1}x");
+        assert_eq!(java_replacement("$12b").as_ref(), "${12}b");
+        assert_eq!(java_replacement("a$").as_ref(), "a$");
+        assert_eq!(java_replacement("$").as_ref(), "$");
+        assert_eq!(java_replacement("sinrefs").as_ref(), "sinrefs");
+    }
+
+    #[test]
+    fn raw_match_string_applies_replace_and_case_conversion() {
+        let token = AnalyzedTokenReadings::new(og_core::AnalyzedToken::new("trabajo", 0, 7));
+        let m = |regexp_match: Option<&str>, regexp_replace: Option<&str>, cc: Option<&str>| {
+            let mut m = XmlMatch::default();
+            m.no = 3;
+            m.regexp_match = regexp_match.map(str::to_string);
+            m.regexp_replace = regexp_replace.map(str::to_string);
+            m.case_conversion = cc.map(str::to_string);
+            m
+        };
+        assert_eq!(
+            raw_match_string(&m(Some("(.+)"), Some("tele$1"), None), &token).as_deref(),
+            Some("teletrabajo")
+        );
+        assert_eq!(
+            raw_match_string(&m(None, Some("tel"), None), &token).as_deref(),
+            Some("tel")
+        );
+        assert_eq!(
+            raw_match_string(&m(Some("(t.*)"), Some("$1"), Some("startupper")), &token).as_deref(),
+            Some("Trabajo")
+        );
+        assert_eq!(
+            raw_match_string(&m(None, None, Some("allupper")), &token),
+            None,
+            "without any regexp field there is nothing to build the word from"
+        );
+    }
 }
