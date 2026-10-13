@@ -3085,6 +3085,91 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_self_closing_token_attributes() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <category id="C" name="c">
+                <rule id="EMPTYTOK" name="Empty token">
+                    <pattern>
+                        <token foo="bar"></token>
+                        <token regexp="yes" negate="yes" negate_pos="yes" case_sensitive="yes" inflected="yes" postag="NN" postag_regexp="yes" min="1" max="2" skip="1" spacebefore="yes" chunk="B-NP" chunk_re="B-.*" foo="x">word</token>
+                    </pattern>
+                    <message>Test</message>
+                </rule>
+            </category>
+        </rules>"#;
+
+        let result = XmlRuleParser::new().parse(xml).unwrap();
+
+        let token = &result.rules[0].pattern.tokens[1];
+        assert_eq!(token.text.as_deref(), Some("word"));
+        assert!(token.regexp.as_deref() == Some("yes"));
+        assert!(token.negate);
+        assert!(token.negate_pos);
+        assert!(token.case_sensitive && token.case_sensitive_set);
+        assert!(token.inflected);
+        assert_eq!(token.postag.as_deref(), Some("NN"));
+        assert_eq!(token.postag_regexp.as_deref(), Some("yes"));
+        assert_eq!(token.min, Some(1));
+        assert_eq!(token.max, Some(2));
+        assert_eq!(token.skip, 1);
+        assert_eq!(token.space_before.as_deref(), Some("yes"));
+        assert_eq!(token.chunk.as_deref(), Some("B-NP"));
+        assert_eq!(token.chunk_re.as_deref(), Some("B-.*"));
+    }
+
+    #[test]
+    fn test_parse_match_elements_with_explicit_close_tags() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <category id="C" name="c">
+                <rule id="MSTART" name="M">
+                    <pattern>
+                        <token>foo<match no="1" postag="JJ" postag_regexp="yes" postag_replace="NN" setpos="yes" regexp_match="f(o+)" regexp_replace="$1" case_conversion="startlower"></match></token>
+                    </pattern>
+                    <message>Test</message>
+                    <suggestion suppress_misspelled="yes"><match no="2" case_conversion="startupper" include_inflected="yes" include_skipped="follow" postag="NN" postag_regexp="yes" postag_replace="NNP" regexp_match=".*" regexp_replace="x"></match> bar</suggestion>
+                </rule>
+            </category>
+        </rules>"#;
+
+        let result = XmlRuleParser::new().parse(xml).unwrap();
+
+        let rule = &result.rules[0];
+        let token = &rule.pattern.tokens[0];
+        assert_eq!(token.text.as_deref(), Some("foo\\1"));
+        assert_eq!(token.match_no, Some(1));
+        assert_eq!(token.match_no_postag.as_deref(), Some("JJ"));
+        assert!(token.match_no_postag_regexp);
+        assert_eq!(token.match_no_postag_replace.as_deref(), Some("NN"));
+        assert!(token.match_no_setpos);
+        assert_eq!(token.match_no_regexp_match.as_deref(), Some("f(o+)"));
+        assert_eq!(token.match_no_regexp_replace.as_deref(), Some("$1"));
+        assert_eq!(
+            token.match_no_case_conversion.as_deref(),
+            Some("startlower")
+        );
+        assert_eq!(rule.suggestions.len(), 1);
+        assert!(rule.suggestions[0].suppress_misspelled);
+        let SuggestionPart::Match(m) = &rule.suggestions[0].parts[0] else {
+            panic!("expected match part");
+        };
+        assert_eq!(m.no, 2);
+        assert_eq!(m.case_conversion.as_deref(), Some("startupper"));
+        assert!(m.include_inflected);
+        assert_eq!(m.include_skipped.as_deref(), Some("follow"));
+        assert_eq!(m.postag.as_deref(), Some("NN"));
+        assert!(m.postag_regexp);
+        assert_eq!(m.postag_replace.as_deref(), Some("NNP"));
+        assert_eq!(m.regexp_match.as_deref(), Some(".*"));
+        assert_eq!(m.regexp_replace.as_deref(), Some("x"));
+        assert!(matches!(
+            &rule.suggestions[0].parts[1],
+            SuggestionPart::Text(t) if t == " bar"
+        ));
+    }
+
+    #[test]
     fn test_parse_example_correction_attr() {
         let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
         <rules lang="en">
