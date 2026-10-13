@@ -1901,6 +1901,59 @@ mod tests {
             ]
         );
     }
+
+    #[test]
+    fn it_synthesizes_forms_from_italian_synth_dict() {
+        let dir = std::path::Path::new(
+            "/home/agent/opengrammar-rs/languagetool/languagetool-language-modules/it/src/main/resources/org/languagetool/resource/it",
+        );
+        let Some(synth) = LangSynthesizer::for_language(dir, "it") else {
+            return;
+        };
+        assert_eq!(
+            synth.synthesize_exact_for("blablabla", None, "blablabla"),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            synth.synthesize_exact_for("richiedere", None, "VER:impr+pres+2+s"),
+            vec!["richiedi".to_string()]
+        );
+        assert_eq!(
+            synth.synthesize_exact_for("esultare", None, "VER:part+past+s+f"),
+            vec!["esultata".to_string()]
+        );
+        assert_eq!(
+            synth.synthesize_exact_for("libro", None, "NOUN-M:p"),
+            vec!["libri".to_string()]
+        );
+    }
+
+    #[test]
+    fn sv_synthesizes_forms_from_swedish_synth_dict() {
+        let dir = std::path::Path::new(
+            "/home/agent/opengrammar-rs/languagetool/languagetool-language-modules/sv/src/main/resources/org/languagetool/resource/sv",
+        );
+        let Some(synth) = LangSynthesizer::for_language(dir, "sv") else {
+            return;
+        };
+        assert_eq!(
+            synth.synthesize_exact_for("blablabla", None, "blablabla"),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            synth.synthesize_exact_for("nyckel", None, "NN:BF:SIN:GEN:UTR"),
+            vec!["nyckelns".to_string()]
+        );
+        assert_eq!(
+            synth.synthesize_exact_for("FN", None, "PM:GEN:ACR"),
+            vec!["FN:s".to_string()]
+        );
+        let re = Regex::new("JJ:S:BF:.*").unwrap();
+        assert_eq!(
+            synth.synthesize("stor", &re),
+            vec!["störste".to_string(), "största".to_string()]
+        );
+    }
     fn lang_dir(module: &str) -> std::path::PathBuf {
         std::path::Path::new(
             "/home/agent/opengrammar-rs/languagetool/languagetool-language-modules",
@@ -2231,6 +2284,55 @@ mod tests {
                     refs.iter().map(|t| t.token().token()).collect::<Vec<_>>(),
                     values_of(&rm)
                 ),
+            }
+        }
+    }
+
+    #[test]
+    fn es_concordance_counts_common_gender_determiners_and_prepositions() {
+        let dir = lang_dir("es");
+        let Some(synth) = LangSynthesizer::for_language(&dir, "es") else {
+            return;
+        };
+        let cases: Vec<(Vec<AnalyzedTokenReadings>, usize, Option<Vec<&str>>)> = vec![
+            (
+                vec![
+                    tagged("el", "el", &["DD0CS0"]),
+                    tagged("agua", "agua", &["NCMS000", "NCFS000"]),
+                    tagged("blancos", "blanco", &["AQ0MP0"]),
+                ],
+                2,
+                Some(vec!["blanco"]),
+            ),
+            (
+                vec![
+                    tagged("el", "el", &["DD0CS0"]),
+                    tagged("arma", "arma", &["NCFS000"]),
+                    tagged("blancos", "blanco", &["AQ0MP0"]),
+                ],
+                2,
+                Some(vec!["blanca"]),
+            ),
+            (
+                vec![
+                    tagged("las", "el", &["DD0FP0"]),
+                    tagged("casas", "casa", &["NCFP000"]),
+                    tagged("de", "de", &["SPS00"]),
+                    tagged("la", "el", &["DD0FS0"]),
+                    tagged("ciudad", "ciudad", &["NCFS000"]),
+                    tagged("blancos", "blanco", &["AQ0MP0"]),
+                ],
+                5,
+                Some(vec!["blanca", "blancas"]),
+            ),
+        ];
+        for (tokens, adj_pos, expected) in cases {
+            let refs: Vec<&AnalyzedTokenReadings> = tokens.iter().collect();
+            let out = accept_es(Some(&synth), "key:value", &[adj_pos], &refs, rm_for("x"));
+            match (out, expected) {
+                (Some(rm), Some(want)) => assert_eq!(values_of(&rm), want),
+                (None, None) => {}
+                (got, want) => panic!("mismatch: got {got:?} want {want:?}"),
             }
         }
     }
