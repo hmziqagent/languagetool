@@ -412,4 +412,135 @@ mod tests {
             0
         );
     }
+
+    fn rule_over(data: &str) -> IrishCompoundRule {
+        IrishCompoundRule {
+            data: CompoundRuleData::load(data),
+        }
+    }
+
+    fn replacements(text: &str, rule: &IrishCompoundRule) -> Vec<String> {
+        rule.match_sentence(&make_sentence(text))
+            .first()
+            .map(|m| {
+                m.replacements()
+                    .iter()
+                    .map(|r| r.value().to_string())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn suffix_markers_pick_the_entry_sets() {
+        let data = CompoundRuleData::load(
+            "# comment\n\nplus-one+\nlower?\ndollar$\ndash*\nplain-pair\nnum-\\d+-run*\n",
+        );
+        assert!(data.joined.contains("plus one"));
+        assert!(!data.dash.contains("plus one"));
+        assert!(data.joined.contains("lower"));
+        assert!(data.joined_lower.contains("lower"));
+        assert!(!data.dash.contains("lower"));
+        assert!(data.joined.contains("dollar"));
+        assert!(data.joined_lower.contains("dollar"));
+        assert!(data.dash.contains("dollar"));
+        assert!(data.joined.contains("plain pair"));
+        assert!(data.dash.contains("plain pair"));
+        assert!(!data.joined_lower.contains("plain pair"));
+        assert!(data.has_digit_patterns);
+    }
+
+    #[test]
+    fn plus_entries_suggest_only_the_joined_form() {
+        let rule = rule_over("ró-úsáid+\n");
+        let matches = rule.match_sentence(&make_sentence("is ró úsáid a bhí ann"));
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].replacements()[0].value(), "róúsáid");
+        assert_eq!(
+            matches[0].message(),
+            "Litrítear an focal seo mar fhocal amháin de ghnáth."
+        );
+    }
+
+    #[test]
+    fn question_entries_lowercase_the_middle_parts() {
+        let rule = rule_over("buí-Sholas?\n");
+        assert_eq!(
+            replacements("is buí Sholas ann", &rule),
+            vec!["buísholas".to_string()],
+            "a joined_lower entry uncapitalizes the middle part"
+        );
+        assert_eq!(
+            replacements("Buí Sholas a bhí ann", &rule),
+            vec!["Buísholas".to_string()],
+            "the sentence-start capital is kept and the middle part lowercased"
+        );
+    }
+
+    #[test]
+    fn dollar_entries_offer_both_forms_with_the_generic_message() {
+        let rule = rule_over("ró-úsáid$\n");
+        assert_eq!(
+            replacements("is ró úsáid a bhí ann", &rule),
+            vec!["ró-úsáid".to_string(), "róúsáid".to_string()]
+        );
+        let matches = rule.match_sentence(&make_sentence("is ró úsáid a bhí ann"));
+        assert_eq!(
+            matches[0].message(),
+            "Litrítear an nath seo mar fhocal amháin nó le fleiscín."
+        );
+    }
+
+    #[test]
+    fn all_uppercase_text_only_gets_the_dash_form() {
+        let rule = rule_over("RÓ-ÚSÁID$\n");
+        assert_eq!(
+            replacements("is RÓ ÚSÁID a bhí ann", &rule),
+            vec!["RÓ-ÚSÁID".to_string()],
+            "the joined form is skipped when the original is all uppercase"
+        );
+    }
+
+    #[test]
+    fn digit_runs_match_through_the_backslash_d_pattern() {
+        let rule = rule_over("ar-\\d+-uair*\n");
+        let text = "ar 12 uair";
+        let matches = rule.match_sentence(&make_sentence(text));
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].replacements()[0].value(), "ar-12-uair");
+        assert_eq!(
+            matches[0].message(),
+            "Litrítear an focal seo le fleiscín de ghnáth."
+        );
+    }
+
+    #[test]
+    fn single_letter_first_parts_only_get_the_dash_form() {
+        let rule = rule_over("a-bhéan$\n");
+        assert_eq!(
+            replacements("is a bhéan ann", &rule),
+            vec!["a-bhéan".to_string()]
+        );
+        let matches = rule.match_sentence(&make_sentence("is a bhéan ann"));
+        assert_eq!(
+            matches[0].message(),
+            "Litrítear an focal seo le fleiscín de ghnáth."
+        );
+    }
+
+    #[test]
+    fn immunized_tokens_are_skipped() {
+        let rule = IrishCompoundRule::new();
+        let mut sentence = make_sentence("is ró úsáid a bhí ann");
+        sentence.tokens_mut()[3].immunize();
+        assert_eq!(rule.match_sentence(&sentence).len(), 0);
+    }
+
+    #[test]
+    fn default_matches_new() {
+        assert_eq!(
+            IrishCompoundRule::default().id(),
+            IrishCompoundRule::new().id()
+        );
+    }
 }
