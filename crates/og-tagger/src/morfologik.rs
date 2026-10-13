@@ -1489,7 +1489,7 @@ pub fn shared_synth_dictionary(
 mod tests {
     use super::*;
 
-    fn fsa5_fixture() -> Fsa {
+    pub(super) fn fsa5_fixture_bytes() -> Vec<u8> {
         let mut data = Vec::new();
         data.extend_from_slice(b"\\fsa");
         data.extend_from_slice(&[0x05, b'_', b'+', 0x02]);
@@ -1512,7 +1512,14 @@ mod tests {
         arcs[15] = 0x8b;
         arcs[16] = 0x00;
         data.extend_from_slice(&arcs);
-        Fsa::from_bytes(std::sync::Arc::from(data.into_boxed_slice())).expect("fsa5 fixture")
+        data
+    }
+
+    fn fsa5_fixture() -> Fsa {
+        Fsa::from_bytes(std::sync::Arc::from(
+            fsa5_fixture_bytes().into_boxed_slice(),
+        ))
+        .expect("fsa5 fixture")
     }
 
     #[test]
@@ -1540,7 +1547,7 @@ mod tests {
         assert!(!fsa5.contains_word(root, b"aq", b'+'));
     }
 
-    fn cfsa1_fixture() -> Fsa {
+    pub(super) fn cfsa1_fixture_bytes() -> Vec<u8> {
         let mut data = vec![0u8; 55];
         data[0..4].copy_from_slice(b"\\fsa");
         data[4] = 0xc5;
@@ -1556,7 +1563,14 @@ mod tests {
         set(8, &[0x70, 0x2b, 0x00]);
         set(11, &[0x7b, 0x62, 0x00]);
         set(14, &[0x0f]);
-        Fsa::from_bytes(std::sync::Arc::from(data.into_boxed_slice())).expect("cfsa1 fixture")
+        data
+    }
+
+    fn cfsa1_fixture() -> Fsa {
+        Fsa::from_bytes(std::sync::Arc::from(
+            cfsa1_fixture_bytes().into_boxed_slice(),
+        ))
+        .expect("cfsa1 fixture")
     }
 
     #[test]
@@ -1590,6 +1604,18 @@ mod tests {
         data.extend_from_slice(&[0, 0, 0x02]);
         data.extend_from_slice(&[0u8; 64]);
         assert!(Fsa::from_bytes(std::sync::Arc::from(data.into_boxed_slice())).is_none());
+    }
+
+    #[test]
+    fn fsa5_and_cfsa1_reject_zero_goto_length_headers() {
+        for version in [0x05u8, 0xc5] {
+            let mut data = Vec::new();
+            data.extend_from_slice(b"\\fsa");
+            data.push(version);
+            data.extend_from_slice(&[0, 0, 0x00]);
+            data.extend_from_slice(&[0u8; 64]);
+            assert!(Fsa::from_bytes(std::sync::Arc::from(data.into_boxed_slice())).is_none());
+        }
     }
 
     #[test]
@@ -2299,7 +2325,12 @@ mod cfsa2_tests {
         assert_eq!(DictEncoding::Latin1.decode(&[0x80]), "€");
         assert_eq!(DictEncoding::Latin15.decode(&[0xa4]), "€");
         assert_eq!(DictEncoding::Latin15.decode(&[0xa6]), "Š");
+        assert_eq!(DictEncoding::Latin15.decode(&[0xa8]), "š");
+        assert_eq!(DictEncoding::Latin15.decode(&[0xb4]), "Ž");
+        assert_eq!(DictEncoding::Latin15.decode(&[0xb8]), "ž");
+        assert_eq!(DictEncoding::Latin15.decode(&[0xbc]), "Œ");
         assert_eq!(DictEncoding::Latin15.decode(&[0xbd]), "œ");
+        assert_eq!(DictEncoding::Latin15.decode(&[0xbe]), "Ÿ");
         assert_eq!(DictEncoding::Utf8.decode(&[0x61, 0xff]), "a\u{fffd}");
         assert_eq!(decode_bytes("koi8-r", &[0xc1]), "а");
     }
@@ -2318,7 +2349,13 @@ mod cfsa2_tests {
         assert_eq!(DictEncoding::Windows1251.encode("я"), Some(vec![0xff]));
         assert_eq!(DictEncoding::Latin1.encode("é"), Some(vec![0xe9]));
         assert_eq!(DictEncoding::Latin15.encode("€"), Some(vec![0xa4]));
-        assert_eq!(DictEncoding::Latin15.encode("€"), Some(vec![0xa4]));
+        assert_eq!(DictEncoding::Latin15.encode("Š"), Some(vec![0xa6]));
+        assert_eq!(DictEncoding::Latin15.encode("š"), Some(vec![0xa8]));
+        assert_eq!(DictEncoding::Latin15.encode("Ž"), Some(vec![0xb4]));
+        assert_eq!(DictEncoding::Latin15.encode("ž"), Some(vec![0xb8]));
+        assert_eq!(DictEncoding::Latin15.encode("Œ"), Some(vec![0xbc]));
+        assert_eq!(DictEncoding::Latin15.encode("œ"), Some(vec![0xbd]));
+        assert_eq!(DictEncoding::Latin15.encode("Ÿ"), Some(vec![0xbe]));
     }
 
     #[test]
@@ -2391,6 +2428,22 @@ mod cfsa2_tests {
             let set = FsaWordSet::load(dict, _info).expect("word set loads");
             assert!(!set.contains("a+x"));
         });
+    }
+
+    #[test]
+    fn fsa_word_set_answers_membership_for_fsa5_and_cfsa1_files() {
+        for bytes in [
+            super::tests::fsa5_fixture_bytes(),
+            super::tests::cfsa1_fixture_bytes(),
+        ] {
+            with_dict_files(&bytes, INFO, |dict, info| {
+                let set = FsaWordSet::load(dict, info).expect("word set loads");
+                assert!(set.contains("a"));
+                assert!(set.contains("ab"));
+                assert!(!set.contains("a+x"));
+                assert!(!set.contains("zzz"));
+            });
+        }
     }
 
     #[test]
