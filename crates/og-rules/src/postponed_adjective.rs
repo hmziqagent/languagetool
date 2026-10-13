@@ -2245,6 +2245,108 @@ mod tests {
     }
 
     #[test]
+    fn es_concordance_walk_uses_gendered_determiners_and_levels() {
+        let dir = lang_dir("es");
+        let Some(synth) = LangSynthesizer::for_language(&dir, "es") else {
+            return;
+        };
+        let cases: Vec<(Vec<AnalyzedTokenReadings>, usize, Option<Vec<&str>>)> = vec![
+            (
+                vec![
+                    tagged("x", "x", &["UNKNOWN"]),
+                    tagged("un", "uno", &["DD0CS0"]),
+                    tagged("libro", "libro", &["NCMS000"]),
+                    tagged("blanca", "blanco", &["AQ0FS0"]),
+                ],
+                3,
+                Some(vec!["blanco"]),
+            ),
+            (
+                vec![
+                    tagged("x", "x", &["UNKNOWN"]),
+                    tagged("una", "uno", &["DD0CS0"]),
+                    tagged("casa", "casa", &["NCFS000"]),
+                    tagged("blanco", "blanco", &["AQ0MS0"]),
+                ],
+                3,
+                Some(vec!["blanca"]),
+            ),
+            (
+                vec![
+                    tagged("x", "x", &["UNKNOWN"]),
+                    tagged("el", "el", &["DD0MS0"]),
+                    tagged("libro", "libro", &["NCMS000"]),
+                    tagged("blanca", "blanco", &["AQ0FS0"]),
+                ],
+                3,
+                Some(vec!["blanco"]),
+            ),
+            (
+                vec![
+                    tagged("x", "x", &["UNKNOWN"]),
+                    tagged("la", "el", &["DD0FS0"]),
+                    tagged("casa", "casa", &["NCFS000"]),
+                    tagged("blanco", "blanco", &["AQ0MS0"]),
+                ],
+                3,
+                Some(vec!["blanca"]),
+            ),
+            (
+                vec![
+                    tagged("x", "x", &["UNKNOWN"]),
+                    tagged("los", "el", &["DD0MP0"]),
+                    tagged("libros", "libro", &["NCMP000"]),
+                    tagged("blanca", "blanco", &["AQ0FS0"]),
+                ],
+                3,
+                Some(vec!["blancos"]),
+            ),
+            (
+                vec![
+                    tagged("x", "x", &["UNKNOWN"]),
+                    tagged("las", "el", &["DD0FP0"]),
+                    tagged("casas", "casa", &["NCFP000"]),
+                    tagged("blanco", "blanco", &["AQ0MS0"]),
+                ],
+                3,
+                Some(vec!["blancas"]),
+            ),
+            (
+                vec![
+                    tagged("x", "x", &["UNKNOWN"]),
+                    tagged("de", "de", &["SPS00"]),
+                    tagged("casa", "casa", &["NCFS000"]),
+                    tagged("blanco", "blanco", &["AQ0MS0"]),
+                ],
+                3,
+                Some(vec!["blanca"]),
+            ),
+            (
+                vec![
+                    tagged("x", "x", &["UNKNOWN"]),
+                    tagged("x", "x", &["UNKNOWN"]),
+                    tagged("y", "y", &["UNKNOWN"]),
+                    tagged("x", "x", &["UNKNOWN"]),
+                    tagged("de", "de", &["SPS00"]),
+                    tagged("libro", "libro", &["NCMS000"]),
+                    tagged("blanca", "blanco", &["AQ0FS0"]),
+                ],
+                6,
+                Some(vec!["blanco"]),
+            ),
+        ];
+        for (tokens, adj_pos, expected) in cases {
+            let refs: Vec<&AnalyzedTokenReadings> = tokens.iter().collect();
+            let out = accept_es(Some(&synth), "key:value", &[adj_pos], &refs, rm_for("x"));
+            match (out, expected) {
+                (Some(rm), Some(want)) => assert_eq!(values_of(&rm), want),
+                (None, None) => {}
+                (got, want) => panic!("mismatch: got {got:?} want {want:?}"),
+            }
+        }
+    }
+
+    #[test]
     fn es_concordance_rejects_agreeing_and_empty_contexts() {
         let dir = lang_dir("es");
         let Some(synth) = LangSynthesizer::for_language(&dir, "es") else {
