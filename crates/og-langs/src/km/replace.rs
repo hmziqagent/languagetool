@@ -468,4 +468,157 @@ mod tests {
         );
         assert_eq!(rule.category().name(), "របស់ផ្សេងៗ");
     }
+
+    fn rule_from(data: &str) -> KhmerSimpleReplaceRule {
+        let mut rule = KhmerSimpleReplaceRule::new();
+        rule.load_data(data);
+        rule
+    }
+
+    fn sentence_from_parts(parts: &[&str]) -> AnalyzedSentence {
+        use og_core::AnalyzedToken;
+        let text = parts.concat();
+        let mut sentence = AnalyzedSentence::new(text.clone(), 0, text.len());
+        let mut tokens = vec![AnalyzedTokenReadings::new(
+            AnalyzedToken::new("<S>", 0, 0).with_pos_tags(vec!["SENT_START".to_string()]),
+        )];
+        let mut pos = 0usize;
+        for part in parts {
+            tokens.push(AnalyzedTokenReadings::new(AnalyzedToken::new(
+                *part,
+                pos,
+                pos + part.len(),
+            )));
+            pos += part.len();
+        }
+        sentence.set_tokens(tokens);
+        sentence
+    }
+
+    fn triples(
+        rule: &KhmerSimpleReplaceRule,
+        sentence: &AnalyzedSentence,
+    ) -> Vec<(String, String)> {
+        rule.match_sentence(sentence)
+            .into_iter()
+            .map(|m| {
+                (
+                    sentence.text()[m.offset()..m.offset() + m.length()].to_string(),
+                    m.replacements()
+                        .iter()
+                        .map(|r| r.value().to_string())
+                        .collect::<Vec<_>>()
+                        .join("|"),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn multiword_entries_with_spaces_load_and_match() {
+        let rule = rule_from("# header\n\nfoo bar=baz qux # inline note\n");
+        let sentence = sentence_from_parts(&["The", " ", "foo", " ", "bar", "."]);
+        assert_eq!(
+            triples(&rule, &sentence),
+            vec![("foo bar".to_string(), "baz qux".to_string())]
+        );
+    }
+
+    #[test]
+    fn adjacent_tokens_join_into_the_no_space_key() {
+        let rule = rule_from("ab=xy\n");
+        let sentence = sentence_from_parts(&["The", " ", "a", "b"]);
+        assert_eq!(
+            triples(&rule, &sentence),
+            vec![("ab".to_string(), "xy".to_string())]
+        );
+    }
+
+    #[test]
+    fn sentence_start_and_uppercase_inputs_uppercase_the_suggestion() {
+        let rule = rule_from("foo bar=baz qux\n");
+        let start = sentence_from_parts(&["Foo", " ", "bar", "."]);
+        assert_eq!(
+            triples(&rule, &start),
+            vec![("Foo bar".to_string(), "Baz qux".to_string())]
+        );
+        let shouting = sentence_from_parts(&["FOO", " ", "BAR", "."]);
+        assert_eq!(
+            triples(&rule, &shouting),
+            vec![("FOO BAR".to_string(), "BAZ QUX".to_string())]
+        );
+    }
+
+    #[test]
+    fn a_suggestion_equal_to_the_original_drops_the_match() {
+        let rule = rule_from("same=same\n");
+        let sentence = sentence_from_parts(&["same", "."]);
+        assert!(triples(&rule, &sentence).is_empty());
+    }
+
+    #[test]
+    fn tab_messages_win_and_urls_fall_back_to_the_placeholder_message() {
+        let noted = rule_from("foo=bar\ta custom note\n");
+        let sentence = sentence_from_parts(&["foo", "."]);
+        assert_eq!(
+            noted
+                .match_sentence(&sentence)
+                .first()
+                .map(|m| m.message().to_string()),
+            Some("a custom note".to_string())
+        );
+
+        let linked = rule_from("foo=bar\thttps://example.com/why\n");
+        assert_eq!(
+            linked
+                .match_sentence(&sentence)
+                .first()
+                .map(|m| m.message().to_string()),
+            Some(" Consider following the spelling of Chuon Nath ".to_string())
+        );
+
+        let paired = rule_from("zip=alpha|beta\n");
+        let zip = sentence_from_parts(&["zip", "."]);
+        assert_eq!(
+            paired
+                .match_sentence(&zip)
+                .first()
+                .map(|m| m.message().to_string()),
+            Some(" Consider following the spelling of Chuon Nath ".to_string())
+        );
+        assert_eq!(triples(&paired, &zip)[0].1, "Alpha|Beta");
+    }
+
+    #[test]
+    fn the_longest_multiword_match_wins_over_covered_shorter_ones() {
+        let rule = rule_from("foo bar=short\nfoo bar baz=longest\n");
+        let sentence = sentence_from_parts(&["foo", " ", "bar", " ", "baz", "."]);
+        assert_eq!(
+            triples(&rule, &sentence),
+            vec![("foo bar baz".to_string(), "Longest".to_string())]
+        );
+    }
+
+    #[test]
+    fn immunized_and_punctuation_start_tokens_never_match() {
+        let rule = rule_from("1234=xyz\nfoo=bar\n");
+        let digits = sentence_from_parts(&["1234", " ", "foo"]);
+        assert_eq!(
+            triples(&rule, &digits),
+            vec![("foo".to_string(), "Bar".to_string())],
+            "a digit-leading sentence token is skipped as sentence-start punctuation"
+        );
+
+        let mut immunized = sentence_from_parts(&["foo", "."]);
+        immunized.tokens_mut()[1].immunize();
+        assert!(triples(&rule, &immunized).is_empty());
+    }
+
+    #[test]
+    fn default_matches_new() {
+        assert_eq!(
+            KhmerSimpleReplaceRule::default().id(),
+            KhmerSimpleReplaceRule::new().id()
+        );
+    }
 }
