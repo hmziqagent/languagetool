@@ -179,7 +179,7 @@ impl CatalanTagger {
             wrong_verbs,
             adj_part_fs: Regex::new("^(VMP00SF.|A[QO].[FC]S.)$").unwrap(),
             verb: Regex::new("^V.+$").unwrap(),
-            prefixes_for_verbs: Regex::new("(?i)^auto(.*[aeiouàéèíòóïü].*[aeiouàéèíòóïü].*)$")
+            prefixes_for_verbs: Regex::new("(?i)^(auto)(.*[aeiouàéèíòóïü].+[aeiouàéèíòóïü].*)$")
                 .unwrap(),
             adjectiu_compost: Regex::new("(?i)^(.*)o-(.*)$").unwrap(),
             tres_adjectius: Regex::new("(?i)^(.*)o-(.*)o-(.*)$").unwrap(),
@@ -729,5 +729,145 @@ mod tests {
             tagger.wrong_verbs.contains("lliberar"),
             "replace_verbs.txt wrong-side forms must load"
         );
+    }
+
+    fn fixture_tagger() -> CatalanTagger {
+        let base = std::env::temp_dir().join(format!("og-ca-tagger-{}", std::process::id()));
+        let resource_dir = base.join("resource/ca");
+        let rules_dir = base.join("rules/ca");
+        std::fs::create_dir_all(&resource_dir).unwrap();
+        std::fs::create_dir_all(&rules_dir).unwrap();
+        std::fs::write(
+            resource_dir.join("added.txt"),
+            "# comment line\n\nmalformed-no-tabs\nonly\ttwo\n\
+             abusar\tabusar\tVMN0000\n\
+             fotia\tfotre\tVMII3S00\n\
+             fotia\tfotre\tVMII1S00\n\
+             cantada\tcantar\tVMP00SF0\n\
+             cantava\tcantar\tVMII3S00\n\
+             cantava\tcantar\tVMII1S00\n\
+             servint\tservir\tVMG0000\n\
+             conen\tconèixer\tVMII3P00\n\
+             desmerassin\tdesmerèixer\tVMSS3P00\n\
+             populars\tpopular\tAQ0CP0\n\
+             alemany\talemany\tAQ0MS0\n\
+             americana\tamericà\tAQ0FS0\n\
+             folklòrica\tfolklòrico\tAQ0FS0\n\
+             ordinària\tordinari\tAQ0FS0\n\
+             caca\tcaca\tNCMS000\n",
+        )
+        .unwrap();
+        std::fs::write(resource_dir.join("removed.txt"), "caca\tcaca\tNCMS000\n").unwrap();
+        std::fs::write(
+            rules_dir.join("replace_verbs.txt"),
+            "# només primera conjugació\n\nquebrar=escurar\nliar=lligar\ndeguir=deure\nquebrèixer=conèixer\n",
+        )
+        .unwrap();
+        CatalanTagger::from_resource_dir(&resource_dir)
+    }
+
+    fn fixture_readings(word: &str) -> Vec<(String, String)> {
+        let tagger = fixture_tagger();
+        let (readings, _, _) = tagger.analyze_token(word, 0, word.len());
+        readings
+            .into_iter()
+            .map(|r| {
+                (
+                    r.lemma().unwrap_or_default().to_string(),
+                    r.pos_tags().first().cloned().unwrap_or_default(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn en_prefixed_incorrect_verbs_copy_the_flexion_of_the_inner_verb() {
+        let readings = fixture_readings("enfotia");
+        assert!(readings.contains(&("enfotre".to_string(), "VMII3S00".to_string())));
+        assert!(readings.contains(&("enfotre".to_string(), "VMII1S00".to_string())));
+        let tagged = Tagger::tag(&fixture_tagger(), &["enfotia"]);
+        assert_eq!(
+            tagged[0].chunks(),
+            &["_incorrect_verb_".to_string()],
+            "Java marks the token with an incorrect-verb chunk"
+        );
+    }
+
+    #[test]
+    fn first_conjugation_incorrect_verbs_map_through_cantar() {
+        assert_eq!(
+            fixture_readings("quebrada"),
+            vec![("quebrar".to_string(), "VMP00SF0".to_string())]
+        );
+        assert_eq!(
+            fixture_readings("liava"),
+            vec![
+                ("liar".to_string(), "VMII3S00".to_string()),
+                ("liar".to_string(), "VMII1S00".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn soft_vowel_lexemes_try_the_gu_uir_paradigm() {
+        assert_eq!(
+            fixture_readings("degint"),
+            vec![("deguir".to_string(), "VMG0000".to_string())]
+        );
+    }
+
+    #[test]
+    fn eixer_verbs_fall_back_to_con_and_desmer_flexions() {
+        assert_eq!(
+            fixture_readings("quebren"),
+            vec![("quebrèixer".to_string(), "VMII3P00".to_string())]
+        );
+        assert_eq!(
+            fixture_readings("quebrassin"),
+            vec![("quebrèixer".to_string(), "VMSS3P00".to_string())]
+        );
+    }
+
+    #[test]
+    fn auto_prefixed_verbs_copy_the_inner_verb_tags() {
+        assert_eq!(
+            fixture_readings("autoabusar"),
+            vec![("autoabusar".to_string(), "VMN0000".to_string())]
+        );
+    }
+
+    #[test]
+    fn compound_and_triple_adjectives_compose_the_hyphenated_lemma() {
+        assert_eq!(
+            fixture_readings("Folklòrico-populars"),
+            vec![("folklòrico-popular".to_string(), "AQ0CP0".to_string())]
+        );
+        assert_eq!(
+            fixture_readings("franco-americano-alemany"),
+            vec![("franco-americano-alemany".to_string(), "AQ0MS0".to_string())]
+        );
+    }
+
+    #[test]
+    fn ment_adverbs_take_the_rg_tag_from_the_fixture_stem() {
+        assert_eq!(
+            fixture_readings("ordinàriament"),
+            vec![("ordinàriament".to_string(), "RG".to_string())]
+        );
+    }
+
+    #[test]
+    fn emoji_tokens_get_the_emoji_reading() {
+        let (readings, _, _) = fixture_tagger().analyze_token("\u{1F600}", 0, 4);
+        assert_eq!(readings.len(), 1);
+        assert_eq!(readings[0].lemma(), Some("_emoji_"));
+        assert_eq!(readings[0].pos_tags(), &["_emoji_".to_string()]);
+    }
+
+    #[test]
+    fn removed_entries_win_over_the_added_ones() {
+        let tagger = fixture_tagger();
+        assert!(!tagger.is_word_tagged("caca"));
+        assert!(tagger.is_word_tagged("abusar"));
     }
 }
