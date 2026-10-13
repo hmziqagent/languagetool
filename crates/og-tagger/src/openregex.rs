@@ -774,3 +774,248 @@ pub(crate) mod lru_cache {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::lru_cache::BoundedMap;
+    use super::*;
+    use og_core::AnalyzedToken;
+    use og_core::AnalyzedTokenReadings;
+    use std::collections::HashSet;
+
+    fn reading(text: &str, tags: &[&str]) -> AnalyzedTokenReadings {
+        let readings: Vec<AnalyzedToken> = tags
+            .iter()
+            .map(|t| AnalyzedToken::new(text, 0, 0).with_pos_tags(vec![t.to_string()]))
+            .collect();
+        let primary = AnalyzedToken::new(text, 0, 0)
+            .with_pos_tags(tags.iter().map(|t| t.to_string()).collect());
+        AnalyzedTokenReadings::new(primary).with_readings(readings)
+    }
+
+    fn chunks_after(expr: &str, parts: &[(&str, &[&str])]) -> Vec<String> {
+        let rule = build_expanded(expr, PhraseTag::Flat("X"), false, &[], Vec::new());
+        let readings: Vec<AnalyzedTokenReadings> =
+            parts.iter().map(|(t, tags)| reading(t, tags)).collect();
+        let forms: HashSet<String> = readings
+            .iter()
+            .map(|r| r.token().token().to_lowercase())
+            .collect();
+        let mut tokens: Vec<Token> = readings
+            .iter()
+            .map(|r| Token::new(r, vec!["O".to_string()]))
+            .collect();
+        apply(&rule, &mut tokens, &forms);
+        tokens.iter().map(|t| t.chunks.join("|")).collect()
+    }
+
+    fn build(expr: &str) {
+        build_expanded(expr, PhraseTag::Flat("X"), false, &[], Vec::new());
+    }
+
+    #[test]
+    fn optional_atom_matches_with_and_without_the_atom() {
+        assert_eq!(
+            chunks_after(r"<pos=ART>? <pos=SUB>", &[("Haus", &["SUB"])]),
+            vec!["X"]
+        );
+        assert_eq!(
+            chunks_after(
+                r"<pos=ART>? <pos=SUB>",
+                &[("das", &["ART"]), ("Haus", &["SUB"])]
+            ),
+            vec!["X", "X"]
+        );
+        assert_eq!(
+            chunks_after(r"<pos=ART>? <pos=SUB>", &[("das", &["ART"])]),
+            vec!["O"]
+        );
+    }
+
+    #[test]
+    fn quantifier_after_space_still_applies_to_the_previous_atom() {
+        assert_eq!(
+            chunks_after(
+                r"<pos=ART> ? <pos=SUB>",
+                &[("das", &["ART"]), ("Haus", &["SUB"])]
+            ),
+            vec!["X", "X"]
+        );
+        assert_eq!(
+            chunks_after(r"<pos=ART> ? <pos=SUB>", &[("Haus", &["SUB"])]),
+            vec!["X"]
+        );
+        assert_eq!(
+            chunks_after(
+                r"<pos=ART> ? <pos=SUB>",
+                &[("das", &["ART"]), ("schnell", &["ADV"])]
+            ),
+            vec!["O", "O"]
+        );
+    }
+
+    #[test]
+    fn minmax_quantifier_bounds_the_repetition() {
+        assert_eq!(
+            chunks_after(r"<pos=ADJ>{1,2} <pos=SUB>", &[("Haus", &["SUB"])]),
+            vec!["O"]
+        );
+        assert_eq!(
+            chunks_after(
+                r"<pos=ADJ>{1,2} <pos=SUB>",
+                &[("schöne", &["ADJ"]), ("Haus", &["SUB"])]
+            ),
+            vec!["X", "X"]
+        );
+        assert_eq!(
+            chunks_after(
+                r"<pos=ADJ>{1,2} <pos=SUB>",
+                &[
+                    ("a", &["ADJ"]),
+                    ("b", &["ADJ"]),
+                    ("c", &["ADJ"]),
+                    ("Haus", &["SUB"])
+                ]
+            ),
+            vec!["O", "X", "X", "X"]
+        );
+    }
+
+    #[test]
+    fn spaced_minmax_quantifier_binds_to_the_previous_atom() {
+        assert_eq!(
+            chunks_after(
+                r"<pos=ADJ> {1,2} <pos=SUB>",
+                &[
+                    ("a", &["ADJ"]),
+                    ("b", &["ADJ"]),
+                    ("c", &["ADJ"]),
+                    ("Haus", &["SUB"])
+                ]
+            ),
+            vec!["O", "X", "X", "X"]
+        );
+        assert_eq!(
+            chunks_after(r"<pos=ADJ> {1,2} <pos=SUB>", &[("Haus", &["SUB"])]),
+            vec!["O"]
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "bad minmax quantifier")]
+    fn minmax_quantifier_without_a_maximum_is_rejected() {
+        build(r"<pos=ADJ>{2}");
+    }
+
+    #[test]
+    #[should_panic(expected = "bad minmax quantifier")]
+    fn spaced_minmax_quantifier_without_a_maximum_is_rejected() {
+        build(r"<pos=ADJ> {2}");
+    }
+
+    #[test]
+    fn non_capturing_group_prefix_is_accepted() {
+        assert_eq!(
+            chunks_after(
+                r"(?:<pos=ART>|<pos=PRO>) <pos=SUB>",
+                &[("das", &["ART"]), ("Haus", &["SUB"])]
+            ),
+            vec!["X", "X"]
+        );
+        assert_eq!(
+            chunks_after(
+                r"(?:<pos=ART>|<pos=PRO>) <pos=SUB>",
+                &[("er", &["PRO"]), ("Haus", &["SUB"])]
+            ),
+            vec!["X", "X"]
+        );
+        assert_eq!(
+            chunks_after(
+                r"(?:<pos=ART>|<pos=PRO>) <pos=SUB>",
+                &[("schnell", &["ADV"]), ("Haus", &["SUB"])]
+            ),
+            vec!["O", "O"]
+        );
+    }
+
+    #[test]
+    fn named_group_prefix_is_skipped() {
+        assert_eq!(
+            chunks_after(
+                r"(<grp>:<pos=ART>) <pos=SUB>",
+                &[("das", &["ART"]), ("Haus", &["SUB"])]
+            ),
+            vec!["X", "X"]
+        );
+        assert_eq!(
+            chunks_after(
+                r"(<grp>:<pos=ART>) <pos=SUB>",
+                &[("schnell", &["ADV"]), ("Haus", &["SUB"])]
+            ),
+            vec!["O", "O"]
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Expression type not supported")]
+    fn unknown_expression_type_is_rejected() {
+        build(r"<foo=bar>");
+    }
+
+    #[test]
+    #[should_panic(expected = "Could not parse expression")]
+    fn expression_with_two_equals_is_rejected() {
+        build(r"<a=b=c>");
+    }
+
+    #[test]
+    #[should_panic(expected = "empty logic expression")]
+    fn empty_logic_expression_is_rejected() {
+        build(r"< >");
+    }
+
+    #[test]
+    #[should_panic(expected = "Unbalanced parentheses")]
+    fn unbalanced_parenthesis_in_an_atom_is_rejected() {
+        build(r"<(a>");
+    }
+
+    #[test]
+    #[should_panic(expected = "non-matching brackets")]
+    fn unclosed_group_is_rejected() {
+        build(r"( <pos=SUB>");
+    }
+
+    #[test]
+    #[should_panic(expected = "assertions not supported")]
+    fn assertions_are_rejected() {
+        build(r"^ <pos=SUB>");
+    }
+
+    #[test]
+    #[should_panic(expected = "unknown symbol #")]
+    fn unknown_symbols_are_rejected() {
+        build(r"# <pos=SUB>");
+    }
+
+    #[test]
+    #[should_panic(expected = "OR remains on the stack")]
+    fn trailing_alternative_is_rejected() {
+        build(r"<pos=SUB> |");
+    }
+
+    #[test]
+    fn bounded_map_evicts_least_recently_used_entries_at_capacity() {
+        let mut map = BoundedMap::new();
+        map.put("k".to_string(), vec![vec!["v".to_string()]]);
+        assert_eq!(map.get("k").map(|v| v.len()), Some(1));
+        assert!(map.get("missing").is_none());
+        for i in 0..=1024 {
+            map.put(format!("k{i}"), Vec::new());
+        }
+        assert!(map.get("k").is_none());
+        assert!(map.get("k0").is_none());
+        assert!(map.get("k1").is_some());
+        assert!(map.get("k1024").is_some());
+    }
+}
