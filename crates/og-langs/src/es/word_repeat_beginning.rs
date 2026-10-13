@@ -256,4 +256,123 @@ mod tests {
         let matches = rule.match_text(text, &sentences);
         assert!(matches.is_empty());
     }
+
+    fn run_rule(text: &str) -> Vec<RuleMatch> {
+        let rule = SpanishWordRepeatBeginningRule::default();
+        let sentences = analyze_spanish_sentences(text);
+        rule.match_text(text, &sentences)
+    }
+
+    fn values_of(matches: &[RuleMatch]) -> Vec<String> {
+        matches[0]
+            .replacements()
+            .iter()
+            .map(|r| r.value().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn repeated_pero_suggests_the_contrast_expressions() {
+        let matches = run_rule(
+            "Pero gatos corren rápido. Pero perros corretean rápido. Pero niños corren rápido.",
+        );
+        assert_eq!(matches.len(), 2, "{matches:?}");
+        assert_eq!(
+            values_of(&matches),
+            vec!["Aun así", "Por otra parte", "Sin embargo"]
+        );
+    }
+
+    #[test]
+    fn repeated_emphasis_adverbs_drop_the_repeated_one() {
+        let matches = run_rule(
+            "Obviamente gatos corren rápido. Obviamente perros corretean rápido. Obviamente niños corren rápido.",
+        );
+        assert_eq!(matches.len(), 2, "{matches:?}");
+        assert_eq!(
+            values_of(&matches),
+            vec!["Claramente", "Absolutamente", "Definitivamente"]
+        );
+    }
+
+    #[test]
+    fn repeated_explain_adverbs_drop_the_repeated_one() {
+        let matches = run_rule(
+            "Específicamente gatos corren rápido. Específicamente perros corretean rápido. Específicamente niños corren rápido.",
+        );
+        assert_eq!(matches.len(), 2, "{matches:?}");
+        assert_eq!(
+            values_of(&matches),
+            vec!["Concretamente", "Particularmente", "Precisamente"]
+        );
+    }
+
+    #[test]
+    fn repeated_pronouns_get_ademas_igualmente_y_no_solo_eso() {
+        let matches = run_rule("Él es alto. Él es fuerte. Él es listo.");
+        assert_eq!(
+            matches.len(),
+            1,
+            "pronouns flag from the third sentence like plain words: {matches:?}"
+        );
+        assert_eq!(
+            values_of(&matches),
+            vec![
+                "Además, él".to_string(),
+                "Igualmente, él".to_string(),
+                "No solo eso, sino que él".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn repeated_plain_words_flag_only_from_the_third_sentence() {
+        let two = run_rule("La casa es grande. La calle es azul.");
+        assert!(two.is_empty(), "two plain repeats stay quiet: {two:?}");
+
+        let three =
+            run_rule("Casas grandes hay muchas. Casas azules hay pocas. Casas nuevas hay aquí.");
+        assert_eq!(three.len(), 1, "{three:?}");
+        assert!(
+            three[0].message().contains("Tres frases seguidas"),
+            "{}",
+            three[0].message()
+        );
+        assert!(three[0].replacements().is_empty());
+    }
+
+    #[test]
+    fn por_un_sentences_reset_the_repeat_tracking() {
+        let matches = run_rule(
+            "Por un lado, la casa es grande. Por un otro lado, la calle es azul. Por una parte, el cielo es azul.",
+        );
+        assert!(
+            matches.is_empty(),
+            "sentence-level exceptions skip: {matches:?}"
+        );
+    }
+
+    #[test]
+    fn exception_starters_and_numbers_stay_quiet() {
+        let matches = run_rule("El gato duerme mucho. El perro come mucho. El pájaro canta mucho.");
+        assert!(
+            matches.is_empty(),
+            "'el' is an exception starter: {matches:?}"
+        );
+        let numeric =
+            run_rule("2023 fue un año seco. 2024 fue un año húmedo. 2025 fue un año frío.");
+        assert!(
+            numeric.is_empty(),
+            "numeric starts are exceptions: {numeric:?}"
+        );
+    }
+
+    #[test]
+    fn single_letter_and_symbol_tokens_are_exceptions() {
+        let rule = SpanishWordRepeatBeginningRule::new();
+        assert!(rule.is_exception(":"));
+        assert!(rule.is_exception("3"));
+        assert!(rule.is_exception("Punto"));
+        assert!(!rule.is_exception("casa"));
+    }
 }
