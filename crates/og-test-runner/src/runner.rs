@@ -2819,6 +2819,106 @@ mod tests {
         assert!(std::sync::Arc::ptr_eq(&first, &second));
         assert!(!first.rules.is_empty());
     }
+
+    fn assert_word_count(runner: &TestRunner, text: &str, min_words: usize) {
+        let sentence = runner.debug_sentence(text);
+        let words: Vec<&str> = sentence
+            .non_whitespace_tokens()
+            .iter()
+            .map(|t| t.token().token())
+            .collect();
+        assert!(words.len() >= min_words, "tokens: {words:?}");
+    }
+
+    #[test]
+    fn belarusian_runner_tokenizes_native_text() {
+        assert_word_count(&TestRunner::for_language("be"), "Гэта тэставае сказ.", 3);
+    }
+
+    #[test]
+    fn greek_runner_tokenizes_native_text() {
+        assert_word_count(&TestRunner::for_language("el"), "Αυτή είναι μια δοκιμή.", 3);
+    }
+
+    #[test]
+    fn persian_runner_tokenizes_native_text() {
+        assert_word_count(&TestRunner::for_language("fa"), "این یک آزمایش است.", 3);
+    }
+
+    #[test]
+    fn japanese_runner_keeps_tokenizer_tags_without_tagger() {
+        let runner = TestRunner::for_language("ja");
+        let sentence = runner.debug_sentence("これはテストです。");
+        let tokens = sentence.non_whitespace_tokens();
+        assert!(tokens.len() >= 2);
+        assert!(
+            tokens.iter().any(|t| !t.token().pos_tags().is_empty()),
+            "ja tags come from the tokenizer dictionary"
+        );
+    }
+
+    #[test]
+    fn khmer_runner_tokenizes_native_text() {
+        assert_word_count(&TestRunner::for_language("km"), "នេះ ជា ការ សាកល្បង។", 3);
+    }
+
+    #[test]
+    fn malayalam_runner_matches_inline_examples() {
+        let runner = TestRunner::for_language("ml");
+        let xml = lang_xml(
+            "ml",
+            &token_rule(
+                "ML_TOK",
+                "zqxjw",
+                "ഇത് <marker>zqxjw</marker> ഒരു പരീക്ഷണം.",
+                "ഇവിടെ പ്രശ്നമില്ല.",
+            ),
+        );
+        let summary = runner.run_xml_example_tests(&xml);
+        assert_eq!(summary.total, 2);
+        assert!(summary.is_all_passed(), "{:?}", summary.results);
+    }
+
+    #[test]
+    fn tamil_runner_matches_inline_examples() {
+        let runner = TestRunner::for_language("ta");
+        let xml = lang_xml(
+            "ta",
+            &token_rule(
+                "TA_TOK",
+                "zqxjw",
+                "இது <marker>zqxjw</marker> ஒரு சோதனை.",
+                "இங்கே எந்த பிரச்சனையும் இல்லை.",
+            ),
+        );
+        let summary = runner.run_xml_example_tests(&xml);
+        assert_eq!(summary.total, 2);
+        assert!(summary.is_all_passed(), "{:?}", summary.results);
+    }
+
+    #[test]
+    fn tagalog_runner_matches_inline_examples() {
+        let runner = TestRunner::for_language("tl");
+        let xml = lang_xml(
+            "tl",
+            &token_rule(
+                "TL_TOK",
+                "zqxjw",
+                "Ito ay <marker>zqxjw</marker> na pagsusulit.",
+                "Walang problema dito.",
+            ),
+        );
+        let summary = runner.run_xml_example_tests(&xml);
+        assert_eq!(summary.total, 2);
+        assert!(summary.is_all_passed(), "{:?}", summary.results);
+    }
+
+    #[test]
+    fn chinese_runner_tokenizes_the_whole_text_as_one_sentence() {
+        let runner = TestRunner::for_language("zh");
+        let sentence = runner.debug_sentence("这是一个测试句子。");
+        assert!(sentence.non_whitespace_tokens().len() >= 2);
+    }
 }
 
 #[test]
