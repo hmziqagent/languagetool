@@ -1039,6 +1039,50 @@ mod tests {
     }
 
     #[test]
+    fn test_exceptions_attach_and_or_groups_collect_alternatives() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<rules lang="en">
+    <rule id="EXC_ATTACH" name="exception attachments">
+        <antipattern>
+            <token>anti</token>
+            <token>anti2<exception postag="XYZ"/></token>
+        </antipattern>
+        <pattern>
+            <token>plain<exception postag="ABC"/></token>
+            <or>
+                <token>either</token>
+                <token>other</token>
+            </or>
+        </pattern>
+        <disambig action="filter" postag="NN"/>
+    </rule>
+</rules>"#;
+
+        let parser = DisambigXmlParser::new();
+        let result = parser.parse(xml).unwrap();
+
+        let anti = &result.rules[0].antipatterns[0];
+        assert_eq!(anti.tokens.len(), 2);
+        assert_eq!(anti.tokens[1].exceptions[0].postag.as_deref(), Some("XYZ"));
+
+        let pattern = &result.rules[0].pattern;
+        assert_eq!(pattern.tokens[0].text.as_deref(), Some("plain"));
+        assert_eq!(pattern.tokens[0].exceptions.len(), 1);
+        assert_eq!(
+            pattern.tokens[0].exceptions[0].postag.as_deref(),
+            Some("ABC")
+        );
+        match &pattern.elements[1] {
+            XmlPatternElement::OrGroup(g) => {
+                assert_eq!(g.alternatives.len(), 2);
+                assert_eq!(g.alternatives[0].text.as_deref(), Some("either"));
+                assert_eq!(g.alternatives[1].text.as_deref(), Some("other"));
+            }
+            other => panic!("expected or group, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn test_commented_out_entity_definition_is_ignored() {
         let xml = r#"<?xml version="1.0" encoding="utf-8"?>
 <!DOCTYPE rules [

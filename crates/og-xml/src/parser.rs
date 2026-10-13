@@ -3230,6 +3230,46 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_unification_token_negate_pos_and_phrase_run_ref() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="pl">
+            <unification feature="gender">
+                <equivalence type="other">
+                    <token postag="NN" postag_regexp="yes" negate_pos="yes"/>
+                </equivalence>
+            </unification>
+            <phrases>
+                <phrase id="ONE"><token>a</token></phrase>
+                <phrase id="PRE_REF"><token>pre</token><phraseref idref="ONE"></phraseref></phrase>
+            </phrases>
+            <category id="C" name="c">
+                <rule id="U" name="u">
+                    <pattern>
+                        <token>t</token>
+                        <phraseref idref="PRE_REF"/>
+                    </pattern>
+                    <message>m</message>
+                </rule>
+            </category>
+        </rules>"#;
+
+        let result = XmlRuleParser::new().parse(xml).unwrap();
+
+        let uni = &result.unifications[0];
+        assert_eq!(uni.equivalences[0].eq_type, "other");
+        assert_eq!(uni.equivalences[0].postag, "NN");
+        assert!(!uni.equivalences[0].exact);
+
+        let texts: Vec<Option<&str>> = result.rules[0]
+            .pattern
+            .tokens
+            .iter()
+            .map(|t| t.text.as_deref())
+            .collect();
+        assert_eq!(texts, vec![Some("t"), Some("pre"), Some("a"), Some("pre")]);
+    }
+
+    #[test]
     fn test_parse_unify_negate_features_or_and_ignore_groups() {
         let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
         <rules lang="en">
