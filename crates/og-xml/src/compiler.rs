@@ -2135,6 +2135,82 @@ mod tests {
     }
 }
 
+#[test]
+fn parse_lookbehind_atom_handles_classes_escapes_and_unicode() {
+    assert_eq!(
+        parse_lookbehind_atom("[a-z]\\."),
+        Some(("[a-z]".to_string(), 5))
+    );
+    assert_eq!(parse_lookbehind_atom("[a"), None);
+    assert_eq!(parse_lookbehind_atom("\\d+"), Some(("\\d".to_string(), 2)));
+    assert_eq!(parse_lookbehind_atom("\\"), None);
+    assert_eq!(parse_lookbehind_atom("üx"), Some(("ü".to_string(), 2)));
+    assert_eq!(parse_lookbehind_atom("("), None);
+    assert_eq!(parse_lookbehind_atom(""), None);
+}
+
+#[test]
+fn expand_bounded_negative_lookbehind_rejects_unbounded_and_empty_forms() {
+    assert_eq!(expand_bounded_negative_lookbehind("a{2,}"), None);
+    assert_eq!(expand_bounded_negative_lookbehind("a{2,9}"), None);
+    assert_eq!(expand_bounded_negative_lookbehind(""), None);
+    assert_eq!(expand_bounded_negative_lookbehind("a{0,2}"), None);
+    assert_eq!(
+        expand_bounded_negative_lookbehind("[0-9]{1,2}"),
+        Some("[0-9]|[0-9][0-9]".to_string())
+    );
+}
+
+#[test]
+fn split_variable_lookbehind_distributes_over_alternatives() {
+    assert_eq!(split_variable_lookbehind("(?<!a|b)c"), "(?<!a)(?<!b)c");
+    assert_eq!(split_variable_lookbehind("(?<!(a|b))c"), "((?<!a)(?<!b))c");
+    assert_eq!(split_variable_lookbehind("(?<!\\d)x"), "(?<!\\d)x");
+    assert_eq!(split_variable_lookbehind("(?<!(ab))x"), "(?<!(ab))x");
+    assert_eq!(split_variable_lookbehind("plain"), "plain");
+}
+
+#[test]
+fn lookbehind_helpers_classify_groups_and_alternatives() {
+    assert!(group_spans_inner("(a|b)"));
+    assert!(!group_spans_inner("a(b)"));
+    assert!(!group_spans_inner("(a)b"));
+    assert_eq!(count_capturing_groups("(a|(b))"), 2);
+    assert_eq!(count_capturing_groups("(?:a)"), 0);
+    assert_eq!(
+        split_top_level_alternatives("a|b(c|d)|e"),
+        vec!["a", "b(c|d)", "e"]
+    );
+}
+
+#[test]
+fn decode_surrogate_pairs_and_space_replacement_follow_java() {
+    assert_eq!(decode_surrogate_pairs("\\uD83D\\uDE00"), "\\u{1F600}");
+    assert_eq!(decode_surrogate_pairs("\\uD83Dnope"), "\\uD83Dnope");
+    assert_eq!(decode_surrogate_pairs("\\ü"), "ü");
+    assert_eq!(decode_surrogate_pairs("a"), "a");
+    assert_eq!(
+        replace_spaces_in_regex("a b[c d]"),
+        "a(?:[\\s\u{00A0}\u{202F}]+)b[c d]"
+    );
+}
+
+#[test]
+fn regex_cache_release_clears_cached_compilations() {
+    let first = shared_cached_regex("og-xml-release-probe-[0-9]+").unwrap();
+    og_core::releasable::release_all();
+    let second = shared_cached_regex("og-xml-release-probe-[0-9]+").unwrap();
+    assert!(false || !std::sync::Arc::ptr_eq(&first, &second));
+    assert!(second.is_match("og-xml-release-probe-42"));
+}
+
+#[test]
+fn compiler_default_matches_new() {
+    let xml = r#"<rules lang="en"><rule id="D" name="d"><pattern><token>t</token></pattern><message>m</message></rule></rules>"#;
+    let rs = XmlCompiler::default().compile_file(xml).unwrap();
+    assert_eq!(rs.rules.len(), 1);
+}
+
 #[cfg(test)]
 mod surrogate_tests {
     use super::*;
