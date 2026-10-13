@@ -684,4 +684,97 @@ mod tests {
             "Java setIgnoreTaggedWords skips dictionary-tagged tokens"
         );
     }
+
+    fn lemma_sentence(surface: &str, lemma: &str) -> AnalyzedSentence {
+        let mut s = sentence(&[surface]);
+        s.tokens_mut()[1] = AnalyzedTokenReadings::new(
+            AnalyzedToken::new(surface, 0, surface.len()).with_lemma(lemma),
+        )
+        .with_readings(vec![
+            AnalyzedToken::new(surface, 0, surface.len()).with_lemma(lemma),
+        ]);
+        s
+    }
+
+    #[test]
+    fn dnv_lemmas_rule_matches_lemma_readings() {
+        let rule = catalan_simple_replace_dnv_rule();
+        let matches = rule.match_sentence(&lemma_sentence("acevament", "acevament"));
+        assert_eq!(matches.len(), 1, "{matches:?}");
+        assert_eq!(matches[0].rule().id(), "CA_SIMPLE_REPLACE_DNV_acevament");
+        assert_eq!(matches[0].replacements()[0].value(), "encebament");
+        assert_eq!(
+            matches[0].message(),
+            "Paraula admesa pel DNV (AVL), però no per altres diccionaris."
+        );
+        assert_eq!(rule.category().name(), "Regionalismes");
+        assert_eq!(rule.issue_type().as_str(), "style");
+    }
+
+    #[test]
+    fn dnv_lemmas_rule_capitalizes_for_uppercase_originals() {
+        let rule = catalan_simple_replace_dnv_rule();
+        let matches = rule.match_sentence(&lemma_sentence("Acevament", "acevament"));
+        assert_eq!(matches.len(), 1, "{matches:?}");
+        assert_eq!(matches[0].replacements()[0].value(), "Encebament");
+    }
+
+    #[test]
+    fn dnv_lemmas_rule_skips_immunized_tokens() {
+        let rule = catalan_simple_replace_dnv_rule();
+        let mut s = lemma_sentence("acevament", "acevament");
+        s.tokens_mut()[1].immunize();
+        assert!(rule.match_sentence(&s).is_empty());
+        let mut ignored = lemma_sentence("acevament", "acevament");
+        ignored.tokens_mut()[1].ignore_spelling();
+        assert!(rule.match_sentence(&ignored).is_empty());
+    }
+
+    #[test]
+    fn operation_names_rule_matches_the_lemma_path() {
+        let rule = replace_operation_names_rule();
+        let matches = rule.match_sentence(&lemma_sentence("encriptada", "encriptat"));
+        assert_eq!(matches.len(), 1, "{matches:?}");
+        assert_eq!(matches[0].rule().id(), "NOMS_OPERACIONS_encriptada");
+        let values: Vec<&str> = matches[0]
+            .replacements()
+            .iter()
+            .map(|r| r.value())
+            .collect();
+        assert_eq!(values, vec!["encriptació", "xifratge"]);
+        assert_eq!(rule.issue_type().as_str(), "style");
+    }
+
+    #[test]
+    fn verbs_rule_lemma_path_fires_for_untagged_readings() {
+        let rule = catalan_simple_replace_verbs_rule();
+        let matches = rule.match_sentence(&lemma_sentence("lliberava", "lliberar"));
+        assert_eq!(matches.len(), 1, "{matches:?}");
+        assert_eq!(matches[0].message(), "Verb incorrecte.");
+        assert_eq!(matches[0].replacements()[0].value(), "alliberar");
+    }
+
+    #[test]
+    fn all_caps_originals_uppercase_the_replacements() {
+        let rule = catalan_simple_replace_rule();
+        let matches = rule.match_sentence(&sentence(&["ACONTEIXIMENTS"]));
+        assert_eq!(matches.len(), 1, "{matches:?}");
+        assert_eq!(matches[0].replacements()[0].value(), "ESDEVENIMENTS");
+        assert_eq!(
+            matches[0].rule().id(),
+            "CA_SIMPLE_REPLACE_SIMPLE_aconteiximents"
+        );
+    }
+
+    #[test]
+    fn diacritics_rule_sanitizes_punctuation_in_sub_rule_ids() {
+        let rule = catalan_simple_replace_diacritics_iec_rule();
+        let matches = rule.match_sentence(&sentence(&["adéu-siau"]));
+        assert_eq!(matches.len(), 1, "{matches:?}");
+        assert_eq!(
+            matches[0].rule().id(),
+            "CA_SIMPLE_REPLACE_DIACRITICS_IEC_ad_u_siau"
+        );
+        assert_eq!(matches[0].replacements()[0].value(), "adeu-siau");
+    }
 }
