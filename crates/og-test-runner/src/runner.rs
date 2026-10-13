@@ -2468,6 +2468,357 @@ mod tests {
         let sentence = runner.debug_sentence("A teh house");
         assert!(sentence.tokens().len() >= 3);
     }
+
+    #[test]
+    fn spanish_runner_matches_inline_examples() {
+        let runner = TestRunner::for_language("es");
+        let xml = lang_xml(
+            "es",
+            &token_rule(
+                "ES_TOK",
+                "zqxjw",
+                "Una <marker>zqxjw</marker> frase más.",
+                "No hay ningún problema.",
+            ),
+        );
+        let summary = runner.run_xml_example_tests(&xml);
+        assert_eq!(summary.total, 2);
+        assert!(summary.is_all_passed(), "{:?}", summary.results);
+    }
+
+    #[test]
+    fn portuguese_runner_matches_inline_examples() {
+        let runner = TestRunner::for_language("pt");
+        let xml = lang_xml(
+            "pt",
+            &token_rule(
+                "PT_TOK",
+                "zqxjw",
+                "Uma <marker>zqxjw</marker> frase maior.",
+                "Não há problema.",
+            ),
+        );
+        let summary = runner.run_xml_example_tests(&xml);
+        assert_eq!(summary.total, 2);
+        assert!(summary.is_all_passed(), "{:?}", summary.results);
+    }
+
+    #[test]
+    fn french_runner_matches_inline_examples() {
+        let runner = TestRunner::for_language("fr");
+        let xml = lang_xml(
+            "fr",
+            &token_rule(
+                "FR_TOK",
+                "zqxjw",
+                "Une <marker>zqxjw</marker> phrase encore.",
+                "Il n'y a aucun problème.",
+            ),
+        );
+        let summary = runner.run_xml_example_tests(&xml);
+        assert_eq!(summary.total, 2);
+        assert!(summary.is_all_passed(), "{:?}", summary.results);
+    }
+
+    #[test]
+    fn polish_runner_matches_inline_examples() {
+        let runner = TestRunner::for_language("pl");
+        let xml = lang_xml(
+            "pl",
+            &token_rule(
+                "PL_TOK",
+                "zqxjw",
+                "Jeszcze <marker>zqxjw</marker> jedno zdanie.",
+                "Nie ma tutaj problemu.",
+            ),
+        );
+        let summary = runner.run_xml_example_tests(&xml);
+        assert_eq!(summary.total, 2);
+        assert!(summary.is_all_passed(), "{:?}", summary.results);
+    }
+
+    #[test]
+    fn german_runner_matches_inline_examples() {
+        assert!(test_support::german_grammar_available());
+        let runner = test_support::german_runner();
+        let again = test_support::german_runner();
+        assert!(std::sync::Arc::ptr_eq(&runner, &again));
+        let xml = lang_xml(
+            "de",
+            &token_rule(
+                "DE_TOK",
+                "zqxjw",
+                "Ein <marker>zqxjw</marker> weiterer Satz.",
+                "Hier gibt es kein Problem.",
+            ),
+        );
+        let summary = runner.run_xml_example_tests(&xml);
+        assert_eq!(summary.total, 2);
+        assert!(summary.is_all_passed(), "{:?}", summary.results);
+    }
+
+    #[test]
+    fn dutch_runner_matches_inline_examples() {
+        let runner = TestRunner::for_language("nl");
+        let xml = lang_xml(
+            "nl",
+            &token_rule(
+                "NL_TOK",
+                "zqxjw",
+                "Nog <marker>zqxjw</marker> een zin.",
+                "Er is hier geen probleem.",
+            ),
+        );
+        let summary = runner.run_xml_example_tests(&xml);
+        assert_eq!(summary.total, 2);
+        assert!(summary.is_all_passed(), "{:?}", summary.results);
+    }
+
+    #[test]
+    fn breton_runner_matches_inline_examples() {
+        let runner = TestRunner::for_language("br");
+        let xml = lang_xml(
+            "br",
+            &token_rule(
+                "BR_TOK",
+                "zqxjw",
+                "Ur <marker>zqxjw</marker> frazenn all.",
+                "N'eus kudenn ebet.",
+            ),
+        );
+        let summary = runner.run_xml_example_tests(&xml);
+        assert_eq!(summary.total, 2);
+        assert!(summary.is_all_passed(), "{:?}", summary.results);
+    }
+
+    #[test]
+    fn galician_runner_matches_inline_examples() {
+        let runner = TestRunner::for_language("gl");
+        let xml = lang_xml(
+            "gl",
+            &token_rule(
+                "GL_TOK",
+                "zqxjw",
+                "Unha <marker>zqxjw</marker> frase máis.",
+                "Non hai ningún problema.",
+            ),
+        );
+        let summary = runner.run_xml_example_tests(&xml);
+        assert_eq!(summary.total, 2);
+        assert!(summary.is_all_passed(), "{:?}", summary.results);
+    }
+
+    #[test]
+    fn serbian_runner_matches_inline_examples() {
+        let runner = TestRunner::for_language("sr");
+        let xml = lang_xml(
+            "sr",
+            &token_rule(
+                "SR_TOK",
+                "zqxjw",
+                "Još <marker>zqxjw</marker> jedna rečenica.",
+                "Ovde nema nikakvog problema.",
+            ),
+        );
+        let summary = runner.run_xml_example_tests(&xml);
+        assert_eq!(summary.total, 2);
+        assert!(summary.is_all_passed(), "{:?}", summary.results);
+    }
+
+    #[test]
+    fn arabic_runner_matches_inline_examples() {
+        let runner = TestRunner::for_language("ar");
+        let xml = lang_xml(
+            "ar",
+            &token_rule(
+                "AR_TOK",
+                "zqxjw",
+                "هذا <marker>zqxjw</marker> اختبار آخر.",
+                "لا توجد مشكلة هنا.",
+            ),
+        );
+        let summary = runner.run_xml_example_tests(&xml);
+        assert_eq!(summary.total, 2);
+        assert!(summary.is_all_passed(), "{:?}", summary.results);
+    }
+
+    #[test]
+    fn unmatched_incorrect_examples_fail_with_message() {
+        let runner = test_support::shared_runner();
+        let xml = lang_xml(
+            "en",
+            r#"<rule id="NO_HIT" name="No hit">
+                <pattern>
+                    <token>zqxjw</token>
+                    <token>wvv</token>
+                </pattern>
+                <message>Two tokens.</message>
+                <example type="incorrect">A <marker>zqxjw</marker> standalone token.</example>
+            </rule>"#,
+        );
+        let summary = runner.run_xml_example_tests(&xml);
+        assert_eq!(summary.failed, 1);
+        let result = &summary.results[0];
+        assert!(!result.passed);
+        assert_eq!(result.rule_id, "NO_HIT");
+        assert_eq!(result.expected_type, "incorrect");
+        assert!(
+            result
+                .message
+                .contains("Expected match on incorrect example but got none")
+        );
+    }
+
+    #[test]
+    fn matches_outside_the_marker_fail_the_example() {
+        let runner = test_support::shared_runner();
+        let xml = lang_xml(
+            "en",
+            r#"<rule id="OFF_MARK" name="Off marker">
+                <pattern>
+                    <token>here</token>
+                </pattern>
+                <message>Here.</message>
+                <example type="incorrect">A <marker>zqxjw</marker> thing here.</example>
+            </rule>"#,
+        );
+        let summary = runner.run_xml_example_tests(&xml);
+        assert_eq!(summary.failed, 1);
+        let result = &summary.results[0];
+        assert!(
+            result.message.contains("does not contain marker"),
+            "{}",
+            result.message
+        );
+    }
+
+    #[test]
+    fn incorrect_examples_without_markers_pass_on_any_match() {
+        let runner = test_support::shared_runner();
+        let xml = lang_xml(
+            "en",
+            r#"<rule id="NO_MARK" name="No marker">
+                <pattern>
+                    <token>zqxjw</token>
+                </pattern>
+                <message>Found.</message>
+                <example type="incorrect">It happens zqxjw today.</example>
+            </rule>"#,
+        );
+        let summary = runner.run_xml_example_tests(&xml);
+        assert!(summary.is_all_passed(), "{:?}", summary.results);
+        assert!(summary.results[0].message.contains("Matched correctly"));
+    }
+
+    #[test]
+    fn triggers_error_examples_pass_through() {
+        let runner = test_support::shared_runner();
+        let xml = lang_xml(
+            "en",
+            r#"<rule id="TRIG" name="Triggers">
+                <pattern>
+                    <token>zqxjw</token>
+                </pattern>
+                <message>Known FP.</message>
+                <example type="triggers_error">A zqxjw sentence.</example>
+            </rule>"#,
+        );
+        let summary = runner.run_xml_example_tests(&xml);
+        assert!(summary.is_all_passed(), "{:?}", summary.results);
+        assert_eq!(summary.results[0].expected_type, "triggers_error");
+        assert!(summary.results[0].message.contains("Triggers error"));
+    }
+
+    #[test]
+    fn malformed_xml_reports_a_parse_error_result() {
+        let runner = test_support::shared_runner();
+        let xml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<rules></wrong></rules>";
+        let summary = runner.run_xml_example_tests(xml);
+        assert_eq!(summary.total, 1);
+        assert_eq!(summary.failed, 1);
+        assert_eq!(summary.results[0].rule_id, "PARSE_ERROR");
+        assert_eq!(summary.results[0].expected_type, "parse");
+        assert!(
+            summary.results[0].message.contains("Failed to parse XML"),
+            "{}",
+            summary.results[0].message
+        );
+    }
+
+    #[test]
+    fn rules_sharing_an_id_are_evaluated_as_one_group() {
+        let runner = test_support::shared_runner();
+        let base = lang_xml(
+            "en",
+            r#"<rule id="GROUPED" name="Grouped base">
+                <pattern>
+                    <token>zqxjw</token>
+                    <token>wvv</token>
+                </pattern>
+                <message>Two tokens.</message>
+                <example type="incorrect">A <marker>zqxjw</marker> single token.</example>
+            </rule>"#,
+        );
+        let extra = lang_xml(
+            "en",
+            r#"<rule id="GROUPED" name="Grouped extra">
+                <pattern>
+                    <token>zqxjw</token>
+                </pattern>
+                <message>One token.</message>
+            </rule>"#,
+        );
+        let mut rule_set = XmlCompiler::new().compile_file(&base).unwrap();
+        let alone = runner.run_rule_set_example_tests(&rule_set);
+        assert_eq!(alone.failed, 1, "{:?}", alone.results);
+
+        let extra_set = XmlCompiler::new().compile_file(&extra).unwrap();
+        rule_set.rules.push(extra_set.rules[0].clone());
+        let grouped = runner.run_rule_set_example_tests(&rule_set);
+        assert_eq!(grouped.total, 1);
+        assert!(grouped.is_all_passed(), "{:?}", grouped.results);
+    }
+
+    #[test]
+    fn pattern_test_reports_expectation_mismatches() {
+        let runner = test_support::shared_runner();
+        let xml = lang_xml(
+            "en",
+            &token_rule(
+                "MM_TOK",
+                "zqxjw",
+                "A <marker>zqxjw</marker> house.",
+                "The house.",
+            ),
+        );
+        let result = runner.run_pattern_test("MM_TOK", &xml, "a zqxjw house", false);
+        assert!(!result.passed);
+        assert!(result.message.contains("expected no match, got match"));
+    }
+
+    #[test]
+    fn default_runner_behaves_like_new() {
+        let runner = TestRunner::default();
+        let xml = lang_xml(
+            "en",
+            &token_rule(
+                "DF_TOK",
+                "zqxjw",
+                "A <marker>zqxjw</marker> house.",
+                "The house.",
+            ),
+        );
+        let summary = runner.run_xml_example_tests(&xml);
+        assert!(summary.is_all_passed(), "{:?}", summary.results);
+    }
+
+    #[test]
+    fn shared_grammar_rules_cache_the_english_compilation() {
+        let first = test_support::shared_grammar_rules();
+        let second = test_support::shared_grammar_rules();
+        assert!(std::sync::Arc::ptr_eq(&first, &second));
+        assert!(!first.rules.is_empty());
+    }
 }
 
 #[test]
