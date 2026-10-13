@@ -2293,6 +2293,181 @@ mod tests {
         assert_eq!(summary.total, 1);
         assert!(summary.is_all_passed(), "{:?}", summary.results);
     }
+    fn lang_xml(lang: &str, rules_body: &str) -> String {
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="{lang}">
+            <category id="GRAMMAR" name="Grammar">
+                {}
+            </category>
+        </rules>"#,
+            rules_body
+        )
+    }
+
+    fn token_rule(id: &str, token: &str, incorrect: &str, correct: &str) -> String {
+        format!(
+            r#"<rule id="{id}" name="{id}">
+                <pattern>
+                    <token regexp="yes">{token}</token>
+                </pattern>
+                <message>Unexpected token.</message>
+                <example type="incorrect">{incorrect}</example>
+                <example type="correct">{correct}</example>
+            </rule>"#
+        )
+    }
+
+    #[test]
+    fn esperanto_runner_matches_inline_examples() {
+        let runner = TestRunner::for_language("eo");
+        let xml = lang_xml(
+            "eo",
+            &token_rule(
+                "EO_TOK",
+                "zqxjw",
+                "Teksto <marker>zqxjw</marker> plua frazo.",
+                "Neniu problemo cxi tie.",
+            ),
+        );
+        let summary = runner.run_xml_example_tests(&xml);
+        assert_eq!(summary.total, 2);
+        assert!(summary.is_all_passed(), "{:?}", summary.results);
+    }
+
+    #[test]
+    fn danish_runner_matches_inline_examples() {
+        let runner = TestRunner::for_language("da");
+        let xml = lang_xml(
+            "da",
+            &token_rule(
+                "DA_TOK",
+                "zqxjw",
+                "En <marker>zqxjw</marker> mere s&aelig;tning.",
+                "Der er intet problem her.",
+            ),
+        );
+        let summary = runner.run_xml_example_tests(&xml);
+        assert_eq!(summary.total, 2);
+        assert!(summary.is_all_passed(), "{:?}", summary.results);
+    }
+
+    #[test]
+    fn catalan_runner_matches_inline_examples() {
+        let runner = TestRunner::for_language("ca");
+        let xml = lang_xml(
+            "ca",
+            &token_rule(
+                "CA_TOK",
+                "zqxjw",
+                "Una <marker>zqxjw</marker> m&eacute;s frase.",
+                "No hi ha cap problema.",
+            ),
+        );
+        let summary = runner.run_xml_example_tests(&xml);
+        assert_eq!(summary.total, 2);
+        assert!(summary.is_all_passed(), "{:?}", summary.results);
+    }
+
+    #[test]
+    fn russian_runner_matches_inline_examples() {
+        let runner = TestRunner::for_language("ru");
+        let xml = lang_xml(
+            "ru",
+            &token_rule(
+                "RU_TOK",
+                "эзюча",
+                "Одно <marker>эзюча</marker> ещё предложение.",
+                "Здесь нет никакой проблемы.",
+            ),
+        );
+        let summary = runner.run_xml_example_tests(&xml);
+        assert_eq!(summary.total, 2);
+        assert!(summary.is_all_passed(), "{:?}", summary.results);
+    }
+
+    #[test]
+    fn run_xml_file_tests_read_rules_from_disk() {
+        let dir = std::env::temp_dir().join("og_test_runner_file_tests");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("example_rules.xml");
+        std::fs::write(
+            &path,
+            lang_xml(
+                "en",
+                &token_rule(
+                    "FILE_TOK",
+                    "teh",
+                    "A <marker>teh</marker> house.",
+                    "The house.",
+                ),
+            ),
+        )
+        .unwrap();
+        let runner = test_support::shared_runner();
+        let summary = runner.run_xml_file_tests(&path).unwrap();
+        assert_eq!(summary.total, 2);
+        assert!(summary.is_all_passed(), "{:?}", summary.results);
+
+        let missing = runner.run_xml_file_tests(&dir.join("does_not_exist.xml"));
+        assert!(missing.is_err());
+    }
+
+    #[test]
+    fn pattern_test_reports_unknown_rule_ids() {
+        let runner = test_support::shared_runner();
+        let xml = lang_xml(
+            "en",
+            &token_rule(
+                "PT_TOK",
+                "teh",
+                "A <marker>teh</marker> house.",
+                "The house.",
+            ),
+        );
+        let result = runner.run_pattern_test("NO_SUCH_RULE", &xml, "teh house", false);
+        assert!(!result.passed);
+        assert!(result.message.contains("not found"));
+
+        let hit = runner.run_pattern_test("PT_TOK", &xml, "teh house", true);
+        assert!(hit.passed, "{}", hit.message);
+        let miss = runner.run_pattern_test("PT_TOK", &xml, "clean house", false);
+        assert!(miss.passed, "{}", miss.message);
+    }
+
+    #[test]
+    fn generic_grammar_helpers_load_and_cache_danish_rules() {
+        assert!(test_support::generic_grammar_available("da"));
+        let first = test_support::generic_grammar_rules("da");
+        assert!(!first.rules.is_empty());
+        let second = test_support::generic_grammar_rules("da");
+        assert!(std::sync::Arc::ptr_eq(&first, &second));
+        assert!(!test_support::generic_grammar_available("zz"));
+    }
+
+    #[test]
+    fn match_rule_on_text_reports_marker_and_matches() {
+        let runner = test_support::shared_runner();
+        let xml = lang_xml(
+            "en",
+            &token_rule(
+                "MR_TOK",
+                "teh",
+                "A <marker>teh</marker> house.",
+                "The house.",
+            ),
+        );
+        let rule_set = XmlCompiler::new().compile_file(&xml).unwrap();
+        let rule = &rule_set.rules[0];
+        let (clean, marker, matches) =
+            runner.match_rule_on_text(rule, "A <marker>teh</marker> house");
+        assert_eq!(clean, "A teh house");
+        assert_eq!(marker, Some((2, 5)));
+        assert!(!matches.is_empty());
+
+        let sentence = runner.debug_sentence("A teh house");
+        assert!(sentence.tokens().len() >= 3);
+    }
 }
 
 #[test]
