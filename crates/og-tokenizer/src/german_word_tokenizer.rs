@@ -51,12 +51,15 @@ impl GermanWordTokenizer {
             let domain = &remaining[at_pos + 1..];
             let domain_end = domain.find(char::is_whitespace).unwrap_or(domain.len());
             let domain_part = &domain[..domain_end];
-            if domain_part.contains('.')
-                && domain_part
+            let trimmed = domain_part.trim_end_matches(|c: char| !c.is_alphanumeric());
+            let top_label = trimmed.rsplit('.').next().unwrap_or_default();
+            if trimmed.contains('.')
+                && top_label.len() >= 2
+                && trimmed
                     .chars()
                     .all(|c| c.is_alphanumeric() || c == '.' || c == '-')
             {
-                return Some(byte_start + at_pos + 1 + domain_end);
+                return Some(byte_start + at_pos + 1 + trimmed.len());
             }
         }
         None
@@ -104,9 +107,6 @@ impl WordTokenizer for GermanWordTokenizer {
             let rest = text[byte..].chars();
             for rc in rest {
                 if rc.is_whitespace() || Self::is_delimiter(rc) {
-                    break;
-                }
-                if Self::url_or_email_end(text, end + rc.len_utf8()).is_some() {
                     break;
                 }
                 end += rc.len_utf8();
@@ -213,6 +213,67 @@ mod tests {
             texts("Siehe https://example.org/a-b, ok"),
             vec!["Siehe", " ", "https://example.org/a-b,", " ", "ok"]
         );
+    }
+
+    #[test]
+    fn wwww_prefix_does_not_start_a_url_mid_word() {
+        assert_eq!(
+            texts("wwww.example.org"),
+            vec!["wwww", ".", "example", ".", "org"]
+        );
+        assert_eq!(
+            texts("9€www.example.org"),
+            vec!["9€www", ".", "example", ".", "org"]
+        );
+    }
+
+    #[test]
+    fn emails_stay_whole_and_trailing_punctuation_splits() {
+        assert_eq!(
+            texts("dev.all@languagetool.org"),
+            vec!["dev.all@languagetool.org"]
+        );
+        assert_eq!(
+            texts("dev.all@languagetool.org."),
+            vec!["dev.all@languagetool.org", "."]
+        );
+        assert_eq!(
+            texts("dev.all@languagetool.org:"),
+            vec!["dev.all@languagetool.org", ":"]
+        );
+        assert_eq!(
+            texts("Schreiben Sie Hr. Meier (meier@mail.com)."),
+            vec![
+                "Schreiben",
+                " ",
+                "Sie",
+                " ",
+                "Hr",
+                ".",
+                " ",
+                "Meier",
+                " ",
+                "(",
+                "meier@mail.com",
+                ")",
+                "."
+            ]
+        );
+    }
+
+    #[test]
+    fn single_label_tld_addresses_are_not_joined() {
+        assert_eq!(texts("f@t.t"), vec!["f@t", ".", "t"]);
+    }
+
+    #[test]
+    fn default_matches_new() {
+        let via_default: Vec<String> = GermanWordTokenizer::default()
+            .tokenize("ein- oder mehrmals")
+            .into_iter()
+            .map(|t| t.text().to_string())
+            .collect();
+        assert_eq!(via_default, vec!["ein-", " ", "oder", " ", "mehrmals"]);
     }
 
     #[test]
