@@ -3726,6 +3726,32 @@ mod tests {
             ],
             "a literal postag assigns the tag to every non-empty reading with the first lemma"
         );
+
+        let mut readings = vec![
+            AnalyzedToken::new("le", 0, 2)
+                .with_pos_tags(vec!["D f s".to_string()])
+                .with_lemma("der"),
+            AnalyzedToken::new("le", 0, 2)
+                .with_pos_tags(vec!["PRON".to_string()])
+                .with_lemma("leobj"),
+            AnalyzedToken::new("le", 0, 2),
+        ];
+        let mut custom = AnalyzedSentence::new("test", 0, 5);
+        custom.set_tokens(vec![
+            AnalyzedTokenReadings::new(AnalyzedToken::new("le", 0, 2)).with_readings(readings),
+            AnalyzedTokenReadings::new(AnalyzedToken::new("x", 3, 4)).with_readings(vec![
+                AnalyzedToken::new("x", 3, 4).with_pos_tags(vec!["NC".to_string()]),
+            ]),
+        ]);
+        disambig.disambiguate(&mut custom);
+        assert_eq!(
+            readings_of(&custom.tokens()[0]),
+            vec![
+                (Some("leobj"), "PRON".to_string()),
+                (Some("leobj"), "PRON".to_string())
+            ],
+            "the reading matching the literal postag donates its lemma and tagless readings are skipped"
+        );
     }
 
     #[test]
@@ -3816,11 +3842,12 @@ mod tests {
                 <token>morning</token>
             </marker>
         </pattern>
-        <disambig action="add"><wd pos="X1"/><wd pos="X2"/></disambig>
+        <disambig action="add"><wd pos="X1"/><wd pos="X2">morgen</wd></disambig>
     </rule>
 </rules>"#;
         let disambig = XmlDisambiguator::from_xml(xml).unwrap();
         let mut sentence = make_sentence(vec![("good", vec!["JJ"]), ("morning", vec!["NN"])]);
+        sentence.tokens_mut()[1].ignore_spelling();
         disambig.disambiguate(&mut sentence);
         assert!(sentence.tokens()[0].has_pos_tag("JJ"));
         assert!(sentence.tokens()[0].has_pos_tag("X1"));
@@ -3828,6 +3855,23 @@ mod tests {
         assert!(sentence.tokens()[1].has_pos_tag("NN"));
         assert!(sentence.tokens()[1].has_pos_tag("X2"));
         assert!(!sentence.tokens()[1].has_pos_tag("X1"));
+        assert!(sentence.tokens()[1].is_ignored_by_speller());
+        assert_eq!(
+            sentence.tokens()[1].readings().last().unwrap().token(),
+            "morgen",
+            "a wd with text content adds a reading carrying that text"
+        );
+
+        disambig.disambiguate(&mut sentence);
+        let count = sentence.tokens()[1]
+            .readings()
+            .iter()
+            .filter(|r| r.pos_tags().first().is_some_and(|t| t == "X2"))
+            .count();
+        assert_eq!(
+            count, 1,
+            "adding the identical reading a second time is a no-op"
+        );
     }
 
     #[test]
