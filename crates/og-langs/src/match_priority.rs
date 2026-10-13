@@ -1105,6 +1105,7 @@ pub fn for_code(code: &str) -> Arc<dyn LanguageMatchFilter> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use og_core::{RuleMatchContext, RuleMatchKind, RuleMatchRule, SuggestedReplacement};
 
     #[test]
     fn english_priorities_match_java() {
@@ -1197,5 +1198,194 @@ mod tests {
             for_code("ca-ES-valencia").priority_for_id("CA_SIMPLE_REPLACE_MULTIWORDS_X"),
             70
         );
+    }
+
+    #[test]
+    fn english_prefix_arms_match_java() {
+        let filter = EnglishMatchFilter;
+        assert_eq!(filter.priority_for_id("PRP_VBZ"), -2);
+        assert_eq!(filter.priority_for_id("CONFUSION_RULE_X"), -20);
+        assert_eq!(filter.priority_for_id("EN_UPPER_CASE_NGRAM"), -12);
+        assert_eq!(filter.priority_for_id("EN_MULTITOKEN_SPELLING_X"), -9);
+        assert_eq!(filter.priority_for_id("EN_GB_SIMPLE_REPLACE_X"), -5);
+        assert_eq!(filter.priority_for_id("EN_US_SIMPLE_REPLACE_X"), -5);
+        assert_eq!(filter.priority_for_id("QB_EN_OXFORD"), -51);
+        assert_eq!(filter.priority_for_id("EN_SIMPLE_REPLACE_KILOGRAMME"), -49);
+        assert_eq!(filter.priority_for_id("EN_SIMPLE_REPLACE_PLURAL"), 0);
+    }
+
+    fn match_over(text: &str, error: &str, id: &str, replacements: &[&str]) -> RuleMatch {
+        let offset = text.find(error).expect("error occurs in text");
+        RuleMatch::new(
+            "message",
+            offset,
+            error.len(),
+            RuleMatchRule::new(id, "description"),
+            RuleMatchContext::new(text, 0, text.len()),
+        )
+        .with_replacements(
+            replacements
+                .iter()
+                .map(|r| SuggestedReplacement::new(*r))
+                .collect(),
+        )
+    }
+
+    fn replacement_values(matches: &[RuleMatch]) -> Vec<String> {
+        matches[0]
+            .replacements()
+            .iter()
+            .map(|r| r.value().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn english_apostrophe_errors_space_the_replacements() {
+        let filter = EnglishMatchFilter;
+        let mut matches = vec![match_over(
+            "listen to 'em now",
+            "'em",
+            "SOME_RULE",
+            &["them", "'em", "’em", " them"],
+        )];
+        filter.filter_rule_matches(&mut matches, "listen to 'em now");
+        assert_eq!(replacement_values(&matches), vec![" them", "'em", "’em"]);
+    }
+
+    #[test]
+    fn english_nt_errors_space_the_replacements() {
+        let filter = EnglishMatchFilter;
+        let mut matches = vec![match_over(
+            "they do n't know",
+            "n't",
+            "SOME_RULE",
+            &["not", "n’t", "n't", "not"],
+        )];
+        filter.filter_rule_matches(&mut matches, "they do n't know");
+        assert_eq!(replacement_values(&matches), vec![" not", "n’t", "n't"]);
+    }
+
+    #[test]
+    fn english_short_errors_keep_replacements_untouched() {
+        let filter = EnglishMatchFilter;
+        let mut matches = vec![match_over(
+            "the dog's bone",
+            "'s",
+            "SOME_RULE",
+            &["is", "has"],
+        )];
+        filter.filter_rule_matches(&mut matches, "the dog's bone");
+        assert_eq!(replacement_values(&matches), vec!["is", "has"]);
+    }
+
+    #[test]
+    fn english_gramme_rules_become_locale_violations() {
+        let filter = EnglishMatchFilter;
+        let mut matches = vec![match_over(
+            "one kilogramme of flour",
+            "kilogramme",
+            "EN_SIMPLE_REPLACE_KILOGRAMME",
+            &["kilogram"],
+        )];
+        assert_eq!(matches[0].rule().pattern_match_kind(), RuleMatchKind::Other);
+        filter.filter_rule_matches(&mut matches, "one kilogramme of flour");
+        assert_eq!(replacement_values(&matches), vec!["kilogram"]);
+        assert_eq!(matches[0].rule().pattern_match_kind(), RuleMatchKind::Hint);
+    }
+
+    #[test]
+    fn german_multitoken_and_confusion_prefix_arms_match_java() {
+        let filter = GermanMatchFilter;
+        assert_eq!(filter.priority_for_id("DE_MULTITOKEN_SPELLING_X"), -2);
+        assert_eq!(filter.priority_for_id("CONFUSION_RULE_X"), -1);
+    }
+
+    #[test]
+    fn spanish_map_entries_match_java() {
+        let filter = SpanishMatchFilter;
+        assert_eq!(filter.priority_for_id("MISSPELLING"), 40);
+        assert_eq!(filter.priority_for_id("CONFUSIONS"), 40);
+        assert_eq!(filter.priority_for_id("INCORRECT_EXPRESSIONS"), 40);
+        assert_eq!(filter.priority_for_id("DIACRITICS"), 30);
+        assert_eq!(filter.priority_for_id("ES_SIMPLE_REPLACE_SIMPLE_X"), 30);
+        assert_eq!(filter.priority_for_id("ES_COMPOUNDS_X"), 50);
+    }
+
+    #[test]
+    fn dutch_map_and_hydra_priorities_match_java() {
+        let filter = DutchMatchFilter;
+        assert_eq!(filter.priority_for_id("SINT_X"), 3);
+        assert_eq!(filter.priority_for_id("ET_AL"), 1);
+        assert_eq!(filter.priority_for_id("N_PERSOONS"), 1);
+        assert_eq!(filter.priority_for_id("HOOFDLETTERS_OVERBODIG_A"), 1);
+        assert_eq!(filter.priority_for_id("VERSCHILLENDE_AANHALINGSTEKENS"), 1);
+        assert_eq!(filter.priority_for_id("STAM_ZONDER_IK"), -1);
+        assert_eq!(filter.priority_for_id("KOMMA_ONTBR"), -1);
+        assert_eq!(filter.priority_for_id("KOMMA_KOMMA"), -1);
+        assert_eq!(filter.priority_for_id("HET_FIETS"), -2);
+        assert_eq!(filter.priority_for_id("JIJ_JOU_JOUW"), -2);
+        assert_eq!(filter.priority_for_id("JOU_JOUW"), -3);
+        assert_eq!(filter.priority_for_id("BE"), -3);
+        assert_eq!(filter.priority_for_id("DOUBLE_PUNCTUATION"), -3);
+        assert_eq!(filter.priority_for_id("EINDE_ZIN_ONVERWACHT"), -5);
+        assert_eq!(filter.priority_for_id("TOO_LONG_PARAGRAPH"), -15);
+        assert_eq!(filter.priority_for_id("ERG_LANG_WOORD"), -20);
+        assert_eq!(filter.priority_for_id("DE_ONVERWACHT"), -20);
+        assert_eq!(filter.priority_for_id("TOO_LONG_SENTENCE"), -1);
+        assert_eq!(filter.priority_for_id("AI_NL_HYDRA_LEO_X"), -5);
+        assert_eq!(
+            filter.priority_for_id("AI_NL_HYDRA_LEO_MISSING_COMMA_X"),
+            -51
+        );
+    }
+
+    #[test]
+    fn portuguese_map_and_prefix_arms_match_java() {
+        let filter = PortugueseMatchFilter;
+        assert_eq!(
+            filter.priority_for_id("PT_SIMPLE_REPLACE_ORTHOGRAPHY_X"),
+            -49
+        );
+        assert_eq!(filter.priority_for_id("PT_MULTITOKEN_SPELLING_X"), -48);
+        assert_eq!(filter.priority_for_id("ACENTUAÇÃO_VOGAL_ÊNCLISE_X"), -51);
+        assert_eq!(
+            filter.priority_for_id("COLOCACAO_PRONOMINAL_COM_ATRATOR_X"),
+            -52
+        );
+        assert_eq!(filter.priority_for_id("FRAGMENT_TWO_ARTICLES"), 50);
+        assert_eq!(filter.priority_for_id("DEGREE_MINUTES_SECONDS"), 30);
+        assert_eq!(filter.priority_for_id("INTERJECTIONS_PUNTUATION"), 20);
+        assert_eq!(filter.priority_for_id("AUSENCIA_VIRGULA"), 1);
+        assert_eq!(filter.priority_for_id("UNPAIRED_BRACKETS"), -5);
+        assert_eq!(filter.priority_for_id("PROFANITY"), -6);
+        assert_eq!(filter.priority_for_id("PT_PT_SIMPLE_REPLACE"), -11);
+        assert_eq!(filter.priority_for_id("PT_REDUNDANCY_REPLACE"), -12);
+        assert_eq!(filter.priority_for_id("PT_CLICHE_REPLACE"), -17);
+        assert_eq!(filter.priority_for_id("CHILDISH_LANGUAGE"), -25);
+        assert_eq!(filter.priority_for_id("ARCHAISMS"), -26);
+        assert_eq!(filter.priority_for_id("INFORMALITIES"), -27);
+        assert_eq!(filter.priority_for_id("PT_AGREEMENT_REPLACE"), -35);
+        assert_eq!(filter.priority_for_id("PRETERITO_PERFEITO"), -51);
+        assert_eq!(filter.priority_for_id("PT_BR_SIMPLE_REPLACE"), -51);
+        assert_eq!(filter.priority_for_id("CRASE_CONFUSION"), -54);
+        assert_eq!(filter.priority_for_id("GENERAL_VERB_AGREEMENT_ERRORS"), -55);
+        assert_eq!(filter.priority_for_id("REPEATED_WORDS"), -210);
+        assert_eq!(filter.priority_for_id("PT_WIKIPEDIA_COMMON_ERRORS"), -500);
+        assert_eq!(filter.priority_for_id("UPPERCASE_SENTENCE_START"), -600);
+        assert_eq!(filter.priority_for_id("FILLER_WORDS_PT"), -990);
+        assert_eq!(filter.priority_for_id("READABILITY_RULE_SIMPLE_PT"), -1100);
+        assert_eq!(filter.priority_for_id("UNKNOWN_WORD"), -2000);
+    }
+
+    #[test]
+    fn belarusian_priorities_match_java() {
+        let filter = for_code("be");
+        assert_eq!(filter.priority_for_id("RUSSIAN_SIMPLE_REPLACE_RULE"), 10);
+        assert_eq!(filter.priority_for_id("BELARUSIAN_SPECIFIC_CASE"), 9);
+        assert_eq!(filter.priority_for_id("Word_root_repeat"), -1);
+        assert_eq!(filter.priority_for_id("PUNCT_DPT_2"), -2);
+        assert_eq!(filter.priority_for_id("TOO_LONG_PARAGRAPH"), -15);
+        assert_eq!(filter.priority_for_id("TOO_LONG_SENTENCE"), -101);
+        assert_eq!(filter.priority_for_id("UNKNOWN_BE_RULE"), 0);
     }
 }
