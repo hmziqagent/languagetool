@@ -1773,6 +1773,69 @@ mod tests {
     }
 
     #[test]
+    fn italian_fsa5_lookups_match_the_java_tagger_test() {
+        let _guard = DICT_TEST_LOCK.lock().unwrap();
+        let dir = [
+            "/home/agent/opengrammar-rs/languagetool/languagetool-language-modules/it/src/main/resources/org/languagetool/resource/it",
+            "languagetool/languagetool-language-modules/it/src/main/resources/org/languagetool/resource/it",
+        ]
+        .iter()
+        .map(std::path::PathBuf::from)
+        .find(|p| p.join("italian.dict").exists());
+        let dir = match dir {
+            Some(d) => d,
+            None => return,
+        };
+        let dict = MorfologikDictionary::load(&dir.join("italian.dict"), &dir.join("italian.info"));
+        let dict = dict.expect("load italian dict (FSA5, iso-8859-15, suffix encoder)");
+        assert!(dict.has_entries(), "italian dict must expose entries");
+
+        let senza = dict.lookup("senza");
+        assert!(
+            senza.contains(&("senza", "CON")) && senza.contains(&("senza", "PRE")),
+            "senza readings: {senza:?}"
+        );
+
+        let linguaggio = dict.lookup("linguaggio");
+        assert!(
+            linguaggio
+                .iter()
+                .any(|(lemma, tag)| lemma == &"linguaggio" && *tag == "NOUN-M:s"),
+            "linguaggio readings: {linguaggio:?}"
+        );
+
+        let inganno = dict.lookup("inganno");
+        assert!(
+            inganno
+                .iter()
+                .any(|(lemma, tag)| lemma == &"ingannare" && *tag == "VER:ind+pres+1+s"),
+            "inganno readings: {inganno:?}"
+        );
+        assert!(
+            inganno
+                .iter()
+                .any(|(lemma, tag)| lemma == &"inganno" && *tag == "NOUN-M:s"),
+            "inganno readings: {inganno:?}"
+        );
+
+        let impossibile = dict.lookup("impossibile");
+        assert!(
+            impossibile
+                .iter()
+                .any(|(lemma, tag)| lemma == &"impossibile"
+                    && (*tag == "ADJ:pos+f+s" || *tag == "ADJ:pos+m+s")),
+            "impossibile readings: {impossibile:?}"
+        );
+
+        let e_accented = dict.lookup("è");
+        assert!(
+            e_accented.iter().any(|(lemma, tag)| lemma == &"essere"
+                && (*tag == "AUX:ind+pres+3+s" || *tag == "VER:ind+pres+3+s")),
+            "è readings: {e_accented:?}"
+        );
+    }
+
+    #[test]
     fn lazy_lookup_matches_eager_enumeration_german() {
         let _guard = DICT_TEST_LOCK.lock().unwrap();
         let Some(dir) = dict_path() else {
