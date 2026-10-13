@@ -103,18 +103,19 @@ fn unescape_class(class: &str) -> Vec<char> {
 }
 
 fn expand_german_line(line: &str) -> Vec<String> {
-    let suffix = line.rsplit('/').next().unwrap_or("");
-    let has_slash = line.contains('/');
-    if has_slash && !suffix.is_empty() && suffix.chars().all(|c| "ESN".contains(c)) {
-        let stem = line.split('/').next().unwrap_or("").trim();
+    let ends_with_esn = line.chars().last().is_some_and(|c| "ESN".contains(c));
+    if line.contains('/') && ends_with_esn {
+        let mut parts = line.split('/');
+        let stem = parts.next().unwrap_or("").trim();
+        let flags = parts.next().unwrap_or("");
         let mut out = vec![stem.to_string()];
-        if suffix.contains('E') {
+        if flags.contains('E') {
             out.push(format!("{stem}e"));
         }
-        if suffix.contains('S') {
+        if flags.contains('S') {
             out.push(format!("{stem}s"));
         }
-        if suffix.contains('N') {
+        if flags.contains('N') {
             out.push(format!("{stem}n"));
         }
         return out;
@@ -935,6 +936,273 @@ mod tests {
         assert!(tokens[0].readings().iter().all(|r| r.pos_tags().is_empty()));
     }
 
+    fn fake_tagged(text: &str) -> Vec<AnalyzedTokenReadings> {
+        let mut tokens = sentence_tokens(text);
+        for token in &mut tokens {
+            if token.is_whitespace() {
+                continue;
+            }
+            let (word, start, end) = (
+                token.token().token().to_string(),
+                token.token().start(),
+                token.token().end(),
+            );
+            token.readings_mut().push(
+                AnalyzedToken::new(&word, start, end)
+                    .with_pos_tags(vec!["FakePosTag".to_string()])
+                    .with_lemma(&word),
+            );
+        }
+        tokens
+    }
+
+    fn reading_pairs(atr: &AnalyzedTokenReadings) -> Vec<(String, String)> {
+        atr.readings()
+            .iter()
+            .map(|r| {
+                (
+                    r.pos_tags().concat(),
+                    r.lemma().unwrap_or_default().to_string(),
+                )
+            })
+            .collect()
+    }
+
+    fn with_sent_start(tokens: Vec<AnalyzedTokenReadings>) -> Vec<AnalyzedTokenReadings> {
+        let mut out = vec![AnalyzedTokenReadings::new(
+            AnalyzedToken::new("<S>", 0, 3).with_pos_tags(vec!["SENT_START".to_string()]),
+        )];
+        out.extend(tokens);
+        out
+    }
+
+    #[test]
+    fn wrapped_chunk_tags_keep_existing_readings() {
+        let content = "ah this\tfake\nah for shame\tadv\nnot for this either\tfake\n";
+        let chunker = MultiWordChunker::from_content(content, true, true, true, None, false, false);
+        let mut tokens = with_sent_start(fake_tagged("ah for shame"));
+        chunker.apply(&mut tokens);
+        let pairs: Vec<(String, String)> = tokens
+            .iter()
+            .filter(|t| !t.is_whitespace())
+            .flat_map(reading_pairs)
+            .collect();
+        assert!(
+            pairs.contains(&("<adv>".to_string(), "ah for shame".to_string())),
+            "{pairs:?}"
+        );
+        assert!(
+            pairs.contains(&("</adv>".to_string(), "ah for shame".to_string())),
+            "{pairs:?}"
+        );
+        assert!(
+            !pairs
+                .iter()
+                .any(|(tag, _)| tag.contains("adv") && tag != "<adv>" && tag != "</adv>"),
+            "{pairs:?}"
+        );
+        assert_eq!(
+            tokens
+                .iter()
+                .filter(|t| !t.is_whitespace())
+                .filter(|t| reading_pairs(t).iter().any(|(tag, _)| tag == "FakePosTag"))
+                .count(),
+            3,
+            "{pairs:?}"
+        );
+    }
+
+    #[test]
+    fn remove_previous_tags_stamp_every_phrase_token() {
+        let content = "ah this\tfake\nah for shame\tadv\nnot for this either\tfake\n";
+        let chunker = MultiWordChunker::from_content(content, true, true, true, None, true, false);
+        let mut tokens = with_sent_start(fake_tagged("ah for shame"));
+        chunker.apply(&mut tokens);
+        let words: Vec<&AnalyzedTokenReadings> = tokens
+            .iter()
+            .skip(1)
+            .filter(|t| !t.is_whitespace())
+            .collect();
+        assert_eq!(words.len(), 3);
+        for word in &words {
+            assert_eq!(
+                reading_pairs(word),
+                vec![("adv".to_string(), "ah for shame".to_string())],
+                "{}: {:?}",
+                word.token().token(),
+                reading_pairs(word)
+            );
+        }
+    }
+
+    #[test]
+    fn nc_wrapped_entries_become_noun_then_adjective_tags() {
+        let content = "rhythm and blues\tNCMS000\n";
+        let chunker = MultiWordChunker::from_content(content, true, true, true, None, true, false);
+        let mut tokens = with_sent_start(sentence_tokens("rhythm and blues"));
+        chunker.apply(&mut tokens);
+        let words: Vec<&AnalyzedTokenReadings> = tokens
+            .iter()
+            .skip(1)
+            .filter(|t| !t.is_whitespace())
+            .collect();
+        assert_eq!(
+            reading_pairs(words[0]),
+            vec![("NCMS000".to_string(), "rhythm and blues".to_string())]
+        );
+        for word in &words[1..] {
+            assert_eq!(
+                reading_pairs(word),
+                vec![("AQ0MS0".to_string(), "rhythm and blues".to_string())],
+                "{}: {:?}",
+                word.token().token(),
+                reading_pairs(word)
+            );
+        }
+    }
+
+    #[test]
+    fn low_priority_marker_loses_against_real_multiword_at_same_distance() {
+        let chunker = MultiWordChunker::from_content("", true, true, true, None, true, false);
+        let mut tokens = sentence_tokens("big sur");
+        tokens[0].readings_mut().extend([
+            AnalyzedToken::new("big", 0, 3)
+                .with_pos_tags(vec!["<NP00000>".to_string()])
+                .with_lemma("big sur"),
+            AnalyzedToken::new("big", 0, 3)
+                .with_pos_tags(vec!["<NPCN000>".to_string()])
+                .with_lemma("big sur global"),
+        ]);
+        tokens[2].readings_mut().extend([
+            AnalyzedToken::new("sur", 4, 7)
+                .with_pos_tags(vec!["</NP00000>".to_string()])
+                .with_lemma("big sur"),
+            AnalyzedToken::new("sur", 4, 7)
+                .with_pos_tags(vec!["</NPCN000>".to_string()])
+                .with_lemma("big sur global"),
+        ]);
+        chunker.apply(&mut tokens);
+        assert_eq!(
+            reading_pairs(&tokens[0]),
+            vec![("NP00000".to_string(), "big sur".to_string())],
+            "{:?}",
+            reading_pairs(&tokens[0])
+        );
+        assert_eq!(
+            reading_pairs(&tokens[2]),
+            vec![("NP00000".to_string(), "big sur".to_string())],
+            "{:?}",
+            reading_pairs(&tokens[2])
+        );
+    }
+
+    #[test]
+    fn lettercase_variants_follow_java() {
+        let content = "rhythm and blues\tNN\nVênus de Milo\tNN\niPad\tNN\n";
+        let chunker = MultiWordChunker::from_content(content, true, true, true, None, true, false);
+        for text in ["Rhythm and blues", "Rhythm And Blues", "RHYTHM AND BLUES"] {
+            let mut tokens = with_sent_start(sentence_tokens(text));
+            chunker.apply(&mut tokens);
+            assert_eq!(
+                reading_pairs(&tokens[1]),
+                vec![("NN".to_string(), "rhythm and blues".to_string())],
+                "{text}: {:?}",
+                reading_pairs(&tokens[1])
+            );
+        }
+        let mut tokens = with_sent_start(sentence_tokens("VÊNUS DE MILO"));
+        chunker.apply(&mut tokens);
+        assert_eq!(
+            reading_pairs(&tokens[1]),
+            vec![("NN".to_string(), "Vênus de Milo".to_string())],
+            "{:?}",
+            reading_pairs(&tokens[1])
+        );
+        for text in ["Vênus De Milo", "vênus de milo", "IPAD"] {
+            let mut tokens = with_sent_start(sentence_tokens(text));
+            chunker.apply(&mut tokens);
+            assert!(
+                tokens[1].readings().iter().all(|r| r.pos_tags().is_empty()),
+                "{text} should not match: {:?}",
+                reading_pairs(&tokens[1])
+            );
+        }
+    }
+
+    #[test]
+    fn german_suffix_expansion_adds_e_s_n_forms() {
+        let chunker =
+            MultiWordChunker::from_content("auto/ES\n", true, true, true, Some("NN"), false, false);
+        for text in ["auto", "autoe", "autos"] {
+            let mut tokens = sentence_tokens(text);
+            chunker.apply(&mut tokens);
+            assert_eq!(
+                reading_pairs(&tokens[0]),
+                vec![("NN".to_string(), text.to_string())],
+                "{text}: {:?}",
+                reading_pairs(&tokens[0])
+            );
+        }
+        let mut tokens = sentence_tokens("auton");
+        chunker.apply(&mut tokens);
+        assert!(
+            tokens[0].readings().iter().all(|r| r.pos_tags().is_empty()),
+            "{:?}",
+            reading_pairs(&tokens[0])
+        );
+    }
+
+    #[test]
+    fn malformed_lines_are_skipped() {
+        let with_default = MultiWordChunker::from_content(
+            "status quo\tNN\n",
+            true,
+            true,
+            true,
+            Some("NN"),
+            false,
+            false,
+        );
+        let mut tokens = sentence_tokens("status quo");
+        with_default.apply(&mut tokens);
+        assert!(
+            tokens[0].readings().iter().all(|r| r.pos_tags().is_empty()),
+            "{:?}",
+            reading_pairs(&tokens[0])
+        );
+
+        let without_default = MultiWordChunker::from_content(
+            "one two three\tNN\textra\ncoffee\t\n",
+            true,
+            true,
+            true,
+            None,
+            false,
+            false,
+        );
+        let mut tokens = sentence_tokens("one two three");
+        without_default.apply(&mut tokens);
+        assert!(
+            tokens
+                .iter()
+                .filter(|t| !t.is_whitespace())
+                .all(|t| t.readings().iter().all(|r| r.pos_tags().is_empty())),
+            "{:?}",
+            tokens
+                .iter()
+                .filter(|t| !t.is_whitespace())
+                .flat_map(reading_pairs)
+                .collect::<Vec<_>>()
+        );
+        let mut tokens = sentence_tokens("coffee");
+        without_default.apply(&mut tokens);
+        assert!(
+            tokens[0].readings().iter().all(|r| r.pos_tags().is_empty()),
+            "{:?}",
+            reading_pairs(&tokens[0])
+        );
+    }
+
     #[test]
     fn ignore_spelling_marking_keeps_existing_readings() {
         let content = "coffee bar\n";
@@ -1022,6 +1290,81 @@ mod hybrid_tests {
         let chain = hybrid_disambiguator("fr", &fr_resource_dir(), &core_resource_dir(), xml);
         let mut sentence = AnalyzedSentence::new("x", 0, 1);
         chain.disambiguate(&mut sentence);
+    }
+
+    fn lang_resource_dir(code: &str) -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
+            "../../../languagetool/languagetool-language-modules/{code}/src/main/resources/org/languagetool/resource/{code}"
+        ))
+    }
+
+    fn phrase_sentence(first: &str, second: &str) -> AnalyzedSentence {
+        let mut sentence = AnalyzedSentence::new(
+            &format!("{first} {second}"),
+            0,
+            first.len() + 1 + second.len(),
+        );
+        sentence.set_tokens(vec![
+            AnalyzedTokenReadings::new(
+                AnalyzedToken::new("<S>", 0, 3).with_pos_tags(vec!["SENT_START".to_string()]),
+            ),
+            AnalyzedTokenReadings::new(
+                AnalyzedToken::new(first, 0, first.len())
+                    .with_pos_tags(vec!["AQ0CS0".to_string()])
+                    .with_lemma(first),
+            ),
+            AnalyzedTokenReadings::new(AnalyzedToken::new(" ", first.len(), first.len() + 1)),
+            AnalyzedTokenReadings::new(
+                AnalyzedToken::new(second, first.len() + 1, first.len() + 1 + second.len())
+                    .with_pos_tags(vec!["NCMS000".to_string()])
+                    .with_lemma(second),
+            ),
+        ]);
+        sentence
+    }
+
+    #[test]
+    fn hybrid_disambiguator_chunks_spanish_multiwords_from_the_resource_file() {
+        let xml = XmlDisambiguator::from_xml("<rules></rules>").unwrap();
+        let chain = hybrid_disambiguator("es", &lang_resource_dir("es"), &core_resource_dir(), xml);
+        let mut sentence = phrase_sentence("opera", "prima");
+        chain.disambiguate(&mut sentence);
+        let opera = &sentence.tokens()[1];
+        assert!(
+            opera
+                .readings()
+                .iter()
+                .any(|r| r.pos_tags().contains(&"NCFSO00".to_string())),
+            "opera prima should be chunked as NCFSO00, got {:?}",
+            reading_tuples(opera)
+        );
+    }
+
+    #[test]
+    fn hybrid_disambiguator_builds_nl_ru_and_pl_chains() {
+        for code in ["nl", "ru", "pl"] {
+            let xml = XmlDisambiguator::from_xml("<rules></rules>").unwrap();
+            let chain =
+                hybrid_disambiguator(code, &lang_resource_dir(code), &core_resource_dir(), xml);
+            let mut sentence = phrase_sentence("opera", "prima");
+            chain.disambiguate(&mut sentence);
+        }
+    }
+
+    #[test]
+    fn hybrid_disambiguator_without_resources_returns_the_xml_stage() {
+        let xml = XmlDisambiguator::from_xml("<rules></rules>").unwrap();
+        let missing = std::path::Path::new("/nonexistent-resource-dir");
+        let chain = hybrid_disambiguator("xx", missing, missing, xml);
+        let mut sentence = phrase_sentence("opera", "prima");
+        chain.disambiguate(&mut sentence);
+        let opera = &sentence.tokens()[1];
+        assert_eq!(
+            reading_tuples(opera),
+            vec![("AQ0CS0".to_string(), "opera".to_string())],
+            "{:?}",
+            reading_tuples(opera)
+        );
     }
 
     fn en_resource_dir() -> std::path::PathBuf {
