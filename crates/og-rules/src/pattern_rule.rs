@@ -7954,6 +7954,190 @@ mod tests {
         assert_eq!(indt, vec!["a friend"]);
     }
 
+    fn set_readings(
+        sentence: &mut og_core::AnalyzedSentence,
+        i: usize,
+        readings: &[(Option<&str>, &str)],
+    ) {
+        let tokens = sentence.tokens_mut();
+        let atr = &mut tokens[i];
+        let token = atr.token().clone();
+        let parsed: Vec<og_core::AnalyzedToken> = readings
+            .iter()
+            .map(|(lemma, tag)| {
+                let mut at = og_core::AnalyzedToken::new(token.token(), token.start(), token.end())
+                    .with_pos_tags(vec![tag.to_string()]);
+                if let Some(lemma) = lemma {
+                    at = at.with_lemma(lemma.to_string());
+                }
+                at
+            })
+            .collect();
+        *atr = og_core::AnalyzedTokenReadings::new(token).with_readings(parsed);
+    }
+
+    fn en_suggestion_match(
+        engine: &PatternRuleEngine,
+        match_xml: &str,
+        sentence: &og_core::AnalyzedSentence,
+    ) -> Vec<String> {
+        let xml = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <rule id="T" name="t">
+                <pattern>
+                    <token>is</token>
+                    <marker><token regexp="yes">friends?</token></marker>
+                </pattern>
+                <message>m</message>
+                <suggestion>{match_xml}</suggestion>
+            </rule>
+        </rules>"#
+        );
+        let compiler = XmlCompiler::new();
+        let rule_set = compiler.compile_file(&xml).unwrap();
+        let matches: Vec<_> = rule_set
+            .rules
+            .iter()
+            .flat_map(|r| engine.match_rule(r, sentence))
+            .collect();
+        matches
+            .iter()
+            .flat_map(|m| m.replacements().iter().map(|r| r.value().to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn en_postag_suggestion_synthesizes_the_exact_form() {
+        let Some(engine) = synth_engine("en") else {
+            return;
+        };
+        let mut sentence = make_analyzed_sentence("He is friend .");
+        set_reading(&mut sentence, 2, "friend", "NN");
+        assert_eq!(
+            en_suggestion_match(&engine, r#"<match no="2" postag="NNS"/>"#, &sentence),
+            vec!["friends"]
+        );
+    }
+
+    #[test]
+    fn en_postag_suggestion_applies_case_conversion_to_synthesized_forms() {
+        let Some(engine) = synth_engine("en") else {
+            return;
+        };
+        let mut sentence = make_analyzed_sentence("He is friend .");
+        set_reading(&mut sentence, 2, "friend", "NN");
+        assert_eq!(
+            en_suggestion_match(
+                &engine,
+                r#"<match no="2" postag="NNS" case_conversion="allupper"/>"#,
+                &sentence
+            ),
+            vec!["FRIENDS"]
+        );
+    }
+
+    #[test]
+    fn invalid_postag_regexp_falls_back_to_the_parenthesized_token() {
+        let Some(engine) = synth_engine("en") else {
+            return;
+        };
+        let mut sentence = make_analyzed_sentence("He is friend .");
+        set_reading(&mut sentence, 2, "friend", "NN");
+        assert_eq!(
+            en_suggestion_match(
+                &engine,
+                r#"<match no="2" postag="(" postag_regexp="yes"/>"#,
+                &sentence
+            ),
+            vec!["(friend)"]
+        );
+    }
+
+    #[test]
+    fn tagless_readings_render_the_surface_form() {
+        let Some(engine) = synth_engine("en") else {
+            return;
+        };
+        let sentence = make_analyzed_sentence("He is friend .");
+        assert_eq!(
+            en_suggestion_match(
+                &engine,
+                r#"<match no="2" postag="NNS" postag_regexp="yes"/>"#,
+                &sentence
+            ),
+            vec!["friend"]
+        );
+    }
+
+    #[test]
+    fn sentence_boundary_readings_render_the_surface_form_once() {
+        let Some(engine) = synth_engine("en") else {
+            return;
+        };
+        let mut sentence = make_analyzed_sentence("He is friend .");
+        set_readings(&mut sentence, 2, &[(None, "SENT_END")]);
+        assert_eq!(
+            en_suggestion_match(
+                &engine,
+                r#"<match no="2" postag="NNS" postag_regexp="yes"/>"#,
+                &sentence
+            ),
+            vec!["friend"]
+        );
+    }
+
+    #[test]
+    fn mixed_readings_synthesize_from_the_lemmatized_reading() {
+        let Some(engine) = synth_engine("en") else {
+            return;
+        };
+        let mut sentence = make_analyzed_sentence("He is friends .");
+        set_readings(&mut sentence, 2, &[(None, "NNS"), (Some("friend"), "NN")]);
+        assert_eq!(
+            en_suggestion_match(
+                &engine,
+                r#"<match no="2" postag="NN.*" postag_regexp="yes"/>"#,
+                &sentence
+            ),
+            vec!["friend"]
+        );
+    }
+
+    #[test]
+    fn postag_replace_without_matching_tags_replaces_the_pattern() {
+        let Some(engine) = synth_engine("en") else {
+            return;
+        };
+        let mut sentence = make_analyzed_sentence("He is friend .");
+        set_reading(&mut sentence, 2, "friend", "NN");
+        assert_eq!(
+            en_suggestion_match(
+                &engine,
+                r#"<match no="2" postag="ZZ.*" postag_regexp="yes" postag_replace="QQ"/>"#,
+                &sentence
+            ),
+            vec!["(friend)"]
+        );
+    }
+
+    #[test]
+    fn regexp_postag_suggestion_applies_case_conversion() {
+        let Some(engine) = synth_engine("en") else {
+            return;
+        };
+        let mut sentence = make_analyzed_sentence("He is friends .");
+        set_reading(&mut sentence, 2, "friend", "NN");
+        assert_eq!(
+            en_suggestion_match(
+                &engine,
+                r#"<match no="2" postag="NN" postag_regexp="yes" case_conversion="allupper"/>"#,
+                &sentence
+            ),
+            vec!["FRIEND"]
+        );
+    }
+
     #[test]
     fn de_dative_suggestion_synthesizes_the_matching_pronoun() {
         let Some(engine) = synth_engine("de") else {
