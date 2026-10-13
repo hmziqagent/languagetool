@@ -1178,7 +1178,7 @@ impl GermanTagger {
                     combined.extend(self.word_tag(&format!("{word}{next}")));
                     tagger_tokens = Some(combined);
                 } else if innen_pattern1(next) {
-                    let last_part = next.strip_suffix('-').unwrap_or(next);
+                    let last_part = next.rsplit_once('-').map_or(next, |(_, last)| last);
                     tagger_tokens = Some(self.word_tag(last_part));
                 } else if innen_pattern2(next)
                     && let Some(idx) = next.rfind("innen")
@@ -2326,6 +2326,74 @@ mod tests {
         assert!(
             lach.iter().all(|r| r.pos_tags().is_empty()),
             "Lach should stay untagged mid-sentence: {lach:?}"
+        );
+    }
+
+    #[test]
+    fn alternative_imperative_forms_match_java() {
+        let tagger = tagger();
+        let result = Tagger::tag(&tagger, &["Geh", "bitte", "!"]);
+        assert!(
+            result[0]
+                .all_pos_tags()
+                .iter()
+                .any(|t| t.starts_with("VER:IMP:SIN")),
+            "{:?}",
+            result[0].all_pos_tags()
+        );
+        let result = Tagger::tag(&tagger, &["Er", "geh", "jetzt"]);
+        assert!(
+            result[1]
+                .all_pos_tags()
+                .iter()
+                .any(|t| t.starts_with("VER:IMP:SIN")),
+            "{:?}",
+            result[1].all_pos_tags()
+        );
+        let result = Tagger::tag(&tagger, &["zehnfach"]);
+        assert!(
+            result[0].readings().iter().all(|r| r.pos_tags().is_empty()),
+            "a single imperative-looking token must stay untagged: {:?}",
+            result[0].all_pos_tags()
+        );
+    }
+
+    #[test]
+    fn ddd_er_numeral_gets_all_adj_gru_tags() {
+        let tagger = tagger();
+        let result = Tagger::tag(&tagger, &["Den", "2019er", "Wert", "hatten", "sie"]);
+        let tags = result[1].all_pos_tags();
+        assert!(
+            tags.iter().any(|t| *t == "ADJ:AKK:SIN:NEU:GRU:IND"),
+            "{tags:?}"
+        );
+        assert!(
+            tags.iter().any(|t| *t == "ADJ:NOM:SIN:MAS:GRU:SOL"),
+            "{tags:?}"
+        );
+        assert_eq!(tags.len(), 72, "{tags:?}");
+    }
+
+    #[test]
+    fn innen_gap_compound_variants_take_the_tail_reading() {
+        let tagger = tagger();
+        let result = Tagger::tag(&tagger, &["Werkstudent", ":", "innen-Zielgruppe"]);
+        assert!(
+            result[0]
+                .readings()
+                .iter()
+                .any(|r| r.lemma() == Some("Zielgruppe")),
+            "{:?}",
+            result[0].readings()
+        );
+        let result = Tagger::tag(&tagger, &["Werkstudent", ":", "innenzielgruppe"]);
+        assert!(
+            result[0]
+                .readings()
+                .iter()
+                .any(|r| r.lemma() == Some("Zielgruppe")),
+            "{:?}",
+            result[0].readings()
         );
     }
 
