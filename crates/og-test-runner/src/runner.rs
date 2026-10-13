@@ -2436,6 +2436,22 @@ mod tests {
     }
 
     #[test]
+    fn pattern_test_reports_xml_parse_errors() {
+        let runner = test_support::shared_runner();
+        let result = runner.run_pattern_test(
+            "PT_TOK",
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<rules></wrong></rules>",
+            "teh house",
+            true,
+        );
+        assert!(!result.passed);
+        assert_eq!(result.rule_id, "PT_TOK");
+        assert_eq!(result.expected_type, "single");
+        assert_eq!(result.example_text, "teh house");
+        assert!(result.message.contains("Parse error"), "{}", result.message);
+    }
+
+    #[test]
     fn generic_grammar_helpers_load_and_cache_danish_rules() {
         assert!(test_support::generic_grammar_available("da"));
         let first = test_support::generic_grammar_rules("da");
@@ -2521,6 +2537,20 @@ mod tests {
     }
 
     #[test]
+    fn french_runner_splits_hyphenated_unknown_words() {
+        let runner = TestRunner::for_language("fr");
+        let sentence = runner.debug_sentence("Un mot-zqxjw supplémentaire.");
+        let tokens: Vec<&str> = sentence
+            .non_whitespace_tokens()
+            .iter()
+            .map(|t| t.token().token())
+            .collect();
+        assert!(tokens.contains(&"mot"), "tokens: {tokens:?}");
+        assert!(tokens.contains(&"-"), "tokens: {tokens:?}");
+        assert!(tokens.contains(&"zqxjw"), "tokens: {tokens:?}");
+    }
+
+    #[test]
     fn polish_runner_matches_inline_examples() {
         let runner = TestRunner::for_language("pl");
         let xml = lang_xml(
@@ -2601,6 +2631,23 @@ mod tests {
                 "zqxjw",
                 "Unha <marker>zqxjw</marker> frase máis.",
                 "Non hai ningún problema.",
+            ),
+        );
+        let summary = runner.run_xml_example_tests(&xml);
+        assert_eq!(summary.total, 2);
+        assert!(summary.is_all_passed(), "{:?}", summary.results);
+    }
+
+    #[test]
+    fn irish_runner_matches_inline_examples() {
+        let runner = TestRunner::for_language("ga");
+        let xml = lang_xml(
+            "ga",
+            &token_rule(
+                "GA_TOK",
+                "zqxjw",
+                "Is <marker>zqxjw</marker> sampla eile.",
+                "Níl aon fhadhb ann.",
             ),
         );
         let summary = runner.run_xml_example_tests(&xml);
@@ -2843,6 +2890,19 @@ mod tests {
     #[test]
     fn persian_runner_tokenizes_native_text() {
         assert_word_count(&TestRunner::for_language("fa"), "این یک آزمایش است.", 3);
+    }
+
+    #[test]
+    fn crimean_tatar_runner_splits_trailing_hyphen_tokens() {
+        let runner = TestRunner::for_language("crh");
+        let sentence = runner.debug_sentence("Bir kelime- sóz.");
+        let tokens: Vec<&str> = sentence
+            .non_whitespace_tokens()
+            .iter()
+            .map(|t| t.token().token())
+            .collect();
+        assert!(tokens.contains(&"kelime"), "tokens: {tokens:?}");
+        assert!(tokens.contains(&"-"), "tokens: {tokens:?}");
     }
 
     #[test]
