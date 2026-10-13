@@ -876,4 +876,222 @@ mod tests {
         assert!(!reading_matches_element(&pattern, "hat", &token, false));
         assert!(reading_matches_element(&pattern, "hat", &token, true));
     }
+
+    fn base_pattern() -> CompiledPatternToken {
+        CompiledPatternToken {
+            unify_neutral: false,
+            is_regexp: false,
+            text: None,
+            compiled_regexp: None,
+            compiled_regexp_ci: None,
+            compiled_regexp_fancy: None,
+            postag: None,
+            compiled_postag_regexp: None,
+            compiled_postag_regexp_fancy: None,
+            negate: false,
+            negate_pos: false,
+            case_sensitive: false,
+            inflected: false,
+            min: None,
+            max: None,
+            skip: 0,
+            exceptions: Vec::new(),
+            space_before: None,
+            chunk: None,
+            chunk_re: None,
+            match_no: None,
+            match_no_case_conversion: None,
+            match_no_postag: None,
+            match_no_postag_regexp: false,
+            match_no_postag_replace: None,
+            match_no_setpos: false,
+            match_no_regexp_replace: None,
+            compiled_match_no_regex: None,
+        }
+    }
+
+    #[test]
+    fn normalize_apostrophes_and_non_ascii_case_helpers_follow_java() {
+        assert_eq!(normalize_apostrophes("l’été"), "l'été");
+        assert_eq!(normalize_apostrophes("‘‛’"), "'''");
+        assert_eq!(normalize_apostrophes("plain").as_ref(), "plain");
+        assert!(!eq_ignore_case("aı", "aıx"));
+        assert!(!eq_ignore_case("aıx", "aı"));
+        assert!(!eq_ignore_case("ſ", "f"));
+        assert!(!eq_ignore_case("ß", "ss"));
+    }
+
+    #[test]
+    fn surface_and_tag_helpers_classify_sentence_tokens() {
+        use og_core::{AnalyzedToken, AnalyzedTokenReadings};
+        let start = AnalyzedTokenReadings::new(
+            AnalyzedToken::new("<S>", 0, 0).with_pos_tags(vec!["SENT_START".to_string()]),
+        );
+        assert_eq!(surface_text(&start), "");
+        let word = AnalyzedTokenReadings::new(AnalyzedToken::new("Wort", 0, 4));
+        assert_eq!(surface_text(&word), "Wort");
+
+        let untagged = AnalyzedTokenReadings::new(AnalyzedToken::new("x", 0, 1));
+        assert!(has_no_tag_reading(&untagged));
+        let mut ended = AnalyzedTokenReadings::new(AnalyzedToken::new("x", 0, 1));
+        ended.add_sent_end();
+        assert!(has_no_tag_reading(&ended));
+        let tagged = AnalyzedTokenReadings::new(
+            AnalyzedToken::new("x", 0, 1).with_pos_tags(vec!["NN".to_string()]),
+        );
+        assert!(!has_no_tag_reading(&tagged));
+    }
+
+    #[test]
+    fn reading_pos_matches_supports_regex_fancy_and_unknown_forms() {
+        let tags = vec!["ART:DEF:NOM:SIN:MAS".to_string()];
+        let plain = std::sync::Arc::new(regex::Regex::new(".*:NOM.*").unwrap());
+        assert!(reading_pos_matches("", Some(&plain), None, &tags, false));
+        let unknown_re = std::sync::Arc::new(regex::Regex::new("UNKNOWN").unwrap());
+        assert!(reading_pos_matches("", Some(&unknown_re), None, &[], true));
+        assert!(!reading_pos_matches(
+            "",
+            Some(&unknown_re),
+            None,
+            &[],
+            false
+        ));
+
+        let fancy = std::sync::Arc::new(fancy_regex::Regex::new(".*:(NOM|AKK).*").unwrap());
+        assert!(reading_pos_matches("", None, Some(&fancy), &tags, false));
+        let fancy_unknown = std::sync::Arc::new(fancy_regex::Regex::new("^UNKNOWN$").unwrap());
+        assert!(reading_pos_matches(
+            "",
+            None,
+            Some(&fancy_unknown),
+            &[],
+            true
+        ));
+        assert!(!reading_pos_matches(
+            "",
+            None,
+            Some(&fancy_unknown),
+            &[],
+            false
+        ));
+        assert!(reading_pos_matches(
+            "ART:DEF:NOM:SIN:MAS",
+            None,
+            None,
+            &tags,
+            false
+        ));
+    }
+
+    #[test]
+    fn reading_matches_element_covers_text_fancy_and_lemma_paths() {
+        let mut pattern = base_pattern();
+        pattern.text = Some("l’été".to_string());
+        let reading = og_core::AnalyzedToken::new("l'été", 0, 5);
+        assert!(reading_matches_element(&pattern, "l'été", &reading, false));
+        assert!(!reading_matches_element(
+            &pattern, "l'hiver", &reading, false
+        ));
+
+        let mut cs = base_pattern();
+        cs.text = Some("Straße".to_string());
+        cs.case_sensitive = true;
+        assert!(reading_matches_element(&cs, "Straße", &reading, false));
+        assert!(!reading_matches_element(&cs, "straße", &reading, false));
+
+        let mut inflected = base_pattern();
+        inflected.text = Some("Haus".to_string());
+        inflected.inflected = true;
+        let lemma_reading = og_core::AnalyzedToken::new("Häuser", 0, 6).with_lemma("Haus");
+        assert!(reading_matches_element(
+            &inflected,
+            "Häuser",
+            &lemma_reading,
+            false
+        ));
+
+        let mut fancy_pattern = base_pattern();
+        fancy_pattern.compiled_regexp_fancy = Some(std::sync::Arc::new(
+            fancy_regex::Regex::new("colou?r").unwrap(),
+        ));
+        assert!(reading_matches_element(
+            &fancy_pattern,
+            "color",
+            &reading,
+            false
+        ));
+        assert!(!reading_matches_element(
+            &fancy_pattern,
+            "couleur",
+            &reading,
+            false
+        ));
+
+        let mut re_only = base_pattern();
+        re_only.compiled_regexp = Some(std::sync::Arc::new(regex::Regex::new("h.t").unwrap()));
+        assert!(reading_matches_element(&re_only, "hat", &reading, false));
+
+        let mut postag_only = base_pattern();
+        postag_only.postag = Some("NN".to_string());
+        let nn_reading =
+            og_core::AnalyzedToken::new("hat", 0, 3).with_pos_tags(vec!["NN".to_string()]);
+        assert!(reading_matches_element(
+            &postag_only,
+            "hat",
+            &nn_reading,
+            false
+        ));
+        postag_only.negate_pos = true;
+        assert!(!reading_matches_element(
+            &postag_only,
+            "hat",
+            &nn_reading,
+            false
+        ));
+
+        let mut negated = base_pattern();
+        negated.text = Some("hat".to_string());
+        negated.negate = true;
+        assert!(!reading_matches_element(&negated, "hat", &reading, false));
+        assert!(reading_matches_element(&negated, "cat", &reading, false));
+    }
+
+    #[test]
+    fn from_unifications_resolves_explicit_group_feature_types() {
+        let unifications = gender_number_unifications();
+        let group = XmlUnifyGroup {
+            negate: false,
+            features: vec![
+                ("gender".to_string(), vec!["mas".to_string()]),
+                ("number".to_string(), Vec::new()),
+            ],
+            token_start: 0,
+            token_end: 2,
+            elem_start: 0,
+            elem_end: 2,
+        };
+        let mut uni = Unifier::from_unifications(&unifications, &group);
+        let det = reading(&["ART:AKK:MAS:SIN"], 0);
+        let noun = reading(&["SUB:AKK:MAS:SIN"], 1);
+        assert!(uni.is_unified(&det, true));
+        assert!(uni.is_unified(&noun, true));
+        assert_eq!(uni.unified_readings(), Some(vec![vec![0], vec![1]]));
+
+        let fem_group = XmlUnifyGroup {
+            negate: false,
+            features: vec![(
+                "gender".to_string(),
+                vec!["fem".to_string(), "neu".to_string()],
+            )],
+            token_start: 0,
+            token_end: 2,
+            elem_start: 0,
+            elem_end: 2,
+        };
+        let mut fem = Unifier::from_unifications(&unifications, &fem_group);
+        let die = reading(&["ART:AKK:FEM:SIN"], 0);
+        let tuer = reading(&["SUB:AKK:FEM:SIN"], 1);
+        assert!(fem.is_unified(&die, true));
+        assert!(fem.is_unified(&tuer, true));
+    }
 }
