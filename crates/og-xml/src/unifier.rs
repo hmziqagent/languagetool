@@ -550,4 +550,330 @@ mod tests {
         assert!(eq_ignore_case("K", "k"));
         assert!(!eq_ignore_case("ab", "abc"));
     }
+
+    use crate::compiler::CompiledPatternToken;
+    use crate::compiler::{CompiledUnification, PosMatcher};
+    use crate::types::XmlUnifyGroup;
+
+    fn gender_unifications() -> Vec<CompiledUnification> {
+        vec![CompiledUnification {
+            feature: "gender".to_string(),
+            equivalences: vec![
+                (
+                    "mas".to_string(),
+                    PosMatcher::new_anchored(".*:MAS.*").unwrap(),
+                ),
+                (
+                    "fem".to_string(),
+                    PosMatcher::new_anchored(".*:FEM.*").unwrap(),
+                ),
+            ],
+        }]
+    }
+
+    fn gender_number_unifications() -> Vec<CompiledUnification> {
+        vec![
+            CompiledUnification {
+                feature: "gender".to_string(),
+                equivalences: vec![
+                    (
+                        "mas".to_string(),
+                        PosMatcher::new_anchored(".*:MAS.*").unwrap(),
+                    ),
+                    (
+                        "fem".to_string(),
+                        PosMatcher::new_anchored(".*:FEM.*").unwrap(),
+                    ),
+                ],
+            },
+            CompiledUnification {
+                feature: "number".to_string(),
+                equivalences: vec![
+                    (
+                        "sg".to_string(),
+                        PosMatcher::new_anchored(".*:SIN.*").unwrap(),
+                    ),
+                    (
+                        "pl".to_string(),
+                        PosMatcher::new_anchored(".*:PLU.*").unwrap(),
+                    ),
+                ],
+            },
+        ]
+    }
+
+    fn reading(tags: &[&'static str], id: u32) -> UnifyReading<'static> {
+        UnifyReading {
+            tags: tags.to_vec(),
+            id,
+        }
+    }
+
+    #[test]
+    fn tokens_sharing_a_feature_unify() {
+        let unifications = gender_unifications();
+        let group = XmlUnifyGroup::default();
+        let mut uni = Unifier::from_unifications(&unifications, &group);
+
+        let det = reading(&["ART:AKK:MAS:SIN"], 0);
+        let noun = reading(&["SUB:AKK:MAS:SIN"], 0);
+        assert!(uni.is_unified(&det, true));
+        assert!(uni.is_unified(&noun, true));
+        assert_eq!(uni.unified_readings(), Some(vec![vec![0], vec![0]]));
+    }
+
+    #[test]
+    fn tokens_with_conflicting_features_do_not_unify() {
+        let unifications = gender_unifications();
+        let group = XmlUnifyGroup::default();
+        let mut uni = Unifier::from_unifications(&unifications, &group);
+
+        let det = reading(&["ART:AKK:MAS:SIN"], 0);
+        let noun = reading(&["SUB:AKK:FEM:SIN"], 0);
+        assert!(uni.is_unified(&det, true));
+        assert!(!uni.is_unified(&noun, true));
+    }
+
+    #[test]
+    fn ambiguous_readings_keep_the_matching_branch() {
+        let unifications = gender_unifications();
+        let group = XmlUnifyGroup::default();
+        let mut uni = Unifier::from_unifications(&unifications, &group);
+
+        let det_mas = reading(&["ART:NOM:MAS:SIN"], 0);
+        let det_fem = reading(&["ART:NOM:FEM:SIN"], 1);
+        let noun_fem = reading(&["SUB:NOM:FEM:SIN"], 0);
+        assert!(uni.is_unified(&det_mas, false));
+        assert!(uni.is_unified(&det_fem, true));
+        assert!(uni.is_unified(&noun_fem, true));
+        assert_eq!(uni.unified_readings(), Some(vec![vec![1], vec![0]]));
+    }
+
+    #[test]
+    fn neutral_elements_keep_the_sequence_unified() {
+        let unifications = gender_unifications();
+        let group = XmlUnifyGroup::default();
+        let mut uni = Unifier::from_unifications(&unifications, &group);
+
+        let det = reading(&["ART:AKK:MAS:SIN"], 0);
+        let noun = reading(&["SUB:AKK:MAS:SIN"], 1);
+        assert!(uni.is_unified(&det, true));
+        uni.add_neutral(1);
+        assert!(uni.is_unified(&noun, true));
+        assert_eq!(
+            uni.unified_readings(),
+            Some(vec![vec![0], vec![0], vec![1]])
+        );
+    }
+
+    #[test]
+    fn a_reading_missing_the_second_feature_blocks_unification() {
+        let unifications = gender_number_unifications();
+        let group = XmlUnifyGroup::default();
+        let mut uni = Unifier::from_unifications(&unifications, &group);
+
+        let det = reading(&["ART:AKK:MAS:SIN"], 0);
+        let same_gender_other_number = reading(&["SUB:AKK:MAS:PLU"], 0);
+        assert!(uni.is_unified(&det, true));
+        assert!(!uni.is_unified(&same_gender_other_number, true));
+    }
+
+    #[test]
+    fn explicit_group_features_restrict_the_unified_types() {
+        let unifications = gender_unifications();
+        let group = XmlUnifyGroup {
+            features: vec![("gender".to_string(), vec!["mas".to_string()])],
+            ..XmlUnifyGroup::default()
+        };
+        let mut uni = Unifier::from_unifications(&unifications, &group);
+
+        let det = reading(&["ART:AKK:MAS:SIN"], 0);
+        let noun_fem = reading(&["SUB:AKK:FEM:SIN"], 0);
+        assert!(uni.is_unified(&det, true));
+        assert!(!uni.is_unified(&noun_fem, true));
+    }
+
+    #[test]
+    fn eval_unify_plans_accepts_a_two_element_gender_sequence() {
+        let unifications = gender_unifications();
+        let group = XmlUnifyGroup::default();
+        let plans = vec![
+            UnifyElemPlan {
+                elem_idx: 0,
+                neutral_readings: Vec::new(),
+                reading_sets: vec![vec![vec![reading(&["ART:AKK:MAS:SIN"], 0)]]],
+            },
+            UnifyElemPlan {
+                elem_idx: 1,
+                neutral_readings: Vec::new(),
+                reading_sets: vec![vec![vec![reading(&["SUB:AKK:MAS:SIN"], 0)]]],
+            },
+        ];
+        let mut uni = Unifier::from_unifications(&unifications, &group);
+        assert!(eval_unify_plans(&plans, 0, 1, false, &mut uni));
+    }
+
+    #[test]
+    fn eval_unify_plans_rejects_conflicting_genders() {
+        let unifications = gender_unifications();
+        let group = XmlUnifyGroup::default();
+        let plans = vec![
+            UnifyElemPlan {
+                elem_idx: 0,
+                neutral_readings: Vec::new(),
+                reading_sets: vec![vec![vec![reading(&["ART:AKK:MAS:SIN"], 0)]]],
+            },
+            UnifyElemPlan {
+                elem_idx: 1,
+                neutral_readings: Vec::new(),
+                reading_sets: vec![vec![vec![reading(&["SUB:AKK:FEM:SIN"], 0)]]],
+            },
+        ];
+        let mut uni = Unifier::from_unifications(&unifications, &group);
+        assert!(!eval_unify_plans(&plans, 0, 1, false, &mut uni));
+    }
+
+    #[test]
+    fn eval_unify_plans_negate_passes_only_when_features_conflict() {
+        let unifications = gender_unifications();
+        let group = XmlUnifyGroup {
+            negate: true,
+            ..XmlUnifyGroup::default()
+        };
+        let conflicting = vec![
+            UnifyElemPlan {
+                elem_idx: 0,
+                neutral_readings: Vec::new(),
+                reading_sets: vec![vec![vec![reading(&["ART:AKK:MAS:SIN"], 0)]]],
+            },
+            UnifyElemPlan {
+                elem_idx: 1,
+                neutral_readings: Vec::new(),
+                reading_sets: vec![vec![vec![reading(&["SUB:AKK:FEM:SIN"], 0)]]],
+            },
+        ];
+        let mut uni = Unifier::from_unifications(&unifications, &group);
+        assert!(eval_unify_plans(&conflicting, 0, 1, true, &mut uni));
+
+        let agreeing = vec![
+            UnifyElemPlan {
+                elem_idx: 0,
+                neutral_readings: Vec::new(),
+                reading_sets: vec![vec![vec![reading(&["ART:AKK:MAS:SIN"], 0)]]],
+            },
+            UnifyElemPlan {
+                elem_idx: 1,
+                neutral_readings: Vec::new(),
+                reading_sets: vec![vec![vec![reading(&["SUB:AKK:MAS:SIN"], 0)]]],
+            },
+        ];
+        let mut uni = Unifier::from_unifications(&unifications, &group);
+        assert!(!eval_unify_plans(&agreeing, 0, 1, true, &mut uni));
+    }
+
+    #[test]
+    fn eval_unify_plans_walks_neutral_elements_between_unified_tokens() {
+        let unifications = gender_unifications();
+        let group = XmlUnifyGroup::default();
+        let plans = vec![
+            UnifyElemPlan {
+                elem_idx: 0,
+                neutral_readings: Vec::new(),
+                reading_sets: vec![vec![vec![reading(&["ART:AKK:MAS:SIN"], 0)]]],
+            },
+            UnifyElemPlan {
+                elem_idx: 1,
+                neutral_readings: vec![1],
+                reading_sets: Vec::new(),
+            },
+            UnifyElemPlan {
+                elem_idx: 2,
+                neutral_readings: Vec::new(),
+                reading_sets: vec![vec![vec![reading(&["SUB:AKK:MAS:SIN"], 0)]]],
+            },
+        ];
+        let mut uni = Unifier::from_unifications(&unifications, &group);
+        assert!(eval_unify_plans(&plans, 0, 2, false, &mut uni));
+        assert_eq!(
+            uni.unified_readings(),
+            Some(vec![vec![0], vec![0], vec![0]])
+        );
+    }
+
+    #[test]
+    fn eval_unify_plans_falls_back_to_the_next_or_group_variant() {
+        let unifications = gender_unifications();
+        let group = XmlUnifyGroup::default();
+        let plans = vec![
+            UnifyElemPlan {
+                elem_idx: 0,
+                neutral_readings: Vec::new(),
+                reading_sets: vec![
+                    vec![vec![reading(&["ART:AKK:FEM:SIN"], 0)]],
+                    vec![vec![reading(&["ART:AKK:MAS:SIN"], 0)]],
+                ],
+            },
+            UnifyElemPlan {
+                elem_idx: 1,
+                neutral_readings: Vec::new(),
+                reading_sets: vec![vec![vec![reading(&["SUB:AKK:MAS:SIN"], 0)]]],
+            },
+        ];
+        let mut uni = Unifier::from_unifications(&unifications, &group);
+        assert!(eval_unify_plans(&plans, 0, 1, false, &mut uni));
+    }
+
+    #[test]
+    fn reading_matches_element_combines_regexp_text_and_postag() {
+        let re = std::sync::Arc::new(regex::Regex::new("h.t").unwrap());
+        let ci = std::sync::Arc::new(regex::Regex::new("(?i)h.t").unwrap());
+        let mut pattern = CompiledPatternToken {
+            unify_neutral: false,
+            is_regexp: true,
+            text: None,
+            compiled_regexp: Some(re),
+            compiled_regexp_ci: Some(ci),
+            compiled_regexp_fancy: None,
+            postag: Some("VVFIN".to_string()),
+            compiled_postag_regexp: None,
+            compiled_postag_regexp_fancy: None,
+            negate: false,
+            negate_pos: false,
+            case_sensitive: false,
+            inflected: false,
+            min: None,
+            max: None,
+            skip: 0,
+            exceptions: Vec::new(),
+            space_before: None,
+            chunk: None,
+            chunk_re: None,
+            match_no: None,
+            match_no_case_conversion: None,
+            match_no_postag: None,
+            match_no_postag_regexp: false,
+            match_no_postag_replace: None,
+            match_no_setpos: false,
+            match_no_regexp_replace: None,
+            compiled_match_no_regex: None,
+        };
+        let token =
+            og_core::AnalyzedToken::new("hat", 0, 3).with_pos_tags(vec!["VVFIN".to_string()]);
+        assert!(reading_matches_element(&pattern, "hat", &token, false));
+        assert!(reading_matches_element(&pattern, "HAT", &token, false));
+
+        pattern.case_sensitive = true;
+        assert!(!reading_matches_element(&pattern, "HAT", &token, false));
+        assert!(reading_matches_element(&pattern, "hat", &token, false));
+
+        pattern.postag = Some("NN".to_string());
+        assert!(!reading_matches_element(&pattern, "hat", &token, false));
+        pattern.negate_pos = true;
+        assert!(reading_matches_element(&pattern, "hat", &token, false));
+
+        pattern.postag = Some("UNKNOWN".to_string());
+        pattern.negate_pos = false;
+        assert!(!reading_matches_element(&pattern, "hat", &token, false));
+        assert!(reading_matches_element(&pattern, "hat", &token, true));
+    }
 }

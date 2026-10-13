@@ -1418,4 +1418,247 @@ mod self_closing_exception_tests {
         assert_eq!(ap.tokens[1].exceptions.len(), 1);
         assert_eq!(ap.tokens[1].exceptions[0].postag.as_deref(), Some("V ppr"));
     }
+
+    #[test]
+    fn unification_block_and_unify_disambig_rule_are_parsed() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<rules lang="de">
+    <unification feature="gender">
+        <equivalence type="mas">
+            <token postag=".*:(MAS|NOG).*" postag_regexp="yes"/>
+        </equivalence>
+        <equivalence type="fem">
+            <token postag=".*:(FEM|NOG).*" postag_regexp="yes"/>
+        </equivalence>
+        <equivalence type="pl" postag=".*:PLU.*" postag_regexp="yes"></equivalence>
+    </unification>
+    <rule id="UNI_DET" name="NP unify">
+        <pattern>
+            <unify>
+                <feature id="gender"/>
+                <token regexp="yes">der|die|das</token>
+                <token postag="SUB:.*" postag_regexp="yes"/>
+            </unify>
+        </pattern>
+        <disambig action="unify"/>
+        <example type="untouched">Der Wagen</example>
+    </rule>
+</rules>"#;
+
+        let parser = DisambigXmlParser::new();
+        let result = parser.parse(xml).unwrap();
+
+        assert_eq!(result.unifications.len(), 1);
+        let uni = &result.unifications[0];
+        assert_eq!(uni.feature, "gender");
+        assert_eq!(uni.equivalences.len(), 3);
+        assert_eq!(uni.equivalences[0].eq_type, "mas");
+        assert_eq!(uni.equivalences[0].postag, ".*:(MAS|NOG).*");
+        assert!(!uni.equivalences[0].exact);
+        assert_eq!(uni.equivalences[2].eq_type, "pl");
+        assert_eq!(uni.equivalences[2].postag, ".*:PLU.*");
+        assert!(!uni.equivalences[2].exact);
+
+        let rule = &result.rules[0];
+        let unify = rule.unify.as_ref().unwrap();
+        assert_eq!(unify.features, vec!["gender"]);
+        assert!(!unify.negate);
+        assert_eq!(unify.token_start, 0);
+        assert_eq!(unify.token_end, 2);
+        assert_eq!(unify.elem_start, 0);
+        assert_eq!(unify.elem_end, 2);
+        assert!(matches!(rule.disambig, DisambigAction::Unify));
+        assert_eq!(rule.untouched_examples, vec!["Der Wagen"]);
+    }
+
+    #[test]
+    fn unify_negate_and_multiple_features_are_parsed() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<rules lang="de">
+    <rule id="UNI_NEG" name="negated unify">
+        <pattern>
+            <unify negate="yes">
+                <feature id="gender"/><feature id="number"/>
+                <token>der</token>
+                <token>Wagen</token>
+            </unify>
+            <token>.</token>
+        </pattern>
+        <disambig action="filterall"/>
+    </rule>
+</rules>"#;
+
+        let parser = DisambigXmlParser::new();
+        let result = parser.parse(xml).unwrap();
+
+        let rule = &result.rules[0];
+        let unify = rule.unify.as_ref().unwrap();
+        assert_eq!(unify.features, vec!["gender", "number"]);
+        assert!(unify.negate);
+        assert_eq!(unify.token_start, 0);
+        assert_eq!(unify.token_end, 2);
+        assert_eq!(unify.elem_start, 0);
+        assert_eq!(unify.elem_end, 2);
+        assert_eq!(rule.pattern.tokens.len(), 3);
+        assert!(matches!(rule.disambig, DisambigAction::FilterAll));
+    }
+
+    #[test]
+    fn filter_class_and_args_attach_to_the_current_rule() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<rules lang="de">
+    <rule id="EN_FILTER" name="English filter rule">
+        <pattern>
+            <token regexp="yes">test|case</token>
+            <token regexp="yes">[a-z]+</token>
+        </pattern>
+        <filter class="org.languagetool.rules.IsEnglishWordFilter" args="formPositions:1,2"/>
+        <disambig action="add">
+            <wd pos="_english_ignore_"/>
+            <wd pos="_english_ignore_"/>
+        </disambig>
+    </rule>
+</rules>"#;
+
+        let parser = DisambigXmlParser::new();
+        let result = parser.parse(xml).unwrap();
+
+        let rule = &result.rules[0];
+        assert_eq!(
+            rule.filter_class.as_deref(),
+            Some("org.languagetool.rules.IsEnglishWordFilter")
+        );
+        assert_eq!(rule.filter_args.as_deref(), Some("formPositions:1,2"));
+        match &rule.disambig {
+            DisambigAction::Add(wds) => {
+                assert_eq!(wds.len(), 2);
+                assert_eq!(wds[0].pos.as_deref(), Some("_english_ignore_"));
+            }
+            other => panic!("Expected Add, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn filter_disambig_with_match_lemma_becomes_a_match_action() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<rules lang="pl">
+    <rule id="MAC_MATCH" name="match lemma">
+        <pattern>
+            <token>mają</token>
+        </pattern>
+        <disambig action="filter"><match no="1">mieć</match></disambig>
+        <example type="ambiguous" inputform="mają[maić/verb:fin]" outputform="mają[mieć/verb:fin]">Oni <marker>mają</marker> robaki.</example>
+    </rule>
+</rules>"#;
+
+        let parser = DisambigXmlParser::new();
+        let result = parser.parse(xml).unwrap();
+
+        let rule = &result.rules[0];
+        match &rule.disambig {
+            DisambigAction::Match(m) => {
+                assert_eq!(m.lemma.as_deref(), Some("mieć"));
+                assert!(m.postag.is_none());
+                assert!(m.postag_regexp);
+            }
+            other => panic!("Expected Match, got {:?}", other),
+        }
+        assert_eq!(rule.examples.len(), 1);
+        let example = &rule.examples[0];
+        assert_eq!(example.text, "Oni <marker>mają</marker> robaki.");
+        assert_eq!(example.input_form.as_deref(), Some("mają[maić/verb:fin]"));
+        assert_eq!(example.output_form.as_deref(), Some("mają[mieć/verb:fin]"));
+    }
+
+    #[test]
+    fn filter_disambig_with_postag_match_keeps_the_regexp_flag() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<rules lang="fr">
+    <rule id="FR_MATCH" name="postag match">
+        <pattern>
+            <token>des</token>
+            <token>trucs</token>
+        </pattern>
+        <disambig action="filter"><match no="2" postag="[ZNJ].*" postag_regexp="yes"/></disambig>
+    </rule>
+</rules>"#;
+
+        let parser = DisambigXmlParser::new();
+        let result = parser.parse(xml).unwrap();
+
+        let rule = &result.rules[0];
+        match &rule.disambig {
+            DisambigAction::Match(m) => {
+                assert_eq!(m.postag.as_deref(), Some("[ZNJ].*"));
+                assert!(m.postag_regexp);
+                assert!(m.lemma.is_none());
+            }
+            other => panic!("Expected Match, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn and_group_tokens_and_self_closing_remove_postag_are_parsed() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<rules lang="ca">
+    <rule id="FOT_N" name="fot nominal">
+        <pattern>
+            <and>
+                <token postag="N.*" postag_regexp="yes" regexp="yes">fot|fots|bon|ros</token>
+                <token postag="N.*|SENT_END" postag_regexp="yes" negate_pos="yes"/>
+            </and>
+        </pattern>
+        <disambig action="remove" postag="N.*"/>
+    </rule>
+</rules>"#;
+
+        let parser = DisambigXmlParser::new();
+        let result = parser.parse(xml).unwrap();
+
+        let rule = &result.rules[0];
+        assert_eq!(rule.pattern.elements.len(), 1);
+        match &rule.pattern.elements[0] {
+            XmlPatternElement::AndGroup(g) => {
+                assert_eq!(g.constraints.len(), 2);
+                assert!(g.constraints[1].negate_pos);
+            }
+            other => panic!("Expected AndGroup, got {:?}", other),
+        }
+        match &rule.disambig {
+            DisambigAction::RemovePostag(pos) => assert_eq!(pos, "N.*"),
+            other => panic!("Expected RemovePostag, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn or_group_alternatives_and_post_token_exceptions_are_parsed() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<rules lang="ca">
+    <rule id="OR_GROUP" name="or group">
+        <pattern>
+            <or>
+                <token>alpha</token>
+                <token>beta</token>
+                <exception postag="XYZ" spacebefore="yes"/>
+            </or>
+        </pattern>
+        <disambig action="filterall"/>
+    </rule>
+</rules>"#;
+
+        let parser = DisambigXmlParser::new();
+        let result = parser.parse(xml).unwrap();
+
+        let rule = &result.rules[0];
+        match &rule.pattern.elements[0] {
+            XmlPatternElement::OrGroup(g) => {
+                assert_eq!(g.alternatives.len(), 2);
+                let exc = &g.alternatives[1].exceptions[0];
+                assert_eq!(exc.postag.as_deref(), Some("XYZ"));
+                assert_eq!(exc.space_before, Some(true));
+            }
+            other => panic!("Expected OrGroup, got {:?}", other),
+        }
+        assert!(matches!(rule.disambig, DisambigAction::FilterAll));
+    }
 }
