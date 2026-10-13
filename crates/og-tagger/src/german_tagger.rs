@@ -2738,6 +2738,279 @@ mod tests {
     }
 
     #[test]
+    fn non_separable_prefix_verbs_match_java_counts() {
+        let tagger = tagger();
+
+        let vergaeren = Tagger::tag(&tagger, &["vergären"]);
+        let tags = tags_of(&vergaeren[0]);
+        assert_eq!(tags.len(), 15, "{tags:?}");
+        for expected in [
+            "VER:1:PLU:PRÄ:NON",
+            "VER:1:PLU:KJ1:NON",
+            "VER:3:PLU:PRÄ:NON",
+            "VER:3:PLU:KJ1:NON",
+            "VER:INF:NON",
+            "VER:1:PLU:PRÄ:SFT",
+            "VER:1:PLU:KJ1:SFT",
+            "VER:3:PLU:PRÄ:SFT",
+            "VER:3:PLU:KJ1:SFT",
+            "VER:INF:SFT",
+        ] {
+            assert!(
+                tags.iter().any(|(l, t)| l == "vergären" && t == expected),
+                "{expected} missing: {tags:?}"
+            );
+        }
+
+        let vergaeren_cap = Tagger::tag(&tagger, &["Vergären"]);
+        let tags = tags_of(&vergaeren_cap[0]);
+        assert_eq!(tags.len(), 24, "{tags:?}");
+        for expected in [
+            "SUB:NOM:SIN:NEU:INF",
+            "SUB:DAT:SIN:NEU:INF",
+            "SUB:AKK:SIN:NEU:INF",
+        ] {
+            assert!(
+                tags.iter().any(|(l, t)| l == "Vergären" && t == expected),
+                "{expected} missing: {tags:?}"
+            );
+        }
+        assert!(
+            tags.iter()
+                .any(|(l, t)| l == "vergären" && t == "VER:INF:SFT"),
+            "{tags:?}"
+        );
+
+        let unbeglueckt = Tagger::tag(&tagger, &["unbeglückt"]);
+        let tags = tags_of(&unbeglueckt[0]);
+        assert_eq!(tags.len(), 2, "{tags:?}");
+        assert!(
+            tags.iter()
+                .any(|(l, t)| l == "unbeglückt" && t == "PA2:PRD:GRU:VER"),
+            "{tags:?}"
+        );
+        assert!(tags.iter().all(|(_, t)| !t.contains("VER:")), "{tags:?}");
+
+        let erstritten = Tagger::tag(&tagger, &["erstritten"]);
+        let tags = tags_of(&erstritten[0]);
+        assert_eq!(tags.len(), 6, "{tags:?}");
+        for (lemma, expected) in [
+            ("erstreiten", "VER:1:PLU:PRT:NON"),
+            ("erstreiten", "VER:PA2:NON"),
+            ("erstritten", "PA2:PRD:GRU:VER"),
+        ] {
+            assert!(
+                tags.iter().any(|(l, t)| l == lemma && t == expected),
+                "{lemma}/{expected} missing: {tags:?}"
+            );
+        }
+
+        let bemessen = Tagger::tag(&tagger, &["bemessen"]);
+        let tags = tags_of(&bemessen[0]);
+        assert_eq!(tags.len(), 7, "{tags:?}");
+        for (lemma, expected) in [
+            ("bemessen", "VER:INF:NON"),
+            ("bemessen", "VER:PA2:NON"),
+            ("bemessen", "PA2:PRD:GRU:VER"),
+        ] {
+            assert!(
+                tags.iter().any(|(l, t)| l == lemma && t == expected),
+                "{lemma}/{expected} missing: {tags:?}"
+            );
+        }
+
+        let bemisst = Tagger::tag(&tagger, &["bemisst"]);
+        let tags = tags_of(&bemisst[0]);
+        assert_eq!(tags.len(), 8, "{tags:?}");
+        assert!(
+            !tags
+                .iter()
+                .any(|(l, t)| l == "bemessen" && t == "PA2:PRD:GRU:VER"),
+            "{tags:?}"
+        );
+
+        let hinterlass = Tagger::tag(&tagger, &["hinterlass"]);
+        let tags = tags_of(&hinterlass[0]);
+        assert_eq!(tags.len(), 3, "{tags:?}");
+        for expected in ["VER:IMP:SIN:NON", "VER:1:SIN:PRÄ:NON"] {
+            assert!(
+                tags.iter()
+                    .any(|(l, t)| l == "hinterlassen" && t == expected),
+                "{expected} missing: {tags:?}"
+            );
+        }
+        assert!(tags.iter().all(|(_, t)| !t.contains("NEB")), "{tags:?}");
+    }
+
+    #[test]
+    fn modal_like_prefixes_stay_unmodified() {
+        let tagger = tagger();
+
+        let rauslassen = Tagger::tag(&tagger, &["rauslassen"]);
+        let tags = tags_of(&rauslassen[0]);
+        assert_eq!(tags.len(), 5, "{tags:?}");
+        for expected in [
+            "VER:1:PLU:PRÄ:NON:NEB",
+            "VER:1:PLU:KJ1:NON:NEB",
+            "VER:3:PLU:PRÄ:NON:NEB",
+            "VER:3:PLU:KJ1:NON:NEB",
+            "VER:INF:NON",
+        ] {
+            assert!(
+                tags.iter().any(|(l, t)| l == "rauslassen" && t == expected),
+                "{expected} missing: {tags:?}"
+            );
+        }
+        assert!(
+            !tags
+                .iter()
+                .any(|(l, t)| l == "rauslassen" && t == "VER:1:PLU:PRÄ:NON"),
+            "{tags:?}"
+        );
+        assert!(
+            tags.iter()
+                .all(|(l, t)| !(l == "rauslassen" && t.contains("VER:MOD"))),
+            "{tags:?}"
+        );
+
+        let rauslass = Tagger::tag(&tagger, &["rauslass"]);
+        let tags = tags_of(&rauslass[0]);
+        assert_eq!(tags.len(), 2, "{tags:?}");
+        assert!(
+            tags.iter()
+                .any(|(l, t)| l == "rauslassen" && t == "VER:1:SIN:PRÄ:NON:NEB"),
+            "{tags:?}"
+        );
+        assert!(
+            !tags
+                .iter()
+                .any(|(l, t)| l == "rauslassen" && t.starts_with("VER:IMP")),
+            "{tags:?}"
+        );
+
+        let rauszulassen = Tagger::tag(&tagger, &["rauszulassen"]);
+        let tags = tags_of(&rauszulassen[0]);
+        assert_eq!(tags.len(), 1, "{tags:?}");
+        assert_eq!(
+            tags[0],
+            ("rauslassen".to_string(), "VER:EIZ:NON".to_string())
+        );
+
+        let rausgelassen = Tagger::tag(&tagger, &["rausgelassen"]);
+        let tags = tags_of(&rausgelassen[0]);
+        assert_eq!(tags.len(), 2, "{tags:?}");
+        for (lemma, expected) in [
+            ("rauslassen", "VER:PA2:NON"),
+            ("rausgelassen", "PA2:PRD:GRU:VER"),
+        ] {
+            assert!(
+                tags.iter().any(|(l, t)| l == lemma && t == expected),
+                "{lemma}/{expected} missing: {tags:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn noun_like_words_do_not_get_verb_readings() {
+        let tagger = tagger();
+        for word in [
+            "geschichte",
+            "bereich",
+            "beispiel",
+            "keksdose",
+            "aktienarten",
+            "unmenge",
+        ] {
+            let result = Tagger::tag(&tagger, &[word]);
+            let readings = result[0].readings();
+            assert_eq!(readings.len(), 1, "{word}: {readings:?}");
+            assert!(
+                readings
+                    .iter()
+                    .all(|r| r.pos_tags().iter().all(|t| !t.contains("VER"))),
+                "{word}: {readings:?}"
+            );
+        }
+
+        let schwarzgrau = Tagger::tag(&tagger, &["schwarzgrau"]);
+        let tags = tags_of(&schwarzgrau[0]);
+        assert_eq!(tags.len(), 2, "{tags:?}");
+        assert!(tags.iter().any(|(_, t)| t.contains("ADJ")), "{tags:?}");
+        assert!(tags.iter().any(|(_, t)| t.contains("VER")), "{tags:?}");
+
+        let entlang = Tagger::tag(&tagger, &["entlang"]);
+        let tags = tags_of(&entlang[0]);
+        assert_eq!(tags.len(), 4, "{tags:?}");
+        assert!(tags.iter().any(|(_, t)| t.contains("PRP")), "{tags:?}");
+        assert!(tags.iter().any(|(_, t)| t.contains("ZUS")), "{tags:?}");
+        assert!(tags.iter().all(|(_, t)| !t.contains("VER:")), "{tags:?}");
+    }
+
+    #[test]
+    fn verb_and_pa2_readings_match_java_counts() {
+        let tagger = tagger();
+
+        let erstickt = Tagger::tag(&tagger, &["erstickt"]);
+        let tags = tags_of(&erstickt[0]);
+        assert_eq!(tags.len(), 5, "{tags:?}");
+        for (lemma, expected) in [
+            ("ersticken", "VER:2:PLU:PRÄ:SFT"),
+            ("ersticken", "VER:3:SIN:PRÄ:SFT"),
+            ("ersticken", "VER:IMP:PLU:SFT"),
+            ("ersticken", "VER:PA2:SFT"),
+            ("erstickt", "PA2:PRD:GRU:VER"),
+        ] {
+            assert!(
+                tags.iter().any(|(l, t)| l == lemma && t == expected),
+                "{lemma}/{expected} missing: {tags:?}"
+            );
+        }
+
+        let erstickte = Tagger::tag(&tagger, &["erstickte"]);
+        let tags = tags_of(&erstickte[0]);
+        assert_eq!(tags.len(), 19, "{tags:?}");
+        assert!(
+            tags.iter()
+                .any(|(l, t)| l == "erstickt" && t.starts_with("PA2")),
+            "{tags:?}"
+        );
+        for expected in [
+            "VER:1:SIN:KJ2:SFT",
+            "VER:1:SIN:PRT:SFT",
+            "VER:3:SIN:KJ2:SFT",
+            "VER:3:SIN:PRT:SFT",
+        ] {
+            assert!(
+                tags.iter().any(|(l, t)| l == "ersticken" && t == expected),
+                "{expected} missing: {tags:?}"
+            );
+        }
+        assert!(tags.iter().all(|(_, t)| !t.contains("NEB")), "{tags:?}");
+
+        let erstickend = Tagger::tag(&tagger, &["erstickend"]);
+        let tags = tags_of(&erstickend[0]);
+        assert_eq!(tags.len(), 2, "{tags:?}");
+        for (lemma, expected) in [
+            ("ersticken", "VER:PA1:SFT"),
+            ("erstickend", "PA1:PRD:GRU:VER"),
+        ] {
+            assert!(
+                tags.iter().any(|(l, t)| l == lemma && t == expected),
+                "{lemma}/{expected} missing: {tags:?}"
+            );
+        }
+
+        let erstickender = Tagger::tag(&tagger, &["erstickender"]);
+        let tags = tags_of(&erstickender[0]);
+        assert_eq!(tags.len(), 7, "{tags:?}");
+        assert!(
+            tags.iter()
+                .any(|(l, t)| l == "erstickend" && t == "PA1:DAT:SIN:FEM:GRU:SOL:VER"),
+            "{tags:?}"
+        );
+    }
+
+    #[test]
     fn manual_data_extends_and_removes_readings() {
         let dir = resource_dir().expect("german resources");
         let mut tagger = GermanTagger::from_resource_dir(&dir).expect("tagger loads");
