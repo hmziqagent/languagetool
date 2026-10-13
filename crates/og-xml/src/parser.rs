@@ -3265,4 +3265,124 @@ mod tests {
         assert!(texts.contains(&Some("tail")));
         assert!(ap.tokens.iter().any(|t| t.postag.as_deref() == Some("NN")));
     }
+
+    #[test]
+    fn test_parse_phrase_merge_and_antipattern_phraseref() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <phrases>
+                <phrase id="ONE"><token>a</token></phrase>
+                <phrase id="MIX"><token>pre</token><phraseref idref="ONE"/></phrase>
+                <phrase id="EITHER"><phraseref idref="ONE"></phraseref><phraseref idref="MIX"/></phrase>
+            </phrases>
+            <category id="C" name="c">
+                <rule id="R" name="r">
+                    <antipattern><phraseref idref="ONE"/></antipattern>
+                    <antipattern><phraseref idref="MIX"/></antipattern>
+                    <pattern>
+                        <token>lead</token>
+                        <phraseref idref="EITHER"/>
+                        <token>tail</token>
+                    </pattern>
+                    <message>m</message>
+                </rule>
+            </category>
+        </rules>"#;
+
+        let result = XmlRuleParser::new().parse(xml).unwrap();
+
+        assert_eq!(result.rules.len(), 2);
+        let texts: Vec<Vec<Option<&str>>> = result
+            .rules
+            .iter()
+            .map(|r| r.pattern.tokens.iter().map(|t| t.text.as_deref()).collect())
+            .collect();
+        assert_eq!(
+            texts,
+            vec![
+                vec![Some("lead"), Some("a"), Some("tail")],
+                vec![
+                    Some("lead"),
+                    Some("pre"),
+                    Some("a"),
+                    Some("pre"),
+                    Some("tail")
+                ],
+            ]
+        );
+        for rule in &result.rules {
+            assert_eq!(rule.antipatterns.len(), 2);
+            let ap_texts: Vec<Option<&str>> = rule.antipatterns[0]
+                .tokens
+                .iter()
+                .map(|t| t.text.as_deref())
+                .collect();
+            assert_eq!(ap_texts, vec![Some("a")]);
+            let mix_texts: Vec<Option<&str>> = rule.antipatterns[1]
+                .tokens
+                .iter()
+                .map(|t| t.text.as_deref())
+                .collect();
+            assert_eq!(mix_texts, vec![Some("pre"), Some("a"), Some("pre")]);
+        }
+    }
+
+    #[test]
+    fn test_parse_phraseref_renumbers_matches_and_shifts_unify() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <phrases>
+                <phrase id="A">
+                    <token>z</token>
+                    <token>y<match no="2"/></token>
+                </phrase>
+                <phrase id="C"><token>w</token></phrase>
+                <phrase id="ALT"><phraseref idref="A"></phraseref><phraseref idref="C"/></phrase>
+            </phrases>
+            <category id="C2" name="c2">
+                <rule id="RN" name="rn">
+                    <pattern>
+                        <token>lead</token>
+                        <phraseref idref="ALT"/>
+                        <unify>
+                            <feature id="gender"><type id="masc"/></feature>
+                            <token>x<match no="1"/></token>
+                        </unify>
+                    </pattern>
+                    <message>m</message>
+                </rule>
+            </category>
+        </rules>"#;
+
+        let result = XmlRuleParser::new().parse(xml).unwrap();
+
+        assert_eq!(result.rules.len(), 2);
+        let base = &result.rules[0];
+        let base_texts: Vec<Option<&str>> = base
+            .pattern
+            .tokens
+            .iter()
+            .map(|t| t.text.as_deref())
+            .collect();
+        assert_eq!(
+            base_texts,
+            vec![Some("lead"), Some("z"), Some("y\\3"), Some("x\\1")]
+        );
+        let y = &base.pattern.tokens[2];
+        assert_eq!(y.match_no, Some(3));
+        assert_eq!(y.text.as_deref(), Some("y\\3"));
+        assert_eq!(base.pattern.unify_groups[0].token_start, 3);
+        assert_eq!(base.pattern.unify_groups[0].token_end, 4);
+
+        let clone = &result.rules[1];
+        let clone_texts: Vec<Option<&str>> = clone
+            .pattern
+            .tokens
+            .iter()
+            .map(|t| t.text.as_deref())
+            .collect();
+        assert_eq!(clone_texts, vec![Some("lead"), Some("w"), Some("x\\1")]);
+        assert_eq!(clone.pattern.unify_groups[0].token_start, 2);
+        assert_eq!(clone.pattern.unify_groups[0].token_end, 3);
+    }
 }
