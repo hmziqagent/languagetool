@@ -2033,4 +2033,53 @@ mod tests {
             vec!["word", "\u{26A0}", "\u{FE0F}"]
         );
     }
+
+    #[test]
+    fn test_leading_and_trailing_hyphens_split_off() {
+        let tz = DefaultWordTokenizer::new();
+        let tokens = tz.tokenize("-word");
+        assert_eq!(token_texts(&tz, "-word"), vec!["-", "word"]);
+        assert_offsets_valid(&tokens);
+        assert_reconstruction(&tokens, "-word");
+
+        let tokens = tz.tokenize("word-");
+        assert_eq!(token_texts(&tz, "word-"), vec!["word", "-"]);
+        assert_offsets_valid(&tokens);
+        assert_reconstruction(&tokens, "word-");
+
+        let tokens = tz.tokenize("--word--");
+        assert_eq!(
+            token_texts(&tz, "--word--"),
+            vec!["-", "-", "word", "-", "-"]
+        );
+        assert_offsets_valid(&tokens);
+        assert_reconstruction(&tokens, "--word--");
+    }
+
+    #[test]
+    fn test_split_underscores_separates_the_boundaries() {
+        let tz = en_tz();
+        let texts = |tokens: &[Token]| -> Vec<String> {
+            tokens.iter().map(|t| t.text().to_string()).collect()
+        };
+        let tokens = tz.split_underscores(tz.tokenize("foo_bar"));
+        assert_eq!(texts(&tokens), vec!["foo", "_", "bar"]);
+        assert_offsets_valid(&tokens);
+        assert_reconstruction(&tokens, "foo_bar");
+
+        let tokens = tz.split_underscores(tz.tokenize("foo_"));
+        assert_eq!(texts(&tokens), vec!["foo", "_"]);
+
+        let tokens = tz.split_underscores(tz.tokenize("_foo"));
+        assert_eq!(texts(&tokens), vec!["_", "foo"]);
+
+        let tokens = tz.split_underscores(tz.tokenize("__"));
+        assert_eq!(texts(&tokens), vec!["_", "_"]);
+
+        let tokens = tz.split_underscores(tz.tokenize("plain"));
+        assert_eq!(texts(&tokens), vec!["plain"]);
+
+        let tokens = tz.split_underscores(tz.tokenize("_"));
+        assert_eq!(texts(&tokens), vec!["_"]);
+    }
 }
