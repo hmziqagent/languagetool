@@ -3109,4 +3109,160 @@ mod tests {
         assert_eq!(examples[1].example_type, XmlExampleType::Incorrect);
         assert_eq!(examples[1].corrections, vec!["qux".to_string()]);
     }
+
+    #[test]
+    fn test_parse_unification_equivalences_with_token_postags() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="pl">
+            <unification feature="gender">
+                <equivalence type="masc" postag="NN:.*" postag_regexp="no">
+                    <token postag="NN:.*"/>
+                </equivalence>
+                <equivalence type="fem">
+                    <token postag="NN" postag_regexp="yes"> word </token>
+                </equivalence>
+            </unification>
+            <category id="C" name="c">
+                <rule id="U" name="u">
+                    <pattern><token>t</token></pattern>
+                    <message>m</message>
+                </rule>
+            </category>
+        </rules>"#;
+
+        let result = XmlRuleParser::new().parse(xml).unwrap();
+
+        assert_eq!(result.unifications.len(), 1);
+        let uni = &result.unifications[0];
+        assert_eq!(uni.feature, "gender");
+        assert_eq!(uni.equivalences.len(), 2);
+        assert_eq!(uni.equivalences[0].eq_type, "masc");
+        assert_eq!(uni.equivalences[0].postag, "NN:.*");
+        assert!(uni.equivalences[0].exact);
+        assert_eq!(uni.equivalences[1].eq_type, "fem");
+        assert_eq!(uni.equivalences[1].postag, "NN");
+        assert!(!uni.equivalences[1].exact);
+    }
+
+    #[test]
+    fn test_parse_unify_negate_features_or_and_ignore_groups() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <category id="C" name="c">
+                <rule id="UNI" name="uni">
+                    <pattern>
+                        <unify negate="yes">
+                            <feature id="gender"><type id="masc"/><type id="neut"/></feature>
+                            <feature id="number"><type id="sg"/></feature>
+                            <or>
+                                <token>a</token>
+                                <token>b</token>
+                            </or>
+                            <and>
+                                <token postag="NN"/>
+                                <token postag="VB"/>
+                            </and>
+                            <unify-ignore><token>skip</token></unify-ignore>
+                            <token>c</token>
+                        </unify>
+                    </pattern>
+                    <message>m</message>
+                </rule>
+            </category>
+        </rules>"#;
+
+        let result = XmlRuleParser::new().parse(xml).unwrap();
+        let pattern = &result.rules[0].pattern;
+
+        assert_eq!(pattern.unify_groups.len(), 1);
+        let group = &pattern.unify_groups[0];
+        assert!(group.negate);
+        assert_eq!(
+            group.features,
+            vec![
+                (
+                    "gender".to_string(),
+                    vec!["masc".to_string(), "neut".to_string()]
+                ),
+                ("number".to_string(), vec!["sg".to_string()])
+            ]
+        );
+        let or_group = pattern
+            .elements
+            .iter()
+            .find_map(|e| match e {
+                XmlPatternElement::OrGroup(g) if g.alternatives.len() == 2 => Some(g),
+                _ => None,
+            })
+            .expect("or group");
+        let or_texts: Vec<Option<&str>> = or_group
+            .alternatives
+            .iter()
+            .map(|t| t.text.as_deref())
+            .collect();
+        assert_eq!(or_texts, vec![Some("a"), Some("b")]);
+        assert!(pattern.elements.iter().any(|e| matches!(
+            e,
+            XmlPatternElement::AndGroup(g) if g.constraints.len() == 2
+        )));
+        assert!(
+            pattern
+                .tokens
+                .iter()
+                .any(|t| t.text.as_deref() == Some("skip") && t.unify_neutral)
+        );
+        assert!(
+            pattern
+                .tokens
+                .iter()
+                .any(|t| t.text.as_deref() == Some("c"))
+        );
+    }
+
+    #[test]
+    fn test_parse_unify_and_groups_inside_antipattern() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <category id="C" name="c">
+                <rule id="AP" name="ap">
+                    <antipattern>
+                        <unify negate="yes">
+                            <feature id="gender"><type id="fem"/></feature>
+                            <token>foo</token>
+                        </unify>
+                        <or><token>a</token></or>
+                        <and><token>b</token></and>
+                        <token>tail</token>
+                        <token postag="NN"/>
+                    </antipattern>
+                    <pattern><token>bar</token></pattern>
+                    <message>m</message>
+                </rule>
+            </category>
+        </rules>"#;
+
+        let result = XmlRuleParser::new().parse(xml).unwrap();
+        let rule = &result.rules[0];
+
+        assert_eq!(rule.antipatterns.len(), 1);
+        let ap = &rule.antipatterns[0];
+        assert_eq!(ap.unify_groups.len(), 1);
+        assert!(ap.unify_groups[0].negate);
+        assert_eq!(
+            ap.unify_groups[0].features,
+            vec![("gender".to_string(), vec!["fem".to_string()])]
+        );
+        assert!(ap.elements.iter().any(|e| matches!(
+            e,
+            XmlPatternElement::OrGroup(g) if g.alternatives.len() == 1
+        )));
+        assert!(ap.elements.iter().any(|e| matches!(
+            e,
+            XmlPatternElement::AndGroup(g) if g.constraints.len() == 1
+        )));
+        let texts: Vec<Option<&str>> = ap.tokens.iter().map(|t| t.text.as_deref()).collect();
+        assert!(texts.contains(&Some("foo")));
+        assert!(texts.contains(&Some("tail")));
+        assert!(ap.tokens.iter().any(|t| t.postag.as_deref() == Some("NN")));
+    }
 }
