@@ -327,4 +327,41 @@ mod tests {
         let atr = &og_tagger::Tagger::tag(&tagger(), &["’"])[0];
         assert!(atr.chunks().is_empty());
     }
+
+    #[test]
+    fn inner_is_word_tagged_normalizes_the_typographic_apostrophe() {
+        let tagger = tagger();
+        assert!(
+            tagger.inner_is_word_tagged("aujourd’hui"),
+            "the lookup must rewrite ’ to ' before hitting the dictionary"
+        );
+        assert!(tagger.inner_is_word_tagged("aujourd'hui"));
+        assert!(!tagger.inner_is_word_tagged("aujourd’huixyz"));
+    }
+
+    #[test]
+    fn core_tagger_tag_rewrites_apostrophes_in_place() {
+        let surfaces = ["<S>", "aujourd’hui", "aujourd'hui", "plainword"];
+        let mut atrs: Vec<AnalyzedTokenReadings> = surfaces
+            .iter()
+            .map(|s| AnalyzedTokenReadings::new(AnalyzedToken::new(*s, 0, s.len())))
+            .collect();
+        CoreTagger::tag(&tagger(), &mut atrs);
+        assert_eq!(atrs[1].token().token(), "aujourd'hui");
+        assert_eq!(
+            atrs[1].chunks(),
+            &["containsTypographicApostrophe".to_string()]
+        );
+        assert_eq!(atrs[2].token().token(), "aujourd'hui");
+        assert_eq!(atrs[3].token().token(), "plainword");
+        assert!(atrs[3].chunks().is_empty());
+        assert!(
+            atrs[1]
+                .readings()
+                .iter()
+                .any(|r| r.lemma() == Some("aujourd'hui")),
+            "the dictionary reading survives the surface rewrite: {:?}",
+            atrs[1].readings()
+        );
+    }
 }
