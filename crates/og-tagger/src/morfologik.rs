@@ -1791,7 +1791,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn decodes_prefix_and_suffix_encoded_lemmas() {
         let _guard = DICT_TEST_LOCK.lock().unwrap();
         let dir = [
@@ -1833,7 +1832,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn decodes_koi8_r_suffix_encoded_lemmas() {
         let _guard = DICT_TEST_LOCK.lock().unwrap();
         let dir = [
@@ -1888,7 +1886,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn lazy_lookup_matches_eager_enumeration_asturian_cfsa1() {
         let _guard = DICT_TEST_LOCK.lock().unwrap();
         let Some(dir) = lang_dir("ast", "asturian.dict") else {
@@ -1898,7 +1895,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn loads_cfsa1_version_cfsa_dict() {
         let _guard = DICT_TEST_LOCK.lock().unwrap();
         let dir = [
@@ -1935,7 +1931,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn slovak_v6_prefix_dict_lookups_match_slovak_tagger_test() {
         let _guard = DICT_TEST_LOCK.lock().unwrap();
         let dir = [
