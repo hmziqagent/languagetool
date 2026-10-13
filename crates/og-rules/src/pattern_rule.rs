@@ -8529,6 +8529,382 @@ mod tests {
     }
 
     #[test]
+    fn regexp_backreference_matches_case_insensitively_by_default() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <rule id="BACKREF_CI" name="case insensitive regexp backref">
+                <pattern>
+                    <marker>
+                        <token regexp="yes">aa|bb</token>
+                        <token regexp="yes"><match no="0"/></token>
+                    </marker>
+                </pattern>
+                <message>m</message>
+            </rule>
+        </rules>"#;
+        assert_eq!(compile_and_match(xml, "aa AA").len(), 1);
+        assert_eq!(compile_and_match(xml, "aa CC").len(), 0);
+    }
+
+    #[test]
+    fn inflected_regexp_backreference_matches_lemmas() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <rule id="BACKREF_INFLECTED_RE" name="inflected regexp backref">
+                <pattern>
+                    <marker>
+                        <token>run</token>
+                        <token inflected="yes" regexp="yes"><match no="0"/></token>
+                    </marker>
+                </pattern>
+                <message>m</message>
+            </rule>
+        </rules>"#;
+        let compiler = XmlCompiler::new();
+        let rule_set = compiler.compile_file(xml).unwrap();
+        let engine = PatternRuleEngine::new();
+
+        let mut sentence = make_analyzed_sentence("they run running .");
+        set_reading(&mut sentence, 2, "run", "VB");
+        let matches: Vec<_> = rule_set
+            .rules
+            .iter()
+            .flat_map(|r| engine.match_rule(r, &sentence))
+            .collect();
+        assert_eq!(matches.len(), 1, "the lemma satisfies the regexp backref");
+
+        let bare = make_analyzed_sentence("they run running .");
+        let matches: Vec<_> = rule_set
+            .rules
+            .iter()
+            .flat_map(|r| engine.match_rule(r, &bare))
+            .collect();
+        assert_eq!(
+            matches.len(),
+            0,
+            "without a lemma the surface form does not satisfy the regexp backref"
+        );
+    }
+
+    #[test]
+    fn case_sensitive_inflected_backreference_compares_exact_case() {
+        let cs_xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <rule id="BACKREF_CS" name="case sensitive inflected backref">
+                <pattern>
+                    <marker>
+                        <token>Run</token>
+                        <token inflected="yes" case_sensitive="yes"><match no="0"/></token>
+                    </marker>
+                </pattern>
+                <message>m</message>
+            </rule>
+        </rules>"#;
+        let compiler = XmlCompiler::new();
+        let rule_set = compiler.compile_file(cs_xml).unwrap();
+        let engine = PatternRuleEngine::new();
+        let mut sentence = make_analyzed_sentence("they Run run .");
+        set_reading(&mut sentence, 2, "run", "VB");
+        let matches: Vec<_> = rule_set
+            .rules
+            .iter()
+            .flat_map(|r| engine.match_rule(r, &sentence))
+            .collect();
+        assert_eq!(
+            matches.len(),
+            0,
+            "case sensitive comparison rejects the lowercase lemma"
+        );
+
+        let ci_xml = cs_xml.replace(" case_sensitive=\"yes\"", "");
+        let ci_rule_set = compiler.compile_file(&ci_xml).unwrap();
+        let matches: Vec<_> = ci_rule_set
+            .rules
+            .iter()
+            .flat_map(|r| engine.match_rule(r, &sentence))
+            .collect();
+        assert_eq!(matches.len(), 1);
+    }
+
+    #[test]
+    fn setpos_backreference_without_regexp_escapes_the_postag() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <rule id="SETPOS_LITERAL" name="setpos literal postag">
+                <pattern>
+                    <marker>
+                        <token>dog</token>
+                        <token><match no="0" postag="NN" setpos="yes" postag_replace="VB"/></token>
+                    </marker>
+                </pattern>
+                <message>m</message>
+            </rule>
+        </rules>"#;
+        let compiler = XmlCompiler::new();
+        let rule_set = compiler.compile_file(xml).unwrap();
+        let engine = PatternRuleEngine::new();
+
+        let mut tagged = make_analyzed_sentence("the dog runs .");
+        set_reading(&mut tagged, 1, "dog", "NN");
+        set_reading(&mut tagged, 2, "runs", "VB");
+        let matches: Vec<_> = rule_set
+            .rules
+            .iter()
+            .flat_map(|r| engine.match_rule(r, &tagged))
+            .collect();
+        assert_eq!(
+            matches.len(),
+            1,
+            "the literal postag is replaced and the target tag matched"
+        );
+
+        let mut untagged = make_analyzed_sentence("the dog runs .");
+        set_reading(&mut untagged, 2, "runs", "VB");
+        let matches: Vec<_> = rule_set
+            .rules
+            .iter()
+            .flat_map(|r| engine.match_rule(r, &untagged))
+            .collect();
+        assert_eq!(
+            matches.len(),
+            1,
+            "without reference tags the pattern itself is the replace base"
+        );
+
+        let mut wrong_target = make_analyzed_sentence("the dog runs .");
+        set_reading(&mut wrong_target, 1, "dog", "NN");
+        set_reading(&mut wrong_target, 2, "runs", "NN");
+        let matches: Vec<_> = rule_set
+            .rules
+            .iter()
+            .flat_map(|r| engine.match_rule(r, &wrong_target))
+            .collect();
+        assert_eq!(matches.len(), 0);
+    }
+
+    #[test]
+    fn setpos_backreference_without_replace_targets_the_last_tag() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <rule id="SETPOS_LAST" name="setpos last tag">
+                <pattern>
+                    <marker>
+                        <token>dog</token>
+                        <token><match no="0" postag="N.*" postag_regexp="yes" setpos="yes"/></token>
+                    </marker>
+                </pattern>
+                <message>m</message>
+            </rule>
+        </rules>"#;
+        let compiler = XmlCompiler::new();
+        let rule_set = compiler.compile_file(xml).unwrap();
+        let engine = PatternRuleEngine::new();
+
+        let mut sentence = make_analyzed_sentence("the dog barks .");
+        set_reading(&mut sentence, 1, "dog", "NNP");
+        set_reading(&mut sentence, 2, "barks", "NNP");
+        let matches: Vec<_> = rule_set
+            .rules
+            .iter()
+            .flat_map(|r| engine.match_rule(r, &sentence))
+            .collect();
+        assert_eq!(
+            matches.len(),
+            1,
+            "the referenced reading's last tag becomes the target"
+        );
+
+        let mut other = make_analyzed_sentence("the dog barks .");
+        set_reading(&mut other, 1, "dog", "NNP");
+        set_reading(&mut other, 2, "barks", "NN");
+        let matches: Vec<_> = rule_set
+            .rules
+            .iter()
+            .flat_map(|r| engine.match_rule(r, &other))
+            .collect();
+        assert_eq!(matches.len(), 0);
+    }
+
+    #[test]
+    fn setpos_backreference_residual_text_must_match_the_surface() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <rule id="SETPOS_RESIDUAL" name="setpos residual text">
+                <pattern>
+                    <marker>
+                        <token>dog</token>
+                        <token>x<match no="0" postag="N.*" postag_regexp="yes" setpos="yes"/>y</token>
+                    </marker>
+                </pattern>
+                <message>m</message>
+            </rule>
+        </rules>"#;
+        let compiler = XmlCompiler::new();
+        let rule_set = compiler.compile_file(xml).unwrap();
+        let engine = PatternRuleEngine::new();
+
+        let mut sentence = make_analyzed_sentence("the dog xy .");
+        set_reading(&mut sentence, 1, "dog", "NNP");
+        set_reading(&mut sentence, 2, "xy", "NNP");
+        let matches: Vec<_> = rule_set
+            .rules
+            .iter()
+            .flat_map(|r| engine.match_rule(r, &sentence))
+            .collect();
+        assert_eq!(
+            matches.len(),
+            1,
+            "the residual text wraps the matched token"
+        );
+
+        let mut other_surface = make_analyzed_sentence("the dog zz .");
+        set_reading(&mut other_surface, 1, "dog", "NNP");
+        set_reading(&mut other_surface, 2, "zz", "NNP");
+        let matches: Vec<_> = rule_set
+            .rules
+            .iter()
+            .flat_map(|r| engine.match_rule(r, &other_surface))
+            .collect();
+        assert_eq!(matches.len(), 0);
+    }
+
+    #[test]
+    fn regexp_match_backreference_applies_case_conversion() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <rule id="BACKREF_RE_CASE" name="regexp match with case conversion">
+                <pattern>
+                    <marker>
+                        <token>house7</token>
+                        <token case_sensitive="yes"><match no="0" regexp_match="(\w+)7" regexp_replace="$1x" case_conversion="allupper"/></token>
+                    </marker>
+                </pattern>
+                <message>m</message>
+            </rule>
+        </rules>"#;
+        assert_eq!(compile_and_match(xml, "the house7 HOUSEX .").len(), 1);
+        assert_eq!(compile_and_match(xml, "the house7 housex .").len(), 0);
+    }
+
+    #[test]
+    fn negated_regexp_match_backreference_inverts_the_result() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <rule id="BACKREF_RE_NEG" name="negated regexp match backref">
+                <pattern>
+                    <marker>
+                        <token>house7</token>
+                        <token negate="yes"><match no="0" regexp_match="(\w+)7" regexp_replace="$1x"/></token>
+                    </marker>
+                </pattern>
+                <message>m</message>
+            </rule>
+        </rules>"#;
+        assert_eq!(compile_and_match(xml, "the house7 housex .").len(), 0);
+        assert_eq!(compile_and_match(xml, "the house7 other .").len(), 1);
+    }
+
+    #[test]
+    fn postag_backreference_without_conversion_or_synthesizer_uses_the_reference_text() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <rule id="BACKREF_POSTAG_PLAIN" name="postag backref plain">
+                <pattern>
+                    <marker>
+                        <token>Foo</token>
+                        <token><match no="0" postag="VB"/></token>
+                    </marker>
+                </pattern>
+                <message>m</message>
+            </rule>
+        </rules>"#;
+        assert_eq!(compile_and_match(xml, "Foo Foo").len(), 1);
+        assert_eq!(compile_and_match(xml, "Foo bar").len(), 0);
+
+        let negated = xml.replace(
+            "<token><match no=\"0\" postag=\"VB\"/></token>",
+            "<token negate=\"yes\"><match no=\"0\" postag=\"VB\"/></token>",
+        );
+        assert_eq!(compile_and_match(&negated, "Foo Foo").len(), 0);
+        assert_eq!(compile_and_match(&negated, "Foo bar").len(), 1);
+    }
+
+    #[test]
+    fn postag_backreference_synthesizes_forms_with_the_engine_synthesizer() {
+        let Some(engine) = synth_engine("en") else {
+            return;
+        };
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <rule id="BACKREF_POSTAG_SYNTH" name="postag backref synthesized">
+                <pattern>
+                    <marker>
+                        <token>friend</token>
+                        <token><match no="0" postag="NNS"/></token>
+                    </marker>
+                </pattern>
+                <message>m</message>
+            </rule>
+        </rules>"#;
+        let compiler = XmlCompiler::new();
+        let rule_set = compiler.compile_file(xml).unwrap();
+
+        let mut sentence = make_analyzed_sentence("He friend friends .");
+        set_reading(&mut sentence, 1, "friend", "NN");
+        let matches: Vec<_> = rule_set
+            .rules
+            .iter()
+            .flat_map(|r| engine.match_rule(r, &sentence))
+            .collect();
+        assert_eq!(
+            matches.len(),
+            1,
+            "the synthesized plural form satisfies the backreference"
+        );
+
+        let upper_xml = xml.replace(
+            "postag=\"NNS\"",
+            "postag=\"NNS\" case_conversion=\"allupper\"",
+        );
+        let upper_rule_set = compiler.compile_file(&upper_xml).unwrap();
+        let mut upper = make_analyzed_sentence("He friend FRIENDS .");
+        set_reading(&mut upper, 1, "friend", "NN");
+        let matches: Vec<_> = upper_rule_set
+            .rules
+            .iter()
+            .flat_map(|r| engine.match_rule(r, &upper))
+            .collect();
+        assert_eq!(matches.len(), 1, "case conversion applies to the forms");
+
+        let negated_xml = xml.replace(
+            "<token><match no=\"0\" postag=\"NNS\"/></token>",
+            "<token negate=\"yes\"><match no=\"0\" postag=\"NNS\"/></token>",
+        );
+        let negated_rule_set = compiler.compile_file(&negated_xml).unwrap();
+        let matches: Vec<_> = negated_rule_set
+            .rules
+            .iter()
+            .flat_map(|r| engine.match_rule(r, &sentence))
+            .collect();
+        assert_eq!(matches.len(), 0);
+
+        let fallback_xml = xml.replace("postag=\"NNS\"", "postag=\"JJ\"");
+        let fallback_rule_set = compiler.compile_file(&fallback_xml).unwrap();
+        let mut fallback = make_analyzed_sentence("He friend friend .");
+        set_reading(&mut fallback, 1, "friend", "NN");
+        let matches: Vec<_> = fallback_rule_set
+            .rules
+            .iter()
+            .flat_map(|r| engine.match_rule(r, &fallback))
+            .collect();
+        assert_eq!(
+            matches.len(),
+            1,
+            "unsynthesizable postags fall back to the reference text"
+        );
+    }
+
+    #[test]
     fn pattern_backreference_postag_synthesizes_with_the_engine_synthesizer() {
         let Some(engine) = synth_engine("en") else {
             return;
