@@ -540,3 +540,212 @@ pub fn greek_native_rules() -> GreekNativeRules {
         text_level_rules: vec![Arc::new(GreekWordRepeatBeginningRule::new())],
     }
 }
+
+#[cfg(test)]
+mod direct_tests {
+    use super::*;
+    use og_core::{AnalyzedSentence, AnalyzedToken, AnalyzedTokenReadings};
+
+    fn make_sentence(text: &str, start: usize) -> AnalyzedSentence {
+        let mut tokens = vec![AnalyzedTokenReadings::new(
+            AnalyzedToken::new("<S>", start, start).with_pos_tags(vec!["SENT_START".to_string()]),
+        )];
+        let bytes = text.as_bytes();
+        let mut i = 0usize;
+        while i < bytes.len() {
+            let is_space = bytes[i] == b' ';
+            let mut j = i;
+            while j < bytes.len() && (bytes[j] == b' ') == is_space {
+                j += 1;
+            }
+            tokens.push(AnalyzedTokenReadings::new(AnalyzedToken::new(
+                &text[i..j],
+                start + i,
+                start + j,
+            )));
+            i = j;
+        }
+        let mut sentence = AnalyzedSentence::new(text, start, start + text.len());
+        sentence.set_tokens(tokens);
+        sentence
+    }
+
+    fn first_replacement(matches: &[RuleMatch]) -> String {
+        matches
+            .first()
+            .and_then(|m| m.replacements().first().map(|r| r.value().to_string()))
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn numerals_needing_stress_are_flagged_with_the_stressed_suffix() {
+        let rule = NumeralStressRule::new();
+        let matches = rule.match_sentence(&make_sentence("τον 200ος κανόνα", 0));
+        assert_eq!(matches.len(), 1);
+        assert_eq!(first_replacement(&matches), "200ός");
+        assert_eq!(
+            matches[0].offset(),
+            "τον 200ος κανόνα".find("200ος").unwrap()
+        );
+    }
+
+    #[test]
+    fn already_correct_numerals_are_left_alone() {
+        let rule = NumeralStressRule::new();
+        for text in ["τον 200ό κανόνα", "τον 21ο κανόνα"] {
+            assert!(
+                rule.match_sentence(&make_sentence(text, 0)).is_empty(),
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn unstressed_suffix_on_a_stressed_numeral_maps_back() {
+        let rule = NumeralStressRule::new();
+        let matches = rule.match_sentence(&make_sentence("τον 21ό άρθρο", 0));
+        assert_eq!(matches.len(), 1);
+        assert_eq!(first_replacement(&matches), "21ο");
+    }
+
+    #[test]
+    fn numerals_with_leading_zero_unknown_suffix_or_no_digits_are_ignored() {
+        let rule = NumeralStressRule::new();
+        for text in ["ο 0ος", "ο 200xx", "ο abc", "ο 200"] {
+            assert!(
+                rule.match_sentence(&make_sentence(text, 0)).is_empty(),
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn repeated_words_are_flagged_with_the_survivor_as_replacement() {
+        let rule = GreekWordRepeatRule::new();
+        let matches = rule.match_sentence(&make_sentence("και και", 0));
+        assert_eq!(matches.len(), 1);
+        assert_eq!(first_replacement(&matches), "και");
+        assert_eq!(matches[0].offset(), 0);
+        assert_eq!(matches[0].length(), "και και".len());
+    }
+
+    #[test]
+    fn repeated_ignored_names_digits_and_emojis_stay_clean() {
+        let rule = GreekWordRepeatRule::new();
+        for text in ["Li Li", "3 3", "\u{1F600} \u{1F600}", "- -"] {
+            assert!(
+                rule.match_sentence(&make_sentence(text, 0)).is_empty(),
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn immunized_repeated_words_reset_the_previous_token() {
+        let rule = GreekWordRepeatRule::new();
+        let mut sentence = make_sentence("και και", 0);
+        sentence.tokens_mut()[3].immunize();
+        assert!(rule.match_sentence(&sentence).is_empty());
+    }
+
+    fn sentences_of(text: &str) -> Vec<AnalyzedSentence> {
+        let mut out = Vec::new();
+        let mut start = 0usize;
+        for part in text.split(". ") {
+            let part = if part.ends_with('.') {
+                part.to_string()
+            } else {
+                format!("{part}.")
+            };
+            out.push(make_sentence(&part, start));
+            start += part.len() + 1;
+        }
+        out
+    }
+
+    #[test]
+    fn sentences_restarting_with_the_same_adverb_are_flagged_with_alternatives() {
+        let text = "Επίσης α β γ. Επίσης α β γ.";
+        let sentences = sentences_of(text);
+        let matches = GreekWordRepeatBeginningRule::new().match_text(text, &sentences);
+        assert_eq!(matches.len(), 1);
+        assert!(
+            !matches[0].replacements().is_empty()
+                && matches[0]
+                    .replacements()
+                    .iter()
+                    .all(|r| r.value() != "Επίσεις"),
+            "the suggestions are the other additive adverbs"
+        );
+        assert_eq!(
+            matches[0].short_message().unwrap_or_default(),
+            "Δύο συνεχόμενες προτάσεις ξεκινάνε με το ίδιο επίρρημα."
+        );
+    }
+
+    #[test]
+    fn a_third_consecutive_sentence_changes_the_short_message() {
+        let text = "η γάτα α β. η γάτα α β. η γάτα α β.";
+        let sentences = sentences_of(text);
+        let matches = GreekWordRepeatBeginningRule::new().match_text(text, &sentences);
+        assert!(
+            matches.iter().any(|m| m.short_message().unwrap_or_default()
+                == "Τρεις συνεχόμενες προτάσεις ξεκινάνε με την ίδια λέξη.")
+                && matches.iter().all(|m| m.replacements().is_empty()),
+            "a non-adverb word offers no replacements"
+        );
+    }
+
+    #[test]
+    fn exception_initials_and_short_symbols_do_not_trigger_the_rule() {
+        let text = "με Ένας α β. με Ένας α β.";
+        let sentences = sentences_of(text);
+        assert!(
+            GreekWordRepeatBeginningRule::new()
+                .match_text(text, &sentences)
+                .is_empty()
+        );
+
+        let digit = "με 5 α β. με 5 α β.";
+        let sentences = sentences_of(digit);
+        assert!(
+            GreekWordRepeatBeginningRule::new()
+                .match_text(digit, &sentences)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn defaults_and_metadata_match_the_constructors() {
+        assert_eq!(
+            NumeralStressRule::default().id(),
+            NumeralStressRule::new().id()
+        );
+        assert_eq!(
+            GreekWordRepeatRule::default().id(),
+            GreekWordRepeatRule::new().id()
+        );
+        assert_eq!(
+            GreekWordRepeatBeginningRule::default().id(),
+            GreekWordRepeatBeginningRule::new().id()
+        );
+        assert_eq!(
+            GreekWordRepeatRule::new().issue_type(),
+            IssueType::Redundancy
+        );
+        assert_eq!(
+            NumeralStressRule::new().issue_type(),
+            IssueType::Misspelling
+        );
+        assert_eq!(
+            GreekWordRepeatBeginningRule::new().issue_type(),
+            IssueType::Style
+        );
+        let specifics = greek_specific_case_rule();
+        assert_eq!(specifics.id(), "EL_SPECIFIC_CASE");
+        assert!(specifics.is_default_on());
+        let natives = greek_native_rules();
+        assert_eq!(natives.rules.len(), 5);
+        assert_eq!(natives.text_level_rules.len(), 1);
+    }
+}
