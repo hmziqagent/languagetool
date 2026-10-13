@@ -553,4 +553,95 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn masculine_noun_arms_fire_after_verbs_and_articles() {
+        let rule = PortugueseAccentuationCheckRule::new();
+        for (text, tags, expected) in [
+            (
+                "Ele comeu este abrenuncio.",
+                &["", "PP3CS000", "VMIS3S0", "DD0MS00", "", ""][..],
+                "abrenúncio",
+            ),
+            (
+                "Ele comeu o abrenuncio.",
+                &["", "PP3CS000", "VMIS3S0", "", "", ""][..],
+                "abrenúncio",
+            ),
+            ("o abrenuncio de", &["", "", "", "SPS00"][..], "abrenúncio"),
+            (
+                "o abrenuncio baixo caiu.",
+                &["", "", "", "AQ0MS0", "VMIS3S0", ""],
+                "abrenúncio",
+            ),
+            (
+                "O baixo abrenuncio caiu.",
+                &["", "AQ0MS0", "", "VMIS3S0", ""],
+                "abrenúncio",
+            ),
+            (
+                "O abrenuncio que caiu.",
+                &["", "", "", "PR0CN000", "VMIS3S0", ""],
+                "abrenúncio",
+            ),
+            (
+                "este baixo abrenuncio que caiu.",
+                &["", "DD0MS00", "AQ0MS0", "", "PR0CN000", "VMIS3S0", ""],
+                "abrenúncio",
+            ),
+            (
+                "de baixo abrenuncio",
+                &["", "SPS00", "AQ0MS0", ""][..],
+                "abrenúncio",
+            ),
+        ] {
+            let mut sentence = make_sentence(text);
+            with_tags(&mut sentence, tags);
+            let matches = rule.match_sentence(&sentence);
+            assert_eq!(
+                matches.len(),
+                1,
+                "{text}: expected one accentuation match, got {matches:?}"
+            );
+            assert_eq!(
+                matches[0].replacements()[0].value(),
+                expected,
+                "{text}: wrong replacement"
+            );
+        }
+    }
+
+    #[test]
+    fn masculine_adjective_arms_fire_before_and_after_nouns() {
+        let rule = PortugueseAccentuationCheckRule::new();
+        for (text, tags, expected) in [
+            (
+                "em acarido prato",
+                &["", "SPS00", "", "NCMS000"][..],
+                "acárido",
+            ),
+            ("o acarido prato", &["", "", "", "NCMS000"][..], "acárido"),
+        ] {
+            let mut sentence = make_sentence(text);
+            with_tags(&mut sentence, tags);
+            let matches = rule.match_sentence(&sentence);
+            assert_eq!(
+                matches.len(),
+                1,
+                "{text}: expected one accentuation match, got {matches:?}"
+            );
+            assert_eq!(
+                matches[0].replacements()[0].value(),
+                expected,
+                "{text}: wrong replacement"
+            );
+        }
+    }
+
+    #[test]
+    fn default_constructor_loads_the_same_data() {
+        let rule = PortugueseAccentuationCheckRule::default();
+        assert!(rule.nouns.contains_key("abrenuncio"));
+        assert!(rule.adjectives.contains_key("acarido"));
+    }
 }
