@@ -649,6 +649,89 @@ fn typography_rule_pins_the_java_test_corpus() {
 }
 
 #[test]
+fn comma_whitespace_rule_pins_the_java_behavior() {
+    let rule = super::UkrainianCommaWhitespaceRule::new();
+    let pipeline = uk_pipeline();
+    let matches_of = |text: &str| {
+        let sentence = pipeline.analyze_text(text).pop().unwrap();
+        rule.match_sentence(&sentence)
+    };
+    let empty = |text: &str| matches_of(text).is_empty();
+
+    let matches = matches_of("Дужки ( пробіл).");
+    assert_eq!(matches.len(), 1, "{matches:?}");
+    assert_eq!(
+        matches[0]
+            .replacements()
+            .iter()
+            .map(|r| r.value().to_string())
+            .collect::<Vec<_>>(),
+        vec!["(".to_string()]
+    );
+
+    let matches = matches_of("Дужки (пробіл ).");
+    assert_eq!(matches.len(), 1, "{matches:?}");
+    assert_eq!(
+        matches[0]
+            .replacements()
+            .iter()
+            .map(|r| r.value().to_string())
+            .collect::<Vec<_>>(),
+        vec![")".to_string()]
+    );
+
+    let matches = matches_of("Він прийшов,пішов.");
+    assert_eq!(matches.len(), 1, "{matches:?}");
+    assert_eq!(
+        matches[0]
+            .replacements()
+            .iter()
+            .map(|r| r.value().to_string())
+            .collect::<Vec<_>>(),
+        vec![", пішов".to_string()]
+    );
+
+    let matches = matches_of("Він , пішов.");
+    assert_eq!(matches.len(), 1, "{matches:?}");
+    assert_eq!(
+        matches[0]
+            .replacements()
+            .iter()
+            .map(|r| r.value().to_string())
+            .collect::<Vec<_>>(),
+        vec![",".to_string()]
+    );
+
+    let matches = matches_of("Слово .");
+    assert_eq!(matches.len(), 1, "{matches:?}");
+    assert_eq!(
+        matches[0]
+            .replacements()
+            .iter()
+            .map(|r| r.value().to_string())
+            .collect::<Vec<_>>(),
+        vec![".".to_string()]
+    );
+
+    let matches = matches_of("Він « слово» сказав.");
+    assert_eq!(matches.len(), 1, "{matches:?}");
+    assert_eq!(
+        matches[0]
+            .replacements()
+            .iter()
+            .map(|r| r.value().to_string())
+            .collect::<Vec<_>>(),
+        vec!["« ".to_string(), " «".to_string()]
+    );
+
+    assert!(empty("Список [ ] пункт"));
+    assert!(empty("Рахунки 4 .5 гривень"));
+    assert!(empty("Шлях ./run файл"));
+    assert!(empty("Вовка,— любили"));
+    assert!(empty("Київ, 1994"));
+}
+
+#[test]
 fn hidden_character_rule_pins_the_java_test_corpus() {
     let rule = super::UkrainianHiddenCharacterRule::new();
     let pipeline = uk_pipeline();
@@ -925,6 +1008,19 @@ fn uppercase_sentence_start_pins_the_java_test_corpus() {
         vec!["Автор".to_string()]
     );
     assert!(matches_of("Цей список з декількох рядків:\n\nрядок 1,\n\nрядок 2,").is_empty());
+    assert!(matches_of("Цей список з декількох рядків:\n\n 1) рядок 1;\n\n2) рядок 2;").is_empty());
+    assert!(matches_of("2 автори написали це речення.").is_empty());
+
+    let matches = matches_of("«автор» написав це речення.");
+    assert_eq!(matches.len(), 1, "{matches:?}");
+    assert_eq!(
+        matches[0]
+            .replacements()
+            .iter()
+            .map(|r| r.value().to_string())
+            .collect::<Vec<_>>(),
+        vec!["Автор".to_string()]
+    );
 }
 
 #[test]
