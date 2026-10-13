@@ -2257,4 +2257,37 @@ mod surrogate_tests {
         assert!(!re.is_match("ich"));
         assert!(re.is_match("\u{1F600}"));
     }
+    #[test]
+    fn group_span_and_capturing_group_walks_handle_escapes_and_classes() {
+        assert!(group_spans_inner("(a|b)"));
+        assert!(!group_spans_inner("(a)b"));
+        assert!(group_spans_inner("(a[b)]c)"));
+        assert!(group_spans_inner("(\\)x)"));
+        assert!(!group_spans_inner("(a(b)c)d"));
+        assert_eq!(count_capturing_groups("a[b(c]"), 0);
+        assert_eq!(count_capturing_groups("\\(a\\)"), 0);
+        assert_eq!(count_capturing_groups("(a)[b](c)"), 2);
+    }
+
+    #[test]
+    fn compile_element_compiles_token_or_and_and_groups() {
+        let tok = |text: &str| {
+            let mut t = XmlPatternToken::default();
+            t.text = Some(text.to_string());
+            t
+        };
+        let compiler = XmlCompiler::new();
+        assert!(matches!(
+            compiler.compile_element(&XmlPatternElement::Token(tok("a"))),
+            CompiledPatternElement::Token(_)
+        ));
+        let or = compiler.compile_element(&XmlPatternElement::OrGroup(XmlOrGroup {
+            alternatives: vec![tok("a"), tok("b")],
+        }));
+        assert!(matches!(or, CompiledPatternElement::OrGroup(_)));
+        let and = compiler.compile_element(&XmlPatternElement::AndGroup(XmlAndGroup {
+            constraints: vec![tok("c")],
+        }));
+        assert!(matches!(and, CompiledPatternElement::AndGroup(_)));
+    }
 }
