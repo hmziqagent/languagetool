@@ -1079,10 +1079,7 @@ mod tests {
 
         let fem_group = XmlUnifyGroup {
             negate: false,
-            features: vec![(
-                "gender".to_string(),
-                vec!["fem".to_string(), "neu".to_string()],
-            )],
+            features: vec![("gender".to_string(), vec!["fem".to_string()])],
             token_start: 0,
             token_end: 2,
             elem_start: 0,
