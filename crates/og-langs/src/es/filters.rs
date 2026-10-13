@@ -1972,4 +1972,133 @@ mod tests {
             "synthesized masculine form must follow: {out:?}"
         );
     }
+
+    #[test]
+    fn advanced_synthesizer_passthrough_arms_keep_or_drop_the_match() {
+        let tokens: Vec<AnalyzedTokenReadings> = vec![
+            sent_start(),
+            atr("administración", &[("administración", "NCFS000")]),
+            atr("lenta", &[("lento", "AQ0FS0")]),
+            atr("y", &[("y", "CC")]),
+            atr("corrupto", &[("corrupto", "AQ0MS0")]),
+        ];
+        let tokens: Vec<&AnalyzedTokenReadings> = tokens.iter().collect();
+        let args = "lemmaFrom:4 lemmaSelect:A.* postagFrom:2 postagSelect:A.*";
+        let matched_texts = vec!["corrupto".to_string()];
+
+        let rm = base_rm("m", 0, 7, "{suggestion}");
+        let out = advanced_synthesizer_filter(None, args, &matched_texts, &[4, 2], &tokens, rm);
+        let out = out.expect("out-of-order positions keep the match");
+        assert_eq!(out.replacements()[0].value(), "{suggestion}");
+
+        let rm = base_rm("m", 0, 7, "{suggestion}");
+        let out =
+            advanced_synthesizer_filter(None, "lemmaFrom:4", &matched_texts, &[4], &tokens, rm);
+        let out = out.expect("missing args keep the match untouched");
+        assert_eq!(out.replacements()[0].value(), "{suggestion}");
+
+        let rm = base_rm("m", 0, 7, "{suggestion}");
+        let out = advanced_synthesizer_filter(
+            None,
+            "lemmaFrom:4 lemmaSelect:A.* postagFrom:2 postagSelect:A.* newLemma:_",
+            &matched_texts,
+            &[1, 4],
+            &tokens,
+            rm,
+        );
+        assert!(
+            out.is_none(),
+            "newLemma underscore suppresses the match: {out:?}"
+        );
+    }
+
+    #[test]
+    fn advanced_synthesizer_rewrites_the_suggestion_placeholder() {
+        let synth = es_synth();
+        let args = "lemmaFrom:4 lemmaSelect:A.* postagFrom:2 postagSelect:A.*";
+        let matched_texts = vec!["corrupto".to_string()];
+
+        let tokens: Vec<AnalyzedTokenReadings> = vec![
+            sent_start(),
+            atr("administración", &[("administración", "NCFS000")]),
+            atr("lenta", &[("lento", "AQ0FS0")]),
+            atr("y", &[("y", "CC")]),
+            atr("corrupto", &[("corrupto", "AQ0MS0")]),
+        ];
+        let tokens: Vec<&AnalyzedTokenReadings> = tokens.iter().collect();
+        let rm = base_rm("m", 0, 7, "{suggestion}");
+        let out = advanced_synthesizer_filter(
+            synth.as_deref(),
+            args,
+            &matched_texts,
+            &[1, 4],
+            &tokens,
+            rm,
+        )
+        .expect("synthesized match kept");
+        let values: Vec<String> = out
+            .replacements()
+            .iter()
+            .map(|r| r.value().to_string())
+            .collect();
+        assert_eq!(values, vec!["corrupta".to_string()]);
+
+        let tokens: Vec<AnalyzedTokenReadings> = vec![
+            sent_start(),
+            atr("administración", &[("administración", "NCFS000")]),
+            atr("lenta", &[("lento", "AQ0FS0")]),
+            atr("y", &[("y", "CC")]),
+            atr("Corrupto", &[("corrupto", "AQ0MS0")]),
+        ];
+        let tokens: Vec<&AnalyzedTokenReadings> = tokens.iter().collect();
+        let rm = base_rm("m", 0, 7, "{suggestion}");
+        let out = advanced_synthesizer_filter(
+            synth.as_deref(),
+            args,
+            &matched_texts,
+            &[1, 4],
+            &tokens,
+            rm,
+        )
+        .expect("capitalized match kept");
+        assert_eq!(out.replacements()[0].value(), "Corrupta");
+
+        let tokens: Vec<AnalyzedTokenReadings> = vec![
+            sent_start(),
+            atr("administración", &[("administración", "NCFS000")]),
+            atr("lenta", &[("lento", "AQ0FS0")]),
+            atr("y", &[("y", "CC")]),
+            atr("CORRUPTO", &[("corrupto", "AQ0MS0")]),
+        ];
+        let tokens: Vec<&AnalyzedTokenReadings> = tokens.iter().collect();
+        let rm = base_rm("m", 0, 7, "{suggestion}");
+        let out = advanced_synthesizer_filter(
+            synth.as_deref(),
+            args,
+            &matched_texts,
+            &[1, 4],
+            &tokens,
+            rm,
+        )
+        .expect("uppercase match kept");
+        assert_eq!(out.replacements()[0].value(), "CORRUPTA");
+    }
+
+    #[test]
+    fn find_suggestions_diacritics_mode_suppresses_matching_readings() {
+        let sentence = "Yo publico eso.";
+        let rm = base_rm("m", 3, 7, "x");
+        let out = find_suggestions_filter(
+            "wordFrom:inmarker desiredPostag:V.* Mode:diacritics",
+            &[],
+            &[],
+            &[],
+            sentence,
+            rm,
+        );
+        assert!(
+            out.is_none(),
+            "verb reading present so the match is dropped"
+        );
+    }
 }
