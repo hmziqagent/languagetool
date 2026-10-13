@@ -2432,6 +2432,55 @@ mod tests {
     }
 
     #[test]
+    fn gender_neutral_plural_suffixes_match_the_java_pins() {
+        let Some(s) = hunspell_speller() else {
+            eprintln!("Skipping: German resources not present");
+            return;
+        };
+        for word in [
+            "Jurist:innenausbildung",
+            "Jurist*innenausbildung",
+            "Jurist_innenausbildung",
+        ] {
+            assert!(!s.is_misspelled(word), "'{word}' must be accepted");
+        }
+        for word in [
+            "Jurist:innenausbildunk",
+            "Jurist*innenausbildunk",
+            "Jurist_innenausbildunk",
+        ] {
+            assert!(s.is_misspelled(word), "'{word}' must stay flagged");
+        }
+        for word in ["SEO-Expert/-innen", "Arbeitnehmer/-innenschutzgesetz"] {
+            assert!(!s.is_misspelled(word), "'{word}' must be accepted");
+        }
+        for word in ["SEO-Expert*in", "SEO-Expert:in", "SEO-Expert_in"] {
+            assert!(!s.is_misspelled(word), "'{word}' must be accepted");
+        }
+        for word in ["SEO-Expert*annen", "SEO-Expert:innenwahrsheinlich"] {
+            assert!(s.is_misspelled(word), "'{word}' must stay flagged");
+        }
+        for word in [
+            "SEO-Expert*in",
+            "SEO-Expert:in",
+            "SEO-Expert_in",
+            "SEO-Expert*innen",
+            "SEO-Expert:innen",
+            "SEO-Expert_innen",
+            "SEO-Expert/-innen",
+            "Arbeitnehmer*innenschutzgesetz",
+            "Arbeitnehmer:innenschutzgesetz",
+            "Arbeitnehmer_innenschutzgesetz",
+            "Arbeitnehmer/-innenschutzgesetz",
+        ] {
+            assert!(
+                s.ignore_potentially_misspelled_word(word),
+                "'{word}' must be ignored as potentially misspelled"
+            );
+        }
+    }
+
+    #[test]
     fn oversized_and_single_char_words_skip_the_hunspell_gates() {
         let Some(s) = speller() else {
             eprintln!("Skipping: German resources not present");
