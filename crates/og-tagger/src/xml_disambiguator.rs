@@ -3642,6 +3642,237 @@ mod tests {
         assert!(token.has_pos_tag("PCT"));
     }
 
+    fn readings_of(token: &AnalyzedTokenReadings) -> Vec<(Option<&str>, String)> {
+        token
+            .readings()
+            .iter()
+            .map(|r| (r.lemma(), r.pos_tags().join("|")))
+            .collect()
+    }
+
+    fn le_sentence() -> AnalyzedSentence {
+        make_sentence_with_lemmas(vec![
+            ("le", "le", vec!["D f s", "R pers obj 3 s"]),
+            ("chat", "chat", vec!["NC s m"]),
+        ])
+    }
+
+    #[test]
+    fn match_action_filters_readings_by_a_regexp_postag() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<rules lang="fr">
+    <rule id="LE_OBJ" name="le as object pronoun">
+        <pattern>
+            <marker><token>le</token></marker>
+        </pattern>
+        <disambig action="replace"><match postag="R.*" postag_regexp="yes"/></disambig>
+    </rule>
+</rules>"#;
+        let disambig = XmlDisambiguator::from_xml(xml).unwrap();
+        let mut sentence = le_sentence();
+        disambig.disambiguate(&mut sentence);
+        assert_eq!(
+            readings_of(&sentence.tokens()[0]),
+            vec![(Some("le"), "R pers obj 3 s".to_string())],
+            "only the pronoun reading survives the regexp match filter"
+        );
+        assert_eq!(
+            readings_of(&sentence.tokens()[1]).len(),
+            1,
+            "unmatched tokens are untouched"
+        );
+    }
+
+    #[test]
+    fn match_action_rewrites_tags_with_postag_replace() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<rules lang="fr">
+    <rule id="LE_REWRITE" name="rewrite the pronoun tag">
+        <pattern>
+            <marker><token>le</token></marker>
+        </pattern>
+        <disambig action="replace"><match postag="R (.+)" postag_regexp="yes" postag_replace="PRON $1"/></disambig>
+    </rule>
+</rules>"#;
+        let disambig = XmlDisambiguator::from_xml(xml).unwrap();
+        let mut sentence = le_sentence();
+        disambig.disambiguate(&mut sentence);
+        assert_eq!(
+            readings_of(&sentence.tokens()[0]),
+            vec![(Some("le"), "PRON pers obj 3 s".to_string())],
+            "the matched tag is rewritten with the replacement"
+        );
+    }
+
+    #[test]
+    fn match_action_with_a_literal_postag_builds_a_new_reading() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<rules lang="fr">
+    <rule id="LE_LITERAL" name="literal postag match">
+        <pattern>
+            <marker><token>le</token></marker>
+        </pattern>
+        <disambig action="replace"><match postag="PRON"/></disambig>
+    </rule>
+</rules>"#;
+        let disambig = XmlDisambiguator::from_xml(xml).unwrap();
+        let mut sentence = le_sentence();
+        disambig.disambiguate(&mut sentence);
+        assert_eq!(
+            readings_of(&sentence.tokens()[0]),
+            vec![
+                (Some("le"), "PRON".to_string()),
+                (Some("le"), "PRON".to_string())
+            ],
+            "a literal postag assigns the tag to every non-empty reading with the first lemma"
+        );
+    }
+
+    #[test]
+    fn match_action_with_an_unmatched_regexp_falls_back_to_a_new_reading() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<rules lang="fr">
+    <rule id="LE_MISS" name="regexp match miss">
+        <pattern>
+            <marker><token>le</token></marker>
+        </pattern>
+        <disambig action="replace"><match postag="Z.*" postag_regexp="yes"/></disambig>
+    </rule>
+</rules>"#;
+        let disambig = XmlDisambiguator::from_xml(xml).unwrap();
+        let mut sentence = le_sentence();
+        disambig.disambiguate(&mut sentence);
+        assert_eq!(
+            readings_of(&sentence.tokens()[0]),
+            vec![
+                (Some("le"), "Z.*".to_string()),
+                (Some("le"), "Z.*".to_string())
+            ],
+            "an unmatched regexp falls back to the literal postag text"
+        );
+    }
+
+    #[test]
+    fn match_action_with_lemma_text_keeps_only_that_lemma() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<rules lang="fr">
+    <rule id="LE_LEMMA" name="lemma-selected match">
+        <pattern>
+            <marker><token>le</token></marker>
+        </pattern>
+        <disambig action="replace"><match>le</match></disambig>
+    </rule>
+    <rule id="LE_LEMMA_MISS" name="lemma-selected match miss">
+        <pattern>
+            <marker><token>chat</token></marker>
+        </pattern>
+        <disambig action="replace"><match>rien</match></disambig>
+    </rule>
+</rules>"#;
+        let disambig = XmlDisambiguator::from_xml(xml).unwrap();
+        let mut sentence = make_sentence_with_lemmas(vec![
+            ("le", "le", vec!["D f s", "R pers obj 3 s"]),
+            ("chat", "chat", vec!["NC s m"]),
+        ]);
+        disambig.disambiguate(&mut sentence);
+        assert_eq!(
+            readings_of(&sentence.tokens()[1]),
+            vec![(None, String::new())],
+            "a lemma with no surviving reading collapses to a plain reading"
+        );
+    }
+
+    #[test]
+    fn match_action_preserves_speller_and_immunize_flags() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<rules lang="fr">
+    <rule id="LE_FLAGS" name="flags preserved">
+        <pattern>
+            <marker><token>le</token></marker>
+        </pattern>
+        <disambig action="replace"><match postag="R.*" postag_regexp="yes"/></disambig>
+    </rule>
+</rules>"#;
+        let disambig = XmlDisambiguator::from_xml(xml).unwrap();
+        let mut sentence = le_sentence();
+        sentence.tokens_mut()[0].ignore_spelling();
+        disambig.disambiguate(&mut sentence);
+        let token = &sentence.tokens()[0];
+        assert!(token.is_ignored_by_speller());
+        assert_eq!(
+            readings_of(token),
+            vec![(Some("le"), "R pers obj 3 s".to_string())]
+        );
+    }
+
+    #[test]
+    fn add_wd_action_applies_per_token_across_the_marker() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<rules lang="en">
+    <rule id="ADD_WDS" name="add one reading per token">
+        <pattern>
+            <marker>
+                <token>good</token>
+                <token>morning</token>
+            </marker>
+        </pattern>
+        <disambig action="add"><wd pos="X1"/><wd pos="X2"/></disambig>
+    </rule>
+</rules>"#;
+        let disambig = XmlDisambiguator::from_xml(xml).unwrap();
+        let mut sentence = make_sentence(vec![("good", vec!["JJ"]), ("morning", vec!["NN"])]);
+        disambig.disambiguate(&mut sentence);
+        assert!(sentence.tokens()[0].has_pos_tag("JJ"));
+        assert!(sentence.tokens()[0].has_pos_tag("X1"));
+        assert!(!sentence.tokens()[0].has_pos_tag("X2"));
+        assert!(sentence.tokens()[1].has_pos_tag("NN"));
+        assert!(sentence.tokens()[1].has_pos_tag("X2"));
+        assert!(!sentence.tokens()[1].has_pos_tag("X1"));
+    }
+
+    #[test]
+    fn remove_wd_action_keeps_the_flags_and_the_last_reading() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<rules lang="en">
+    <rule id="RM_WD" name="remove one reading">
+        <pattern>
+            <marker><token>run</token></marker>
+        </pattern>
+        <disambig action="remove"><wd pos="NN" lemma="run"/></disambig>
+    </rule>
+</rules>"#;
+        let disambig = XmlDisambiguator::from_xml(xml).unwrap();
+        let mut sentence = make_sentence_with_lemmas(vec![
+            ("run", "run", vec!["VB", "NN"]),
+            (".", ".", vec!["."]),
+        ]);
+        sentence.tokens_mut()[0].ignore_spelling();
+        disambig.disambiguate(&mut sentence);
+        let token = &sentence.tokens()[0];
+        assert_eq!(readings_of(token), vec![(Some("run"), "VB".to_string())]);
+        assert!(token.is_ignored_by_speller());
+    }
+
+    #[test]
+    fn set_pos_action_preserves_speller_and_immunize_flags() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<rules lang="en">
+    <rule id="SETPOS_FLAGS" name="set-pos flags">
+        <pattern>
+            <marker><token>run</token></marker>
+        </pattern>
+        <disambig postag="VB"/>
+    </rule>
+</rules>"#;
+        let disambig = XmlDisambiguator::from_xml(xml).unwrap();
+        let mut sentence = make_sentence_with_lemmas(vec![("run", "run", vec!["VB", "NN"])]);
+        sentence.tokens_mut()[0].ignore_spelling();
+        disambig.disambiguate(&mut sentence);
+        let token = &sentence.tokens()[0];
+        assert!(token.is_ignored_by_speller());
+        assert_eq!(readings_of(token), vec![(Some("run"), "VB".to_string())]);
+    }
+
     #[test]
     fn test_filter_disambiguation() {
         let xml = r#"<?xml version="1.0" encoding="utf-8"?>
