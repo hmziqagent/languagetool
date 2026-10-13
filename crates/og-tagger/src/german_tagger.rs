@@ -2258,6 +2258,46 @@ mod tests {
     }
 
     #[test]
+    fn in_place_tagging_fills_readings_and_preserves_offsets() {
+        let tagger = tagger();
+        let words = [("Der", 0usize, 3usize), ("Hund", 4, 8), ("schläft", 9, 16)];
+        let start = AnalyzedTokenReadings::new(
+            AnalyzedToken::new("<S>", 0, 0).with_pos_tags(vec!["SENT_START".to_string()]),
+        );
+        let mut tokens = vec![start];
+        tokens.extend(words.iter().map(|(text, start, end)| {
+            AnalyzedTokenReadings::new(AnalyzedToken::new(*text, *start, *end))
+        }));
+        og_core::checker::Tagger::tag(&tagger, &mut tokens);
+        assert_eq!(tokens[0].token().token(), "<S>");
+        assert!(
+            tokens[0].token().pos_tags() == ["SENT_START"],
+            "{:?}",
+            tokens[0].token().pos_tags()
+        );
+        for (i, (text, start, end)) in words.iter().enumerate() {
+            let atr = &tokens[i + 1];
+            assert_eq!(atr.token().token(), *text);
+            assert_eq!(atr.token().start(), *start);
+            assert_eq!(atr.token().end(), *end);
+        }
+        assert!(
+            tokens[1].has_pos_tag("ART:DEF:NOM:SIN:MAS"),
+            "{:?}",
+            tokens[1].all_pos_tags()
+        );
+        assert!(
+            tokens[2].has_pos_tag("SUB:NOM:SIN:MAS"),
+            "{:?}",
+            tokens[2].all_pos_tags()
+        );
+        let by_value = Tagger::tag(&tagger, &["Der", "Hund", "schläft"]);
+        for (in_place, by_value) in tokens[1..].iter().zip(by_value.iter()) {
+            assert_eq!(in_place.all_pos_tags(), by_value.all_pos_tags());
+        }
+    }
+
+    #[test]
     fn capitalized_sentence_start_falls_back_to_lowercase() {
         let tagger = tagger();
         let result = Tagger::tag(&tagger, &["Der", "Hund", "schläft"]);
