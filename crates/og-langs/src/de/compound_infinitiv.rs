@@ -219,20 +219,20 @@ fn token_matches_anti_pattern_at(tokens: &[&AnalyzedTokenReadings], zu_index: us
         }
         let matcher = &pattern[pattern_pos];
         if let Matcher::TokenSkip(_, skip) = matcher {
-            for gap in 0..=*skip {
-                let next = token_pos + gap;
-                if next < tokens.len()
-                    && matcher_matches(matcher, regexes[pattern_pos].as_ref(), tokens[next])
-                    && covers(
+            if token_pos < tokens.len()
+                && matcher_matches(matcher, regexes[pattern_pos].as_ref(), tokens[token_pos])
+            {
+                for gap in 0..=*skip {
+                    if covers(
                         tokens,
                         regexes,
                         pattern,
                         pattern_pos + 1,
-                        next + 1,
+                        token_pos + 1 + gap,
                         zu_index,
-                    )
-                {
-                    return true;
+                    ) {
+                        return true;
+                    }
                 }
             }
             return false;
@@ -496,6 +496,7 @@ impl Rule for CompoundInfinitivRule {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
 
     #[test]
     fn fires_on_getrenntes_zu_infinitiv() {
@@ -525,5 +526,229 @@ mod tests {
                 .iter()
                 .any(|m| m.rule().id() == "COMPOUND_INFINITIV_RULE")
         );
+    }
+
+    #[test]
+    fn no_fire_when_the_aus_heraus_gap_stays_within_the_java_skip() {
+        let engine = crate::engine::LanguageEngine::shared_for_code("de").expect("german engine");
+        for text in [
+            "Sie scheint aus Spanien heraus zu kaufen.",
+            "Er will aus dem alten Haus heraus zu kaufen.",
+        ] {
+            let matches = engine.check(text);
+            assert!(
+                !matches
+                    .matches
+                    .iter()
+                    .any(|m| m.rule().id() == "COMPOUND_INFINITIV_RULE"),
+                "{text}: Java's token(\"aus\").setSkip(3) anti-pattern must suppress the rule"
+            );
+        }
+    }
+
+    #[test]
+    fn fires_when_the_aus_heraus_gap_exceeds_the_java_skip() {
+        let engine = crate::engine::LanguageEngine::shared_for_code("de").expect("german engine");
+        let matches = engine.check("Sie kauft aus dem alten leerstehenden Haus heraus zu gehen.");
+        assert!(
+            matches
+                .matches
+                .iter()
+                .any(|m| m.rule().id() == "COMPOUND_INFINITIV_RULE"),
+            "four tokens between 'aus' and 'heraus' fall outside setSkip(3)"
+        );
+    }
+
+    use og_core::AnalyzedToken;
+
+    fn tok(word: &str, tags: &[&str]) -> AnalyzedTokenReadings {
+        let primary = AnalyzedToken::new(word, 0, word.len());
+        let readings = if tags.is_empty() {
+            Vec::new()
+        } else {
+            tags.iter()
+                .map(|t| AnalyzedToken::new(word, 0, word.len()).with_pos_tags(vec![t.to_string()]))
+                .collect()
+        };
+        AnalyzedTokenReadings::new(primary).with_readings(readings)
+    }
+
+    fn imp(word: &str, lemma: &str) -> AnalyzedTokenReadings {
+        let primary = AnalyzedToken::new(word, 0, word.len());
+        AnalyzedTokenReadings::new(primary).with_readings(vec![
+            AnalyzedToken::new(word, 0, word.len())
+                .with_lemma(lemma)
+                .with_pos_tags(vec!["VER:IMP".to_string()]),
+        ])
+    }
+
+    #[test]
+    fn exception_arms_match_the_java_list() {
+        let rule = CompoundInfinitivRule::new(None);
+        for tokens in [
+            vec![
+                tok("Er", &[]),
+                tok("kommt", &["VER:3S"]),
+                tok("an", &[]),
+                tok("zu", &[]),
+            ],
+            vec![
+                tok("Er", &[]),
+                tok("ist", &[]),
+                tok("schwer", &[]),
+                tok("zu", &[]),
+            ],
+            vec![
+                tok("Er", &[]),
+                tok("weiter", &[]),
+                tok("zu", &[]),
+                tok("sagen", &[]),
+            ],
+            vec![
+                tok("Er", &[]),
+                tok("dazu", &[]),
+                tok("zu", &[]),
+                tok("sagen", &[]),
+            ],
+            vec![
+                tok("Er", &[]),
+                tok("davon", &[]),
+                tok("zu", &[]),
+                tok("tragen", &[]),
+            ],
+            vec![
+                tok("Er", &[]),
+                tok("davon", &[]),
+                tok("zu", &[]),
+                tok("machen", &[]),
+            ],
+            vec![
+                tok("Er", &[]),
+                tok("daran", &[]),
+                tok("zu", &[]),
+                tok("geben", &[]),
+            ],
+            vec![
+                tok("Er", &[]),
+                tok("ab", &[]),
+                tok("zu", &[]),
+                tok("gehen", &[]),
+            ],
+            vec![
+                tok("Er", &[]),
+                tok("wieder", &[]),
+                tok("zu", &[]),
+                tok("errichten", &[]),
+            ],
+        ] {
+            let n = tokens
+                .iter()
+                .position(|t| t.token().token() == "zu")
+                .unwrap();
+            let refs: Vec<&AnalyzedTokenReadings> = tokens.iter().collect();
+            assert!(
+                rule.is_exception(&refs, n),
+                "{:?}: expected the Java exception",
+                refs.iter().map(|t| t.token().token()).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn imperative_and_fang_walks_accept_known_compounds() {
+        let rule = CompoundInfinitivRule::new(None);
+        let tokens = [
+            tok("Er", &[]),
+            imp("Gib", "geben"),
+            tok("aus", &[]),
+            tok("zu", &[]),
+            tok("geben", &[]),
+        ];
+        let refs: Vec<&AnalyzedTokenReadings> = tokens.iter().collect();
+        assert!(rule.is_exception(&refs, 3), "ausgeben is a known compound");
+
+        let tokens = [
+            tok("Er", &[]),
+            tok("hat", &[]),
+            tok("Fang", &[]),
+            tok("an", &[]),
+            tok("zu", &[]),
+            tok("fangen", &[]),
+        ];
+        let refs: Vec<&AnalyzedTokenReadings> = tokens.iter().collect();
+        assert!(rule.is_exception(&refs, 4), "anfangen is a known compound");
+    }
+
+    #[test]
+    fn finite_verb_walk_falls_through_to_the_preposition_walks() {
+        let rule = CompoundInfinitivRule::new(None);
+        let tokens = [
+            tok("Er", &[]),
+            tok("sann", &["VER:3S"]),
+            tok("dann", &[]),
+            tok("an", &[]),
+            tok("zu", &[]),
+            tok("ziehen", &[]),
+        ];
+        let refs: Vec<&AnalyzedTokenReadings> = tokens.iter().collect();
+        assert!(
+            !rule.is_exception(&refs, 4),
+            "'ansann' is not a word, so the verb walk cannot excuse the split infinitive"
+        );
+
+        for (word, earlier) in [("aus", "von"), ("aus", "vom"), ("her", "vor")] {
+            let tokens = [
+                tok("Er", &[]),
+                tok("kam", &["VER:3S"]),
+                tok(earlier, &[]),
+                tok("gestern", &[]),
+                tok(word, &[]),
+                tok("zu", &[]),
+                tok("kaufen", &[]),
+            ];
+            let refs: Vec<&AnalyzedTokenReadings> = tokens.iter().collect();
+            assert!(
+                rule.is_exception(&refs, 5),
+                "{earlier} ... {word} ... zu: Java's preposition walk must fire"
+            );
+        }
+    }
+
+    #[test]
+    fn anti_patterns_tolerate_optional_adverbs() {
+        let with_adverb: Vec<AnalyzedTokenReadings> = vec![
+            tok("hin", &[]),
+            tok("und", &[]),
+            tok("wieder", &["ADV"]),
+            tok("her", &[]),
+            tok("zu", &[]),
+            tok("gehen", &[]),
+        ];
+        let without_adverb: Vec<AnalyzedTokenReadings> = vec![
+            tok("hin", &[]),
+            tok("und", &[]),
+            tok("her", &[]),
+            tok("zu", &[]),
+            tok("gehen", &[]),
+        ];
+        for tokens in [with_adverb, without_adverb] {
+            let zu_index = tokens
+                .iter()
+                .position(|t| t.token().token() == "zu")
+                .unwrap();
+            let refs: Vec<&AnalyzedTokenReadings> = tokens.iter().collect();
+            assert!(token_matches_anti_pattern_at(&refs, zu_index));
+        }
+    }
+
+    #[test]
+    fn misspelling_check_splits_on_known_zu_compounds() {
+        let rule = CompoundInfinitivRule::new(None);
+        assert!(!rule.is_misspelled("haus"), "known words stay quiet");
+        assert!(
+            !rule.is_misspelled("anzuzeigen"),
+            "an + zeigen around zu counts as known"
+        );
+        assert!(rule.is_misspelled("qzwuuvv"), "unknown junk is misspelled");
     }
 }
