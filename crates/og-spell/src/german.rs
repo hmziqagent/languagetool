@@ -2066,6 +2066,39 @@ mod tests {
     }
 
     #[test]
+    fn gender_star_plural_forms_split_on_the_part_base() {
+        let Some(s) = speller() else {
+            eprintln!("Skipping: German resources not present");
+            return;
+        };
+        assert!(
+            !s.is_misspelled("Autofahrerinnen"),
+            "the plain compound is a valid word"
+        );
+        assert!(
+            !s.is_misspelled("Expert*innen"),
+            "a star plural over a standalone suffix is accepted"
+        );
+        assert!(
+            s.is_misspelled("Autofahrer*innen"),
+            "the split part 'fahrerinnen' is not a word, so the star plural is rejected"
+        );
+    }
+
+    #[test]
+    fn binnen_i_forms_inside_compounds_are_rejected() {
+        let Some(s) = speller() else {
+            eprintln!("Skipping: German resources not present");
+            return;
+        };
+        assert!(!s.is_misspelled("Autofahrerinnen"));
+        assert!(
+            s.is_misspelled("AutofahrerIn"),
+            "the Binnen-I form of the compound is rejected"
+        );
+    }
+
+    #[test]
     fn hyphenated_and_three_part_families() {
         let Some(s) = speller() else {
             eprintln!("Skipping: German resources not present");
