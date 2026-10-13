@@ -2200,7 +2200,7 @@ fn regex_cache_release_clears_cached_compilations() {
     let first = shared_cached_regex("og-xml-release-probe-[0-9]+").unwrap();
     og_core::releasable::release_all();
     let second = shared_cached_regex("og-xml-release-probe-[0-9]+").unwrap();
-    assert!(false || !std::sync::Arc::ptr_eq(&first, &second));
+    assert!(!std::sync::Arc::ptr_eq(&first, &second));
     assert!(second.is_match("og-xml-release-probe-42"));
 }
 
