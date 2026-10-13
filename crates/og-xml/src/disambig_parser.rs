@@ -1371,6 +1371,206 @@ mod tests {
 }
 
 #[cfg(test)]
+#[test]
+fn paired_elements_and_edge_attrs_are_parsed() {
+    let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<rules lang="en">
+    <!-- a comment
+    spanning lines with <!ENTITY decoy "x"> inside -->
+    <rulegroup id="GRP" name="Group">
+        <antipattern case_sensitive="yes">
+            <marker><token>anti</token></marker>
+        </antipattern>
+        <rule foo="unknown">
+            <filter class="DemoFilter" args="a b"></filter>
+            <pattern case_sensitive="yes">
+                <unify-ignore><token>skip</token></unify-ignore>
+                <token case_sensitive="yes" spacebefore="yes" chunk="B-NP" chunk_re="B-.*">word<match no="1" postag="NN"/></token>
+                <token>exc<exception case_sensitive="yes" bogus="x" scope="next">BAD</exception></token>
+                <or><token>either</token><exception postag="XYZ"/></or>
+                <and><token>both</token><exception postag="ZYX"/></and>
+                <marker><token>marked</token></marker>
+            </pattern>
+            <disambig action="filterall"/>
+            <example type="ambiguous" inputform="in" outputform="out" bogus="y">Some <marker>example</marker> text.</example>
+            <example type="untouched">Untouched text.</example>
+        </rule>
+    </rulegroup>
+</rules>"#;
+
+    let parser = DisambigXmlParser::new();
+    let result = parser.parse(xml).unwrap();
+
+    assert_eq!(result.rules.len(), 1);
+    let rule = &result.rules[0];
+    assert_eq!(rule.id.as_deref(), Some("GRP"));
+    assert_eq!(rule.filter_class.as_deref(), Some("DemoFilter"));
+    assert_eq!(rule.filter_args.as_deref(), Some("a b"));
+    assert_eq!(rule.antipatterns.len(), 1);
+    assert!(rule.antipatterns[0].case_sensitive);
+    assert_eq!(rule.antipatterns[0].marker_elem_start, Some(0));
+    assert_eq!(rule.antipatterns[0].marker_elem_end, Some(1));
+    assert!(rule.pattern.case_sensitive);
+
+    let skip = &rule.pattern.tokens[0];
+    assert_eq!(skip.text.as_deref(), Some("skip"));
+    assert!(skip.unify_neutral);
+
+    let token = &rule.pattern.tokens[1];
+    assert!(token.case_sensitive);
+    assert!(token.case_sensitive_set);
+    assert_eq!(token.space_before.as_deref(), Some("yes"));
+    assert_eq!(token.chunk.as_deref(), Some("B-NP"));
+    assert_eq!(token.chunk_re.as_deref(), Some("B-.*"));
+    assert_eq!(token.match_no, Some(1));
+    assert_eq!(token.match_no_postag.as_deref(), Some("NN"));
+
+    let exc_token = &rule.pattern.tokens[2];
+    assert_eq!(exc_token.exceptions.len(), 1);
+    let exc = &exc_token.exceptions[0];
+    assert!(exc.case_sensitive);
+    assert!(exc.case_sensitive_set);
+    assert_eq!(exc.scope.as_deref(), Some("next"));
+    assert_eq!(exc.text.as_deref(), Some("BAD"));
+
+    let or_group = rule
+        .pattern
+        .elements
+        .iter()
+        .find_map(|e| match e {
+            XmlPatternElement::OrGroup(g) => Some(g),
+            _ => None,
+        })
+        .expect("or group");
+    assert_eq!(or_group.alternatives.len(), 1);
+    assert_eq!(
+        or_group.alternatives[0].exceptions[0].postag.as_deref(),
+        Some("XYZ")
+    );
+    let and_group = rule
+        .pattern
+        .elements
+        .iter()
+        .find_map(|e| match e {
+            XmlPatternElement::AndGroup(g) => Some(g),
+            _ => None,
+        })
+        .expect("and group");
+    assert_eq!(and_group.constraints.len(), 1);
+    assert_eq!(
+        and_group.constraints[0].exceptions[0].postag.as_deref(),
+        Some("ZYX")
+    );
+    assert!(rule.pattern.marker_elem_start.is_some());
+
+    assert_eq!(rule.examples.len(), 1);
+    assert_eq!(rule.examples[0].input_form.as_deref(), Some("in"));
+    assert_eq!(rule.examples[0].output_form.as_deref(), Some("out"));
+    assert!(rule.examples[0].text.contains("<marker>"));
+    assert_eq!(rule.untouched_examples, vec!["Untouched text.".to_string()]);
+    assert!(matches!(rule.disambig, DisambigAction::FilterAll));
+}
+
+#[test]
+fn disambig_action_variants_and_unification_tokens_are_parsed() {
+    let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<rules lang="en">
+    <unification feature="number">
+        <equivalence type="sg" postag="NN" postag_regexp="no" bogus="z"><token postag="NN"/></equivalence>
+        <equivalence type="pl"><token postag="NNS">words</token></equivalence>
+    </unification>
+    <rule id="SETPOS" name="setpos">
+        <pattern><token>a</token></pattern>
+        <disambig action="replace" postag="NN"/>
+    </rule>
+    <rule id="RMDIR" name="rmdir">
+        <pattern><token>b</token></pattern>
+        <disambig action="remove" postag="NN"/>
+    </rule>
+    <rule id="ADD" name="add">
+        <pattern><token>c</token></pattern>
+        <disambig action="add"><wd pos="VB" bogus="q">run</wd><wd pos="NN"/></disambig>
+    </rule>
+    <rule id="MATCHED" name="matched">
+        <pattern><token>d</token></pattern>
+        <disambig action="filter" postag="NN"><match postag="NN" postag_regexp="yes" postag_replace="VB">lemma</match></disambig>
+    </rule>
+    <rule id="IGNORE" name="ignore">
+        <pattern><token>e</token></pattern>
+        <disambig action="ignore_spelling"/>
+    </rule>
+    <rule id="UNIFY" name="unify">
+        <pattern><token>f</token></pattern>
+        <disambig action="unify"/>
+    </rule>
+    <rule id="IMMUNE" name="immune">
+        <pattern><token>g</token></pattern>
+        <disambig action="immunize"/>
+    </rule>
+    <rule id="BARE" name="bare">
+        <pattern><token>h</token></pattern>
+        <disambig postag="UH"/>
+    </rule>
+    <rule id="EMPTYACT" name="emptyact">
+        <pattern><token>i</token></pattern>
+        <disambig action="replace"/>
+    </rule>
+</rules>"#;
+
+    let parser = DisambigXmlParser::new();
+    let result = parser.parse(xml).unwrap();
+
+    assert_eq!(result.unifications.len(), 1);
+    let uni = &result.unifications[0];
+    assert_eq!(uni.feature, "number");
+    assert_eq!(uni.equivalences.len(), 2);
+    assert_eq!(uni.equivalences[0].eq_type, "sg");
+    assert!(uni.equivalences[0].exact);
+    assert_eq!(uni.equivalences[0].postag, "NN");
+    assert_eq!(uni.equivalences[1].postag, "NNS");
+
+    let by_id = |id: &str| {
+        result
+            .rules
+            .iter()
+            .find(|r| r.id.as_deref() == Some(id))
+            .unwrap()
+    };
+    assert!(matches!(&by_id("SETPOS").disambig, DisambigAction::SetPos(p) if p == "NN"));
+    assert!(matches!(&by_id("RMDIR").disambig, DisambigAction::RemovePostag(p) if p == "NN"));
+    match &by_id("ADD").disambig {
+        DisambigAction::Add(wds) => {
+            assert_eq!(wds.len(), 2);
+            assert_eq!(wds[0].pos.as_deref(), Some("VB"));
+            assert_eq!(wds[0].text, "run");
+            assert_eq!(wds[1].text, "");
+        }
+        other => panic!("Expected Add, got {:?}", other),
+    }
+    match &by_id("MATCHED").disambig {
+        DisambigAction::Match(m) => {
+            assert_eq!(m.postag.as_deref(), Some("NN"));
+            assert!(m.postag_regexp);
+            assert_eq!(m.postag_replace.as_deref(), Some("VB"));
+            assert_eq!(m.lemma.as_deref(), Some("lemma"));
+        }
+        other => panic!("Expected Match, got {:?}", other),
+    }
+    assert!(matches!(
+        by_id("IGNORE").disambig,
+        DisambigAction::IgnoreSpelling
+    ));
+    assert!(matches!(by_id("UNIFY").disambig, DisambigAction::Unify));
+    assert!(matches!(by_id("IMMUNE").disambig, DisambigAction::Immunize));
+    assert!(matches!(&by_id("BARE").disambig, DisambigAction::SetPos(p) if p == "UH"));
+    assert!(matches!(&by_id("EMPTYACT").disambig, DisambigAction::Replace(wds) if wds.is_empty()));
+}
+
+#[test]
+fn reader_errors_are_reported() {
+    assert!(DisambigXmlParser::new().parse("<rules").is_err());
+}
+
 mod self_closing_exception_tests {
     use super::*;
 
