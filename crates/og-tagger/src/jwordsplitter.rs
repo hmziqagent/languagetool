@@ -509,4 +509,39 @@ mod tests {
             vec!["Buchhaltungs", "trick"]
         );
     }
+
+    #[test]
+    fn non_strict_mode_uses_exception_pieces_for_unknown_sides() {
+        assert_eq!(
+            tokenize_with_mode("stubepilotsendung", false),
+            vec!["stube", "Pilot", "sendung"]
+        );
+        assert_eq!(
+            tokenize_with_mode("xyzcomicstrip", false),
+            vec!["xyz", "Comic", "strip"]
+        );
+        assert_eq!(
+            tokenize_with_mode("Bruttorentenniveauxyz", false),
+            vec!["Brut", "torentenniveauxyz"]
+        );
+    }
+
+    #[test]
+    fn samt_compounds_move_the_linking_s_to_the_left_part() {
+        assert_eq!(tokenize("baumsamt"), vec!["baums", "amt"]);
+        assert_eq!(tokenize("Haussamtes"), vec!["Hauss", "amtes"]);
+        assert_eq!(tokenize("Süßigkeitensamts"), vec!["Süßigkeitens", "amts"]);
+    }
+
+    #[test]
+    fn trailing_hyphen_becomes_its_own_stripped_piece() {
+        assert_eq!(tokenize("Obdachlosen-"), vec!["Obdach", "losen", ""]);
+    }
+
+    #[test]
+    fn oversized_words_are_returned_whole() {
+        let long = "a".repeat(71);
+        assert_eq!(tokenize(&long), vec![long.clone()]);
+        assert_eq!(tokenize_with_mode(&long, false), vec![long]);
+    }
 }
