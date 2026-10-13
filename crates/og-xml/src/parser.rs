@@ -3385,4 +3385,81 @@ mod tests {
         assert_eq!(clone.pattern.unify_groups[0].token_start, 2);
         assert_eq!(clone.pattern.unify_groups[0].token_end, 3);
     }
+
+    #[test]
+    fn test_parse_strips_doctype_and_expands_internal_entities() {
+        let xml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE rules [\n<!ENTITY greet \"hello\">\n]>\n<rules lang=\"en\"><category id=\"C\" name=\"c\"><rule id=\"D\" name=\"d\"><pattern><token>&greet;</token></pattern><message>m</message><url/><weird/></rule></category></rules>";
+
+        let result = XmlRuleParser::default().parse(xml).unwrap();
+
+        assert_eq!(
+            result.rules[0].pattern.tokens[0].text.as_deref(),
+            Some("hello")
+        );
+    }
+
+    #[test]
+    fn test_expand_internal_entities_nested_invalid_and_unknown() {
+        let expanded = XmlRuleParser::expand_entities(
+            "<!ENTITY a \"x&b;\">\n<!ENTITY b \"y\">\n&a;&a;&b;&unknown;",
+        );
+        assert_eq!(
+            expanded,
+            "<!ENTITY a \"xy\">\n<!ENTITY b \"y\">\nxyxyy&unknown;"
+        );
+        assert_eq!(
+            XmlRuleParser::expand_entities("&bad name; more"),
+            "&bad name; more"
+        );
+        assert_eq!(XmlRuleParser::expand_entities("a & b"), "a & ba & b");
+
+        let cyclic = XmlRuleParser::expand_entities("<!ENTITY cyc \"z&cyc;end\">\n&cyc;");
+        let usage = cyclic.rsplit('\n').next().unwrap();
+        assert!(usage.starts_with('z'));
+        assert!(usage.matches('z').count() >= 16);
+        assert!(usage.ends_with("end"));
+    }
+
+    #[test]
+    fn test_expand_external_entities_with_base_dir() {
+        let dir = std::env::temp_dir().join("og_xml_entity_tests");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("ent.dtd"), "<!ENTITY foo \"bar\">").unwrap();
+        std::fs::write(
+            dir.join("self.dtd"),
+            "<!ENTITY % self SYSTEM \"self.dtd\">\n%self;",
+        )
+        .unwrap();
+
+        let with_marker = "<!ENTITY % ext SYSTEM \"ent.dtd\">\n%ext;\n&foo;";
+        assert_eq!(
+            XmlRuleParser::expand_entities_with_base(with_marker, Some(&dir)),
+            "<!ENTITY % ext SYSTEM \"ent.dtd\">\n<!ENTITY foo \"bar\">\nbar"
+        );
+        assert_eq!(
+            XmlRuleParser::expand_entities_with_base(with_marker, None),
+            with_marker
+        );
+
+        let unused = "<!ENTITY % ext SYSTEM \"ent.dtd\">\n&foo;";
+        assert_eq!(
+            XmlRuleParser::expand_entities_with_base(unused, Some(&dir)),
+            unused
+        );
+
+        let self_ref = "<!ENTITY % ext SYSTEM \"self.dtd\">\n%ext;";
+        let expanded = XmlRuleParser::expand_entities_with_base(self_ref, Some(&dir));
+        assert!(expanded.matches("%self;").count() >= 1);
+        assert!(expanded.matches("<!ENTITY").count() >= 8);
+    }
+
+    #[test]
+    fn test_parse_reports_reader_errors() {
+        assert!(XmlRuleParser::new().parse("<rules").is_err());
+        assert!(
+            XmlRuleParser::new()
+                .parse("<rules lang=\"en\"></rules>")
+                .is_ok()
+        );
+    }
 }
