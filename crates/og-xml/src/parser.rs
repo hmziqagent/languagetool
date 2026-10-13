@@ -3547,4 +3547,107 @@ mod tests {
                 .is_ok()
         );
     }
+
+    #[test]
+    fn test_parse_rule_level_regexp_antipattern_and_token_attrs() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <phrases>
+                <phrase id="HEAD">
+                    <token>alpha</token>
+                </phrase>
+                <phrase id="MIX">
+                    <phraseref idref="HEAD"></phraseref>
+                    <token>tail</token>
+                    <token spacebefore="yes" chunk="I-NP"/>
+                </phrase>
+            </phrases>
+            <unification feature="gender">
+                <equivalence type="masc">
+                    <token postag="NN:M"></token>
+                </equivalence>
+            </unification>
+            <category id="C" name="c">
+                <rule id="R0" name="r0">
+                    <regexp case_sensitive="yes" type="exact" mark="1">warn</regexp>
+                </rule>
+                <rule id="R0B" name="r0b">
+                    <regexp case_sensitive="no" type="hello" mark="3"/>
+                </rule>
+                <rule id="R1" name="r">
+                    <antipattern case_sensitive="yes">
+                        <token>beta</token>
+                        <phraseref idref="MIX"/>
+                    </antipattern>
+                    <pattern>
+                        <token spacebefore="yes" chunk="B-NP" chunk_re="B-.*" skip="1" min="1" max="2"/>
+                        <token>word</token>
+                    </pattern>
+                    <message>Use <suggestion><match no="1" case_conversion="startlower" regexp_match="a" regexp_replace="b" include_inflected="yes" include_skipped="yes" postag_replace="NN"/></suggestion>.</message>
+                </rule>
+                <rule id="R2" name="r2">
+                    <pattern>
+                        <unify>
+                            <feature id="gender"><type id="masc"></type></feature>
+                            <token>a</token>
+                            <token>b</token>
+                        </unify>
+                    </pattern>
+                    <message>m</message>
+                </rule>
+            </category>
+        </rules>"#;
+
+        let result = XmlRuleParser::new().parse(xml).unwrap();
+
+        let r0 = &result.rules[0];
+        let rule_regexp = r0.rule_regexp.as_ref().expect("rule regexp");
+        assert_eq!(rule_regexp.text, "warn");
+        assert!(rule_regexp.case_sensitive);
+        assert!(rule_regexp.exact);
+        assert_eq!(rule_regexp.mark, 1);
+
+        let r0b = &result.rules[1];
+        let empty_regexp = r0b.rule_regexp.as_ref().expect("self-closing rule regexp");
+        assert_eq!(empty_regexp.text, "");
+        assert!(!empty_regexp.case_sensitive);
+        assert!(!empty_regexp.exact);
+        assert_eq!(empty_regexp.mark, 3);
+
+        let r1 = &result.rules[2];
+
+        let anti = &r1.antipatterns[0];
+        assert!(anti.case_sensitive);
+        let anti_texts: Vec<Option<&str>> = anti.tokens.iter().map(|t| t.text.as_deref()).collect();
+        assert_eq!(
+            anti_texts,
+            vec![Some("beta"), Some("alpha"), Some("tail"), None]
+        );
+
+        let token = &r1.pattern.tokens[0];
+        assert_eq!(token.space_before.as_deref(), Some("yes"));
+        assert_eq!(token.chunk.as_deref(), Some("B-NP"));
+        assert_eq!(token.chunk_re.as_deref(), Some("B-.*"));
+        assert_eq!(token.skip, 1);
+
+        assert_eq!(result.unifications[0].equivalences[0].postag, "NN:M");
+
+        let parts = &r1.suggestions[0].parts;
+        let matched = parts
+            .iter()
+            .find_map(|p| match p {
+                SuggestionPart::Match(m) => Some(m),
+                _ => None,
+            })
+            .expect("match part in suggestion");
+        assert_eq!(matched.case_conversion.as_deref(), Some("startlower"));
+        assert_eq!(matched.regexp_match.as_deref(), Some("a"));
+        assert_eq!(matched.regexp_replace.as_deref(), Some("b"));
+        assert!(matched.include_inflected);
+        assert_eq!(matched.include_skipped.as_deref(), Some("yes"));
+        assert_eq!(matched.postag_replace.as_deref(), Some("NN"));
+
+        let r2 = &result.rules[3];
+        assert!(!r2.pattern.unify_groups.is_empty());
+    }
 }
