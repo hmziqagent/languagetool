@@ -1211,6 +1211,57 @@ mod tests {
     }
 
     #[test]
+    fn sentence_tokenizer_splits_on_srx_boundaries() {
+        let text = "One sentence. Another one? Yes!";
+        let ranges = TestSentenceTokenizer.split(text);
+        let texts: Vec<&str> = ranges.iter().map(|r| &text[r.start..r.end]).collect();
+        assert_eq!(texts, vec!["One sentence. ", "Another one? ", "Yes!"]);
+        assert!(TestSentenceTokenizer.split("").is_empty());
+    }
+
+    #[test]
+    fn german_grammar_rules_compile_and_share_the_cache() {
+        assert!(test_support::german_grammar_available());
+        let rules = test_support::german_grammar_rules();
+        assert!(
+            rules.rules.len() > 4000,
+            "de grammar rule count: {}",
+            rules.rules.len()
+        );
+        let again = test_support::german_grammar_rules();
+        assert!(std::sync::Arc::ptr_eq(&rules, &again));
+    }
+
+    #[test]
+    fn generic_grammar_rules_merge_the_ukrainian_extra_files() {
+        assert!(test_support::generic_grammar_available("uk"));
+        let rules = test_support::generic_grammar_rules("uk");
+        assert!(
+            rules
+                .rules
+                .iter()
+                .any(|r| r.id == "piv_with_proper_noun_1992"),
+            "rule from grammar-spelling.xml missing; {} rules total",
+            rules.rules.len()
+        );
+        let again = test_support::generic_grammar_rules("uk");
+        assert!(std::sync::Arc::ptr_eq(&rules, &again));
+    }
+
+    #[test]
+    fn shared_german_speller_dictionary_is_reused_while_alive() {
+        let dir = std::path::Path::new(
+            "/home/agent/opengrammar-rs/languagetool/languagetool-language-modules/de/src/main/resources/org/languagetool/resource/de",
+        );
+        let first = shared_german_speller_dictionary(dir);
+        let second = shared_german_speller_dictionary(dir);
+        match (first, second) {
+            (Some(a), Some(b)) => assert!(std::sync::Arc::ptr_eq(&a, &b)),
+            _ => panic!("german speller dictionary should load from {dir:?}"),
+        }
+    }
+
+    #[test]
     fn test_runner_incorrect_example_passes() {
         let runner = test_support::shared_runner();
         let xml = simple_xml(
