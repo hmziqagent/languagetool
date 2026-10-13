@@ -2951,6 +2951,39 @@ mod tests {
     }
 
     #[test]
+    fn non_separable_prefix_imperative_and_praesens_forms() {
+        let tagger = tagger();
+
+        for (word, prefix_lemma) in [("verlasse", "verlassen"), ("behalte", "behalten")] {
+            let result = Tagger::tag(&tagger, &[word]);
+            let tags = tags_of(&result[0]);
+            assert!(
+                tags.iter()
+                    .any(|(l, t)| l == prefix_lemma && t.starts_with("VER:IMP:SIN")),
+                "{word} imperative missing: {tags:?}"
+            );
+            assert!(
+                tags.iter()
+                    .any(|(l, t)| l == prefix_lemma && t.starts_with("VER:1:SIN:PRÄ")),
+                "{word} first person praesens missing: {tags:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn elided_imperative_e_form_tags_as_imperative() {
+        let tagger = tagger();
+
+        let result = Tagger::tag(&tagger, &["Er", "verlier", "jetzt"]);
+        let tags = tags_of(&result[1]);
+        assert!(
+            tags.iter()
+                .any(|(l, t)| l == "verlieren" && t.starts_with("VER:IMP:SIN")),
+            "{tags:?}"
+        );
+    }
+
+    #[test]
     fn modal_like_prefixes_stay_unmodified() {
         let tagger = tagger();
 
