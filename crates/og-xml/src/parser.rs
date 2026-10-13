@@ -2933,4 +2933,180 @@ mod tests {
             vec![("number".to_string(), vec!["sg".to_string()])]
         );
     }
+
+    #[test]
+    fn test_parse_rule_metadata_elements_and_attrs() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <category id="GRAMMAR" name="Grammar" type="grammar" description="Grammar issues">
+                <rule id="META" name="Meta" type="typographical" tags="prio:1 beta">
+                    <pattern>
+                        <token>foo</token>
+                    </pattern>
+                    <message>Test</message>
+                    <short>Short msg</short>
+                    <url>https://example.org/rule</url>
+                    <filter class="ExampleFilter" args="arg1 arg2"/>
+                </rule>
+            </category>
+        </rules>"#;
+
+        let result = XmlRuleParser::new().parse(xml).unwrap();
+
+        assert_eq!(result.categories.len(), 1);
+        assert_eq!(result.categories[0].issue_type.as_deref(), Some("grammar"));
+        assert_eq!(
+            result.categories[0].description.as_deref(),
+            Some("Grammar issues")
+        );
+        let rule = &result.rules[0];
+        assert_eq!(rule.issue_type.as_deref(), Some("typographical"));
+        assert_eq!(rule.tags, vec!["prio:1".to_string(), "beta".to_string()]);
+        assert_eq!(rule.short_message.as_deref(), Some("Short msg"));
+        assert_eq!(rule.url.as_deref(), Some("https://example.org/rule"));
+        let filter = rule.filter.as_ref().expect("filter");
+        assert_eq!(filter.class, "ExampleFilter");
+        assert_eq!(filter.args, "arg1 arg2");
+    }
+
+    #[test]
+    fn test_parse_rulegroup_type_tags_and_inheritance() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <rulegroup id="GRP" name="Group" type="colloquialisms" tags="alpha">
+                <rule id="A" name="A">
+                    <pattern><token>a</token></pattern>
+                    <message>m</message>
+                </rule>
+                <rule id="B" name="B" tags="beta">
+                    <pattern><token>b</token></pattern>
+                    <message>m</message>
+                </rule>
+            </rulegroup>
+        </rules>"#;
+
+        let result = XmlRuleParser::new().parse(xml).unwrap();
+
+        assert_eq!(result.rule_groups.len(), 1);
+        let group = &result.rule_groups[0];
+        assert_eq!(group.id.as_deref(), Some("GRP"));
+        assert_eq!(group.issue_type.as_deref(), Some("colloquialisms"));
+        assert_eq!(group.tags, vec!["alpha".to_string()]);
+        assert_eq!(group.rules[0].tags, vec!["alpha".to_string()]);
+        assert_eq!(
+            group.rules[1].tags,
+            vec!["beta".to_string(), "alpha".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_parse_rule_level_regexp_and_token_edge_attrs() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <category id="C" name="c">
+                <rule id="RE" name="Re">
+                    <regexp case_sensitive="yes" type="exact" mark="1">\bfoo\b</regexp>
+                    <message>Test</message>
+                </rule>
+                <rule id="ATTRS" name="Attrs">
+                    <pattern raw_pos="yes">
+                        <token spacebefore="yes" chunk="B-NP" chunk_re="B-.*">word</token>
+                        <token min="2" max="3" skip="-1" postag="NN" regexp="no">next</token>
+                    </pattern>
+                    <message>Test</message>
+                </rule>
+            </category>
+        </rules>"#;
+
+        let result = XmlRuleParser::new().parse(xml).unwrap();
+
+        let rr = result.rules[0].rule_regexp.as_ref().expect("rule regexp");
+        assert_eq!(rr.text, r"\bfoo\b");
+        assert!(rr.case_sensitive);
+        assert!(rr.exact);
+        assert_eq!(rr.mark, 1);
+        let rule = &result.rules[1];
+        assert!(rule.pattern.raw_pos);
+        let first = &rule.pattern.tokens[0];
+        assert_eq!(first.space_before.as_deref(), Some("yes"));
+        assert_eq!(first.chunk.as_deref(), Some("B-NP"));
+        assert_eq!(first.chunk_re.as_deref(), Some("B-.*"));
+        let second = &rule.pattern.tokens[1];
+        assert_eq!(second.text.as_deref(), Some("next"));
+        assert_eq!(second.min, None);
+        assert_eq!(second.max, Some(3));
+        assert_eq!(second.skip, -1);
+        assert_eq!(rule.pattern.tokens.len(), 3);
+        assert_eq!(rule.pattern.tokens[2].text.as_deref(), Some("next"));
+    }
+
+    #[test]
+    fn test_parse_match_elements_in_token_and_suggestion() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <category id="C" name="c">
+                <rule id="SUG" name="Sug">
+                    <pattern>
+                        <token>foo<match no="1" postag="JJ" postag_regexp="yes" postag_replace="NN" setpos="yes" regexp_match="f(o+)" regexp_replace="$1" case_conversion="startlower"/></token>
+                    </pattern>
+                    <message suppress_misspelled="yes">Use <match no="1" case_conversion="startupper" include_inflected="yes" include_skipped="follow" postag="NN" postag_regexp="yes" postag_replace="NNP" regexp_match=".*" regexp_replace="x"/> instead.</message>
+                    <suggestion suppress_misspelled="yes"><match no="2"/> bar</suggestion>
+                </rule>
+            </category>
+        </rules>"#;
+
+        let result = XmlRuleParser::new().parse(xml).unwrap();
+
+        let rule = &result.rules[0];
+        assert!(rule.suppress_misspelled);
+        let token = &rule.pattern.tokens[0];
+        assert_eq!(token.text.as_deref(), Some("foo\\1"));
+        assert_eq!(token.match_no, Some(1));
+        assert_eq!(token.match_no_postag.as_deref(), Some("JJ"));
+        assert!(token.match_no_postag_regexp);
+        assert_eq!(token.match_no_postag_replace.as_deref(), Some("NN"));
+        assert!(token.match_no_setpos);
+        assert_eq!(token.match_no_regexp_match.as_deref(), Some("f(o+)"));
+        assert_eq!(token.match_no_regexp_replace.as_deref(), Some("$1"));
+        assert_eq!(
+            token.match_no_case_conversion.as_deref(),
+            Some("startlower")
+        );
+        assert_eq!(rule.suggestions.len(), 1);
+        assert!(rule.suggestions[0].suppress_misspelled);
+        assert!(matches!(
+            &rule.suggestions[0].parts[0],
+            SuggestionPart::Match(m) if m.no == 2
+        ));
+        assert!(matches!(
+            &rule.suggestions[0].parts[1],
+            SuggestionPart::Text(t) if t == " bar"
+        ));
+    }
+
+    #[test]
+    fn test_parse_example_correction_attr() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <category id="C" name="c">
+                <rule id="EX" name="Ex">
+                    <pattern><token>foo</token></pattern>
+                    <message>Test</message>
+                    <example type="incorrect" correction="bar|baz">A foo sentence.</example>
+                    <example correction="qux">Another foo.</example>
+                </rule>
+            </category>
+        </rules>"#;
+
+        let result = XmlRuleParser::new().parse(xml).unwrap();
+
+        let examples = &result.rules[0].examples;
+        assert_eq!(examples.len(), 2);
+        assert_eq!(
+            examples[0].corrections,
+            vec!["bar".to_string(), "baz".to_string()]
+        );
+        assert_eq!(examples[1].example_type, XmlExampleType::Incorrect);
+        assert_eq!(examples[1].corrections, vec!["qux".to_string()]);
+    }
 }
