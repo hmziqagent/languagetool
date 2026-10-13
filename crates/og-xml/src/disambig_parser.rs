@@ -1567,10 +1567,76 @@ fn disambig_action_variants_and_unification_tokens_are_parsed() {
 }
 
 #[test]
+fn paired_disambig_actions_feature_and_token_match_are_parsed() {
+    let xml = r#"<rules lang="de">
+    <rule id="FA" name="fa">
+        <pattern><token>a</token></pattern>
+        <disambig action="filterall"></disambig>
+    </rule>
+    <rule id="IG" name="ig">
+        <pattern><token>b</token></pattern>
+        <disambig action="ignore_spelling"></disambig>
+    </rule>
+    <rule id="UN" name="un">
+        <pattern><token>c</token></pattern>
+        <disambig action="unify"></disambig>
+    </rule>
+    <rule id="IM" name="im">
+        <pattern><token>d</token></pattern>
+        <disambig action="immunize"></disambig>
+    </rule>
+    <rule id="SP" name="sp">
+        <pattern><token>e</token></pattern>
+        <disambig postag="NN"></disambig>
+    </rule>
+    <rule id="FM" name="fm">
+        <pattern>
+            <unify>
+                <feature id="gender"></feature>
+                <token>f</token>
+            </unify>
+            <token>wort<match no="1" postag="NN"></match></token>
+        </pattern>
+        <disambig action="filter" postag="NN"></disambig>
+    </rule>
+</rules>"#;
+
+    let result = DisambigXmlParser::new().parse(xml).unwrap();
+
+    let by_id = |id: &str| {
+        result
+            .rules
+            .iter()
+            .find(|r| r.id.as_deref() == Some(id))
+            .unwrap()
+    };
+    assert!(matches!(by_id("FA").disambig, DisambigAction::FilterAll));
+    assert!(matches!(
+        by_id("IG").disambig,
+        DisambigAction::IgnoreSpelling
+    ));
+    assert!(matches!(by_id("UN").disambig, DisambigAction::Unify));
+    assert!(matches!(by_id("IM").disambig, DisambigAction::Immunize));
+    assert!(matches!(&by_id("SP").disambig, DisambigAction::SetPos(p) if p == "NN"));
+    assert!(matches!(
+        &by_id("FM").disambig,
+        DisambigAction::Filter { postag } if postag == "NN"
+    ));
+
+    let fm = by_id("FM");
+    let unify = fm.unify.as_ref().expect("unify");
+    assert_eq!(unify.features, vec!["gender"]);
+    let matched = fm.pattern.tokens.last().unwrap();
+    assert_eq!(matched.match_no, Some(1));
+    assert_eq!(matched.match_no_postag.as_deref(), Some("NN"));
+}
+
+#[test]
 fn reader_errors_are_reported() {
     assert!(DisambigXmlParser::new().parse("<rules").is_err());
 }
 
+#[cfg(test)]
 mod self_closing_exception_tests {
     use super::*;
 
