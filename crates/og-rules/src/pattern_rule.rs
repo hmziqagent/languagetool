@@ -5880,6 +5880,15 @@ mod tests {
         assert_eq!(parse_month_esperanto("Oktobro"), 10);
         assert_eq!(parse_month_esperanto("jan"), 1);
         assert_eq!(parse_month_esperanto("decembro"), 12);
+        assert_eq!(parse_month_esperanto("februaro"), 2);
+        assert_eq!(parse_month_esperanto("marto"), 3);
+        assert_eq!(parse_month_esperanto("aprilo"), 4);
+        assert_eq!(parse_month_esperanto("majo"), 5);
+        assert_eq!(parse_month_esperanto("junio"), 6);
+        assert_eq!(parse_month_esperanto("julio"), 7);
+        assert_eq!(parse_month_esperanto("septembro"), 9);
+        assert_eq!(parse_month_esperanto("novembro"), 11);
+        assert_eq!(parse_month_esperanto("x"), 0);
 
         assert_eq!(parse_day_of_month_for(DateLang::Eo, "28-an"), 28);
         assert_eq!(parse_day_of_month_for(DateLang::Eo, "duan"), 2);
@@ -5956,6 +5965,13 @@ mod tests {
         assert_eq!(parse_month_catalan("mar\u{e7}"), 3);
         assert_eq!(parse_month_catalan("mar"), 0);
         assert_eq!(parse_month_catalan("x"), 0);
+        assert_eq!(parse_month_catalan("gener"), 1);
+        assert_eq!(parse_month_catalan("febrer"), 2);
+        assert_eq!(parse_month_catalan("abril"), 4);
+        assert_eq!(parse_month_catalan("maig"), 5);
+        assert_eq!(parse_month_catalan("juny"), 6);
+        assert_eq!(parse_month_catalan("novembre"), 11);
+        assert_eq!(parse_day_of_month_for(DateLang::Br, "x"), 0);
 
         assert_eq!(compute_weekday(2014, 10, 7), 3);
         assert_eq!(localized_day_name(DateLang::Ca, 3), "dimarts");
@@ -6718,6 +6734,139 @@ mod tests {
     }
 
     #[test]
+    fn future_date_filter_accepts_localized_month_names() {
+        set_test_date_hack(true);
+        for (class, lang, month) in [
+            ("org.languagetool.rules.en.FutureDateFilter", "en", "March"),
+            ("org.languagetool.rules.de.FutureDateFilter", "de", "März"),
+            ("org.languagetool.rules.it.FutureDateFilter", "it", "marzo"),
+            ("org.languagetool.rules.ru.FutureDateFilter", "ru", "марта"),
+        ] {
+            let xml = format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="{lang}">
+            <rule id="T_FUTURE_{lang}" name="future date">
+                <pattern>
+                    <token>am</token>
+                    <token regexp="yes">\d\d?</token>
+                    <token>{month}</token>
+                    <token regexp="yes">\d\d\d\d</token>
+                </pattern>
+                <filter class="{class}" args="year:\4 month:\3 day:\2"/>
+                <message>future date</message>
+            </rule>
+        </rules>"#
+            );
+            let future = format!("am 5 {month} 2015 .");
+            let past = format!("am 5 {month} 2013 .");
+            assert_eq!(
+                compile_and_match(&xml, &future).len(),
+                1,
+                "{class} keeps a date after the pinned current date"
+            );
+            assert_eq!(
+                compile_and_match(&xml, &past).len(),
+                0,
+                "{class} drops a date before the pinned current date"
+            );
+        }
+    }
+
+    #[test]
+    fn inn_number_filter_keeps_only_invalid_inns() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="ru">
+            <rule id="INN" name="inn">
+                <pattern>
+                    <marker><token regexp="yes">\d{10,12}</token></marker>
+                </pattern>
+                <filter class="org.languagetool.rules.ru.INNNumberFilter" args="inn:\1"/>
+                <message>m</message>
+            </rule>
+        </rules>"#;
+        assert_eq!(compile_and_match(xml, "ИНН 7830023695 здесь").len(), 0);
+        assert_eq!(compile_and_match(xml, "ИНН 7830023690 здесь").len(), 1);
+        let no_arg = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="ru">
+            <rule id="INN2" name="inn2">
+                <pattern>
+                    <marker><token regexp="yes">\d{10,12}</token></marker>
+                </pattern>
+                <filter class="org.languagetool.rules.ru.INNNumberFilter"/>
+                <message>m</message>
+            </rule>
+        </rules>"#;
+        assert_eq!(compile_and_match(no_arg, "ИНН 7830023690 здесь").len(), 0);
+    }
+
+    #[test]
+    fn russian_partial_pos_tag_filter_dispatch_checks_the_tagged_form() {
+        let xml = |postag: &str| {
+            format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="ru">
+            <rule id="RU_PARTIAL" name="partial">
+                <pattern>
+                    <token>стол</token>
+                </pattern>
+                <filter class="org.languagetool.rules.ru.RussianPartialPosTagFilter" args="no:1 regexp:(.+) postag_regexp:{postag}"/>
+                <message>m</message>
+            </rule>
+        </rules>"#
+            )
+        };
+        assert_eq!(compile_and_match(&xml("NN.*"), "это стол тут").len(), 1);
+        assert_eq!(compile_and_match(&xml("VB.*"), "это стол тут").len(), 0);
+    }
+
+    #[test]
+    fn russian_suppress_misspelled_filter_dispatch_drops_misspelled_suggestions() {
+        let xml = |suggestion: &str| {
+            format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="ru">
+            <rule id="RU_SUPPRESS" name="suppress">
+                <pattern>
+                    <marker><token>каждя</token></marker>
+                </pattern>
+                <suggestion>{suggestion}</suggestion>
+                <filter class="org.languagetool.rules.ru.RussianSuppressMisspelledSuggestionsFilter" args="suppressMatch:true"/>
+                <message>m</message>
+            </rule>
+        </rules>"#
+            )
+        };
+        assert_eq!(compile_and_match(&xml("каждя"), "каждя раз").len(), 0);
+        let matches = compile_and_match(&xml("каждый"), "каждя раз");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].replacements()[0].value(), "каждый");
+    }
+
+    #[test]
+    fn filter_args_fall_back_to_literals_when_backrefs_do_not_resolve() {
+        set_test_date_hack(true);
+        for args in ["year:\\9 maxYearsBack:10", "year:2010 maxYearsBack:\\x"] {
+            let xml = format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="de">
+            <rule id="RY" name="ry">
+                <pattern>
+                    <token regexp="yes">\d{{4}}</token>
+                </pattern>
+                <message>m</message>
+                <filter class="org.languagetool.rules.de.RecentYearFilter" args="{args}"/>
+            </rule>
+        </rules>"#
+            );
+            assert_eq!(
+                compile_and_match(&xml, "Im Jahr 2010.").len(),
+                0,
+                "args {args} cannot resolve to a recent year"
+            );
+        }
+    }
+
+    #[test]
     fn ru_date_check_filter_parses_russian_months_and_weekdays() {
         set_test_date_hack(true);
         let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -7108,6 +7257,68 @@ mod tests {
         let from = matches[0].offset();
         let to = from + matches[0].length();
         assert_eq!(&text[from..to], "Thé Dákk Kínght Ríses");
+    }
+
+    #[test]
+    fn multitoken_speller_filter_uppercases_suggestions_for_all_caps_errors() {
+        let engine = engine_with_words(
+            &[
+                "good", "god", "the", "dark", "knight", "rises", "rocky", "mountain",
+            ],
+            "The Dark Knight Rises\nRocky Mountain National Park # comment\n",
+        );
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <rule id="MULTITOKEN" name="multitoken">
+                <pattern>
+                    <marker>
+                        <token>THÉ</token>
+                        <token>DÁKK</token>
+                        <token>KÍNGHT</token>
+                        <token>RÍSES</token>
+                    </marker>
+                </pattern>
+                <filter class="org.languagetool.rules.spelling.multitoken.MultitokenSpellerFilter"/>
+                <message>m</message>
+            </rule>
+        </rules>"#;
+        let text = "I said , THÉ DÁKK KÍNGHT RÍSES .";
+        let matches = match_with_engine(&engine, xml, text);
+        assert_eq!(matches.len(), 1);
+        let reps: Vec<&str> = matches[0]
+            .replacements()
+            .iter()
+            .map(|r| r.value())
+            .collect();
+        assert_eq!(reps, vec!["THE DARK KNIGHT RISES"]);
+    }
+
+    #[test]
+    fn multitoken_speller_filter_capitalizes_suggestions_at_sentence_start() {
+        let engine = engine_with_words(&["the", "dark", "knight", "rises"], "dark knight rises\n");
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rules lang="en">
+            <rule id="MULTITOKEN" name="multitoken">
+                <pattern>
+                    <marker>
+                        <token>dákk</token>
+                        <token>kínght</token>
+                        <token>ríses</token>
+                    </marker>
+                </pattern>
+                <filter class="org.languagetool.rules.spelling.multitoken.MultitokenSpellerFilter"/>
+                <message>m</message>
+            </rule>
+        </rules>"#;
+        let text = ", dákk kínght ríses .";
+        let matches = match_with_engine(&engine, xml, text);
+        assert_eq!(matches.len(), 1);
+        let reps: Vec<&str> = matches[0]
+            .replacements()
+            .iter()
+            .map(|r| r.value())
+            .collect();
+        assert_eq!(reps, vec!["Dark knight rises"]);
     }
 
     #[test]
@@ -10914,9 +11125,13 @@ mod unify_tests {
     fn test_date_hack_pins_current_date() {
         set_test_date_hack(true);
         assert_eq!(current_date(), (2014, 1, 1));
+        assert_eq!(logic_current_year(), 2014);
+        assert!(logic_is_january());
         set_test_date_hack(false);
         let (y, m, d) = current_date();
         assert!((2020..=2100).contains(&y) && (1..=12).contains(&m) && (1..=31).contains(&d));
+        assert_eq!(logic_current_year(), y);
+        assert_eq!(logic_is_january(), m == 1);
     }
 
     #[test]
