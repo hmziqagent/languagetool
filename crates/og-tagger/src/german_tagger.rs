@@ -3286,4 +3286,73 @@ mod tests {
             "{tags:?}"
         );
     }
+    #[test]
+    fn non_separable_prefix_expansions_copy_the_base_verb_readings() {
+        let tagger = tagger();
+
+        let verimpfst = Tagger::tag(&tagger, &["verimpfst"]);
+        assert_eq!(
+            tags_of(&verimpfst[0]),
+            vec![("verimpfen".to_string(), "VER:2:SIN:PRÄ:SFT".to_string())],
+            "a plain conjugated form copies its only base reading under the prefixed lemma"
+        );
+
+        let verimpfte = Tagger::tag(&tagger, &["verimpfte"]);
+        let tags = tags_of(&verimpfte[0]);
+        assert_eq!(tags.len(), 4, "{tags:?}");
+        for expected in [
+            "VER:1:SIN:KJ2:SFT",
+            "VER:1:SIN:PRT:SFT",
+            "VER:3:SIN:KJ2:SFT",
+            "VER:3:SIN:PRT:SFT",
+        ] {
+            assert!(
+                tags.iter().any(|(l, t)| l == "verimpfen" && t == expected),
+                "{expected} missing: {tags:?}"
+            );
+        }
+
+        let vermixt = Tagger::tag(&tagger, &["vermixt"]);
+        let tags = tags_of(&vermixt[0]);
+        assert_eq!(tags.len(), 4, "{tags:?}");
+        assert!(
+            tags.iter()
+                .any(|(l, t)| l == "vermixen" && t == "VER:IMP:PLU:SFT"),
+            "{tags:?}"
+        );
+
+        let entfolgt = Tagger::tag(&tagger, &["entfolgt"]);
+        let tags = tags_of(&entfolgt[0]);
+        assert_eq!(tags.len(), 3, "{tags:?}");
+        assert!(
+            tags.iter()
+                .any(|(l, t)| l == "entfolgen" && t == "VER:3:SIN:PRÄ:SFT"),
+            "{tags:?}"
+        );
+
+        let beklettert = Tagger::tag(&tagger, &["beklettert"]);
+        assert!(
+            tags_of(&beklettert[0])
+                .iter()
+                .any(|(l, t)| l == "beklettern" && t == "VER:2:PLU:PRÄ:SFT"),
+            "the be- prefix forms the same copied readings"
+        );
+    }
+
+    #[test]
+    fn non_separable_prefix_imperative_swap_lacks_the_colon_like_java() {
+        let tagger = tagger();
+        let verimpfe = Tagger::tag(&tagger, &["verimpfe"]);
+        let tags = tags_of(&verimpfe[0]);
+        assert!(
+            tags.iter()
+                .any(|(l, t)| l == "verimpfen" && t == "VER:IMP:SINSFT"),
+            "Java concatenates VER:IMP:SIN with the flektion without a separator: {tags:?}"
+        );
+        assert!(
+            tags.iter()
+                .any(|(l, t)| l == "verimpfen" && t == "VER:1:SIN:PRÄ:SFT"),
+            "{tags:?}"
+        );
+    }
 }
