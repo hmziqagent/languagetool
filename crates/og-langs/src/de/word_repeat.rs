@@ -297,4 +297,122 @@ mod tests {
         );
         assert!(rule.match_sentence(&sentence).is_empty());
     }
+
+    fn build_tagged_sentence(text: &str, words: &[(&str, Vec<&str>)]) -> AnalyzedSentence {
+        let mut sentence = AnalyzedSentence::new(text, 0, text.len());
+        let mut tokens = Vec::new();
+        let mut pos = 0usize;
+        for (i, (w, tags)) in words.iter().enumerate() {
+            if i == 0 {
+                tokens.push(AnalyzedTokenReadings::new(
+                    og_core::AnalyzedToken::new("<S>", 0, 0)
+                        .with_pos_tags(vec!["SENT_START".to_string()]),
+                ));
+                continue;
+            }
+            let offset = text[pos..].find(w).expect("word in text");
+            let start = pos + offset;
+            pos = start + w.len();
+            let mut token = og_core::AnalyzedToken::new(*w, start, pos);
+            if !tags.is_empty() {
+                token = token.with_pos_tags(tags.iter().map(|t| t.to_string()).collect());
+            }
+            tokens.push(AnalyzedTokenReadings::new(token));
+        }
+        sentence.set_tokens(tokens);
+        sentence
+    }
+
+    #[test]
+    fn name_repetitions_are_ignored() {
+        let rule = GermanWordRepeatRule::new();
+        let sentence = build_sentence(
+            "Xiao Xiao kam vorbei.",
+            &["<S>", "Xiao", "Xiao", "kam", "vorbei", "."],
+        );
+        assert!(rule.match_sentence(&sentence).is_empty());
+    }
+
+    #[test]
+    fn case_flipped_waren_pairs_are_ignored() {
+        let rule = GermanWordRepeatRule::new();
+        let first = build_sentence(
+            "Dort waren Waren gelagert.",
+            &["<S>", "Dort", "waren", "Waren", "gelagert", "."],
+        );
+        assert!(rule.match_sentence(&first).is_empty());
+        let second = build_sentence(
+            "Die Waren waren teuer.",
+            &["<S>", "Die", "Waren", "waren", "teuer", "."],
+        );
+        assert!(rule.match_sentence(&second).is_empty());
+    }
+
+    #[test]
+    fn sie_sie_after_subordinating_conjunction_is_ignored() {
+        let rule = GermanWordRepeatRule::new();
+        let sentence = build_tagged_sentence(
+            "dass sie sie sehen.",
+            &[
+                ("<S>", vec![]),
+                ("dass", vec!["KON:UNT"]),
+                ("sie", vec![]),
+                ("sie", vec![]),
+                ("sehen", vec![]),
+                (".", vec![]),
+            ],
+        );
+        assert!(rule.match_sentence(&sentence).is_empty());
+    }
+
+    #[test]
+    fn sie_sie_between_verb_and_zus_is_ignored() {
+        let rule = GermanWordRepeatRule::new();
+        let sentence = build_tagged_sentence(
+            "kamen sie sie an.",
+            &[
+                ("<S>", vec![]),
+                ("kamen", vec!["VER:3:PLU"]),
+                ("sie", vec![]),
+                ("sie", vec![]),
+                ("an", vec!["ZUS"]),
+                (".", vec![]),
+            ],
+        );
+        assert!(rule.match_sentence(&sentence).is_empty());
+    }
+
+    #[test]
+    fn sie_sie_between_modal_and_infinitive_is_ignored() {
+        let rule = GermanWordRepeatRule::new();
+        let sentence = build_tagged_sentence(
+            "wollten sie sie gehen.",
+            &[
+                ("<S>", vec![]),
+                ("wollten", vec!["VER:MOD:3:PLU"]),
+                ("sie", vec![]),
+                ("sie", vec![]),
+                ("gehen", vec!["VER:INF:NON"]),
+                (".", vec![]),
+            ],
+        );
+        assert!(rule.match_sentence(&sentence).is_empty());
+    }
+
+    #[test]
+    fn single_letter_sandwich_is_ignored() {
+        let rule = GermanWordRepeatRule::new();
+        let sentence = build_sentence("b a a c.", &["<S>", "b", "a", "a", "c", "."]);
+        assert!(rule.match_sentence(&sentence).is_empty());
+    }
+
+    #[test]
+    fn metadata_pins_the_registration() {
+        let rule = GermanWordRepeatRule::default();
+        assert_eq!(rule.id(), "GERMAN_WORD_REPEAT_RULE");
+        assert_eq!(rule.description(), "Wortwiederholung (z. B. 'als als')");
+        assert_eq!(rule.category().id().as_str(), "REDUNDANCY");
+        assert_eq!(rule.category().name(), "Redundanz");
+        assert!(matches!(rule.issue_type(), IssueType::Redundancy));
+    }
 }
