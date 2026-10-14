@@ -373,4 +373,125 @@ mod tests {
             assert!(rule.is_known_word(word), "ignore.txt covers '{word}'");
         }
     }
+
+    fn built_sentence(text: &str, words: &[&str]) -> AnalyzedSentence {
+        let mut tokens = vec![og_core::AnalyzedTokenReadings::new(
+            og_core::AnalyzedToken::new("<S>", 0, 0).with_pos_tags(vec!["SENT_START".to_string()]),
+        )];
+        let mut offset = 0usize;
+        let mut parts = Vec::new();
+        for word in words {
+            parts.push((*word, offset, offset + word.len()));
+            offset += word.len();
+        }
+        for (surface, start, end) in parts {
+            tokens.push(og_core::AnalyzedTokenReadings::new(
+                og_core::AnalyzedToken::new(surface, start, end),
+            ));
+        }
+        let mut sentence = AnalyzedSentence::new(text, 0, text.len());
+        sentence.set_tokens(tokens);
+        sentence
+    }
+
+    #[test]
+    fn sentence_start_mixed_word_keeps_lowercase_suggestions() {
+        let rule = MalayalamSpellerRule::new();
+        let matches = rule.match_sentence(&analyze("എaങ്ങനെ ഒരു പരീക്ഷണം."));
+        assert_eq!(matches.len(), 1, "{matches:?}");
+        let replacements: Vec<&str> = matches[0]
+            .replacements()
+            .iter()
+            .map(|s| s.value())
+            .collect();
+        assert_eq!(
+            replacements,
+            vec!["എങ്ങനെ", "അങ്ങനെ", "അതങ്ങനെ", "ഇങ്ങനെ", "എങ്ങിനെ"],
+            "the dictionary's similar-word order must stay pinned"
+        );
+    }
+
+    #[test]
+    fn url_and_email_tokens_are_skipped_but_bare_at_is_flagged() {
+        let rule = MalayalamSpellerRule::new();
+        let url_text = "ഇവിടെ http://exemple.com ഒരു വാക്ക്.";
+        let url_sentence = built_sentence(
+            url_text,
+            &[
+                "ഇവിടെ",
+                " ",
+                "http://exemple.com",
+                " ",
+                "ഒരു",
+                " ",
+                "വാക്ക്",
+                ".",
+            ],
+        );
+        assert!(
+            rule.match_sentence(&url_sentence).is_empty(),
+            "a http:// URL token must never be flagged"
+        );
+
+        let www_sentence = built_sentence("www.exemple.com", &["www.exemple.com"]);
+        assert!(
+            rule.match_sentence(&www_sentence).is_empty(),
+            "a www. URL token must never be flagged"
+        );
+
+        let email_text = "വാക്ക് a@b.com ഇവിടെ.";
+        let email_sentence =
+            built_sentence(email_text, &["വാക്ക്", " ", "a@b.com", " ", "ഇവിടെ", "."]);
+        assert!(
+            rule.match_sentence(&email_sentence).is_empty(),
+            "an email token must never be flagged"
+        );
+
+        let bare_text = "വാക്ക് qqzzxxy@bb ഇവിടെ.";
+        let bare_sentence =
+            built_sentence(bare_text, &["വാക്ക്", " ", "qqzzxxy@bb", " ", "ഇവിടെ", "."]);
+        let matches = rule.match_sentence(&bare_sentence);
+        assert_eq!(matches.len(), 1, "{matches:?}");
+        assert_eq!(
+            matches[0].offset(),
+            "വാക്ക് ".len(),
+            "a bare user@host with no dot is not an email"
+        );
+    }
+
+    #[test]
+    fn default_rule_reports_the_misspelling_issue_type() {
+        let rule = MalayalamSpellerRule::default();
+        assert_eq!(rule.id(), "MORFOLOGIK_RULE_ML_IN");
+        assert_eq!(rule.issue_type(), IssueType::Misspelling);
+        assert_eq!(rule.category().id().as_str(), "TYPOS");
+    }
+
+    #[test]
+    fn context_snips_forty_bytes_on_each_side_on_multibyte_text() {
+        let rule = MalayalamSpellerRule::new();
+        let prefix = "അതിന്റെ ഒരു നീണ്ട ബാക്കി ഭാഗം ഇവിടെ ഉണ്ട് ";
+        let suffix = "അതിന്റെ ഒരു നീണ്ട ബാക്കി ഭാഗം ഇവിടെ ഉണ്ട്.";
+        let text = format!("{prefix}എaങ്ങനെ {suffix}");
+        let matches = rule.match_sentence(&analyze(&text));
+        assert_eq!(matches.len(), 1, "{matches:?}");
+        let word_start = prefix.len();
+        let word = "എaങ്ങനെ";
+        assert_eq!(matches[0].offset(), word_start);
+        assert_eq!(matches[0].length(), word.len());
+        let context = matches[0].context().text();
+        assert!(
+            text.contains(context),
+            "context must come from the sentence"
+        );
+        let context_offset = matches[0].context().offset();
+        assert!(
+            text.is_char_boundary(context_offset),
+            "the leading byte window must stop on a char boundary"
+        );
+        assert!(
+            text.is_char_boundary(context_offset + context.len()),
+            "the trailing byte window must stop on a char boundary"
+        );
+    }
 }

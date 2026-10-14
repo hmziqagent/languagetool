@@ -413,5 +413,79 @@ mod tests {
                 .any(|s| s.starts_with('P') && s.chars().skip(1).any(char::is_alphabetic)),
             "expected a capitalized suggestion in {replacements:?}"
         );
+
+        let matches = rule.match_sentence(&analyze("problemis testu equ\u{ed}."));
+        assert_eq!(matches.len(), 1, "{matches:?}");
+        let replacements: Vec<&str> = matches[0]
+            .replacements()
+            .iter()
+            .map(|s| s.value())
+            .collect();
+        assert!(
+            replacements
+                .iter()
+                .all(|s| s.starts_with(|c: char| c.is_uppercase())),
+            "lowercase suggestions at sentence start must be capitalized: {replacements:?}"
+        );
+        assert_eq!(replacements[0], "Problemes");
+    }
+
+    #[test]
+    fn www_url_and_email_tokens_are_skipped() {
+        let rule = AsturianSpellerRule::new();
+        assert!(
+            rule.match_sentence(&analyze("Visita www.exemplu.com g\u{fc}ei."))
+                .is_empty()
+        );
+        assert!(
+            rule.match_sentence(&analyze(
+                "Manda un corr\u{e9}u a usuari@domini.com g\u{fc}ei."
+            ))
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn an_at_token_without_a_dot_is_not_an_email() {
+        let rule = AsturianSpellerRule::new();
+        let matches =
+            rule.match_sentence(&analyze("Manda un corr\u{e9}u a usuari@domini g\u{fc}ei."));
+        assert_eq!(matches.len(), 2, "{matches:?}");
+        assert_eq!(matches[0].offset(), 19);
+        assert_eq!(matches[0].offset() + matches[0].length(), 25);
+        assert_eq!(matches[1].offset(), 26);
+        assert_eq!(matches[1].offset() + matches[1].length(), 32);
+    }
+
+    #[test]
+    fn default_rule_reports_the_misspelling_issue_type() {
+        let rule = AsturianSpellerRule::default();
+        assert_eq!(rule.id(), "MORFOLOGIK_RULE_AST");
+        assert_eq!(rule.issue_type(), IssueType::Misspelling);
+        assert_eq!(rule.category().id().as_str(), "TYPOS");
+    }
+
+    #[test]
+    fn context_snips_forty_bytes_on_each_side_on_multibyte_text() {
+        let rule = AsturianSpellerRule::new();
+        let accented = "\u{e1}\u{e9}\u{ed}\u{f3}".repeat(5);
+        let text = format!("{accented} avec\u{e1}u {accented}.");
+        let matches = rule.match_sentence(&analyze(&text));
+        assert_eq!(matches.len(), 3, "{matches:?}");
+        let word_start = accented.len() + 1;
+        let avecadu = &matches[1];
+        assert_eq!(avecadu.offset(), word_start);
+        assert_eq!(avecadu.length(), "avec\u{e1}u".len());
+        assert_eq!(
+            avecadu.context().offset(),
+            2,
+            "the leading window must walk forward to a char boundary"
+        );
+        assert_eq!(avecadu.context().text().len(), 85);
+        for m in &matches {
+            assert!(text.contains(m.context().text()));
+            assert!(text.is_char_boundary(m.context().offset()));
+            assert!(text.is_char_boundary(m.context().offset() + m.context().text().len()));
+        }
     }
 }
