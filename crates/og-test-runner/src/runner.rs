@@ -1620,7 +1620,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn test_real_english_grammar_examples() {
         const PINNED_EN_RESIDUE: &[(&str, &str)] = &[];
 
