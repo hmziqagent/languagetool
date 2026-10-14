@@ -1971,4 +1971,80 @@ mod self_closing_exception_tests {
         }
         assert!(matches!(rule.disambig, DisambigAction::FilterAll));
     }
+
+    #[test]
+    fn trailing_exceptions_attach_to_the_last_pattern_token() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<rules lang="en">
+    <rule id="TRAILING_EXC" name="exception after the token closes">
+        <pattern>
+            <token>plain</token>
+            <exception postag="ABC" negate_pos="yes"/>
+        </pattern>
+        <disambig action="filter" postag="NN"/>
+    </rule>
+</rules>"#;
+
+        let parser = DisambigXmlParser::new();
+        let result = parser.parse(xml).unwrap();
+
+        let pattern = &result.rules[0].pattern;
+        assert_eq!(pattern.tokens.len(), 1);
+        assert_eq!(pattern.tokens[0].text.as_deref(), Some("plain"));
+        assert_eq!(pattern.tokens[0].exceptions.len(), 1);
+        assert_eq!(
+            pattern.tokens[0].exceptions[0].postag.as_deref(),
+            Some("ABC")
+        );
+        assert!(pattern.tokens[0].exceptions[0].negate_pos);
+    }
+
+    #[test]
+    fn trailing_exceptions_attach_to_the_last_antipattern_token() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<rules lang="en">
+    <rule id="ANTI_TRAILING_EXC" name="antipattern exception after the token closes">
+        <antipattern>
+            <token>anti</token>
+            <exception postag="XYZ"/>
+        </antipattern>
+        <pattern>
+            <token>plain</token>
+        </pattern>
+        <disambig action="filter" postag="NN"/>
+    </rule>
+</rules>"#;
+
+        let parser = DisambigXmlParser::new();
+        let result = parser.parse(xml).unwrap();
+
+        let anti = &result.rules[0].antipatterns[0];
+        assert_eq!(anti.tokens.len(), 1);
+        assert_eq!(anti.tokens[0].text.as_deref(), Some("anti"));
+        assert_eq!(anti.tokens[0].exceptions.len(), 1);
+        assert_eq!(anti.tokens[0].exceptions[0].postag.as_deref(), Some("XYZ"));
+    }
+
+    #[test]
+    fn paired_filter_and_unification_elements_are_parsed() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<rules lang="en">
+    <unification feature="number"></unification>
+    <rule id="PAIRED_FILTER" name="filter with content">
+        <pattern>
+            <token>plain</token>
+        </pattern>
+        <filter class="sometClass" args="someArgs"></filter>
+        <disambig action="filter" postag="NN"/>
+    </rule>
+</rules>"#;
+
+        let parser = DisambigXmlParser::new();
+        let result = parser.parse(xml).unwrap();
+
+        assert_eq!(result.unifications.len(), 1);
+        assert_eq!(result.unifications[0].feature, "number");
+        assert_eq!(result.rules[0].filter_class.as_deref(), Some("sometClass"));
+        assert_eq!(result.rules[0].filter_args.as_deref(), Some("someArgs"));
+    }
 }
