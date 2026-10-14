@@ -3252,7 +3252,6 @@ fn test_debug_a_infinitive_fps() {
 }
 
 #[test]
-#[ignore]
 fn test_real_danish_grammar_examples() {
     run_generic_example_suite("da");
 }
@@ -3282,13 +3281,11 @@ fn test_real_spanish_grammar_examples() {
 }
 
 #[test]
-#[ignore]
 fn test_real_portuguese_grammar_examples() {
     run_generic_example_suite("pt");
 }
 
 #[test]
-#[ignore]
 fn test_real_dutch_grammar_examples() {
     run_generic_example_suite("nl");
 }
@@ -3300,25 +3297,21 @@ fn test_real_polish_grammar_examples() {
 }
 
 #[test]
-#[ignore]
 fn test_real_russian_grammar_examples() {
     run_generic_example_suite("ru");
 }
 
 #[test]
-#[ignore]
 fn test_real_italian_grammar_examples() {
     run_generic_example_suite("it");
 }
 
 #[test]
-#[ignore]
 fn test_real_arabic_grammar_examples() {
     run_generic_example_suite("ar");
 }
 
 #[test]
-#[ignore]
 fn test_real_asturian_grammar_examples() {
     run_generic_example_suite("ast");
 }
@@ -3330,133 +3323,111 @@ fn test_real_catalan_grammar_examples() {
 }
 
 #[test]
-#[ignore]
 fn test_real_belarusian_grammar_examples() {
     run_generic_example_suite("be");
 }
 
 #[test]
-#[ignore]
 fn test_real_crimean_tatar_grammar_examples() {
     run_generic_example_suite("crh");
 }
 
 #[test]
-#[ignore]
 fn test_real_breton_grammar_examples() {
     run_generic_example_suite("br");
 }
 
 #[test]
-#[ignore]
 fn test_real_greek_grammar_examples() {
     run_generic_example_suite("el");
 }
 
 #[test]
-#[ignore]
 fn test_real_persian_grammar_examples() {
     run_generic_example_suite("fa");
 }
 
 #[test]
-#[ignore]
 fn test_real_irish_grammar_examples() {
     run_generic_example_suite("ga");
 }
 
 #[test]
-#[ignore]
 fn test_real_galician_grammar_examples() {
     run_generic_example_suite("gl");
 }
 
 #[test]
-#[ignore]
 fn test_real_icelandic_grammar_examples() {
     run_generic_example_suite("is");
 }
 
 #[test]
-#[ignore]
 fn test_real_japanese_grammar_examples() {
     run_generic_example_suite("ja");
 }
 
 #[test]
-#[ignore]
 fn test_real_khmer_grammar_examples() {
     run_generic_example_suite("km");
 }
 
 #[test]
-#[ignore]
 fn test_real_romanian_grammar_examples() {
     run_generic_example_suite("ro");
 }
 
 #[test]
-#[ignore]
 fn test_real_swedish_grammar_examples() {
     run_generic_example_suite("sv");
 }
 
 #[test]
-#[ignore]
 fn test_real_slovak_grammar_examples() {
     run_generic_example_suite("sk");
 }
 
 #[test]
-#[ignore]
 fn test_real_slovenian_grammar_examples() {
     run_generic_example_suite("sl");
 }
 
 #[test]
-#[ignore]
 fn test_real_lithuanian_grammar_examples() {
     run_generic_example_suite("lt");
 }
 
 #[test]
-#[ignore]
 fn test_real_malayalam_grammar_examples() {
     run_generic_example_suite("ml");
 }
 
 #[test]
-#[ignore]
 fn test_real_tamil_grammar_examples() {
     run_generic_example_suite("ta");
 }
 
 #[test]
-#[ignore]
 fn test_real_tagalog_grammar_examples() {
     run_generic_example_suite("tl");
 }
 
 #[test]
-#[ignore]
 fn test_real_serbian_grammar_examples() {
     run_generic_example_suite("sr");
 }
 
 #[test]
-#[ignore]
 fn test_real_ukrainian_grammar_examples() {
     run_generic_example_suite("uk");
 }
 
 #[test]
-#[ignore]
 fn test_real_chinese_grammar_examples() {
     run_generic_example_suite("zh");
 }
 
 #[test]
-#[ignore]
 fn test_real_esperanto_grammar_examples() {
     run_generic_example_suite("eo");
 }
@@ -3566,4 +3537,8 @@ fn run_generic_example_suite(code: &'static str) {
         }
     }
     let _ = std::fs::write(format!("/tmp/test_failures_{code}.txt"), fail_file);
+    assert!(
+        summary.total > 0,
+        "{code} grammar.xml compiled but its example suite ran zero examples"
+    );
 }
