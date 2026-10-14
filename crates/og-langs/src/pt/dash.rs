@@ -247,4 +247,47 @@ mod tests {
             "'a-propósito' is pre-reform-only data and must not fire the post-reform rule"
         );
     }
+
+    #[test]
+    fn shared_start_with_a_nested_dataset_word_reports_once() {
+        let rule = PostReformPortugueseDashRule::new();
+        for (text, covered, replacement) in [
+            (
+                "\u{e1}gua\u{2013}marinha\u{2013}m\u{e9}dia \u{e9} bonita.",
+                "\u{e1}gua\u{2013}marinha\u{2013}m\u{e9}dia",
+                "\u{e1}gua-marinha-m\u{e9}dia",
+            ),
+            (
+                "\u{c1}gua\u{2014}marinha\u{2014}m\u{e9}dia aqui.",
+                "\u{c1}gua\u{2014}marinha\u{2014}m\u{e9}dia",
+                "\u{c1}gua-marinha-m\u{e9}dia",
+            ),
+        ] {
+            let sentence = make_sentence(text);
+            let matches = rule.match_sentence(&sentence);
+            assert_eq!(matches.len(), 1, "{text}: {matches:?}");
+            assert_eq!(
+                &text[matches[0].offset()..matches[0].offset() + matches[0].length()],
+                covered
+            );
+            assert_eq!(matches[0].replacements()[0].value(), replacement);
+        }
+    }
+
+    #[test]
+    fn metadata_pins_both_rule_registrations() {
+        let post = PostReformPortugueseDashRule::default();
+        assert_eq!(post.id(), "PT_POSAO_DASH_RULE");
+        assert_eq!(post.description(), "Travessões no lugar de hífens");
+        assert_eq!(post.category().id().as_str(), "TYPOGRAPHY");
+        assert!(matches!(post.issue_type(), IssueType::Typographical));
+        assert!(post.is_picky());
+
+        let pre = PreReformPortugueseDashRule::default();
+        assert_eq!(pre.id(), "PT_PREAO_DASH_RULE");
+        assert_eq!(pre.description(), "Travessões no lugar de hífens");
+        assert_eq!(pre.category().id().as_str(), "TYPOGRAPHY");
+        assert!(matches!(pre.issue_type(), IssueType::Typographical));
+        assert!(pre.is_picky());
+    }
 }
