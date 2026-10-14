@@ -217,4 +217,156 @@ mod tests {
                 .all(|m| m.rule().id() != "PUNCTUATION_PARAGRAPH_END")
         );
     }
+
+    use og_core::rule::TextLevelRule as _;
+
+    fn paragraph_end_hits(text: &str) -> Vec<og_core::RuleMatch> {
+        let engine = crate::engine::LanguageEngine::shared_for_code("de").expect("german engine");
+        let mut request = og_core::CheckRequest::new(text, engine.language().clone());
+        request.enabled_rules = vec!["PUNCTUATION_PARAGRAPH_END".to_string()];
+        engine
+            .check_with_request(&request)
+            .matches
+            .into_iter()
+            .filter(|m| m.rule().id() == "PUNCTUATION_PARAGRAPH_END")
+            .collect()
+    }
+
+    #[test]
+    fn is_url_follows_the_java_word_tokenizer_contract() {
+        for url in [
+            "http://example.com",
+            "https://example.com/page",
+            "ftp://example.com",
+            "file://tmp/report.txt",
+            "ws://example.com/socket",
+            "www.example.org",
+            "example.com/seite",
+            "sub.example.org/a/b",
+        ] {
+            assert!(super::is_url(url), "{url} should be a URL");
+        }
+        for word in [
+            "example.com",
+            "Beispiel",
+            "http",
+            "httpx://example.com",
+            "mailto:kontakt@example.com",
+        ] {
+            assert!(!super::is_url(word), "{word} should not be a URL");
+        }
+    }
+
+    #[test]
+    fn metadata_matches_the_java_registration() {
+        let rule = super::GermanPunctuationMarkAtParagraphEnd::default();
+        assert_eq!(rule.id(), "PUNCTUATION_PARAGRAPH_END");
+        assert_eq!(rule.description(), "Kein Satzzeichen am Ende des Absatzes");
+        assert_eq!(rule.category().id().as_str(), "PUNCTUATION");
+        assert_eq!(rule.category().name(), "Zeichensetzung");
+        assert!(matches!(rule.issue_type(), og_core::IssueType::Grammar));
+    }
+
+    #[test]
+    fn numeric_leading_sentence_is_ignored() {
+        assert!(paragraph_end_hits("2.2.2. Dies ist ein Satz ohne Punkt").is_empty());
+    }
+
+    #[test]
+    fn numeric_sentence_before_the_last_is_ignored() {
+        assert!(
+            paragraph_end_hits("Einleitung steht hier. 2.2.2. Und hier fehlt der Punkt").is_empty()
+        );
+    }
+
+    #[test]
+    fn colon_url_at_paragraph_end_is_exempt() {
+        assert!(
+            paragraph_end_hits("Das ist ein Satz. Mehr dazu gibt es unter: http://example.com")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn colon_www_url_at_paragraph_end_is_exempt() {
+        assert!(
+            paragraph_end_hits("Das ist ein Satz. Mehr dazu gibt es unter: www.example.com")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn long_http_url_at_paragraph_end_is_not_flagged() {
+        assert!(
+            paragraph_end_hits(
+                "Das ist ein Satz. Siehe http://www.eine-ganz-lange-adresse-mit-vielen-zeichen.de"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn ftp_url_at_paragraph_end_is_not_flagged() {
+        assert!(
+            paragraph_end_hits("Das ist ein Satz. Der Server steht auf ftp://example.com")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn closing_quotation_mark_at_paragraph_end_is_flagged() {
+        let text = "Das ist ein Satz. Er sagte: \u{201E}Komm doch mal mit\u{201D}";
+        let hits = paragraph_end_hits(text);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(
+            &text[hits[0].offset()..hits[0].offset() + hits[0].length()],
+            "\u{201D}"
+        );
+        let replacements: Vec<&str> = hits[0].replacements().iter().map(|r| r.value()).collect();
+        assert_eq!(
+            replacements,
+            [
+                "\u{201D}.",
+                "\u{201D}!",
+                "\u{201D}?",
+                "\u{201D}:",
+                "\u{201D},",
+                "\u{201D};"
+            ]
+        );
+    }
+
+    #[test]
+    fn paragraph_final_sentence_starting_with_a_quote_is_checked() {
+        let text = "Das ist ein Satz.\n\nEin erster Satz. \u{201E}Hallo sagt er nur";
+        let hits = paragraph_end_hits(text);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(
+            &text[hits[0].offset()..hits[0].offset() + hits[0].length()],
+            "nur"
+        );
+    }
+
+    #[test]
+    fn linebreak_glued_final_token_is_walked_past() {
+        use og_core::{AnalyzedSentence, AnalyzedToken, AnalyzedTokenReadings};
+
+        let mut first = AnalyzedSentence::new("Erster Satz.", 0, 12);
+        first.set_tokens(vec![
+            AnalyzedTokenReadings::new(AnalyzedToken::new("<S>", 0, 0)),
+            AnalyzedTokenReadings::new(AnalyzedToken::new("Erster", 0, 6)),
+            AnalyzedTokenReadings::new(AnalyzedToken::new("Satz.", 7, 12)),
+        ]);
+        let mut second = AnalyzedSentence::new("Zweiter Satz\n", 19, 32);
+        second.set_tokens(vec![
+            AnalyzedTokenReadings::new(AnalyzedToken::new("<S>", 19, 19)),
+            AnalyzedTokenReadings::new(AnalyzedToken::new("Zweiter", 19, 26)),
+            AnalyzedTokenReadings::new(AnalyzedToken::new("Satz\n", 27, 33)),
+        ]);
+        let rule = super::GermanPunctuationMarkAtParagraphEnd::new();
+        let matches = rule.match_text("Erster Satz. Zweiter Satz\n", &[first, second]);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].offset(), 19);
+        assert_eq!(matches[0].length(), "Zweiter".len());
+    }
 }
