@@ -332,4 +332,66 @@ mod tests {
         assert_eq!(rule.issue_type(), IssueType::Typographical);
         assert!(rule.description().contains("haakjes"));
     }
+
+    #[test]
+    fn closing_quote_before_a_comma_pairs() {
+        assert!(matches_for("Dit is \"fout\", en verder.").is_empty());
+    }
+
+    #[test]
+    fn quote_glued_to_a_comma_opens_a_quote() {
+        let text = "Zie hier,\"citaat verder.";
+        let matches = matches_for(text);
+        assert_eq!(matches.len(), 1, "{matches:?}");
+        assert_eq!(matches[0].offset(), text.find('"').unwrap());
+    }
+
+    #[test]
+    fn quote_glued_to_the_next_word_leaves_the_opening_reported() {
+        let text = "Dit is \"fout\"gewijs.";
+        let matches = matches_for(text);
+        assert_eq!(matches.len(), 1, "{matches:?}");
+        assert_eq!(matches[0].offset(), text.find('"').unwrap());
+        assert!(matches[0].message().contains('"'));
+    }
+
+    #[test]
+    fn colon_glued_opening_paren_is_ignored_but_the_close_is_flagged() {
+        let text = "Zie hier:(uitleg) voor details.";
+        let matches = matches_for(text);
+        assert_eq!(matches.len(), 1, "{matches:?}");
+        assert_eq!(matches[0].offset(), text.find(')').unwrap());
+    }
+
+    #[test]
+    fn mismatched_close_pushes_over_a_different_opener() {
+        let text = "Dit (was fout].";
+        let matches = matches_for(text);
+        let offsets: Vec<usize> = matches.iter().map(|m| m.offset()).collect();
+        assert_eq!(
+            offsets,
+            vec![text.find('(').unwrap(), text.find(']').unwrap()]
+        );
+        assert!(matches[0].message().contains(')'));
+        assert!(matches[1].message().contains('['));
+    }
+
+    #[test]
+    fn punctuation_helpers_pin_the_java_patterns() {
+        for apostrophed in ["l'", "d'", "t'", "S'"] {
+            assert!(is_punctuation_no_dot(apostrophed), "{apostrophed}");
+        }
+        for no_dot in [",", "-", "\u{2013}", "\u{2014}"] {
+            assert!(is_punctuation_no_dot(no_dot), "{no_dot}");
+        }
+        for word in [".", "a", "X'", "l", "fout"] {
+            assert!(!is_punctuation_no_dot(word), "{word}");
+        }
+        for punct in ["\u{2026}", "\u{2013}", ",", "!?"] {
+            assert!(is_punctuation(punct), "{punct}");
+        }
+        for word in ["", "fout", "fout,"] {
+            assert!(!is_punctuation(word), "{word}");
+        }
+    }
 }
