@@ -3253,25 +3253,21 @@ fn test_real_danish_grammar_examples() {
 }
 
 #[test]
-#[ignore]
 fn test_real_de_ch_grammar_examples() {
     run_german_variant_example_suite("de-CH");
 }
 
 #[test]
-#[ignore]
 fn test_real_de_at_grammar_examples() {
     run_german_variant_example_suite("de-AT");
 }
 
 #[test]
-#[ignore]
 fn test_real_french_grammar_examples() {
     run_generic_example_suite("fr");
 }
 
 #[test]
-#[ignore]
 fn test_real_spanish_grammar_examples() {
     run_generic_example_suite("es");
 }
@@ -3287,7 +3283,6 @@ fn test_real_dutch_grammar_examples() {
 }
 
 #[test]
-#[ignore]
 fn test_real_polish_grammar_examples() {
     run_generic_example_suite("pl");
 }
@@ -3313,7 +3308,6 @@ fn test_real_asturian_grammar_examples() {
 }
 
 #[test]
-#[ignore]
 fn test_real_catalan_grammar_examples() {
     run_generic_example_suite("ca");
 }
