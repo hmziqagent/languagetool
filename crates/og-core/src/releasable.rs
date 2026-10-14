@@ -331,6 +331,47 @@ mod tests {
     }
 
     #[test]
+    fn default_constructs_an_empty_cell_usable_at_runtime() {
+        let _serialized = SERIALIZE.lock().unwrap();
+        static FROM_DEFAULT: std::sync::OnceLock<&'static Releasable<String>> =
+            std::sync::OnceLock::new();
+        static FROM_NEW: std::sync::OnceLock<&'static Releasable<String>> =
+            std::sync::OnceLock::new();
+        let default_cell = FROM_DEFAULT.get_or_init(|| Box::leak(Box::new(Releasable::default())));
+        let new_cell = FROM_NEW.get_or_init(|| Box::leak(Box::new(Releasable::new())));
+        for cell in [default_cell, new_cell] {
+            assert!(cell.state.lock().unwrap().value.is_none());
+            let value =
+                shared_get_or_build(cell, || Some(Arc::new("runtime".to_string()))).unwrap();
+            assert_eq!(*value, "runtime");
+            assert!(cell.state.lock().unwrap().value.is_some());
+        }
+    }
+
+    #[test]
+    fn release_with_poisoned_state_lock_keeps_the_cached_value() {
+        let _serialized = SERIALIZE.lock().unwrap();
+        static CELL: Releasable<String> = Releasable::new();
+        let value = shared_get_or_build(&CELL, || Some(Arc::new("kept".to_string()))).unwrap();
+        let poisoned = std::thread::spawn(move || {
+            let _guard = CELL.state.lock().unwrap();
+            panic!("poison the cell state lock");
+        })
+        .join();
+        assert!(poisoned.is_err());
+        release_all();
+        let guard = CELL
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        assert!(
+            guard.value.is_some(),
+            "a poisoned cell lock must not clear the cached value"
+        );
+        assert_eq!(*value, "kept");
+    }
+
+    #[test]
     fn poisoned_build_lock_recovers_and_caches() {
         let _serialized = SERIALIZE.lock().unwrap();
         static CELL: Releasable<String> = Releasable::new();
