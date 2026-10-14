@@ -1007,6 +1007,83 @@ mod tests {
     }
 
     #[test]
+    fn converts_fahrenheit_using_the_offset_scale() {
+        assert_matches(
+            "A temperatura \u{e9} de 100 \u{b0}F.",
+            1,
+            Some("37,78 \u{b0}C"),
+        );
+        assert_matches(
+            "A temperatura \u{e9} de 100 \u{b0}F (30 \u{b0}C).",
+            1,
+            Some("100 \u{b0}F (37,78 \u{b0}C)"),
+        );
+        assert_matches(
+            "A temperatura \u{e9} de 100 \u{b0}F (37,78 \u{b0}C).",
+            0,
+            None,
+        );
+    }
+
+    #[test]
+    fn mismatched_dimension_in_parenthesis_is_flagged() {
+        let rule = PortugueseUnitConversionRule::new();
+        let text = "A \u{e1}gua congela a 0 \u{b0}C (32 milhas).";
+        let matches = rule.match_sentence(&sentence(text));
+        assert_eq!(matches.len(), 1, "{matches:?}");
+        assert!(
+            matches[0]
+                .message()
+                .contains("unidades de medida n\u{e3}o s\u{e3}o compat\u{ed}veis"),
+            "{}",
+            matches[0].message()
+        );
+        assert!(matches[0].replacements().is_empty());
+        assert!(
+            matches[0]
+                .short_message()
+                .is_some_and(|s| s.contains("incompat\u{ed}vel"))
+        );
+    }
+
+    #[test]
+    fn unrecognized_unit_in_parenthesis_yields_check_unknown_unit() {
+        let rule = PortugueseUnitConversionRule::new();
+        let text = "Eu tenho 6 p\u{e9}s (2 bra\u{e7}as) de altura.";
+        let matches = rule.match_sentence(&sentence(text));
+        assert_eq!(matches.len(), 1, "{matches:?}");
+        assert!(
+            matches[0].message().contains("n\u{e3}o foi reconhecida"),
+            "{}",
+            matches[0].message()
+        );
+        assert!(
+            matches[0].replacements()[0].value().contains("1,83"),
+            "the metric equivalents of the source unit must still be offered: {:?}",
+            matches[0].replacements()
+        );
+    }
+
+    #[test]
+    fn two_conversions_in_one_sentence_each_keep_their_match() {
+        let rule = PortugueseUnitConversionRule::new();
+        let text = "A via tem 10 km (20 milhas) e 5 milhas (8 km) de comprimento.";
+        let matches = rule.match_sentence(&sentence(text));
+        let spans: Vec<(usize, &str)> = matches
+            .iter()
+            .map(|m| (m.offset(), m.short_message().unwrap_or_default()))
+            .collect();
+        assert_eq!(
+            spans,
+            vec![
+                (17, "Convers\u{e3}o incorreta. Corrigir?"),
+                (30, "Convers\u{e3}o incorreta. Corrigir?"),
+            ],
+            "{matches:?}"
+        );
+    }
+
+    #[test]
     fn format_number_uses_german_locale_shape() {
         assert_eq!(format_number(1.8288), "1,83");
         assert_eq!(format_number(4.5359237), "4,54");
