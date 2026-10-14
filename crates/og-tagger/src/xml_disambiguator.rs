@@ -5865,5 +5865,23 @@ mod tests {
         assert_eq!(disambig.rule_debug(99), "");
         assert_eq!(disambig.first_index_of_rule_id("LE_ONLY"), Some(0));
         assert_eq!(disambig.first_index_of_rule_id("ABSENT"), None);
+        assert!(
+            disambig
+                .rule_debug(0)
+                .starts_with(&format!("{:?}", Some("LE_ONLY")))
+        );
+        let mut probe = le_sentence();
+        assert_eq!(
+            disambig.debug_match_rule(&mut probe, 0),
+            vec![vec![0]],
+            "the marker-only pattern matches the first token"
+        );
+        assert_eq!(
+            disambig.debug_match_rule(&mut probe, 99),
+            Vec::<Vec<usize>>::new()
+        );
+        let pattern_text = disambig.rule_pattern_debug(0);
+        assert!(pattern_text.contains("\"le\""), "{pattern_text}");
+        assert_eq!(disambig.rule_pattern_debug(99), "");
     }
 }
