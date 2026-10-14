@@ -181,4 +181,32 @@ mod tests {
                 .collect::<Vec<_>>()
         );
     }
+
+    #[test]
+    fn metadata_pins_the_registration() {
+        use og_core::rule::TextLevelRule as _;
+
+        let rule = super::GermanWordRepeatBeginningRule::default();
+        assert_eq!(rule.id(), "GERMAN_WORD_REPEAT_BEGINNING_RULE");
+        assert_eq!(
+            rule.description(),
+            "Aufeinanderfolgende S\u{e4}tze beginnen mit dem gleichen Wort"
+        );
+        assert_eq!(rule.category().id().as_str(), "REPETITIONS_STYLE");
+        assert_eq!(rule.category().name(), "Wiederholungen (Stil)");
+        assert!(matches!(rule.issue_type(), og_core::IssueType::Style));
+    }
+
+    #[test]
+    fn single_token_sentences_are_skipped() {
+        use og_core::rule::TextLevelRule as _;
+        use og_core::{AnalyzedSentence, AnalyzedToken, AnalyzedTokenReadings};
+
+        let mut sentence = AnalyzedSentence::new("Ja.", 0, 3);
+        sentence.set_tokens(vec![AnalyzedTokenReadings::new(AnalyzedToken::new(
+            "<S>", 0, 0,
+        ))]);
+        let rule = super::GermanWordRepeatBeginningRule::new();
+        assert!(rule.match_text("Ja.", &[sentence]).is_empty());
+    }
 }

@@ -333,4 +333,135 @@ mod tests {
             vec!["Car", "Ja que", "Per tal com", "Pel fet que", "Puix que"]
         );
     }
+
+    #[test]
+    fn també_gets_the_add_sibling_adverbs_and_expressions() {
+        let rule = CatalanWordRepeatBeginningRule::new();
+        let text = "Tamb\u{e9} plou. Tamb\u{e9} fa fred.";
+        let sentences = analyze(text);
+        let matches = rule.match_text(text, &sentences);
+        assert_eq!(matches.len(), 1, "{matches:?}");
+        let values: Vec<&str> = matches[0]
+            .replacements()
+            .iter()
+            .map(|r| r.value())
+            .collect();
+        assert_eq!(
+            values,
+            vec![
+                "Igualment",
+                "Addicionalment",
+                "Aix\u{ed} mateix",
+                "A m\u{e9}s a m\u{e9}s"
+            ]
+        );
+    }
+
+    #[test]
+    fn emphasis_adverbs_suggest_their_siblings() {
+        let rule = CatalanWordRepeatBeginningRule::new();
+        let text = "Clarament guanya. Clarament perd.";
+        let sentences = analyze(text);
+        let matches = rule.match_text(text, &sentences);
+        assert_eq!(matches.len(), 1, "{matches:?}");
+        let values: Vec<&str> = matches[0]
+            .replacements()
+            .iter()
+            .map(|r| r.value())
+            .collect();
+        assert_eq!(
+            values,
+            vec!["\u{d2}bviament", "Absolutament", "Definitivament"]
+        );
+    }
+
+    #[test]
+    fn explain_adverbs_suggest_their_siblings() {
+        let rule = CatalanWordRepeatBeginningRule::new();
+        let text = "Concretament aix\u{f2}. Concretament all\u{f2}.";
+        let sentences = analyze(text);
+        let matches = rule.match_text(text, &sentences);
+        assert_eq!(matches.len(), 1, "{matches:?}");
+        let values: Vec<&str> = matches[0]
+            .replacements()
+            .iter()
+            .map(|r| r.value())
+            .collect();
+        assert_eq!(
+            values,
+            vec!["Espec\u{ed}ficament", "Particularment", "Precisament"]
+        );
+    }
+
+    #[test]
+    fn dash_as_the_second_token_is_an_exception() {
+        let rule = CatalanWordRepeatBeginningRule::new();
+        let text = "Paraula \u{2013} gran. Paraula \u{2013} petit.";
+        let sentences = analyze(text);
+        assert!(rule.match_text(text, &sentences).is_empty());
+    }
+
+    #[test]
+    fn single_letter_tokens_run_the_alphabetic_check() {
+        let rule = CatalanWordRepeatBeginningRule::new();
+        let text = "A casa vostra. A fora plou.";
+        let sentences = analyze(text);
+        assert!(rule.match_text(text, &sentences).is_empty());
+    }
+
+    #[test]
+    fn two_token_sentences_skip_the_comparison() {
+        let rule = CatalanWordRepeatBeginningRule::new();
+        let text = "Plou. Plou.";
+        let sentences = analyze(text);
+        assert!(rule.match_text(text, &sentences).is_empty());
+    }
+
+    #[test]
+    fn rg_tagged_adverbs_fire_with_no_list_suggestions() {
+        use og_core::{AnalyzedSentence, AnalyzedToken, AnalyzedTokenReadings};
+
+        fn rg_sentence(text: &str, adverb: &str) -> AnalyzedSentence {
+            let mut sentence = AnalyzedSentence::new(text, 0, text.len());
+            sentence.set_tokens(vec![
+                AnalyzedTokenReadings::new(
+                    AnalyzedToken::new("<S>", 0, 0).with_pos_tags(vec!["SENT_START".to_string()]),
+                ),
+                AnalyzedTokenReadings::new(
+                    AnalyzedToken::new(adverb, 0, adverb.len())
+                        .with_pos_tags(vec!["RG".to_string()]),
+                ),
+                AnalyzedTokenReadings::new(AnalyzedToken::new(
+                    "plou",
+                    adverb.len() + 1,
+                    text.len() - 1,
+                )),
+                AnalyzedTokenReadings::new(AnalyzedToken::new(".", text.len() - 1, text.len())),
+            ]);
+            sentence
+        }
+
+        let rule = CatalanWordRepeatBeginningRule::new();
+        let sentences = [
+            rg_sentence("Sovint plou.", "Sovint"),
+            rg_sentence("Sovint plou.", "Sovint"),
+        ];
+        let matches = rule.match_text("Sovint plou. Sovint plou.", &sentences);
+        assert_eq!(matches.len(), 1, "{matches:?}");
+        assert!(matches[0].message().starts_with(MSG_ADV));
+        assert!(matches[0].replacements().is_empty());
+    }
+
+    #[test]
+    fn metadata_pins_the_registration() {
+        let rule = CatalanWordRepeatBeginningRule::default();
+        assert_eq!(rule.id(), "CATALAN_WORD_REPEAT_BEGINNING_RULE");
+        assert_eq!(
+            rule.description(),
+            "Frases successives que comencen amb la mateixa paraula"
+        );
+        assert!(rule.is_picky());
+        assert_eq!(rule.category().id().as_str(), "REPETITIONS_STYLE");
+        assert!(matches!(rule.issue_type(), IssueType::Style));
+    }
 }

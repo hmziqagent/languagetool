@@ -154,24 +154,95 @@ impl TextLevelRule for GermanParagraphRepeatBeginningRule {
 #[cfg(test)]
 mod tests {
 
-    #[test]
-    fn detects_repeated_paragraph_beginning() {
+    fn repeat_hits(text: &str) -> Vec<(usize, usize)> {
         let engine = crate::engine::LanguageEngine::shared_for_code("de").expect("german engine");
-        let text = "Der Hund ist schwarz.\n\nDer Hund ist braun.\n\nDer Hund ist weiß.";
         let mut request = og_core::CheckRequest::new(text, engine.language().clone());
         request.enabled_rules = vec!["GERMAN_PARAGRAPH_REPEAT_BEGINNING_RULE".to_string()];
-        let matches = engine.check_with_request(&request);
-        assert!(
-            matches
-                .matches
-                .iter()
-                .any(|m| m.rule().id() == "GERMAN_PARAGRAPH_REPEAT_BEGINNING_RULE"),
-            "expected paragraph repeat match, got {:?}",
-            matches
-                .matches
-                .iter()
-                .map(|m| (m.rule().id().to_string(), m.offset(), m.length()))
-                .collect::<Vec<_>>()
+        engine
+            .check_with_request(&request)
+            .matches
+            .into_iter()
+            .filter(|m| m.rule().id() == "GERMAN_PARAGRAPH_REPEAT_BEGINNING_RULE")
+            .map(|m| (m.offset(), m.length()))
+            .collect()
+    }
+
+    #[test]
+    fn detects_repeated_paragraph_beginning() {
+        let text = "Der Hund ist schwarz.\n\nDer Hund ist braun.\n\nDer Hund ist weiß.";
+        let hits = repeat_hits(text);
+        assert!(!hits.is_empty(), "{hits:?}");
+    }
+
+    #[test]
+    fn opening_quote_prefix_extends_the_match_into_the_words() {
+        let text = "\u{201E}Der Hund ist schwarz.\n\n\u{201E}Der Hund ist braun.";
+        let hits = repeat_hits(text);
+        let covered: Vec<&str> = hits.iter().map(|(o, l)| &text[*o..*o + *l]).collect();
+        assert_eq!(covered, vec!["\u{201E}Der Hund", "\u{201E}Der Hund"]);
+    }
+
+    #[test]
+    fn short_next_paragraph_yields_no_match() {
+        assert!(repeat_hits("Der Hund ist schwarz.\n\nDer").is_empty());
+    }
+
+    #[test]
+    fn non_alphabetic_word_after_the_article_yields_no_match() {
+        assert!(repeat_hits("Der 100 Jahre dauern.\n\nDer 100 Tage gehen.").is_empty());
+    }
+
+    #[test]
+    fn quote_then_number_yields_no_match() {
+        assert!(repeat_hits("\u{201E}100 Jahre dauern.\n\n\u{201E}100 Tage gehen.").is_empty());
+    }
+
+    #[test]
+    fn different_second_word_after_the_article_yields_no_match() {
+        assert!(repeat_hits("Der Hund ist schwarz.\n\nDer Baum ist gr\u{fc}n.").is_empty());
+    }
+
+    #[test]
+    fn same_paragraph_sentences_do_not_reset_the_comparison() {
+        let text = "Der Hund ist schwarz. Der Hund ist braun.\n\nDer Hund ist wei\u{df}.";
+        let hits = repeat_hits(text);
+        let covered: Vec<&str> = hits.iter().map(|(o, l)| &text[*o..*o + *l]).collect();
+        assert_eq!(covered, vec!["Der Hund", "Der Hund"]);
+    }
+
+    #[test]
+    fn degenerate_inputs_return_no_matches() {
+        use og_core::rule::TextLevelRule as _;
+        use og_core::{AnalyzedSentence, AnalyzedToken, AnalyzedTokenReadings};
+
+        let rule = super::GermanParagraphRepeatBeginningRule::default();
+        assert!(rule.match_text("", &[]).is_empty());
+
+        let mut first = AnalyzedSentence::new("Hallo.\n\n", 0, 8);
+        first.set_tokens(vec![
+            AnalyzedTokenReadings::new(AnalyzedToken::new("<S>", 0, 0)),
+            AnalyzedTokenReadings::new(AnalyzedToken::new("Hallo", 0, 5)),
+            AnalyzedTokenReadings::new(AnalyzedToken::new(".", 5, 6)),
+        ]);
+        let mut second = AnalyzedSentence::new("", 8, 8);
+        second.set_tokens(vec![AnalyzedTokenReadings::new(AnalyzedToken::new(
+            "<S>", 8, 8,
+        ))]);
+        assert!(rule.match_text("Hallo.\n\n", &[first, second]).is_empty());
+    }
+
+    #[test]
+    fn metadata_pins_the_registration() {
+        use og_core::rule::TextLevelRule as _;
+
+        let rule = super::GermanParagraphRepeatBeginningRule::default();
+        assert_eq!(rule.id(), "GERMAN_PARAGRAPH_REPEAT_BEGINNING_RULE");
+        assert_eq!(
+            rule.description(),
+            "Gleicher Anfang von aufeinanderfolgenden Abs\u{e4}tzen"
         );
+        assert!(!rule.is_default_on());
+        assert_eq!(rule.category().id().as_str(), "STYLE");
+        assert!(matches!(rule.issue_type(), og_core::IssueType::Style));
     }
 }
