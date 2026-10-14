@@ -5590,4 +5590,260 @@ mod tests {
         assert!(expand_literal_regexp(r"\d+").is_none());
         assert!(expand_literal_regexp("(unclosed").is_none());
     }
+
+    #[test]
+    fn bare_actions_without_postag_wd_or_match_leave_readings_untouched() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<rules lang="en">
+    <rule id="BARE_REPLACE" name="replace without payload">
+        <pattern><marker><token>alpha</token></marker></pattern>
+        <disambig action="replace"/>
+    </rule>
+    <rule id="BARE_REMOVE" name="remove without payload">
+        <pattern><marker><token>beta</token></marker></pattern>
+        <disambig action="remove"/>
+    </rule>
+    <rule id="BARE_ADD" name="add without payload">
+        <pattern><marker><token>gamma</token></marker></pattern>
+        <disambig action="add"/>
+    </rule>
+</rules>"#;
+        let disambig = XmlDisambiguator::from_xml(xml).unwrap();
+        let mut sentence = make_sentence(vec![
+            ("alpha", vec!["NN", "VB"]),
+            ("beta", vec!["NN", "VB"]),
+            ("gamma", vec!["NN", "VB"]),
+        ]);
+        disambig.disambiguate(&mut sentence);
+        for (idx, word) in ["alpha", "beta", "gamma"].iter().enumerate() {
+            assert_eq!(
+                readings_of(&sentence.tokens()[idx]),
+                vec![(None, "NN".to_string()), (None, "VB".to_string())],
+                "the bare action on '{word}' must not touch the readings"
+            );
+        }
+    }
+
+    #[test]
+    fn malformed_action_postag_regexes_are_skipped() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<rules lang="en">
+    <rule id="BAD_FILTER" name="filter with a broken regex">
+        <pattern><marker><token>alpha</token></marker></pattern>
+        <disambig action="filter" postag="("/>
+    </rule>
+    <rule id="BAD_REMOVE" name="remove with a broken regex">
+        <pattern><marker><token>beta</token></marker></pattern>
+        <disambig action="remove" postag="("/>
+    </rule>
+</rules>"#;
+        let disambig = XmlDisambiguator::from_xml(xml).unwrap();
+        let mut sentence = make_sentence(vec![
+            ("alpha", vec!["NN", "VB"]),
+            ("beta", vec!["NN", "VB"]),
+        ]);
+        disambig.disambiguate(&mut sentence);
+        for idx in 0..2 {
+            assert_eq!(
+                sentence.tokens()[idx].readings().len(),
+                2,
+                "a postag that compiles as no regex at all must leave the readings alone"
+            );
+        }
+    }
+
+    #[test]
+    fn immunized_tokens_are_skipped_by_disambiguation_rules() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<rules lang="fr">
+    <rule id="LE_SET" name="set the pronoun tag">
+        <pattern><marker><token>le</token></marker></pattern>
+        <disambig postag="PRON"/>
+    </rule>
+</rules>"#;
+        let disambig = XmlDisambiguator::from_xml(xml).unwrap();
+        let mut sentence = le_sentence();
+        sentence.tokens_mut()[0].immunize();
+        disambig.disambiguate(&mut sentence);
+        let token = &sentence.tokens()[0];
+        assert!(token.is_immunized());
+        assert_eq!(
+            readings_of(token),
+            vec![
+                (Some("le"), "D f s".to_string()),
+                (Some("le"), "R pers obj 3 s".to_string())
+            ],
+            "an immunized token must not match any disambiguation rule, like PatternRuleMatcher"
+        );
+    }
+
+    #[test]
+    fn filter_action_keeps_the_speller_flag() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<rules lang="fr">
+    <rule id="LE_FILTER" name="keep only the pronoun reading">
+        <pattern><marker><token>le</token></marker></pattern>
+        <disambig action="filter" postag="R.*"/>
+    </rule>
+</rules>"#;
+        let disambig = XmlDisambiguator::from_xml(xml).unwrap();
+        let mut sentence = le_sentence();
+        sentence.tokens_mut()[0].ignore_spelling();
+        disambig.disambiguate(&mut sentence);
+        assert!(sentence.tokens()[0].is_ignored_by_speller());
+        assert_eq!(
+            readings_of(&sentence.tokens()[0]),
+            vec![(Some("le"), "R pers obj 3 s".to_string())]
+        );
+    }
+
+    #[test]
+    fn match_action_lemma_text_keeps_the_speller_flag() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<rules lang="fr">
+    <rule id="LE_LEMMA_FLAGS" name="lemma match keeps the flags">
+        <pattern><marker><token>le</token></marker></pattern>
+        <disambig action="replace"><match>le</match></disambig>
+    </rule>
+</rules>"#;
+        let disambig = XmlDisambiguator::from_xml(xml).unwrap();
+        let mut sentence = AnalyzedSentence::new("test", 0, 5);
+        sentence.set_tokens(vec![
+            AnalyzedTokenReadings::new(AnalyzedToken::new("le", 0, 2)).with_readings(vec![
+                AnalyzedToken::new("le", 0, 2)
+                    .with_pos_tags(vec!["D f s".to_string()])
+                    .with_lemma("le"),
+                AnalyzedToken::new("le", 0, 2)
+                    .with_pos_tags(vec!["D f p".to_string()])
+                    .with_lemma("la"),
+            ]),
+            AnalyzedTokenReadings::new(AnalyzedToken::new("x", 3, 4)).with_readings(vec![
+                AnalyzedToken::new("x", 3, 4).with_pos_tags(vec!["NC".to_string()]),
+            ]),
+        ]);
+        sentence.tokens_mut()[0].ignore_spelling();
+        disambig.disambiguate(&mut sentence);
+        let token = &sentence.tokens()[0];
+        assert!(token.is_ignored_by_speller());
+        assert_eq!(
+            readings_of(token),
+            vec![(Some("le"), "D f s".to_string())],
+            "only the lemma-matching reading survives and the speller flag carries over"
+        );
+    }
+
+    #[test]
+    fn match_action_regexp_postag_skips_tagless_readings() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<rules lang="fr">
+    <rule id="LE_REGEXP_TAGLESS" name="regexp skips tagless readings">
+        <pattern><marker><token>le</token></marker></pattern>
+        <disambig action="replace"><match postag="R.*" postag_regexp="yes"/></disambig>
+    </rule>
+</rules>"#;
+        let disambig = XmlDisambiguator::from_xml(xml).unwrap();
+        let mut sentence = AnalyzedSentence::new("test", 0, 5);
+        sentence.set_tokens(vec![
+            AnalyzedTokenReadings::new(AnalyzedToken::new("le", 0, 2)).with_readings(vec![
+                AnalyzedToken::new("le", 0, 2)
+                    .with_pos_tags(vec!["R pers obj 3 s".to_string()])
+                    .with_lemma("le"),
+                AnalyzedToken::new("le", 0, 2),
+                AnalyzedToken::new("le", 0, 2)
+                    .with_pos_tags(vec!["D f s".to_string()])
+                    .with_lemma("le"),
+            ]),
+            AnalyzedTokenReadings::new(AnalyzedToken::new("x", 3, 4)).with_readings(vec![
+                AnalyzedToken::new("x", 3, 4).with_pos_tags(vec!["NC".to_string()]),
+            ]),
+        ]);
+        disambig.disambiguate(&mut sentence);
+        assert_eq!(
+            readings_of(&sentence.tokens()[0]),
+            vec![(Some("le"), "R pers obj 3 s".to_string())],
+            "the tagless middle reading is skipped instead of matching or panicking"
+        );
+    }
+
+    #[test]
+    fn match_action_lemma_text_with_a_postag_requires_both() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<rules lang="fr">
+    <rule id="LE_LEMMA_POSTAG" name="lemma and postag must both hold">
+        <pattern><marker><token>le</token></marker></pattern>
+        <disambig action="replace"><match postag="D f s">le</match></disambig>
+    </rule>
+</rules>"#;
+        let disambig = XmlDisambiguator::from_xml(xml).unwrap();
+        let mut sentence = AnalyzedSentence::new("test", 0, 5);
+        sentence.set_tokens(vec![
+            AnalyzedTokenReadings::new(AnalyzedToken::new("le", 0, 2)).with_readings(vec![
+                AnalyzedToken::new("le", 0, 2)
+                    .with_pos_tags(vec!["D f s".to_string()])
+                    .with_lemma("le"),
+                AnalyzedToken::new("le", 0, 2)
+                    .with_pos_tags(vec!["D f p".to_string()])
+                    .with_lemma("le"),
+            ]),
+            AnalyzedTokenReadings::new(AnalyzedToken::new("x", 3, 4)).with_readings(vec![
+                AnalyzedToken::new("x", 3, 4).with_pos_tags(vec!["NC".to_string()]),
+            ]),
+        ]);
+        disambig.disambiguate(&mut sentence);
+        assert_eq!(
+            readings_of(&sentence.tokens()[0]),
+            vec![(Some("le"), "D f s".to_string())],
+            "the lemma filter must also require the literal postag before the regexp pass"
+        );
+    }
+
+    #[test]
+    fn match_action_on_a_readingless_token_changes_nothing() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<rules lang="fr">
+    <rule id="LE_EMPTY" name="match on a readingless token">
+        <pattern><marker><token>le</token></marker></pattern>
+        <disambig action="replace"><match postag="R.*" postag_regexp="yes"/></disambig>
+    </rule>
+</rules>"#;
+        let disambig = XmlDisambiguator::from_xml(xml).unwrap();
+        let mut sentence = AnalyzedSentence::new("test", 0, 5);
+        sentence.set_tokens(vec![
+            AnalyzedTokenReadings::new(AnalyzedToken::new("le", 0, 2)).with_readings(Vec::new()),
+            AnalyzedTokenReadings::new(AnalyzedToken::new("x", 3, 4)).with_readings(vec![
+                AnalyzedToken::new("x", 3, 4).with_pos_tags(vec!["NC".to_string()]),
+            ]),
+        ]);
+        disambig.disambiguate(&mut sentence);
+        assert!(
+            sentence.tokens()[0].readings().is_empty(),
+            "a token without readings cannot donate a source reading, so it stays empty"
+        );
+    }
+
+    #[test]
+    fn debug_helpers_report_absent_rules() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<rules lang="fr">
+    <rule id="LE_ONLY" name="the only rule">
+        <pattern><marker><token>le</token></marker></pattern>
+        <disambig postag="PRON"/>
+    </rule>
+</rules>"#;
+        let disambig = XmlDisambiguator::from_xml(xml).unwrap();
+        let mut sentence = le_sentence();
+        let before = readings_signature(&sentence);
+        disambig.apply_rule(&mut sentence, 99);
+        assert_eq!(
+            readings_signature(&sentence),
+            before,
+            "an out-of-range rule index must be a no-op"
+        );
+        let (untouched, examples) = disambig.rule_examples(99);
+        assert!(untouched.is_empty());
+        assert!(examples.is_empty());
+        assert_eq!(disambig.rule_debug(99), "");
+        assert_eq!(disambig.first_index_of_rule_id("LE_ONLY"), Some(0));
+        assert_eq!(disambig.first_index_of_rule_id("ABSENT"), None);
+    }
 }
