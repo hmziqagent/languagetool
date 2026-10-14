@@ -540,4 +540,151 @@ mod tests {
             og_core::IssueType::Other("other".to_string())
         );
     }
+
+    #[test]
+    fn java_pin_paired_quotes_with_trailing_comma_stay_silent() {
+        assert!(run(
+            "Piosenka ta trafi\u{142}a na wiele list \"Best of...\", w\u{142}\u{105}czaj\u{105}c w to te, kt\u{f3}re zosta\u{142}y utworzone przez magazyn Rolling Stone."
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn java_pin_three_quotes_in_one_sentence_stay_silent() {
+        assert!(run("(To jest zdanie do testowania).").is_empty());
+        assert!(run("A \"B\" C.").is_empty());
+        assert!(run("\"A\" B \"C\".").is_empty());
+    }
+
+    #[test]
+    fn symmetric_odd_quote_stack_reports_the_middle_quote() {
+        let text = "To \" a \" b \" c.";
+        let matches = run(text);
+        assert_eq!(matches.len(), 1, "{matches:?}");
+        assert_eq!(
+            matches[0].offset(),
+            text.find("\" b").expect("middle quote")
+        );
+        assert_eq!(matches[0].length(), 1);
+    }
+
+    #[test]
+    fn second_unmatched_quote_annihilates_the_first_match() {
+        assert!(run("To \" a \" b.").is_empty());
+    }
+
+    #[test]
+    fn numeral_then_dot_before_closing_paren_is_ignored() {
+        assert!(run("1. 2. ) koniec.").is_empty());
+    }
+
+    #[test]
+    fn square_close_over_round_open_reports_both() {
+        let text = "To (by\u{142} b\u{142}\u{105}d].";
+        let matches = run(text);
+        let offsets: Vec<usize> = matches.iter().map(|m| m.offset()).collect();
+        assert_eq!(
+            offsets,
+            vec![text.find('(').unwrap(), text.find(']').unwrap()]
+        );
+        assert!(matches[1].message().contains('['));
+    }
+
+    #[test]
+    fn lone_paren_after_url_token_is_ignored() {
+        assert!(run("Zobacz https://example.com/a(b ).").is_empty());
+    }
+
+    #[test]
+    fn quote_before_a_low_opening_quote_reports_the_low_quote() {
+        let text = "To x\"\u{201e} dalej.";
+        let matches = run(text);
+        assert_eq!(matches.len(), 1, "{matches:?}");
+        assert_eq!(
+            &text[matches[0].offset()..matches[0].offset() + matches[0].length()],
+            "\u{201e}"
+        );
+    }
+
+    #[test]
+    fn hyphen_then_quote_is_treated_as_opening() {
+        let text = "To xxx-\"yyy.";
+        let matches = run(text);
+        assert_eq!(matches.len(), 1, "{matches:?}");
+        assert_eq!(matches[0].offset(), text.find('"').unwrap());
+    }
+
+    #[test]
+    fn special_case_next_token_clauses_pair_the_quotes() {
+        assert!(run("To \"Go\"-button.").is_empty());
+        assert!(run("To \"I\"s.").is_empty());
+    }
+
+    #[test]
+    fn bracket_at_text_start_is_reported() {
+        let text = "\"Niedomkni\u{119}ty cytat.";
+        let matches = run(text);
+        assert_eq!(matches.len(), 1, "{matches:?}");
+        assert_eq!(matches[0].offset(), 0);
+    }
+
+    #[test]
+    fn closing_paren_at_text_end_is_reported() {
+        let text = "B\u{142}\u{105}d tutaj)";
+        let matches = run(text);
+        assert_eq!(matches.len(), 1, "{matches:?}");
+        assert_eq!(matches[0].offset(), text.find(')').unwrap());
+    }
+
+    #[test]
+    fn comma_glued_quote_is_treated_as_opening() {
+        let text = "Zobacz,\"cytat dalej.";
+        let matches = run(text);
+        assert_eq!(matches.len(), 1, "{matches:?}");
+        assert_eq!(matches[0].offset(), text.find('"').unwrap());
+    }
+
+    #[test]
+    fn context_snaps_to_char_boundaries_around_multibyte_text() {
+        let text = format!(
+            "\u{2026}{} \"\u{105}\u{2026}{}.",
+            "a".repeat(27),
+            "\u{2026}".repeat(10)
+        );
+        let matches = run(&text);
+        assert_eq!(matches.len(), 1, "{matches:?}");
+        assert_eq!(matches[0].offset(), 31);
+        assert_eq!(matches[0].context().text(), &text[3..61]);
+    }
+
+    #[test]
+    fn opening_quote_before_a_later_sentence_is_reported() {
+        let text = "To \"cytat Drugi.";
+        let pipeline = PolishPipeline::shared();
+        let first = pipeline.analyze_range(text, 0, 9);
+        let second = pipeline.analyze_range(text, 10, 16);
+        let rule = PolishUnpairedBracketsRule::new();
+        let matches = og_core::rule::TextLevelRule::match_text(&rule, text, &[first, second]);
+        assert_eq!(matches.len(), 1, "{matches:?}");
+        assert_eq!(matches[0].offset(), text.find('"').unwrap());
+    }
+
+    #[test]
+    fn punct_helpers_pin_the_java_punctuation_patterns() {
+        assert!(punct_matches("."));
+        assert!(punct_matches("\u{2026}"));
+        assert!(!punct_matches("ab"));
+        assert!(!punct_matches(""));
+        for apostrophed in ["l'", "d'", "m'", "n'", "s'", "t'", "T'"] {
+            assert!(punct_no_dot_matches(apostrophed), "{apostrophed}");
+        }
+        assert!(punct_no_dot_matches(","));
+        assert!(punct_no_dot_matches("-"));
+        assert!(!punct_no_dot_matches("."));
+        assert!(!punct_no_dot_matches("a"));
+        assert!(!punct_no_dot_matches("a'"));
+        assert!(!punct_no_dot_matches("l"));
+        assert!(!is_java_punct('\u{201e}'));
+        assert!(is_java_punct('\u{2014}'));
+    }
 }
