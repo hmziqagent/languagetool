@@ -5698,6 +5698,26 @@ mod tests {
     }
 
     #[test]
+    fn remove_postag_action_keeps_the_speller_flag() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<rules lang="fr">
+    <rule id="LE_DROP_DET" name="drop the determiner reading">
+        <pattern><marker><token>le</token></marker></pattern>
+        <disambig action="remove" postag="D f s"/>
+    </rule>
+</rules>"#;
+        let disambig = XmlDisambiguator::from_xml(xml).unwrap();
+        let mut sentence = le_sentence();
+        sentence.tokens_mut()[0].ignore_spelling();
+        disambig.disambiguate(&mut sentence);
+        assert!(sentence.tokens()[0].is_ignored_by_speller());
+        assert_eq!(
+            readings_of(&sentence.tokens()[0]),
+            vec![(Some("le"), "R pers obj 3 s".to_string())]
+        );
+    }
+
+    #[test]
     fn match_action_lemma_text_keeps_the_speller_flag() {
         let xml = r#"<?xml version="1.0" encoding="utf-8"?>
 <rules lang="fr">

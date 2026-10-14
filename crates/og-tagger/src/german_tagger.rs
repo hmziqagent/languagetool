@@ -3355,4 +3355,34 @@ mod tests {
             "{tags:?}"
         );
     }
+    #[test]
+    fn weise_compounds_expand_to_the_full_sol_adjective_paradigm() {
+        let tagger = tagger();
+        let gelberweise = Tagger::tag(&tagger, &["gelberweise"]);
+        let tags = tags_of(&gelberweise[0]);
+        assert_eq!(tags.len(), 16, "{tags:?}");
+        assert!(
+            tags.iter()
+                .all(|(l, t)| l == "gelberweise" && t.starts_with("ADJ:")),
+            "{tags:?}"
+        );
+        for expected in [
+            "ADJ:AKK:PLU:FEM:GRU:SOL",
+            "ADJ:NOM:SIN:MAS:GRU:DEF",
+            "ADJ:NOM:SIN:NEU:GRU:DEF",
+            "ADJ:PRD:GRU",
+        ] {
+            assert!(
+                tags.iter().any(|(_, t)| t == expected),
+                "{expected} missing: {tags:?}"
+            );
+        }
+        let dict_word = Tagger::tag(&tagger, &["lustigerweise"]);
+        assert!(
+            tags_of(&dict_word[0])
+                .iter()
+                .all(|(_, t)| t.starts_with("ADV:")),
+            "dict-listed adverbs keep their dictionary readings"
+        );
+    }
 }
