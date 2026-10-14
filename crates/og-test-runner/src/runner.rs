@@ -1463,7 +1463,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn test_load_real_english_grammar_xml() {
         if !test_support::grammar_available() {
             eprintln!("Skipping: English grammar.xml not found");
@@ -1845,7 +1844,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn test_it_is_rule_its_cool_man() {
         let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
         <rules lang="en">
@@ -2108,7 +2106,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn test_been_part_agreement_debug() {
         let runner = test_support::shared_runner();
 
@@ -2153,7 +2150,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn test_to_too_inflected_matching() {
         let runner = test_support::shared_runner();
         let compiled = test_support::shared_grammar_rules();
