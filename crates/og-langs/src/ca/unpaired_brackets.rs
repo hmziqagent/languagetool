@@ -517,7 +517,7 @@ mod tests {
 
     type WordSpec<'a> = (&'a str, &'a [&'a str], bool);
 
-    fn built_matches(text: &str, words: &[WordSpec<'_>]) -> Vec<RuleMatch> {
+    fn built_sentence(text: &str, words: &[WordSpec<'_>]) -> AnalyzedSentence {
         let mut tokens = vec![AnalyzedTokenReadings::new(
             AnalyzedToken::new("<S>", 0, 0).with_pos_tags(vec!["SENT_START".to_string()]),
         )];
@@ -552,6 +552,11 @@ mod tests {
         }
         let mut sentence = AnalyzedSentence::new(text, 0, text.len());
         sentence.set_tokens(tokens);
+        sentence
+    }
+
+    fn built_matches(text: &str, words: &[WordSpec<'_>]) -> Vec<RuleMatch> {
+        let sentence = built_sentence(text, words);
         CatalanUnpairedBracketsRule::new().match_text(text, &[sentence])
     }
 
@@ -680,5 +685,172 @@ mod tests {
             ],
         );
         assert!(matches.is_empty(), "{matches:?}");
+    }
+
+    #[test]
+    fn roman_numeral_bullet_closing_paren_is_exempt() {
+        assert!(matches_for("We discussed this in section iv).").is_empty());
+    }
+
+    #[test]
+    fn numbered_bullet_with_dot_before_closing_paren_is_exempt() {
+        assert!(matches_for("1.) El primer punt del programa.").is_empty());
+    }
+
+    #[test]
+    fn mismatched_bracket_kinds_fire_one_match_per_symbol() {
+        let matches = matches_for("This [is (a test} sentence.");
+        assert_eq!(
+            matches
+                .iter()
+                .map(|m| (m.offset(), m.length()))
+                .collect::<Vec<_>>(),
+            vec![(5, 1), (9, 1), (16, 1)],
+            "{matches:?}"
+        );
+
+        let matches = matches_for("(This is a test\u{201d} sentence.");
+        assert_eq!(
+            matches
+                .iter()
+                .map(|m| (m.offset(), m.length()))
+                .collect::<Vec<_>>(),
+            vec![(0, 1), (15, 3)],
+            "{matches:?}"
+        );
+    }
+
+    #[test]
+    fn odd_symmetric_stack_reports_only_the_middle_symbol() {
+        let matches = built_matches(
+            "Va dir \"una \"cosa \"estranya.",
+            &[
+                ("Va", &[], true),
+                ("dir", &[], true),
+                ("\"", &[], true),
+                ("una", &[], false),
+                ("\"", &[], true),
+                ("cosa", &[], false),
+                ("\"", &[], true),
+                ("estranya", &[], false),
+                (".", &[], false),
+            ],
+        );
+        assert_eq!(matches.len(), 1, "{matches:?}");
+        assert_eq!(matches[0].offset(), 12);
+        assert_eq!(matches[0].length(), 1);
+    }
+
+    #[test]
+    fn url_token_containing_a_paren_is_exempt() {
+        let matches = built_matches(
+            "Vegeu http://example.com/f(x) avui.",
+            &[
+                ("Vegeu", &[], true),
+                ("http://example.com/f(x", &[], true),
+                (")", &[], false),
+                ("avui", &[], true),
+                (".", &[], true),
+            ],
+        );
+        assert!(matches.is_empty(), "{matches:?}");
+    }
+
+    #[test]
+    fn smiley_paren_tokens_are_exempt() {
+        for head in [":", ";"] {
+            let matches = built_matches(
+                &format!("{head}-)"),
+                &[(head, &[], true), ("-", &[], false), (")", &[], false)],
+            );
+            assert!(matches.is_empty(), "{head:?}: {matches:?}");
+        }
+    }
+
+    #[test]
+    fn paren_glued_to_a_colon_or_semicolon_is_exempt() {
+        for text in [":(", ";(", ":)", ";)"] {
+            let (head, tail) = text.split_at(1);
+            let matches = built_matches(text, &[(head, &[], true), (tail, &[], false)]);
+            assert!(matches.is_empty(), "{text:?}: {matches:?}");
+        }
+    }
+
+    #[test]
+    fn minute_and_second_quotes_after_a_degree_mark_are_exempt() {
+        let adjacent = built_matches(
+            "60\u{b0} 50' 23'.",
+            &[
+                ("60\u{b0}", &[], true),
+                ("50", &["Zp-"], true),
+                ("'", &[], false),
+                ("23", &["Zp-"], false),
+                ("'", &[], false),
+                (".", &[], false),
+            ],
+        );
+        assert!(adjacent.is_empty(), "{adjacent:?}");
+
+        let distant = built_matches(
+            "60\u{b0} C 50 23'.",
+            &[
+                ("60\u{b0}", &[], true),
+                ("C", &[], true),
+                ("50", &["Zp-"], true),
+                ("23", &["Zp-"], false),
+                ("'", &[], false),
+                (".", &[], false),
+            ],
+        );
+        assert!(distant.is_empty(), "{distant:?}");
+    }
+
+    #[test]
+    fn two_stray_closing_parens_each_fire() {
+        let matches = built_matches(
+            "un) i dos).",
+            &[
+                ("un", &["NPMS00"], true),
+                (")", &[], false),
+                ("i", &[], true),
+                ("dos", &["NCMP00"], true),
+                (")", &[], false),
+                (".", &[], false),
+            ],
+        );
+        assert_eq!(
+            matches.iter().map(|m| m.offset()).collect::<Vec<_>>(),
+            vec![2, 9],
+            "{matches:?}"
+        );
+    }
+
+    #[test]
+    fn unpaired_opening_in_an_earlier_sentence_fires() {
+        let first = built_sentence(
+            "Aix\u{f2} \u{e9}s (impossible sin\u{f3}",
+            &[
+                ("Aix\u{f2}", &[], true),
+                ("\u{e9}s", &[], true),
+                ("(", &[], true),
+                ("impossible", &[], false),
+                ("sin\u{f3}", &[], true),
+            ],
+        );
+        let second = built_sentence("res.", &[("res", &[], true), (".", &[], false)]);
+        let text = "Aix\u{f2} \u{e9}s (impossible sin\u{f3} res.";
+        let matches = CatalanUnpairedBracketsRule::new().match_text(text, &[first, second]);
+        assert_eq!(matches.len(), 1, "{matches:?}");
+        assert_eq!(matches[0].offset(), 10);
+    }
+
+    #[test]
+    fn default_rule_matches_and_reports_the_typographical_issue_type() {
+        let rule = CatalanUnpairedBracketsRule::default();
+        assert_eq!(rule.id(), "UNPAIRED_BRACKETS");
+        assert_eq!(rule.issue_type(), IssueType::Typographical);
+        let matches = matches_for("Aix\u{f2} \u{e9}s (impossible. ");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].rule().category().id().as_str(), "PUNCTUATION");
     }
 }
