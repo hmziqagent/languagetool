@@ -373,22 +373,27 @@ impl TestRunner {
                     return Some(Arc::new(chain));
                 }
                 let disambig_path = resource_dir.join("disambiguation.xml");
+                let english_tagger = (code == "en")
+                    .then(og_tagger::english_tagger::shared_english_tagger)
+                    .flatten();
                 match std::fs::read_to_string(&disambig_path) {
-                    Ok(xml) => match XmlDisambiguator::from_xml_with_english(&xml, None) {
-                        Ok(d) => {
-                            eprintln!("Loaded {} disambiguation rules", d.rule_count());
-                            Some(og_tagger::hybrid_disambiguator(
-                                code,
-                                &resource_dir,
-                                core_resource_dir,
-                                d,
-                            ))
+                    Ok(xml) => {
+                        match XmlDisambiguator::from_xml_with_english(&xml, english_tagger) {
+                            Ok(d) => {
+                                eprintln!("Loaded {} disambiguation rules", d.rule_count());
+                                Some(og_tagger::hybrid_disambiguator(
+                                    code,
+                                    &resource_dir,
+                                    core_resource_dir,
+                                    d,
+                                ))
+                            }
+                            Err(e) => {
+                                eprintln!("Warning: failed to load disambiguation: {}", e);
+                                None
+                            }
                         }
-                        Err(e) => {
-                            eprintln!("Warning: failed to load disambiguation: {}", e);
-                            None
-                        }
-                    },
+                    }
                     Err(_) => None,
                 }
             });

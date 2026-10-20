@@ -237,6 +237,8 @@ struct RemoveWordMatcher {
 }
 
 impl XmlDisambiguator {
+    // Java's IsEnglishWordFilter resolves en-US only when the en module is on the classpath;
+    // de/fr/es/nl/pt/ca modules don't depend on it, so their pipelines run the filter inert.
     pub fn from_xml(xml: &str) -> Result<Self, String> {
         Self::from_xml_with_english(xml, None)
     }
@@ -387,16 +389,6 @@ impl XmlDisambiguator {
                 compile_partial_postag_filter(rule.filter_args.as_deref().unwrap_or(""))
             })
             .collect();
-
-        let english_tagger = if english_tagger.is_none()
-            && compiled_rules.iter().any(|rule| {
-                rule.filter_class.as_deref() == Some(EN_PARTIAL_POSTAG_FILTER_CLASS)
-                    || rule.filter_class.as_deref() == Some(ENGLISH_WORD_FILTER_CLASS)
-            }) {
-            crate::english_tagger::shared_english_tagger()
-        } else {
-            english_tagger
-        };
 
         let rule_index = DisambigRuleIndex::build(&compiled_rules);
 
@@ -4918,7 +4910,7 @@ mod tests {
     }
 
     #[test]
-    fn partial_postag_filter_self_loads_tagger_from_xml() {
+    fn partial_postag_filter_stays_inert_without_a_supplied_tagger() {
         if en_resource_dir().is_none() {
             return;
         }
@@ -4926,8 +4918,8 @@ mod tests {
         let mut sentence = make_sentence(vec![("500-page", vec!["CD"])]);
         disambig.disambiguate(&mut sentence);
         assert!(
-            sentence.tokens()[0].has_pos_tag("JJ"),
-            "from_xml resolves the shared English tagger for the filter like NoDisambiguationEnglishPartialPosTagFilter's constructor"
+            !sentence.tokens()[0].has_pos_tag("JJ"),
+            "from_xml supplies no English tagger, so the filter rejects like Java's null-tagger modules"
         );
     }
 
@@ -4948,12 +4940,15 @@ mod tests {
     }
 
     #[test]
-    fn english_word_filter_admits_tagged_english_forms_and_loads_own_tagger() {
+    fn english_word_filter_admits_tagged_english_forms_with_a_supplied_tagger() {
         if en_resource_dir().is_none() {
             return;
         }
-        let disambig = XmlDisambiguator::from_xml(&english_word_filter_xml("formPositions:2"))
-            .expect("compile IsEnglishWordFilter rule");
+        let disambig = XmlDisambiguator::from_xml_with_english(
+            &english_word_filter_xml("formPositions:2"),
+            crate::english_tagger::shared_english_tagger(),
+        )
+        .expect("compile IsEnglishWordFilter rule");
         let mut english = make_sentence(vec![("for", vec!["SP"]), ("example", vec!["NC"])]);
         disambig.disambiguate(&mut english);
         assert!(
@@ -4973,9 +4968,11 @@ mod tests {
         if en_resource_dir().is_none() {
             return;
         }
-        let disambig =
-            XmlDisambiguator::from_xml(&english_word_filter_xml("formPositions:2 postags:VB"))
-                .unwrap();
+        let disambig = XmlDisambiguator::from_xml_with_english(
+            &english_word_filter_xml("formPositions:2 postags:VB"),
+            crate::english_tagger::shared_english_tagger(),
+        )
+        .unwrap();
         let mut verb = make_sentence(vec![("for", vec!["SP"]), ("run", vec!["NC"])]);
         disambig.disambiguate(&mut verb);
         assert!(

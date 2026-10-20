@@ -258,7 +258,10 @@ impl LanguageEngine {
             if disambig_path.exists()
                 && let Ok(xml) = std::fs::read_to_string(&disambig_path)
             {
-                match XmlDisambiguator::from_xml(&xml) {
+                match XmlDisambiguator::from_xml_with_english(
+                    &xml,
+                    og_tagger::english_tagger::shared_english_tagger(),
+                ) {
                     Ok(disambiguator) => {
                         eprintln!(
                             "Loaded {} disambiguation rules for English",
