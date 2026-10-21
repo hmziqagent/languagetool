@@ -901,5 +901,78 @@ mod tests {
         assert_eq!(char_distance('i', 'y'), 0.0);
         assert_eq!(char_distance('a', 'q'), 1.0);
         assert_eq!(char_distance('a', 'a'), 0.0);
+        assert_eq!(number_of_correct_chars("ab cd", "ab ce"), 2);
+        assert_eq!(number_of_correct_chars("ab", "ce"), 0);
+        assert!(is_exception(SpellerVariant::Dutch, "jan's", "jan"));
+        assert!(!is_exception(SpellerVariant::Dutch, "as", "a"));
+    }
+
+    #[test]
+    fn dictionary_from_dir_folds_in_hunspell_spelling_words() {
+        let dir = std::env::temp_dir().join(format!("og-rules-spelling-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("hunspell")).unwrap();
+        std::fs::write(dir.join("dict_decoded.txt"), "went\tgo\tVBD\n").unwrap();
+        std::fs::write(
+            dir.join("hunspell/spelling.txt"),
+            "# comment\nextraword\n\n",
+        )
+        .unwrap();
+        let dict = SpellingSupport::dictionary_from_dir(&dir).expect("dictionary loads");
+        assert!(dict.contains("extraword"));
+        assert!(dict.contains("went"));
+        drop(dict);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn german_hunspell_words_extend_the_rule_dictionary() {
+        let de = std::path::Path::new(
+            "/home/agent/opengrammar-rs/languagetool/languagetool-language-modules/de/src/main/resources/org/languagetool/resource/de",
+        );
+        let core = std::path::Path::new(
+            "/home/agent/opengrammar-rs/languagetool-core/src/main/resources/org/languagetool/resource",
+        );
+        let words = german_hunspell_words(de);
+        let Some(first) = words.first() else {
+            return;
+        };
+        let support = SpellingSupport::new_for_language(
+            std::sync::Arc::new(Dictionary::new()),
+            core,
+            de,
+            "de",
+        );
+        assert!(
+            support.dictionary().contains(first),
+            "hunspell word {first:?} must land in the german rule dictionary"
+        );
+    }
+
+    #[test]
+    fn support_exposes_the_dictionary() {
+        let binding = support();
+        let dict = binding.dictionary();
+        assert!(dict.contains("good"));
+        assert!(!dict.contains("zzz"));
+    }
+
+    #[test]
+    fn multitoken_cache_survives_the_2000_entry_flush() {
+        let ms = MultitokenSpeller::from_data("New York\n");
+        let mut dict = Dictionary::new();
+        dict.add_word("ne");
+        for i in 0..2001 {
+            let _ = ms.get_suggestions(&format!("zz{i} qqq"), false, &dict);
+        }
+        let got = ms.get_suggestions("new york", false, &dict);
+        assert!(got.iter().any(|c| c == "New York"), "got {got:?}");
+    }
+
+    #[test]
+    fn lowercase_entry_stops_the_title_cased_query() {
+        let ms = MultitokenSpeller::from_data("new york\n");
+        let dict = Dictionary::new();
+        assert!(ms.get_suggestions("New York", false, &dict).is_empty());
     }
 }
