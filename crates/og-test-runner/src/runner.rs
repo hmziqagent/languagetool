@@ -1061,6 +1061,28 @@ pub mod test_support {
             .expect("english runner")
     }
 
+    pub fn shared_language_runner(code: &'static str) -> Arc<TestRunner> {
+        static CELLS: std::sync::OnceLock<
+            std::sync::Mutex<
+                std::collections::HashMap<
+                    &'static str,
+                    &'static og_core::releasable::Releasable<TestRunner>,
+                >,
+            >,
+        > = std::sync::OnceLock::new();
+        let cell = {
+            let cells = CELLS.get_or_init(Default::default);
+            let mut guard = cells.lock().unwrap();
+            *guard
+                .entry(code)
+                .or_insert_with(|| Box::leak(Box::new(og_core::releasable::Releasable::new())))
+        };
+        og_core::releasable::shared_get_or_build(cell, || {
+            Some(Arc::new(TestRunner::for_language(code)))
+        })
+        .unwrap_or_else(|| panic!("{code} runner"))
+    }
+
     pub fn shared_grammar_rules() -> Arc<CompiledRuleSet> {
         static CELL: og_core::releasable::Releasable<CompiledRuleSet> =
             og_core::releasable::Releasable::new();
@@ -3557,7 +3579,7 @@ fn run_generic_example_suite(code: &'static str) {
     }
     let started = std::time::Instant::now();
     let rules_handle = std::thread::spawn(move || test_support::generic_grammar_rules(code));
-    let runner = TestRunner::for_language(code);
+    let runner = test_support::shared_language_runner(code);
     let rules = rules_handle.join().expect("grammar compile thread");
     let summary = runner.run_rule_set_example_tests(&rules);
     drop(rules);
