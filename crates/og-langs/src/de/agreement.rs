@@ -1933,7 +1933,8 @@ mod tests {
 
     #[test]
     fn java_good_sentences_stay_clean() {
-        for text in [
+        use rayon::prelude::*;
+        let offenders: Vec<String> = [
             "Bis zur Anfang Juni geplanten Eröffnung gebe es noch einiges zu tun.",
             "Der fließend Französisch sprechende Präsident dankt stilvoll ab.",
             "Spricht dieser fließend Französisch, muss er viel Geld verdienen.",
@@ -1987,10 +1988,14 @@ mod tests {
             "Picassos Kunstwerke werden häufiger gestohlen als die anderer Künstler.",
             "Er war müde vom vielen Laufen.",
             "Sind das echte Diamanten?",
-        ] {
+        ]
+        .into_par_iter()
+        .filter_map(|text| {
             let matches = agreement_family(text);
-            assert!(matches.is_empty(), "{text}: got {matches:?}");
-        }
+            (!matches.is_empty()).then(|| format!("{text}: got {matches:?}"))
+        })
+        .collect();
+        assert!(offenders.is_empty(), "{}", offenders.join("\n"));
     }
 
     #[test]

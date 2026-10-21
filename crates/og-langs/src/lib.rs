@@ -19,7 +19,7 @@ static BOUND_TEST_ALLOCATOR: extern "C" fn() = {
             libc::mallopt(libc::M_TRIM_THRESHOLD, 4 * 1024 * 1024);
         }
         let _ = rayon::ThreadPoolBuilder::new()
-            .num_threads(2)
+            .num_threads(6)
             .build_global();
     }
     bound
@@ -34,13 +34,16 @@ pub(crate) fn release_guard() -> impl Drop {
     impl Drop for ReleaseOnDrop {
         fn drop(&mut self) {
             const ENGINE_IDLE_GRACE: std::time::Duration = std::time::Duration::from_secs(120);
+            const TRIM_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
             let keep_used_since = std::time::Instant::now()
                 .checked_sub(ENGINE_IDLE_GRACE)
                 .map_or(self.acquired, |floor| self.acquired.max(floor));
-            og_core::releasable::release_unused_since(keep_used_since);
+            let freed = og_core::releasable::release_unused_since(keep_used_since);
             #[cfg(target_os = "linux")]
-            unsafe {
-                libc::malloc_trim(0);
+            if freed > 0 && og_core::releasable::trim_due(TRIM_INTERVAL) {
+                unsafe {
+                    libc::malloc_trim(0);
+                }
             }
         }
     }

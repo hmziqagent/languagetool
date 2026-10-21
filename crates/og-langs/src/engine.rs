@@ -2332,8 +2332,8 @@ mod tests {
         LanguageEngine::shared_for_code("de").expect("german engine")
     }
 
-    fn build_engine(code: &str) -> Option<LanguageEngine> {
-        LanguageEngine::for_code(code)
+    fn build_engine(code: &str) -> Option<std::sync::Arc<LanguageEngine>> {
+        LanguageEngine::shared_for_code(code)
     }
 
     #[test]

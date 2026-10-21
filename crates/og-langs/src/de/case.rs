@@ -1847,7 +1847,8 @@ mod tests {
 
     #[test]
     fn java_good_sentences_stay_clean() {
-        for text in [
+        use rayon::prelude::*;
+        let offenders: Vec<String> = [
             "(Dauer, Raum, Anwesende)",
             "Es gibt wenige Befragte.",
             "Es gibt mehr Befragte, die das machen würden.",
@@ -2021,15 +2022,20 @@ mod tests {
             "Das ist das Debakel und Aus für Podolski.",
             "Ein Highlight für Klein und Groß!",
             "Der schwedische Psychologe Dan Katz, Autor von 'Angst kocht auch nur mit Wasser', sieht in der Corona-Krise dennoch nicht nur Negatives.",
-        ] {
+        ]
+        .into_par_iter()
+        .filter_map(|text| {
             let matches = case_matches(text);
-            assert!(matches.is_empty(), "{text}: got {matches:?}");
-        }
+            (!matches.is_empty()).then(|| format!("{text}: got {matches:?}"))
+        })
+        .collect();
+        assert!(offenders.is_empty(), "{}", offenders.join("\n"));
     }
 
     #[test]
     fn java_bad_sentences_flag_exactly_once() {
-        for text in [
+        use rayon::prelude::*;
+        let offenders: Vec<String> = [
             "Während des Hochwassers den Eingeschlossenen Menschen Nahrung bringen",
             "Während Gefragte Menschen antworteten.",
             "Ich brauche eine Gratis App die Ohne WLAN.",
@@ -2104,14 +2110,18 @@ mod tests {
             "Denn das gehen ist einfach.",
             "Das Große Auto wurde gewaschen.",
             "Ich habe ein Neues Fahrrad.",
-        ] {
+        ]
+        .into_par_iter()
+        .filter_map(|text| {
             let matches = case_matches(text);
-            assert_eq!(
-                matches.len(),
-                1,
-                "{text}: Java CaseRuleTest expects exactly one DE_CASE match, got {matches:?}"
-            );
-        }
+            (matches.len() != 1).then(|| {
+                format!(
+                    "{text}: Java CaseRuleTest expects exactly one DE_CASE match, got {matches:?}"
+                )
+            })
+        })
+        .collect();
+        assert!(offenders.is_empty(), "{}", offenders.join("\n"));
     }
 
     #[test]
