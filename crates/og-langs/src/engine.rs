@@ -152,7 +152,6 @@ impl LanguageEngine {
         }
         let _heavy = og_core::releasable::heavy_guard();
         og_core::releasable::shared_get_or_build(cell, || {
-            let _guard = engine_build_guard();
             trim_released_engine_pages();
             match code {
                 "en" => Some(Self::english()),

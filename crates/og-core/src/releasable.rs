@@ -155,28 +155,53 @@ thread_local! {
     static HEAVY_DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+const HEAVY_PERMITS: usize = 3;
+
+static HEAVY_AVAILABLE: Mutex<usize> = Mutex::new(HEAVY_PERMITS);
+static HEAVY_CV: std::sync::Condvar = std::sync::Condvar::new();
+
 pub struct HeavyGuard {
-    locked: Option<std::sync::MutexGuard<'static, ()>>,
+    acquired: bool,
+}
+
+impl HeavyGuard {
+    fn release(&mut self) {
+        if !self.acquired {
+            HEAVY_DEPTH.with(|depth| depth.set(depth.get().saturating_sub(1)));
+            return;
+        }
+        self.acquired = false;
+        HEAVY_DEPTH.with(|depth| depth.set(depth.get().saturating_sub(1)));
+        if let Ok(mut available) = HEAVY_AVAILABLE.lock() {
+            *available += 1;
+            HEAVY_CV.notify_one();
+        }
+    }
 }
 
 impl Drop for HeavyGuard {
     fn drop(&mut self) {
-        HEAVY_DEPTH.with(|depth| depth.set(depth.get().saturating_sub(1)));
-        self.locked.take();
+        self.release();
     }
 }
 
 // Reentrant on purpose: heavyweight tests hold this across engine builds on the same thread.
 pub fn heavy_guard() -> HeavyGuard {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    let locked = if HEAVY_DEPTH.with(|depth| depth.get()) == 0 {
-        let lock = LOCK.get_or_init(|| Mutex::new(()));
-        Some(lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner()))
-    } else {
-        None
-    };
+    let mut acquired = false;
+    if HEAVY_DEPTH.with(|depth| depth.get()) == 0 {
+        let mut available = HEAVY_AVAILABLE
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        while *available == 0 {
+            available = HEAVY_CV
+                .wait(available)
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+        }
+        *available -= 1;
+        acquired = true;
+    }
     HEAVY_DEPTH.with(|depth| depth.set(depth.get() + 1));
-    HeavyGuard { locked }
+    HeavyGuard { acquired }
 }
 
 #[cfg(test)]
@@ -317,8 +342,26 @@ mod tests {
     }
 
     #[test]
-    fn heavy_guard_blocks_other_threads_until_released() {
-        let outer = heavy_guard();
+    fn heavy_guard_blocks_callers_beyond_the_permit_budget() {
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let release_rx = std::sync::Arc::new(std::sync::Mutex::new(release_rx));
+        let holders: Vec<_> = (0..HEAVY_PERMITS)
+            .map(|_| {
+                let release_rx = std::sync::Arc::clone(&release_rx);
+                let (held_tx, held_rx) = std::sync::mpsc::channel::<()>();
+                let handle = std::thread::spawn(move || {
+                    let _guard = heavy_guard();
+                    held_tx.send(()).unwrap();
+                    let _ = release_rx.lock().unwrap().recv();
+                });
+                (held_rx, handle)
+            })
+            .collect();
+        for (held_rx, _) in &holders {
+            held_rx
+                .recv_timeout(Duration::from_secs(5))
+                .expect("each holder thread must acquire a permit");
+        }
         let (tx, rx) = std::sync::mpsc::channel();
         let handle = std::thread::spawn(move || {
             let _guard = heavy_guard();
@@ -326,11 +369,14 @@ mod tests {
         });
         assert!(
             rx.recv_timeout(Duration::from_millis(300)).is_err(),
-            "a second thread must wait while the guard is held"
+            "a caller beyond the permit budget must wait while all permits are held"
         );
-        drop(outer);
+        drop(release_tx);
+        for (_, holder) in holders {
+            holder.join().unwrap();
+        }
         rx.recv_timeout(Duration::from_secs(5))
-            .expect("second thread must acquire the guard after release");
+            .expect("releasing the permits must let the waiting caller through");
         handle.join().unwrap();
     }
 
