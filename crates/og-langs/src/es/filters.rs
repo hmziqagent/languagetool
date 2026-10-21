@@ -1961,6 +1961,438 @@ mod tests {
         }
     }
 
+    fn run_concordance(tokens: Vec<AnalyzedTokenReadings>) -> Option<RuleMatch> {
+        let i = tokens.len() - 1;
+        let refs: Vec<&AnalyzedTokenReadings> = tokens.iter().collect();
+        let rm = base_rm("m", 0, 5, "{suggestion}");
+        postponed_adjective_concordance_filter("", &[i], &refs, es_synth().as_deref(), rm)
+    }
+
+    fn replacements_of(rm: RuleMatch) -> Vec<String> {
+        rm.replacements()
+            .iter()
+            .map(|r| r.value().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn es_filter_registry_recognizes_the_java_filter_classes() {
+        for class in [
+            "org.languagetool.rules.es.ConfusionCheckFilter",
+            "org.languagetool.rules.AddCommasFilter",
+            "org.languagetool.rules.AdaptSuggestionsFilter",
+            "org.languagetool.rules.es.AdvancedSynthesizerFilter",
+            "org.languagetool.rules.es.FindSuggestionsFilter",
+            "org.languagetool.rules.es.SpanishSuppressMisspelledSuggestionsFilter",
+            "org.languagetool.rules.es.SpanishNumberInWordFilter",
+            "org.languagetool.rules.es.PostponedAdjectiveConcordanceFilter",
+        ] {
+            assert!(
+                is_es_filter(class),
+                "{class} must route to the es filter table"
+            );
+        }
+        assert!(!is_es_filter("org.languagetool.rules.es.UnknownFilter"));
+    }
+
+    #[test]
+    fn postponed_adj_pipeline_walks_coordination_and_preposition_levels() {
+        let out = run_postponed(
+            "Se dan los ciervos, gamos, corzos, muflones y la cabra montés.",
+            "3",
+        );
+        assert_eq!(
+            out,
+            vec![(55, 7, vec!["monteses".to_string(), "montesas".to_string()])]
+        );
+        let out = run_postponed(
+            "Los alumnos de 4º de la ESO de Carmelitas premiados en el concurso europeo.",
+            "3",
+        );
+        assert_eq!(
+            out,
+            vec![(
+                43,
+                9,
+                vec!["premiadoras".to_string(), "premiadas".to_string()]
+            )]
+        );
+        let out = run_postponed("Abandonaron el país transcurridas diez semanas.", "3");
+        assert_eq!(out, vec![(21, 13, vec!["transcurrido".to_string()])]);
+        let out = run_postponed("Son casas rojos.", "3");
+        assert_eq!(out, vec![(10, 5, vec!["rojas".to_string()])]);
+        let out = run_postponed("Análisis clínica.", "3");
+        assert_eq!(
+            out,
+            vec![(10, 8, vec!["clínico".to_string(), "clínicos".to_string()])]
+        );
+    }
+
+    #[test]
+    fn postponed_adj_coordination_scans_back_to_the_preposition() {
+        let out = run_concordance(vec![
+            sent_start(),
+            atr("de", &[("de", "SPS00")]),
+            atr("la", &[("la", "DA0FS0")]),
+            atr("mesa", &[("mesa", "NCFS000")]),
+            atr("y", &[("y", "CC")]),
+            atr("casa", &[("casa", "NCFS000")]),
+            atr("de", &[("de", "SPS00")]),
+            atr("la", &[("la", "DA0FS0")]),
+            atr("silla", &[("silla", "NCFS000")]),
+            atr("blancas", &[("blanco", "AQ0FP0")]),
+        ])
+        .expect("the feminine singular context must yield a suggestion");
+        assert_eq!(replacements_of(out), vec!["blanca".to_string()]);
+        let out = run_concordance(vec![
+            sent_start(),
+            atr("de", &[("de", "SPS00")]),
+            atr("la", &[("la", "DA0FS0")]),
+            atr("corre", &[("correr", "VMIP3S0")]),
+            atr("y", &[("y", "CC")]),
+            atr("de", &[("de", "SPS00")]),
+            atr("la", &[("la", "DA0FS0")]),
+            atr("silla", &[("silla", "NCFS000")]),
+            atr("blancas", &[("blanco", "AQ0FP0")]),
+        ])
+        .expect("a verb behind the coordination must only cut the scan short");
+        assert_eq!(replacements_of(out), vec!["blanca".to_string()]);
+        let out = run_concordance(vec![
+            sent_start(),
+            atr("de", &[("de", "SPS00")]),
+            atr("la", &[("la", "DA0FS0")]),
+            atr("mesa", &[("mesa", "NCFS000")]),
+            atr("y", &[("y", "CC")]),
+            atr("y", &[("y", "CC")]),
+            atr("de", &[("de", "SPS00")]),
+            atr("la", &[("la", "DA0FS0")]),
+            atr("silla", &[("silla", "NCFS000")]),
+            atr("blancas", &[("blanco", "AQ0FP0")]),
+        ]);
+        assert!(
+            out.is_none(),
+            "a preposition behind a coordination opens no new level, so the doubled \
+             feminine counts make the feminine plural agree"
+        );
+        let out = run_concordance(vec![
+            sent_start(),
+            atr("y", &[("y", "CC")]),
+            atr("y", &[("y", "CC")]),
+            atr("mesa", &[("mesa", "NCFS000")]),
+            atr("de", &[("de", "SPS00")]),
+            atr("y", &[("y", "CC")]),
+            atr("silla", &[("silla", "NCFS000")]),
+            atr("blancas", &[("blanco", "AQ0FP0")]),
+        ])
+        .expect("a coordination kept alive only by its text must still count");
+        assert_eq!(replacements_of(out), vec!["blanca".to_string()]);
+        let out = run_concordance(vec![
+            sent_start(),
+            atr("corre", &[("correr", "VMIP3S0")]),
+            atr("y", &[("y", "CC")]),
+            atr("mesa", &[("mesa", "NCFS000")]),
+            atr("de", &[("de", "SPS00")]),
+            atr("y", &[("y", "CC")]),
+            atr("silla", &[("silla", "NCFS000")]),
+            atr("blancas", &[("blanco", "AQ0FP0")]),
+        ])
+        .expect("a verb behind the scanned coordination must only cut the scan short");
+        assert_eq!(replacements_of(out), vec!["blanca".to_string()]);
+    }
+
+    #[test]
+    fn postponed_adj_plural_adjectives_survive_coordinated_singulars_only() {
+        let out = run_concordance(vec![
+            sent_start(),
+            atr("los", &[("el", "DA0MP0")]),
+            atr("coches", &[("coche", "NCMP000")]),
+            atr("y", &[("y", "CC")]),
+            atr("barcos", &[("barco", "NCMP000")]),
+            atr("rojos", &[("rojo", "AQ0MP0")]),
+        ]);
+        assert!(
+            out.is_none(),
+            "a masculine plural after two masculine plurals agrees"
+        );
+        let out = run_concordance(vec![
+            sent_start(),
+            atr("las", &[("el", "DA0FP0")]),
+            atr("casas", &[("casa", "NCFP000")]),
+            atr("y", &[("y", "CC")]),
+            atr("sillas", &[("silla", "NCFP000")]),
+            atr("blancas", &[("blanco", "AQ0FP0")]),
+        ]);
+        assert!(
+            out.is_none(),
+            "a feminine plural after two feminine plurals agrees"
+        );
+        let out = run_concordance(vec![
+            sent_start(),
+            atr("el", &[("el", "DA0MS0")]),
+            atr("casas", &[("casa", "NCFS000")]),
+            atr("y", &[("y", "CC")]),
+            atr("mesa", &[("mesa", "NCFS000")]),
+            atr("blancas", &[("blanco", "AQ0FP0")]),
+        ]);
+        assert!(
+            out.is_none(),
+            "feminine nouns covering every counted noun still block the feminine plural"
+        );
+    }
+
+    #[test]
+    fn postponed_adj_comma_before_plural_noun_forces_the_plural_form() {
+        let out = run_concordance(vec![
+            sent_start(),
+            atr("los", &[("el", "DA0MP0")]),
+            atr("pájaros", &[("pájaro", "NCMP000")]),
+            atr(",", &[(",", "_PUNCT")]),
+            atr("muy", &[("muy", "RG_before")]),
+            atr("rápido", &[("rápido", "AQ0MS0")]),
+        ])
+        .expect("the comma after a plural noun must force the plural suggestion");
+        assert_eq!(replacements_of(out), vec!["rápidos".to_string()]);
+    }
+
+    #[test]
+    fn postponed_adj_stays_silent_without_counted_nouns_or_determiners() {
+        let out = run_concordance(vec![
+            sent_start(),
+            atr("corre", &[("correr", "VMIP3S0")]),
+            atr("rápido", &[("rápido", "AQ0MS0")]),
+        ]);
+        assert!(
+            out.is_none(),
+            "a verb stops the walk before anything is counted"
+        );
+    }
+
+    #[test]
+    fn postponed_adj_common_gender_tags_count_both_genders() {
+        let out = run_concordance(vec![
+            sent_start(),
+            atr("el", &[("el", "DD0CS0")]),
+            atr("problema", &[("problema", "NCMS000")]),
+            atr("fácil", &[("fácil", "AQ0CS0")]),
+        ]);
+        assert!(
+            out.is_none(),
+            "the agreeing common-gender pair must veto the match"
+        );
+        let out = run_concordance(vec![
+            sent_start(),
+            atr("la", &[("el", "DD0CS0")]),
+            atr("casa", &[("casa", "NCFS000")]),
+            atr("fácil", &[("fácil", "AQ0CS0")]),
+        ]);
+        assert!(out.is_none());
+        let out = run_concordance(vec![
+            sent_start(),
+            atr("la", &[("el", "DA0FS0")]),
+            atr("artistas", &[("artista", "NCCS000")]),
+            atr("fácil", &[("fácil", "AQ0CS0")]),
+        ]);
+        assert!(
+            out.is_none(),
+            "the N.CS noun matches the common singular substitution"
+        );
+    }
+
+    #[test]
+    fn postponed_adj_common_gender_adjectives_synthesize_the_other_number() {
+        let out = run_concordance(vec![
+            sent_start(),
+            atr("el", &[("el", "DA0MS0")]),
+            atr("problema", &[("problema", "NCMS000")]),
+            atr("fáciles", &[("fácil", "AQ0CP0")]),
+        ])
+        .expect("a common plural adjective after a singular noun must suggest the singular");
+        assert_eq!(replacements_of(out), vec!["fácil".to_string()]);
+        let out = run_concordance(vec![
+            sent_start(),
+            atr("los", &[("el", "DA0MP0")]),
+            atr("problemas", &[("problema", "NCCP000")]),
+            atr("fácil", &[("fácil", "AQ0CS0")]),
+        ])
+        .expect("a common singular adjective after a plural noun must suggest the plural");
+        assert_eq!(replacements_of(out), vec!["fáciles".to_string()]);
+    }
+
+    #[test]
+    fn postponed_adj_requires_an_adjective_reading_at_the_match() {
+        let out = run_concordance(vec![
+            sent_start(),
+            atr("la", &[("el", "DA0FS0")]),
+            atr("casa", &[("casa", "NCFS000")]),
+            atr("casas", &[("casa", "NCFP000")]),
+        ]);
+        assert!(
+            out.is_none(),
+            "without an adjective reading no substitution class exists"
+        );
+    }
+
+    #[test]
+    fn postponed_adj_gn_marked_readings_veto_the_match() {
+        let out = run_concordance(vec![
+            sent_start(),
+            atr("la", &[("el", "DA0FS0")]),
+            atr("sillas", &[("silla", "NCFS000"), ("silla", "_GN_FP")]),
+            atr("blancas", &[("blanco", "AQ0FP0")]),
+        ]);
+        assert!(
+            out.is_none(),
+            "a noun already marked as feminine plural agrees"
+        );
+        let out = run_concordance(vec![
+            sent_start(),
+            atr("los", &[("el", "DA0MP0")]),
+            atr("coches", &[("coche", "NCMP000"), ("coche", "_GN_MP")]),
+            atr("rojos", &[("rojo", "AQ0MP0")]),
+        ]);
+        assert!(
+            out.is_none(),
+            "a noun already marked as masculine plural agrees"
+        );
+        let out = run_concordance(vec![
+            sent_start(),
+            atr("la", &[("el", "DA0FS0"), ("el", "_GN_FP")]),
+            atr("sillas", &[("silla", "NCFS000")]),
+            atr("blancas", &[("blanco", "AQ0FP0")]),
+        ]);
+        assert!(
+            out.is_none(),
+            "a determiner closing a feminine plural group agrees"
+        );
+    }
+
+    #[test]
+    fn postponed_adj_adjective_predecessor_uses_its_own_gender() {
+        let out = run_concordance(vec![
+            sent_start(),
+            atr("la", &[("el", "DA0FS0")]),
+            atr("bueno", &[("bueno", "AQ0MS0")]),
+            atr("blancas", &[("blanco", "AQ0FP0")]),
+        ])
+        .expect("a masculine adjective predecessor must yield the feminine singular");
+        assert_eq!(replacements_of(out), vec!["blanca".to_string()]);
+        let out = run_concordance(vec![
+            sent_start(),
+            atr("la", &[("el", "DA0FS0")]),
+            atr("bueno", &[("bueno", "AQ0MS0"), ("bueno", "_GN_FP")]),
+            atr("blancas", &[("blanco", "AQ0FP0")]),
+        ]);
+        assert!(
+            out.is_none(),
+            "a predecessor inside a feminine plural nominal group agrees"
+        );
+    }
+
+    #[test]
+    fn postponed_adj_double_loc_adverb_predecessor_passes_the_gate() {
+        let out = run_concordance(vec![
+            sent_start(),
+            atr("problema", &[("problema", "NCMS000")]),
+            atr("cerca", &[("cerca", "LOC_ADV")]),
+            atr("arriba", &[("arriba", "LOC_ADV")]),
+            atr("blancas", &[("blanco", "AQ0FP0")]),
+        ])
+        .expect("two locative adverbs must satisfy the predecessor gate");
+        assert_eq!(replacements_of(out), vec!["blanco".to_string()]);
+    }
+
+    #[test]
+    fn postponed_adj_determiner_predecessor_fails_the_gate() {
+        let out = run_concordance(vec![
+            sent_start(),
+            atr("casa", &[("casa", "NCFS000")]),
+            atr("la", &[("el", "DA0FS0")]),
+            atr("blancas", &[("blanco", "AQ0FP0")]),
+        ]);
+        assert!(
+            out.is_none(),
+            "a determiner predecessor is not a valid context"
+        );
+    }
+
+    #[test]
+    fn postponed_adj_plurional_context_synthesizes_the_plural_across_levels() {
+        let mut tokens = vec![sent_start()];
+        for _ in 0..5 {
+            tokens.push(atr("de", &[("de", "SPS00")]));
+            tokens.push(atr("la", &[("el", "DA0FS0")]));
+            tokens.push(atr("casa", &[("casa", "NCFS000")]));
+        }
+        tokens.push(atr("blancas", &[("blanco", "AQ0FP0")]));
+        let out = run_concordance(tokens).expect("the clamped level walk must still suggest");
+        assert_eq!(replacements_of(out), vec!["blanca".to_string()]);
+    }
+
+    #[test]
+    fn postponed_adj_plural_flag_synthesizes_the_other_plural_gender() {
+        let out = run_concordance(vec![
+            sent_start(),
+            atr("las", &[("el", "DA0FP0")]),
+            atr("casas", &[("casa", "NCFP000")]),
+            atr(",", &[(",", "_PUNCT")]),
+            atr("muy", &[("muy", "RG_before")]),
+            atr("rojos", &[("rojo", "AQ0MP0")]),
+        ])
+        .expect("the plural flag must synthesize the plural forms");
+        assert_eq!(replacements_of(out), vec!["rojas".to_string()]);
+        let out = run_concordance(vec![
+            sent_start(),
+            atr("las", &[("el", "DA0FP0")]),
+            atr("casas", &[("casa", "NCFP000")]),
+            atr(",", &[(",", "_PUNCT")]),
+            atr("muy", &[("muy", "RG_before")]),
+            atr("grandes", &[("grande", "AQ0MP0")]),
+        ]);
+        assert!(
+            out.is_none(),
+            "an invariable adjective resynthesizes only itself and is dropped"
+        );
+    }
+
+    #[test]
+    fn postponed_adj_plural_nouns_force_the_plural_of_a_singular_adjective() {
+        let out = run_concordance(vec![
+            sent_start(),
+            atr("las", &[("el", "DA0FP0")]),
+            atr("casas", &[("casa", "NCFP000")]),
+            atr("roja", &[("rojo", "AQ0FS0")]),
+        ])
+        .expect("a feminine plural context must suggest the plural form");
+        assert_eq!(replacements_of(out), vec!["rojas".to_string()]);
+        let out = run_concordance(vec![
+            sent_start(),
+            atr("la", &[("el", "DA0FS0")]),
+            atr("mesas", &[("mesa", "NCFP000")]),
+            atr("y", &[("y", "CC")]),
+            atr("casas", &[("casa", "NCFP000")]),
+            atr("blanca", &[("blanco", "AQ0FS0")]),
+        ])
+        .expect("the coordinated plural nouns must outrank the singular article");
+        assert_eq!(replacements_of(out), vec!["blancas".to_string()]);
+    }
+
+    #[test]
+    fn postponed_adj_mnemonic_noun_outside_the_short_window_opens_the_plural() {
+        let out = run_concordance(vec![
+            sent_start(),
+            atr("artista", &[("artista", "NCMN000")]),
+            atr("casas", &[("casa", "NCFP000")]),
+            atr("mesas", &[("mesa", "NCFP000")]),
+            atr("sillas", &[("silla", "NCFP000")]),
+            atr("rojo", &[("rojo", "AQ0MS0")]),
+        ])
+        .expect("the mnemonic noun keeps the masculine options open");
+        assert_eq!(
+            replacements_of(out),
+            vec!["rojos".to_string(), "rojas".to_string()]
+        );
+    }
+
     #[test]
     fn postponed_adj_add_comma_shifts_offset_and_prefixes_token() {
         let out = run_postponed("Disculpe el retraso maestra.", "2");
