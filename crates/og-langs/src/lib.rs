@@ -14,7 +14,7 @@ static BOUND_TEST_ALLOCATOR: extern "C" fn() = {
     // per-thread arenas; malloc_trim cannot return those pages and long runs OOM.
     extern "C" fn bound() {
         unsafe {
-            libc::mallopt(libc::M_ARENA_MAX, 2);
+            libc::mallopt(libc::M_ARENA_MAX, 6);
             libc::mallopt(libc::M_MMAP_THRESHOLD, 2 * 1024 * 1024);
             libc::mallopt(libc::M_TRIM_THRESHOLD, 4 * 1024 * 1024);
         }
