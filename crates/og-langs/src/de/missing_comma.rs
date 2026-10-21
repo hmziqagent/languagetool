@@ -816,6 +816,69 @@ mod tests {
         }
     }
 
+    #[test]
+    fn java_battery_behind_matches_the_java_spans() {
+        for (text, expected) in [
+            (
+                "Das Auto, das am Straßenrand steht parkt im Halteverbot.",
+                "steht parkt",
+            ),
+            (
+                "Das Auto, in dem der Mann sitzt parkt im Halteverbot.",
+                "sitzt parkt",
+            ),
+            (
+                "Die Frau, die vor dem Auto steht hat schwarze Haare.",
+                "steht hat",
+            ),
+            ("Alles, was ich habe ist ein Buch.", "habe ist"),
+            (
+                "In diesem Prozess sind aber Entwicklungsschritte ja integriert, die wir Psychiater glaube ich auch gut kennen.",
+                "Psychiater glaube ich",
+            ),
+            (
+                "Alles, was du für die Spieße brauchst sind Tortellini, getrocknete Tomaten, Cherrytomaten und Mozzarellakugeln.",
+                "brauchst sind",
+            ),
+        ] {
+            let spans = rule_spans(text, "COMMA_BEHIND_RELATIVE_CLAUSE");
+            assert_eq!(
+                spans,
+                vec![expected],
+                "{text}: Java MissingCommaRelativeClauseRuleTest behind-mode spans"
+            );
+        }
+    }
+
+    #[test]
+    fn java_battery_behind_accepts_the_clean_sentences() {
+        for text in [
+            ".... das war eher so das, was alle im Browser deaktiviert hatten, weil man dachte, über Javascript wird irgendwie Schadsoftware eingeschleust.",
+            "Ich habe einige Fehler begangen, die ich vermeiden hätte können sollen.",
+            "Doch die Rolle, die Mohammed bin Salman in Riad spielt, ist zwiespältig.",
+            "Laut Josef Peter Burg gehörte das Haus, aus dem er samt Familie geworfen wurde, Werner und Sigrid Bahlke, während er darin wohnte und darauf aufpasste.",
+            "Darüber hinaus stellt die klassische Metaphysik eine Grundfrage, die sich etwa wie folgt formulieren lässt: Warum ist überhaupt Seiendes und nicht vielmehr Nichts?",
+            "Wenn du alles, was du meinst nicht zu können, von anderen erledigen lässt, wirst du es niemals selbst lernen.",
+            "Er hat einen Zeitraum durchlebt, in dem seine Gedanken verträumt auf den weiten Feldern der Mysterien umherirrten.",
+            "Es ist die Wiederkehr der Panikmache, die der neue Nationalismus mit dem der Sprachreiniger verbindet und die Geschichte der Sprachreinigung zu einem Lehrstück macht.",
+            "Gesuche können von Institutionen, Organisationen, Vereinen und Gruppierungen gestellt werden, die im Kanton Luzern domiziliert sind.",
+            "Die Klausel kann zudem nur Gleichrang mit Verbindlichkeiten des Schuldners herstellen, die vom Gesetz in der Insolvenz nicht privilegiert sind, so dass die Klausel nichts an der gesetzlich vorgesehenen Rangfolge im Insolvenzverfahren ändert.",
+            "Plan von Maßnahmen, mit denen das Ansteckungsrisiko während des Aufenthalts an einem Ort verringert werden soll",
+            "Aus diesem Grund sind die Wörter nicht direkt übersetzt, stattdessen wird der Zustand oder die Situation beschrieben in der die Wörter benutzt werden.",
+            "Kryptographisch sichere Verfahren sind dann solche, für die es keine bessere Methode zum Brechen der Sicherheit als das Faktorisieren einer großen Zahl gibt, insbesondere kann der private nicht aus dem öffentlichen Schlüssel errechnet werden.",
+            "Wayne Jancik begrenzt seine One-Hit-Wonders in den USA auf die Billboard-Top-40-Pop-Hitparade mit einer „Ruhe-Periode“ von 5 Jahren, innerhalb derer kein weiterer Hit desselben Interpreten in die Top 40 gelangen darf.",
+            "Nach dem Abzug russischer Truppen aus der Region Kiew sind in den ehemals besetzten und umkämpften ukrainischen Gebieten inzwischen Hunderte Leichen von Bewohnern gefunden worden.",
+            "Bei der Installation werden Ihnen Sticker und Aufkleber zur Verfügung gestellt, die Sie anstelle der traditionellen Emojis verwenden können.",
+            "»Alles, was wir dank dieses Projektes sehen werden, wird für uns neu sein«, so der renommierte Bienenforscher.",
+        ] {
+            let spans = rule_spans(text, "COMMA_BEHIND_RELATIVE_CLAUSE");
+            assert!(
+                spans.is_empty(),
+                "{text}: unexpected behind-mode match {spans:?}"
+            );
+        }
+    }
+
     fn rule_spans<'a>(text: &'a str, rule_id: &str) -> Vec<&'a str> {
         use og_core::checker::CheckRequest;
         let language = shared_engine().language().clone();
@@ -882,68 +945,6 @@ mod tests {
             assert!(
                 rule_spans(text, "COMMA_IN_FRONT_RELATIVE_CLAUSE").is_empty(),
                 "{text}: Java MissingCommaRelativeClauseRuleTest accepts this sentence"
-            );
-        }
-    }
-
-    #[test]
-    fn java_battery_behind_matches_the_java_spans() {
-        for (text, expected) in [
-            (
-                "Das Auto, das am Straßenrand steht parkt im Halteverbot.",
-                "steht parkt",
-            ),
-            (
-                "Das Auto, in dem der Mann sitzt parkt im Halteverbot.",
-                "sitzt parkt",
-            ),
-            (
-                "Die Frau, die vor dem Auto steht hat schwarze Haare.",
-                "steht hat",
-            ),
-            ("Alles, was ich habe ist ein Buch.", "habe ist"),
-            (
-                "In diesem Prozess sind aber Entwicklungsschritte ja integriert, die wir Psychiater glaube ich auch gut kennen.",
-                "Psychiater glaube ich",
-            ),
-            (
-                "Alles, was du für die Spieße brauchst sind Tortellini, getrocknete Tomaten, Cherrytomaten und Mozzarellakugeln.",
-                "brauchst sind",
-            ),
-        ] {
-            let spans = rule_spans(text, "COMMA_BEHIND_RELATIVE_CLAUSE");
-            assert_eq!(
-                spans,
-                vec![expected],
-                "{text}: Java MissingCommaRelativeClauseRuleTest (behind mode) flags the subclause closing plus the finite verb; Java reports UTF-16 char offsets while the engine emits byte offsets"
-            );
-        }
-    }
-
-    #[test]
-    fn java_battery_behind_accepts_the_clean_sentences() {
-        for text in [
-            ".... das war eher so das, was alle im Browser deaktiviert hatten, weil man dachte, über Javascript wird irgendwie Schadsoftware eingeschleust.",
-            "Ich habe einige Fehler begangen, die ich vermeiden hätte können sollen.",
-            "Doch die Rolle, die Mohammed bin Salman in Riad spielt, ist zwiespältig.",
-            "Laut Josef Peter Burg gehörte das Haus, aus dem er samt Familie geworfen wurde, Werner und Sigrid Bahlke, während er darin wohnte und darauf aufpasste.",
-            "Darüber hinaus stellt die klassische Metaphysik eine Grundfrage, die sich etwa wie folgt formulieren lässt: Warum ist überhaupt Seiendes und nicht vielmehr Nichts?",
-            "Wenn du alles, was du meinst nicht zu können, von anderen erledigen lässt, wirst du es niemals selbst lernen.",
-            "Er hat einen Zeitraum durchlebt, in dem seine Gedanken verträumt auf den weiten Feldern der Mysterien umherirrten.",
-            "Es ist die Wiederkehr der Panikmache, die der neue Nationalismus mit dem der Sprachreiniger verbindet und die Geschichte der Sprachreinigung zu einem Lehrstück macht.",
-            "Gesuche können von Institutionen, Organisationen, Vereinen und Gruppierungen gestellt werden, die im Kanton Luzern domiziliert sind.",
-            "Die Klausel kann zudem nur Gleichrang mit Verbindlichkeiten des Schuldners herstellen, die vom Gesetz in der Insolvenz nicht privilegiert sind, so dass die Klausel nichts an der gesetzlich vorgesehenen Rangfolge im Insolvenzverfahren ändert.",
-            "Plan von Maßnahmen, mit denen das Ansteckungsrisiko während des Aufenthalts an einem Ort verringert werden soll",
-            "Aus diesem Grund sind die Wörter nicht direkt übersetzt, stattdessen wird der Zustand oder die Situation beschrieben in der die Wörter benutzt werden.",
-            "Kryptographisch sichere Verfahren sind dann solche, für die es keine bessere Methode zum Brechen der Sicherheit als das Faktorisieren einer großen Zahl gibt, insbesondere kann der private nicht aus dem öffentlichen Schlüssel errechnet werden.",
-            "Wayne Jancik begrenzt seine One-Hit-Wonders in den USA auf die Billboard-Top-40-Pop-Hitparade mit einer „Ruhe-Periode“ von 5 Jahren, innerhalb derer kein weiterer Hit desselben Interpreten in die Top 40 gelangen darf.",
-            "Nach dem Abzug russischer Truppen aus der Region Kiew sind in den ehemals besetzten und umkämpften ukrainischen Gebieten inzwischen Hunderte Leichen von Bewohnern gefunden worden.",
-            "Bei der Installation werden Ihnen Sticker und Aufkleber zur Verfügung gestellt, die Sie anstelle der traditionellen Emojis verwenden können.",
-            "»Alles, was wir dank dieses Projektes sehen werden, wird für uns neu sein«, so der renommierte Bienenforscher.",
-        ] {
-            assert!(
-                rule_spans(text, "COMMA_BEHIND_RELATIVE_CLAUSE").is_empty(),
-                "{text}: Java MissingCommaRelativeClauseRuleTest (behind mode) accepts this sentence"
             );
         }
     }
