@@ -1916,7 +1916,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn test_debug_pipeline_stages() {
         let runner = test_support::shared_runner();
         for text in [
@@ -1937,6 +1936,31 @@ mod tests {
                 .collect();
             let text_refs: Vec<&str> = token_texts.iter().map(|s| s.as_str()).collect();
             let tagged = runner.tagger.tag(&text_refs);
+            let tagged_tags = |word: &str| -> Vec<String> {
+                tagged
+                    .iter()
+                    .find(|atr| atr.token().token() == word)
+                    .map(|atr| {
+                        let mut tags: Vec<String> = atr
+                            .readings()
+                            .iter()
+                            .flat_map(|r| r.pos_tags().to_vec())
+                            .collect();
+                        tags.sort();
+                        tags.dedup();
+                        tags
+                    })
+                    .unwrap_or_default()
+            };
+            if text == "We want go to the cinema." {
+                for (word, expected) in [("want", "VB"), ("go", "VB"), ("to", "TO")] {
+                    assert!(
+                        tagged_tags(word).iter().any(|t| t == expected),
+                        "'{word}' must carry {expected} straight after tagging, got {:?}",
+                        tagged_tags(word)
+                    );
+                }
+            }
             eprintln!("== '{}' AFTER TAG:", text);
             for (i, atr) in tagged.iter().enumerate() {
                 eprintln!(
@@ -1959,6 +1983,43 @@ mod tests {
             sentence.set_tokens(merged);
             if let Some(ref d) = runner.disambiguator {
                 d.disambiguate(&mut sentence);
+            }
+            let disambig_tags = |word: &str| -> Vec<String> {
+                sentence
+                    .tokens()
+                    .iter()
+                    .find(|t| t.token().token() == word)
+                    .map(|t| {
+                        let mut tags: Vec<String> = t
+                            .readings()
+                            .iter()
+                            .flat_map(|r| r.pos_tags().to_vec())
+                            .collect();
+                        tags.sort();
+                        tags.dedup();
+                        tags
+                    })
+                    .unwrap_or_default()
+            };
+            if text == "We want go to the cinema." {
+                for (word, expected) in [("want", "VB"), ("go", "VB"), ("to", "TO")] {
+                    assert!(
+                        disambig_tags(word).iter().any(|t| t == expected),
+                        "'{word}' must still carry {expected} after disambiguation, got {:?}",
+                        disambig_tags(word)
+                    );
+                }
+            } else {
+                assert_eq!(
+                    disambig_tags("will"),
+                    vec!["MD"],
+                    "the en disambiguator must reduce 'will' to MD"
+                );
+                assert_eq!(
+                    disambig_tags("what"),
+                    vec!["WP"],
+                    "the en disambiguator must reduce 'what' to WP"
+                );
             }
             eprintln!("== '{}' AFTER DISAMBIG:", text);
             for t in sentence.tokens() {
@@ -2181,7 +2242,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn test_common_pos_tag_coverage() {
         let runner = test_support::shared_runner();
 
@@ -2202,29 +2262,19 @@ mod tests {
             tags
         }
 
-        fn check(runner: &TestRunner, word: &str, expected_tags: &[&str]) -> Vec<String> {
+        fn check(runner: &TestRunner, word: &str, expected_tags: &[&str]) {
             let actual = tags_for(runner, word);
 
-            let mut missing: Vec<&str> = expected_tags
+            let missing: Vec<&str> = expected_tags
                 .iter()
                 .filter(|t| !actual.iter().any(|a| a == **t))
                 .copied()
                 .collect();
-            missing.sort();
 
-            let status = if missing.is_empty() { "OK" } else { "MISSING" };
-            eprintln!(
-                "  {:20} expected={:?}  actual={:?}  {}",
-                format!("'{}'", word),
-                expected_tags,
-                actual,
-                status,
+            assert!(
+                missing.is_empty(),
+                "'{word}' must carry the en dictionary tags {expected_tags:?}, missing {missing:?} (actual {actual:?})"
             );
-            if !missing.is_empty() {
-                eprintln!("                         missing tags: {:?}", missing);
-            }
-
-            actual
         }
 
         eprintln!("\n=== VBZ (3rd person singular present) ===");
@@ -2243,15 +2293,15 @@ mod tests {
             check(&runner, word, &["VB"]);
         }
 
-        eprintln!("\n=== VB + NN (verb and noun) ===");
-        for word in &["open", "reopen", "close"] {
-            check(&runner, word, &["VB", "NN"]);
+        eprintln!("\n=== VB + noun variants (verb and dictionary noun tag) ===");
+        check(&runner, "close", &["VB", "NN"]);
+        check(&runner, "reopen", &["VB", "VBP"]);
+        check(&runner, "open", &["VB", "JJ", "NN:U"]);
+        for word in &["help", "sleep"] {
+            check(&runner, word, &["NN:U", "VB"]);
         }
-        for word in &["help", "support", "sleep", "exercise"] {
-            check(&runner, word, &["NN", "VB"]);
-        }
-        for word in &["love", "fear", "care"] {
-            check(&runner, word, &["VB", "NN"]);
+        for word in &["support", "exercise", "love", "fear", "care"] {
+            check(&runner, word, &["NN:UN", "VB"]);
         }
 
         eprintln!("\n=== JJ (adjective) ===");
@@ -3127,11 +3177,37 @@ fn test_debug_missing_to_before_verb() {
 }
 
 #[test]
-#[ignore]
 fn test_debug_chunking_with_whitespace() {
     let runner = test_support::shared_runner();
     let sentence = runner.tokenize_sentence("The client is here.");
     let tokens = sentence.tokens();
+    assert_eq!(tokens.len(), 9, "expected <S> + 5 words + 3 spaces + .");
+    let expected = [
+        ("<S>", "-", false),
+        ("The", "B-NP-singular", false),
+        (" ", "-", true),
+        ("client", "E-NP-singular", false),
+        (" ", "-", true),
+        ("is", "B-VP", false),
+        (" ", "-", true),
+        ("here", "B-ADVP", false),
+        (".", "O", false),
+    ];
+    for (token, (text, chunk, ws)) in tokens.iter().zip(expected) {
+        assert_eq!(token.token().token(), text);
+        assert_eq!(token.is_whitespace(), ws, "'{text}' whitespace mismatch");
+        assert_eq!(
+            token.chunk().unwrap_or("-"),
+            chunk,
+            "'{text}' chunk mismatch"
+        );
+        if ws {
+            assert!(
+                token.token().pos_tags().is_empty(),
+                "whitespace tokens carry no POS tags"
+            );
+        }
+    }
     eprintln!(
         "ALL tokens for 'The client is here.' ({} total):",
         tokens.len()
