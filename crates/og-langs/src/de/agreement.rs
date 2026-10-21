@@ -2118,6 +2118,120 @@ mod tests {
     }
 
     #[test]
+    fn compound_det_adj_noun_suggests_the_closed_forms() {
+        let matches = agreement_family("Wir gehen in dem neuen Fitness Studio.");
+        assert_eq!(
+            matches,
+            vec![(
+                "DE_AGREEMENT".to_string(),
+                13,
+                vec![
+                    "dem neuen Fitnessstudio".to_string(),
+                    "dem neuen Fitness-Studio".to_string()
+                ]
+            )]
+        );
+        let matches = agreement_family("Das ist ein interessantes Fitness Studio.");
+        assert_eq!(
+            matches,
+            vec![(
+                "DE_AGREEMENT".to_string(),
+                8,
+                vec![
+                    "ein interessantes Fitnessstudio".to_string(),
+                    "ein interessantes Fitness-Studio".to_string()
+                ]
+            )]
+        );
+    }
+
+    #[test]
+    fn compound_det_adj_adj_noun_suggests_the_closed_forms() {
+        let matches = agreement_family("Wir gehen in dem neuen großen Fitness Studio.");
+        assert_eq!(
+            matches,
+            vec![(
+                "DE_AGREEMENT".to_string(),
+                13,
+                vec![
+                    "dem neuen großen Fitnessstudio".to_string(),
+                    "dem neuen großen Fitness-Studio".to_string()
+                ]
+            )]
+        );
+        let matches = agreement_family("Das ist ein wirklich schönes Fitness Studio.");
+        assert_eq!(
+            matches,
+            vec![(
+                "DE_AGREEMENT".to_string(),
+                8,
+                vec![
+                    "ein wirklich schönes Fitnessstudio".to_string(),
+                    "ein wirklich schönes Fitness-Studio".to_string()
+                ]
+            )],
+            "the skipped adverb must stay inside the compound test phrase"
+        );
+    }
+
+    #[test]
+    fn zur_contraction_rewrites_the_article_leads() {
+        let matches = agreement_family("Wir fahren zur großen Städten.");
+        assert_eq!(
+            matches,
+            vec![(
+                "DE_AGREEMENT".to_string(),
+                11,
+                vec![
+                    "zu großen Städten".to_string(),
+                    "zur großen Stadt".to_string()
+                ]
+            )]
+        );
+        let matches = agreement_family("Wir fahren zur alten Häusern.");
+        assert_eq!(
+            matches,
+            vec![(
+                "DE_AGREEMENT".to_string(),
+                11,
+                vec!["zu alten Häusern".to_string()]
+            )]
+        );
+    }
+
+    #[test]
+    fn ins_contraction_keeps_only_article_led_suggestions() {
+        let matches = agreement_family("Wir gehen ins großen Fitness Studio.");
+        assert_eq!(
+            matches,
+            vec![("DE_AGREEMENT".to_string(), 10, Vec::new())],
+            "the contraction filter drops every suggestion whose lead is not das/dem/den/die"
+        );
+    }
+
+    #[test]
+    fn derselben_and_welcher_lead_the_determiner_synthesis() {
+        let matches = agreement_family("Derselbe alten Fehler passiert heute.");
+        assert_eq!(
+            matches,
+            vec![(
+                "DE_AGREEMENT".to_string(),
+                0,
+                vec!["Derselbe alter Fehler".to_string()]
+            )]
+        );
+        let matches = agreement_family("Welche alten Mann kommt heute?");
+        assert_eq!(
+            matches,
+            vec![(
+                "DE_AGREEMENT".to_string(),
+                0,
+                vec!["Welcher alter Mann".to_string()]
+            )]
+        );
+    }
+
+    #[test]
     fn java_divergences_pin_the_current_residue() {
         let matches = agreement_family("Der Ende der 1960er Jahre umgestaltete Garten ist schön.");
         assert_eq!(
