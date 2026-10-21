@@ -2,5 +2,5 @@
 jobs = 3
 
 [env]
-RUST_TEST_THREADS = { value = "2", force = false }
-MALLOC_ARENA_MAX = { value = "2", force = false }
+RUST_TEST_THREADS = { value = "6", force = false }
+MALLOC_ARENA_MAX = { value = "6", force = false }
