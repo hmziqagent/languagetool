@@ -1542,7 +1542,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn test_real_german_grammar_examples() {
         const PINNED_RESIDUE: &[(&str, &str)] = &[(
             "ZUSAMMENSCHREIBUNG_HINTER",
