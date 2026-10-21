@@ -2261,9 +2261,10 @@ impl WordTokenizer for WordTokenizerBridge {
 
 #[cfg(target_os = "linux")]
 fn trim_released_engine_pages() {
-    // glibc keeps freed engine arenas resident; return them before the next
-    // engine build so long test runs stay under the box's memory ceiling.
-    unsafe { libc::malloc_trim(0) };
+    const TRIM_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
+    if og_core::releasable::trim_due(TRIM_INTERVAL) {
+        unsafe { libc::malloc_trim(0) };
+    }
 }
 
 #[cfg(not(target_os = "linux"))]
