@@ -33,7 +33,11 @@ pub(crate) fn release_guard() -> impl Drop {
     }
     impl Drop for ReleaseOnDrop {
         fn drop(&mut self) {
-            og_core::releasable::release_unused_since(self.acquired);
+            const ENGINE_IDLE_GRACE: std::time::Duration = std::time::Duration::from_secs(120);
+            let keep_used_since = std::time::Instant::now()
+                .checked_sub(ENGINE_IDLE_GRACE)
+                .map_or(self.acquired, |floor| self.acquired.max(floor));
+            og_core::releasable::release_unused_since(keep_used_since);
             #[cfg(target_os = "linux")]
             unsafe {
                 libc::malloc_trim(0);

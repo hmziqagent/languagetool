@@ -140,7 +140,6 @@ impl LanguageEngine {
                 HashMap<String, &'static og_core::releasable::Releasable<LanguageEngine>>,
             >,
         > = std::sync::OnceLock::new();
-        trim_released_engine_pages();
         let cell = {
             let cells = CELLS.get_or_init(Default::default);
             let mut guard = cells.lock().unwrap();
@@ -148,6 +147,9 @@ impl LanguageEngine {
                 .entry(code.to_string())
                 .or_insert_with(|| Box::leak(Box::new(og_core::releasable::Releasable::new())))
         };
+        if let Some(hit) = og_core::releasable::shared_probe(cell) {
+            return Some(hit);
+        }
         let _heavy = og_core::releasable::heavy_guard();
         og_core::releasable::shared_get_or_build(cell, || {
             let _guard = engine_build_guard();

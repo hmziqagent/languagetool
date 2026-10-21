@@ -43,6 +43,17 @@ pub fn register_releaser(key: usize, release: ReleaseFn) {
     }
 }
 
+pub fn shared_probe<T>(cell: &'static Releasable<T>) -> Option<Arc<T>>
+where
+    T: Send + Sync + 'static,
+{
+    let now = Instant::now();
+    let mut guard = cell.state.lock().ok()?;
+    let hit = guard.value.clone()?;
+    guard.last_use = Some(now);
+    Some(hit)
+}
+
 pub fn shared_get_or_build<T>(
     cell: &'static Releasable<T>,
     build: impl FnOnce() -> Option<Arc<T>>,
@@ -94,15 +105,17 @@ where
 }
 
 fn release_cell<T>(cell: &Releasable<T>, keep_used_since: Option<Instant>) {
-    let Ok(mut guard) = cell.state.lock() else {
-        return;
+    let _dropped = {
+        let Ok(mut guard) = cell.state.lock() else {
+            return;
+        };
+        if let Some(since) = keep_used_since
+            && guard.last_use.is_some_and(|used| used > since)
+        {
+            return;
+        }
+        guard.value.take()
     };
-    if let Some(since) = keep_used_since
-        && guard.last_use.is_some_and(|used| used > since)
-    {
-        return;
-    }
-    guard.value = None;
 }
 
 pub fn release_all() {
