@@ -3308,6 +3308,60 @@ mod tests {
     }
 
     #[test]
+    fn or_group_leading_pattern_gates_on_its_literal_set() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<rules lang="en">
+    <rule id="PET_ACTION" name="pet actions">
+        <pattern>
+            <or>
+                <token>cat</token>
+                <token>dog</token>
+            </or>
+            <marker><token postag="VBZ"/></marker>
+        </pattern>
+        <disambig postag="ANIMAL"/>
+    </rule>
+</rules>"#;
+        let disambig = XmlDisambiguator::from_xml(xml).unwrap();
+        assert_eq!(disambig.rule_ids(), vec!["PET_ACTION"]);
+        let readings_of = |sentence: &AnalyzedSentence, word: &str| {
+            sentence
+                .tokens()
+                .iter()
+                .find(|t| t.token().token() == word)
+                .map(|t| {
+                    t.readings()
+                        .iter()
+                        .map(|r| r.pos_tags().join("|"))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+        };
+        for subject in ["cat", "dog"] {
+            let mut sentence =
+                make_sentence(vec![(subject, vec!["NN"]), ("sleeps", vec!["VBZ", "NNS"])]);
+            disambig.disambiguate(&mut sentence);
+            assert_eq!(
+                readings_of(&sentence, "sleeps"),
+                vec!["ANIMAL"],
+                "'{subject}' must pass the or-literal first-token gate so the marker token is replaced"
+            );
+            assert_eq!(
+                readings_of(&sentence, subject),
+                vec!["NN"],
+                "the token outside the marker keeps its readings"
+            );
+        }
+        let mut other = make_sentence(vec![("bird", vec!["NN"]), ("sleeps", vec!["VBZ", "NNS"])]);
+        disambig.disambiguate(&mut other);
+        assert_eq!(
+            readings_of(&other, "sleeps"),
+            vec!["VBZ", "NNS"],
+            "a subject outside the or-group must be gated out before any matching"
+        );
+    }
+
+    #[test]
     fn case_sensitive_antipattern_and_multi_wd_replace() {
         let xml = r#"<?xml version="1.0" encoding="utf-8"?>
 <rules lang="en">
