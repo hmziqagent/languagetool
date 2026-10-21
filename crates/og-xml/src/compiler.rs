@@ -79,7 +79,10 @@ pub fn shared_cached_fancy_regex(pattern: &str) -> Option<SharedFancyRegex> {
 fn register_regex_releaser<T>(cell: &'static std::sync::OnceLock<T>, clear: fn()) {
     og_core::releasable::register_releaser(
         cell as *const std::sync::OnceLock<T> as usize,
-        std::sync::Arc::new(move |_| clear()),
+        std::sync::Arc::new(move |_| {
+            clear();
+            0
+        }),
     );
 }
 

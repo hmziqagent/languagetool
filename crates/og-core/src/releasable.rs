@@ -30,7 +30,7 @@ impl<T> Default for Releasable<T> {
     }
 }
 
-pub type ReleaseFn = std::sync::Arc<dyn Fn(Option<Instant>) + Send + Sync>;
+pub type ReleaseFn = std::sync::Arc<dyn Fn(Option<Instant>) -> usize + Send + Sync>;
 
 fn registry() -> &'static Mutex<HashMap<usize, ReleaseFn>> {
     static REGISTRY: OnceLock<Mutex<HashMap<usize, ReleaseFn>>> = OnceLock::new();
@@ -104,36 +104,51 @@ where
     outcome
 }
 
-fn release_cell<T>(cell: &Releasable<T>, keep_used_since: Option<Instant>) {
+fn release_cell<T>(cell: &Releasable<T>, keep_used_since: Option<Instant>) -> usize {
     let _dropped = {
         let Ok(mut guard) = cell.state.lock() else {
-            return;
+            return 0;
         };
         if let Some(since) = keep_used_since
             && guard.last_use.is_some_and(|used| used > since)
         {
-            return;
+            return 0;
         }
         guard.value.take()
     };
+    usize::from(_dropped.is_some())
 }
 
-pub fn release_all() {
-    release_with_filter(None);
+pub fn release_all() -> usize {
+    release_with_filter(None)
 }
 
-pub fn release_unused_since(since: Instant) {
-    release_with_filter(Some(since));
+pub fn release_unused_since(since: Instant) -> usize {
+    release_with_filter(Some(since))
 }
 
-fn release_with_filter(keep_used_since: Option<Instant>) {
+pub fn trim_due(interval: std::time::Duration) -> bool {
+    static LAST: Mutex<Option<Instant>> = Mutex::new(None);
+    let Ok(mut guard) = LAST.lock() else {
+        return false;
+    };
+    let now = Instant::now();
+    if guard.is_some_and(|last| now.duration_since(last) < interval) {
+        return false;
+    }
+    *guard = Some(now);
+    true
+}
+
+fn release_with_filter(keep_used_since: Option<Instant>) -> usize {
     let releases: Vec<ReleaseFn> = match registry().lock() {
         Ok(registry) => registry.values().cloned().collect(),
-        Err(_) => return,
+        Err(_) => return 0,
     };
-    for release in releases {
-        release(keep_used_since);
-    }
+    releases
+        .iter()
+        .map(|release| release(keep_used_since))
+        .sum()
 }
 
 thread_local! {
