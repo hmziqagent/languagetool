@@ -2725,4 +2725,308 @@ mod tests {
             "without a synthesizer the match passes through untouched"
         );
     }
+
+    #[test]
+    fn es_coordination_walk_jumps_back_to_the_preposition() {
+        let dir = lang_dir("es");
+        let Some(synth) = LangSynthesizer::for_language(&dir, "es") else {
+            return;
+        };
+        let tokens = vec![
+            tagged("La", "el", &["DA0FS0"]),
+            tagged("de", "de", &["SPS00"]),
+            tagged(",", ",", &["Fx"]),
+            tagged("y", "y", &["CC"]),
+            tagged("casa", "casa", &["NCFS000"]),
+            tagged("de", "de", &["SPS00"]),
+            tagged("ciudad", "ciudad", &["NCFS000"]),
+            tagged("blancas", "blanco", &["AQ0FP0"]),
+        ];
+        let refs: Vec<&AnalyzedTokenReadings> = tokens.iter().collect();
+        let out = accept_es(Some(&synth), "key:value", &[7], &refs, rm_for("x")).expect("kept");
+        assert_eq!(values_of(&out), vec!["blanca".to_string()]);
+    }
+
+    #[test]
+    fn es_coordination_walk_stops_at_a_finite_verb() {
+        let dir = lang_dir("es");
+        let Some(synth) = LangSynthesizer::for_language(&dir, "es") else {
+            return;
+        };
+        let tokens = vec![
+            tagged("El", "el", &["DA0MS0"]),
+            tagged("corre", "correr", &["VMIP3P0"]),
+            tagged("y", "y", &["CC"]),
+            tagged("casa", "casa", &["NCFS000"]),
+            tagged("de", "de", &["SPS00"]),
+            tagged("pueblo", "pueblo", &["NCMS000"]),
+            tagged("blancas", "blanco", &["AQ0FP0"]),
+        ];
+        let refs: Vec<&AnalyzedTokenReadings> = tokens.iter().collect();
+        let out = accept_es(Some(&synth), "key:value", &[6], &refs, rm_for("x")).expect("kept");
+        assert_eq!(
+            values_of(&out),
+            vec!["blanco".to_string(), "blanca".to_string()]
+        );
+    }
+
+    #[test]
+    fn es_concordance_clamps_the_level_at_max_levels() {
+        let dir = lang_dir("es");
+        let Some(synth) = LangSynthesizer::for_language(&dir, "es") else {
+            return;
+        };
+        let mut tokens = vec![tagged("La", "el", &["DA0FS0"])];
+        for _ in 0..4 {
+            tokens.push(tagged("de", "de", &["SPS00"]));
+            tokens.push(tagged("pueblo", "pueblo", &["NCMS000"]));
+        }
+        tokens.push(tagged("blancas", "blanco", &["AQ0FP0"]));
+        let refs: Vec<&AnalyzedTokenReadings> = tokens.iter().collect();
+        let out = accept_es(
+            Some(&synth),
+            "key:value",
+            &[refs.len() - 1],
+            &refs,
+            rm_for("x"),
+        )
+        .expect("kept");
+        assert_eq!(values_of(&out), vec!["blanco".to_string()]);
+    }
+
+    #[test]
+    fn es_unmatched_adjective_shape_is_rejected() {
+        let dir = lang_dir("es");
+        let Some(synth) = LangSynthesizer::for_language(&dir, "es") else {
+            return;
+        };
+        let tokens = vec![
+            tagged("La", "el", &["DA0FS0"]),
+            tagged("casa", "casa", &["NCFS000"]),
+            tagged("corre", "correr", &["VMIP3S0"]),
+        ];
+        let refs: Vec<&AnalyzedTokenReadings> = tokens.iter().collect();
+        assert!(
+            accept_es(Some(&synth), "key:value", &[2], &refs, rm_for("x")).is_none(),
+            "only the six gender/number adjective shapes can be checked"
+        );
+    }
+
+    #[test]
+    fn es_unknown_lemma_yields_no_suggestions() {
+        let dir = lang_dir("es");
+        let Some(synth) = LangSynthesizer::for_language(&dir, "es") else {
+            return;
+        };
+        let tokens = vec![
+            tagged("En", "en", &["SPS00"]),
+            tagged("en", "en", &["SPS00"]),
+            tagged("un", "uno", &["DI0MS0"]),
+            tagged("restaurante", "restaurante", &["NCMS000"]),
+            tagged("lujosa", "zzzzzzzz", &["AQ0FS0"]),
+        ];
+        let refs: Vec<&AnalyzedTokenReadings> = tokens.iter().collect();
+        assert!(
+            accept_es(Some(&synth), "key:value", &[4], &refs, rm_for("x")).is_none(),
+            "an adjective the synthesizer cannot inflect produces no rule match"
+        );
+    }
+
+    #[test]
+    fn es_out_of_range_match_position_rejects() {
+        let tokens = vec![tagged("casa", "casa", &["NCFS000"])];
+        let refs: Vec<&AnalyzedTokenReadings> = tokens.iter().collect();
+        assert!(accept_es(None, "key:value", &[7], &refs, rm_for("x")).is_none());
+    }
+
+    #[test]
+    fn fr_common_gender_plural_adjective_uses_the_plural_synthesis() {
+        let dir = lang_dir("fr");
+        let Some(synth) = LangSynthesizer::for_language(&dir, "fr") else {
+            return;
+        };
+        let tokens = vec![
+            tagged("Les", "le", &["D e p"]),
+            tagged("chats", "chat", &["N m p"]),
+            tagged(".", ".", &["N m p"]),
+            tagged(",", ",", &["R"]),
+            tagged("joli", "joli", &["J m s"]),
+            tagged("bleues", "bleu", &["J f p"]),
+        ];
+        let refs: Vec<&AnalyzedTokenReadings> = tokens.iter().collect();
+        let out = accept_fr(Some(&synth), "key:value", &[5], &refs, rm_for("x")).expect("kept");
+        assert_eq!(values_of(&out), vec!["bleus".to_string()]);
+    }
+
+    #[test]
+    fn fr_feminine_singular_plural_adjective_selects_the_fn_pattern() {
+        let dir = lang_dir("fr");
+        let Some(synth) = LangSynthesizer::for_language(&dir, "fr") else {
+            return;
+        };
+        let tokens = vec![
+            tagged("Le", "le", &["D m s"]),
+            tagged("chat", "chat", &["N m s"]),
+            tagged("jolie", "joli", &["J f sp"]),
+        ];
+        let refs: Vec<&AnalyzedTokenReadings> = tokens.iter().collect();
+        let out = accept_fr(Some(&synth), "key:value", &[2], &refs, rm_for("x")).expect("kept");
+        assert_eq!(values_of(&out), vec!["joli".to_string()]);
+    }
+
+    #[test]
+    fn fr_deux_ou_plus_jumps_past_the_numeral_determiner() {
+        let dir = lang_dir("fr");
+        let Some(synth) = LangSynthesizer::for_language(&dir, "fr") else {
+            return;
+        };
+        let tokens = vec![
+            tagged("Les", "le", &["D f p"]),
+            tagged("deux", "deux", &["D f p"]),
+            tagged("ou", "ou", &["C c"]),
+            tagged("plus", "plus", &["A"]),
+            tagged("grandes", "grand", &["J f p"]),
+        ];
+        let refs: Vec<&AnalyzedTokenReadings> = tokens.iter().collect();
+        assert!(
+            accept_fr(Some(&synth), "key:value", &[4], &refs, rm_for("x")).is_none(),
+            "the 'deux ou plus' jump must skip the numeral so nothing is counted"
+        );
+    }
+
+    #[test]
+    fn fr_com_token_updates_no_apparitions() {
+        let tokens = vec![
+            tagged("Le", "le", &["D m s"]),
+            tagged("com", "com", &["D m p"]),
+            tagged("restaurant", "restaurant", &["N m s"]),
+            tagged("jolie", "zzzzzzzz", &["J f s"]),
+        ];
+        let refs: Vec<&AnalyzedTokenReadings> = tokens.iter().collect();
+        let kept = accept_fr(None, "key:value", &[3], &refs, rm_for("x")).expect("kept");
+        assert!(kept.replacements().is_empty());
+    }
+
+    #[test]
+    fn fr_out_of_range_match_position_rejects() {
+        let tokens = vec![tagged("maison", "maison", &["N f s"])];
+        let refs: Vec<&AnalyzedTokenReadings> = tokens.iter().collect();
+        assert!(accept_fr(None, "key:value", &[9], &refs, rm_for("x")).is_none());
+    }
+
+    #[test]
+    fn synthesizer_regex_tail_and_postag_edges() {
+        let Some(synth) = pl_synth() else {
+            return;
+        };
+        assert_eq!(
+            synth.synthesize_full("zrobić", "ger:sg:nom\\.acc:n2:perf:aff:refl.nonrefl"),
+            vec!["zrobienie".to_string()]
+        );
+        assert!(
+            synth
+                .synthesize_full_for("zrobić", None, "adj:[")
+                .is_empty()
+        );
+        let es = LangSynthesizer::for_language(&lang_dir("es"), "es").expect("es synthesizer");
+        let forms = es.synthesize_full_for("dar lo", None, "VMIP3S0");
+        assert!(
+            forms.iter().all(|f| f.ends_with(" lo")),
+            "tail is appended: {forms:?}"
+        );
+        assert_eq!(es.target_postag(&["VMM02S0", "VMIP3S0"]), Some("VMIP3S0"));
+        assert_eq!(
+            es.target_postag(&["AQ0MS0", "VMIP3S0", "VMM02S0"]),
+            Some("VMIP3S0")
+        );
+        assert!(es.synthesize_full_for("casa", None, "[").is_empty());
+        assert_eq!(uppercase_first_char(""), "");
+        assert_eq!(lowercase_first_char(""), "");
+    }
+
+    #[test]
+    fn german_hyphen_compound_falls_back_to_the_hyphen_split() {
+        let dir = lang_dir("de");
+        let Some(synth) = LangSynthesizer::for_language(&dir, "de") else {
+            return;
+        };
+        let forms = synth.synthesize_full_for("Xyzqwe-Ding", None, "SUB:NOM:SIN:NEU");
+        assert_eq!(
+            forms,
+            vec!["Xyzqwe-Ding".to_string()],
+            "the hyphen split recombines with the original uppercase part"
+        );
+    }
+
+    #[test]
+    fn es_concordance_counts_disambiguated_gn_readings() {
+        let dir = lang_dir("es");
+        let Some(synth) = LangSynthesizer::for_language(&dir, "es") else {
+            return;
+        };
+        let cases: Vec<(Vec<AnalyzedTokenReadings>, Vec<&str>)> = vec![
+            (
+                vec![
+                    tagged("La", "el", &["DA0FS0"]),
+                    tagged("casa", "casa", &["NCFS000"]),
+                    tagged("la", "el", &["DA0FS0"]),
+                    tagged("verde", "verde", &["AQ0FS0", "_GN_FS"]),
+                    tagged("blancos", "blanco", &["AQ0MP0"]),
+                ],
+                vec!["blanca", "blancas"],
+            ),
+            (
+                vec![
+                    tagged("El", "el", &["DA0MS0"]),
+                    tagged("el", "el", &["DA0MS0"]),
+                    tagged("verdes", "verde", &["NCMS000", "_GN_MP"]),
+                    tagged("blanca", "blanco", &["AQ0FS0"]),
+                ],
+                vec!["blanco", "blancos"],
+            ),
+            (
+                vec![
+                    tagged("El", "el", &["DA0MS0"]),
+                    tagged("pueblo", "pueblo", &["NCMS000"]),
+                    tagged("el", "el", &["DA0MS0"]),
+                    tagged("verdes", "verde", &["AQ0FP0", "_GN_FP"]),
+                    tagged("blanca", "blanco", &["AQ0FS0"]),
+                ],
+                vec!["blanco", "blancas", "blancos"],
+            ),
+        ];
+        for (tokens, want) in cases {
+            let refs: Vec<&AnalyzedTokenReadings> = tokens.iter().collect();
+            let out = accept_es(
+                Some(&synth),
+                "key:value",
+                &[refs.len() - 1],
+                &refs,
+                rm_for("x"),
+            )
+            .expect("kept");
+            assert_eq!(
+                values_of(&out),
+                want,
+                "tokens: {:?}",
+                tokens.iter().map(|t| t.token().token()).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn english_synthesizer_without_a_rules_dir_uses_empty_article_data() {
+        let dir = std::env::temp_dir().join(format!("og-rules-en-synth-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("dict_decoded.txt"), "went\tgo\tVBD\n").unwrap();
+        let synth = LangSynthesizer::for_language(&dir, "en").expect("synthesizer from dict alone");
+        assert!(synth.is_determiner_tag("+DT"));
+        let re = Regex::new("^(?:VBD)$").unwrap();
+        let went = synth.synthesize("go", &re);
+        assert_eq!(went, vec!["went".to_string()]);
+        assert_eq!(synth.determiner_forms("university", "+INDT").len(), 1);
+        drop(synth);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
