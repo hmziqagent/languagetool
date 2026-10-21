@@ -1022,38 +1022,32 @@ impl Default for TestRunner {
 
 pub mod test_support {
     use super::*;
-    use std::sync::OnceLock;
 
     pub const GRAMMAR_PATH: &str = "/home/agent/opengrammar-rs/languagetool/languagetool-language-modules/en/src/main/resources/org/languagetool/rules/en/grammar.xml";
     const DE_GRAMMAR_PATH: &str = "/home/agent/opengrammar-rs/languagetool/languagetool-language-modules/de/src/main/resources/org/languagetool/rules/de/grammar.xml";
 
     pub fn german_runner() -> Arc<TestRunner> {
-        static RUNNER: OnceLock<std::sync::Mutex<std::sync::Weak<TestRunner>>> = OnceLock::new();
-        let cache = RUNNER.get_or_init(|| std::sync::Mutex::new(std::sync::Weak::new()));
-        if let Some(hit) = cache.lock().unwrap().upgrade() {
-            return hit;
-        }
-        let runner = Arc::new(TestRunner::for_language("de"));
-        *cache.lock().unwrap() = Arc::downgrade(&runner);
-        runner
+        static CELL: og_core::releasable::Releasable<TestRunner> =
+            og_core::releasable::Releasable::new();
+        og_core::releasable::shared_get_or_build(&CELL, || {
+            Some(Arc::new(TestRunner::for_language("de")))
+        })
+        .expect("german runner")
     }
 
     pub fn german_grammar_rules() -> Arc<CompiledRuleSet> {
-        static GRAMMAR: OnceLock<std::sync::Mutex<std::sync::Weak<CompiledRuleSet>>> =
-            OnceLock::new();
-        let cache = GRAMMAR.get_or_init(|| std::sync::Mutex::new(std::sync::Weak::new()));
-        if let Some(hit) = cache.lock().unwrap().upgrade() {
-            return hit;
-        }
-        let path = std::path::Path::new(DE_GRAMMAR_PATH);
-        let xml = std::fs::read_to_string(path).expect("Failed to read de grammar.xml");
-        let compiled = Arc::new(
-            XmlCompiler::new()
-                .compile_file_with_base(&xml, path.parent())
-                .expect("Failed to compile de grammar.xml"),
-        );
-        *cache.lock().unwrap() = Arc::downgrade(&compiled);
-        compiled
+        static CELL: og_core::releasable::Releasable<CompiledRuleSet> =
+            og_core::releasable::Releasable::new();
+        og_core::releasable::shared_get_or_build(&CELL, || {
+            let path = std::path::Path::new(DE_GRAMMAR_PATH);
+            let xml = std::fs::read_to_string(path).expect("Failed to read de grammar.xml");
+            Some(Arc::new(
+                XmlCompiler::new()
+                    .compile_file_with_base(&xml, path.parent())
+                    .expect("Failed to compile de grammar.xml"),
+            ))
+        })
+        .expect("de grammar rules")
     }
 
     pub fn german_grammar_available() -> bool {
@@ -1061,32 +1055,25 @@ pub mod test_support {
     }
 
     pub fn shared_runner() -> Arc<TestRunner> {
-        static RUNNER: OnceLock<std::sync::Mutex<std::sync::Weak<TestRunner>>> = OnceLock::new();
-        let cache = RUNNER.get_or_init(|| std::sync::Mutex::new(std::sync::Weak::new()));
-        if let Some(hit) = cache.lock().unwrap().upgrade() {
-            return hit;
-        }
-        let runner = Arc::new(TestRunner::new());
-        *cache.lock().unwrap() = Arc::downgrade(&runner);
-        runner
+        static CELL: og_core::releasable::Releasable<TestRunner> =
+            og_core::releasable::Releasable::new();
+        og_core::releasable::shared_get_or_build(&CELL, || Some(Arc::new(TestRunner::new())))
+            .expect("english runner")
     }
 
     pub fn shared_grammar_rules() -> Arc<CompiledRuleSet> {
-        static GRAMMAR: OnceLock<std::sync::Mutex<std::sync::Weak<CompiledRuleSet>>> =
-            OnceLock::new();
-        let cache = GRAMMAR.get_or_init(|| std::sync::Mutex::new(std::sync::Weak::new()));
-        if let Some(hit) = cache.lock().unwrap().upgrade() {
-            return hit;
-        }
-        let path = std::path::Path::new(GRAMMAR_PATH);
-        let xml = std::fs::read_to_string(path).expect("Failed to read grammar.xml");
-        let compiled = Arc::new(
-            XmlCompiler::new()
-                .compile_file_with_base(&xml, path.parent())
-                .expect("Failed to compile grammar.xml"),
-        );
-        *cache.lock().unwrap() = Arc::downgrade(&compiled);
-        compiled
+        static CELL: og_core::releasable::Releasable<CompiledRuleSet> =
+            og_core::releasable::Releasable::new();
+        og_core::releasable::shared_get_or_build(&CELL, || {
+            let path = std::path::Path::new(GRAMMAR_PATH);
+            let xml = std::fs::read_to_string(path).expect("Failed to read grammar.xml");
+            Some(Arc::new(
+                XmlCompiler::new()
+                    .compile_file_with_base(&xml, path.parent())
+                    .expect("Failed to compile grammar.xml"),
+            ))
+        })
+        .expect("english grammar rules")
     }
 
     pub fn grammar_available() -> bool {
@@ -1560,8 +1547,7 @@ mod tests {
         let summary = runner.run_rule_set_example_tests(&rules);
         drop(rules);
         drop(runner);
-        og_core::releasable::release_unused_since(started);
-        trim_released_pages();
+        trim_released_pages(og_core::releasable::release_unused_since(started));
 
         eprintln!("Total German examples tested: {}", summary.total);
         eprintln!("Passed: {}", summary.passed);
@@ -3502,11 +3488,13 @@ fn test_real_esperanto_grammar_examples() {
 }
 
 #[cfg(test)]
-fn trim_released_pages() {
-    // glibc keeps freed arenas resident; per-language suites would otherwise staircase the RSS.
+fn trim_released_pages(freed: usize) {
+    const TRIM_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
     #[cfg(target_os = "linux")]
-    unsafe {
-        libc::malloc_trim(0);
+    if freed > 0 && og_core::releasable::trim_due(TRIM_INTERVAL) {
+        unsafe {
+            libc::malloc_trim(0);
+        }
     }
 }
 
@@ -3528,8 +3516,7 @@ fn run_german_variant_example_suite(code: &'static str) {
         .expect("grammar compile");
     let summary = runner.run_rule_set_example_tests(&rules);
     drop(rules);
-    og_core::releasable::release_unused_since(started);
-    trim_released_pages();
+    trim_released_pages(og_core::releasable::release_unused_since(started));
 
     let mut no_match = 0;
     let mut fp = 0;
@@ -3575,8 +3562,7 @@ fn run_generic_example_suite(code: &'static str) {
     let summary = runner.run_rule_set_example_tests(&rules);
     drop(rules);
     drop(runner);
-    og_core::releasable::release_unused_since(started);
-    trim_released_pages();
+    trim_released_pages(og_core::releasable::release_unused_since(started));
 
     let mut no_match = 0;
     let mut fp = 0;
